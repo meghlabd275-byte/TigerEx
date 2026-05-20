@@ -1,76 +1,109 @@
-# TigerEx - Institutional Cryptocurrency Exchange
+# TigerEx - Complete Exchange Architecture
 
-> **Architecture Note**: This structure represents a production-grade institutional exchange system designed for Binance/Bybit/Coinbase scale operations.
+> **The most comprehensive institutional cryptocurrency exchange platform**
 
-TigerEx is architected as a polyglot system where each layer uses the optimal language based on:
-- Latency requirements (nanosecond, microsecond, millisecond)
-- Memory behavior and safety requirements  
-- Concurrency models
-- Regulatory and compliance needs
-- Operational scalability
+TigerEx combines the best of Binance and Bybit into a unified full-coverage trading platform.
 
-## Domain Overview
+## Architecture Overview
 
-| Domain | Primary Languages | Latency Profile |
-|--------|-----------------|----------------|
-| Ultra Low Latency | C++, Rust, FPGA | Nanosecond - Microsecond |
-| Distributed Backend | Go, Rust | Millisecond |
-| Banking & Finance | Java, Kotlin | Second+ |
-| Blockchain & Web3 | Rust, Solidity, Go | Variable |
-| AI & Quant | Python, Rust, CUDA | Variable |
-| Frontend | TypeScript, Kotlin, Swift | Interactive |
+This is a polyglot system designed for elite exchange scale (5M+ orders/second) with:
 
-## Directory Structure
+- **Ultra-low latency** C++ matching engines
+- **Rust** security-critical systems  
+- **Go** distributed microservices
+- **Java** enterprise finance
+- **Python** AI/ML
+- **TypeScript** frontends
 
-```
-TigerEx/
-├── ultra_low_latency_domain/     # C++ matching engine, Rust risk
-├── distributed_exchange_backend/   # Go microservices, APIs
-├── banking_and_enterprise_finance/ # Java enterprise systems
-├── blockchain_and_web3/         # Rust wallets, Solidity contracts
-├── ai_quant_and_research/       # Python ML, CUDA training
-├── frontend_ecosystem/         # TypeScript, mobile apps
-├── data_and_storage_architecture/ # SQL, NoSQL, Vector DBs
-├── realtime_messaging_backbone/ # Kafka, NATS, Pulsar
-├── infrastructure_and_sre/     # K8s, Terraform, observability
-└── language_ownership_matrix/   # Language-specific ownership
-```
+## Directory Structure (2,400+ directories)
+
+### Core Exchange Engine
+- `core_exchange_engine/matching_and_execution/` - All matching engines
+- `core_exchange_engine/unified_trading_account/` - UTA 2.0
+- `core_exchange_engine/realtime_risk_engine/` - Risk & liquidation
+- `core_exchange_engine/market_data_distribution/` - Market data
+
+### Identity & Security
+- `identity_and_security/user_identity_core/` - User accounts, VIP tiers
+- `identity_and_security/authentication_core/` - Auth, 2FA, OAuth
+- `identity_and_security/authorization_and_access_control/` - RBAC/ABAC
+- `identity_and_security/kyc_aml_and_compliance/` - KYC, AML
+- `identity_and_security/fraud_and_security_intelligence/` - Fraud detection
+
+### Deposits & Payments
+- `deposits_withdrawals_and_payments/crypto_deposit_system/`
+- `deposits_withdrawals_and_payments/crypto_withdrawal_system/`
+- `deposits_withdrawals_and_payments/fiat_banking_systems/`
+- `deposits_withdrawals_and_payments/p2p_trading_platform/`
+- `deposits_withdrawals_and_payments/convert_engine/`
+- `deposits_withdrawals_and_payments/crypto_card_platform/`
+
+### TradFi & CFD (Bybit Features)
+- `tradfi_and_cfd_platform/mt5_gateway/`
+- `tradfi_and_cfd_platform/cfd_product_management/`
+- `tradfi_and_cfd_platform/xstocks_platform/`
+
+### Crypto Loans
+- `crypto_loans_and_lending/`
+
+### Earn & Yield
+- `earn_and_yield_platform/flexible_savings/`
+- `earn_and_yield_platform/locked_staking/`
+- `earn_and_yield_platform/dual_investment/`
+
+### Copy Trading
+- `copy_trading_platform/`
+
+### Launchpad
+- `launchpad_and_token_sales/`
+
+### Algo Trading
+- `algo_trading_and_bot_platform/`
+
+### NFT
+- `nft_and_digital_assets/`
+
+### User Growth
+- `user_growth_and_retention/`
+
+### Frontend
+- `frontend_superapp/web_platform/`
+- `frontend_superapp/mobile_apps/`
+- `frontend_superapp/desktop_terminal/`
+
+### Infrastructure
+- `infrastructure_and_sre/`
+- `database_architecture/`
+
+## Supported Products
+
+| Product Type | Status |
+|-------------|--------|
+| Spot Trading | ✅ |
+| USDT Perpetuals | ✅ |
+| USDC Perpetuals | ✅ |
+| Inverse Perpetuals | ✅ |
+| Expiry Futures | ✅ |
+| Options | ✅ |
+| CFD (MT5) | ✅ |
+| xStocks | ✅ |
+| P2P Trading | ✅ |
+| Crypto Loans | ✅ |
+| Flexible Savings | ✅ |
+| Locked Staking | ✅ |
+| Dual Investment | ✅ |
+| Launchpad | ✅ |
+| NFT Marketplace | ✅ |
+| Copy Trading | ✅ |
+| Algo Bots | ✅ |
+
+## Scale Targets
+
+- **Matching Engine**: < 500ns latency, 5M+ orders/second
+- **Market Data**: < 1μs distribution
+- **API Gateway**: < 10ms, 100K+ req/s
+- **WebSocket**: 1M+ concurrent connections
 
 ## Technology Stack
 
-### Low Latency Layer
-- **C++17/20** - Matching engine, orderbook, HFT paths
-- **Rust** - Ultra-low latency risk, wallet signing
-- **FPGA/Verilog** - Hardware acceleration, feed handlers
-
-### Backend Layer
-- **Go** - API gateway, WebSocket, streaming
-- **Rust** - High-performance microservices
-
-### Enterprise Layer
-- **Java 21** - Banking, compliance, reporting
-- **Kotlin** - Android mobile
-
-### Frontend Layer
-- **TypeScript/React** - Web trading terminals
-- **Swift** - iOS applications
-
-### AI/Quant Layer
-- **Python** - ML models, research, fraud detection
-- **CUDA** - GPU training clusters
-
-## Getting Started
-
-See individual domain READMEs for setup instructions.
-
-## Why Polyglot Architecture?
-
-An exchange at Binance scale processes:
-- 5M+ orders/second core matching
-- Millions of WebSocket connections
-- Billions in daily volume
-- Regulatory compliance requirements
-
-No single language optimizes for all these constraints simultaneously. Elite exchanges allocate languages by latency domain, safety domain, and operational domain.
-
-**The "best" language depends on the problem domain.**
+- C++ (matching), Rust (security), Go (backend), Java (enterprise), Python (AI), TypeScript (frontend)
