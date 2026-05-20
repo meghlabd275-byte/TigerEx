@@ -1,0 +1,384 @@
+# TigerEx Kubernetes Manifests
+# Production-grade K8s configs
+
+# =============================================================================
+# Namespace
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tigerex
+  labels:
+    environment: production
+
+---
+# =============================================================================
+# Secrets
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tigerex-secrets
+  namespace: tigerex
+type: Opaque
+stringData:
+  DATABASE_URL: "postgres://user:pass@postgres:5432/tigerex"
+  REDIS_URL: "redis://redis:6379"
+  JWT_SECRET: "change-me-in-production"
+  AWS_ACCESS_KEY_ID: ""
+  AWS_SECRET_ACCESS_KEY: ""
+
+---
+# =============================================================================
+# ConfigMaps
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tigerex-config
+  namespace: tigerex
+data:
+  LOG_LEVEL: "info"
+  ENVIRONMENT: "production"
+  API_URL: "https://api.tigerex.io"
+  FRONTEND_URL: "https://tigerex.io"
+
+---
+# =============================================================================
+# Matching Engine Deployment (C++)
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: matching-engine
+  namespace: tigerex
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: matching-engine
+  template:
+    metadata:
+      labels:
+        app: matching-engine
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: matching-engine
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: matching-engine
+        image: tigerex/matching-engine:latest
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "2000m"
+          limits:
+            memory: "4Gi"
+            cpu: "4000m"
+        env:
+        - name: NODE_ENV
+          value: "production"
+        ports:
+        - containerPort: 8080
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# =============================================================================
+# API Gateway Deployment (Go)
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: tigerex
+spec:
+  replicas: 10
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+      - name: api-gateway
+        image: tigerex/api-gateway:latest
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        envFrom:
+        - configMapRef:
+            name: tigerex-config
+        - secretRef:
+            name: tigerex-secrets
+        ports:
+        - containerPort: 8080
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+
+---
+# =============================================================================
+# Auth Service Deployment (Rust)
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: tigerex
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+      - name: auth-service
+        image: tigerex/auth-service:latest
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        envFrom:
+        - secretRef:
+            name: tigerex-secrets
+
+---
+# =============================================================================
+# PostgreSQL
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: tigerex
+spec:
+  serviceName: postgres
+  replicas: 3
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "1000m"
+        env:
+        - name: POSTGRES_DB
+          value: tigerex
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: tigerex-secrets
+              key: DATABASE_URL
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+
+---
+# =============================================================================
+# Redis
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: tigerex
+spec:
+  serviceName: redis
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"
+        ports:
+        - containerPort: 6379
+
+---
+# =============================================================================
+# Kafka
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: tigerex
+spec:
+  serviceName: kafka
+  replicas: 3
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+      - name: kafka
+        image: confluentinc/cp-kafka:7.5.0
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+        env:
+        - name: KAFKA_BROKER_ID
+          value: "1"
+        - name: KAFKA_ZOOKEEPER_CONNECT
+          value: "zookeeper:2181"
+        - name: KAFKA_ADVERTISED_LISTENERS
+          value: "PLAINTEXT://kafka:9092"
+        ports:
+        - containerPort: 9092
+
+---
+# =============================================================================
+# Services
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: matching-engine
+  namespace: tigerex
+spec:
+  selector:
+    app: matching-engine
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: tigerex
+spec:
+  selector:
+    app: api-gateway
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: LoadBalancer
+
+---
+# =============================================================================
+# Horizontal Pod Autoscaler
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-gateway-hpa
+  namespace: tigerex
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-gateway
+  minReplicas: 10
+  maxReplicas: 100
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+---
+# =============================================================================
+# Ingress
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tigerex-ingress
+  namespace: tigerex
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - tigerex.io
+    - api.tigerex.io
+    secretName: tigerex-tls
+  rules:
+  - host: api.tigerex.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: api-gateway
+            port:
+              number: 80
+
+---
+# =============================================================================
+# Pod Disruption Budget
+# =============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-gateway-pdb
+  namespace: tigerex
+spec:
+  minAvailable: 8
+  selector:
+    matchLabels:
+      app: api-gateway
