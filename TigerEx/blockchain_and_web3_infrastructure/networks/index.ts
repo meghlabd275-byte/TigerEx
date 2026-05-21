@@ -43,7 +43,8 @@ export enum ChainType {
   KASPA = 'kaspa',
   MASSA = 'massa',
   AION = 'aion',
-  WANCHAIN = 'wanchain'
+  WANCHAIN = 'wanchain',
+  PI_NETWORK = 'pi_network'
 }
 
 export interface NetworkConfig {
@@ -105,8 +106,10 @@ export class EVMAddressGenerator implements AddressGenerator {
 }
 
 // ============================================================
-// BITCOIN ADDRESS GENERATOR
+// CRYPTO ADDRESS GENERATORS
 // ============================================================
+
+// EVM-compatible address generator (C++ would be used for production matching engine)
 
 export class BitcoinAddressGenerator implements AddressGenerator {
   private network: string;
@@ -258,7 +261,8 @@ export const nonEvmNetworks: NetworkConfig[] = [
   { id: 'rsk_mainnet', name: 'Rootstock', chainType: ChainType.EVM, symbol: 'BTC', decimals: 18, chainId: 30, coinType: 30, derivationPath: "m/44'/30'/0'/0/0", rpcUrls: ['https://public.rsk.co'], explorerUrls: ['https://explorer.rsk.co'], enabled: true, isEVM: false, isLayer2: false, avgBlockTime: 30, gasSymbol: 'BTC' },
   { id: 'syscoin', name: 'Syscoin', chainType: ChainType.EVM, symbol: 'SYS', decimals: 18, chainId: 57, coinType: 57, derivationPath: "m/44'/57'/0'/0/0", rpcUrls: ['https://rpc.syscoin.org'], explorerUrls: ['https://explorer.syscoin.org'], enabled: true, isEVM: false, isLayer2: false, avgBlockTime: 60, gasSymbol: 'SYS' },
   { id: 'ultron_mainnet', name: 'Ultron', chainType: ChainType.EVM, symbol: 'ULT', decimals: 18, chainId: 1231, coinType: 1231, derivationPath: "m/44'/1231'/0'/0/0", rpcUrls: ['https://ultron-rpc.net'], explorerUrls: ['https://ulronscan.io'], enabled: true, isEVM: false, isLayer2: false, avgBlockTime: 5, gasSymbol: 'ULT' },
-  { id: 'iotex_mainnet', name: 'IoTeX', chainType: ChainType.EVM, symbol: 'IOTX', decimals: 18, chainId: 4689, coinType: 4668, derivationPath: "m/44'/4668'/0'/0/0", rpcUrls: ['https://babel.iotex.io'], explorerUrls: ['https://iotexscan.io'], enabled: true, isEVM: false, isLayer2: false, avgBlockTime: 2, gasSymbol: 'IOTX' }
+  { id: 'iotex_mainnet', name: 'IoTeX', chainType: ChainType.EVM, symbol: 'IOTX', decimals: 18, chainId: 4689, coinType: 4668, derivationPath: "m/44'/4668'/0'/0/0", rpcUrls: ['https://babel.iotex.io'], explorerUrls: ['https://iotexscan.io'], enabled: true, isEVM: false, isLayer2: false, avgBlockTime: 2, gasSymbol: 'IOTX' },
+  { id: 'pi_mainnet', name: 'Pi Network', chainType: ChainType.PI_NETWORK, symbol: 'PI', decimals: 8, coinType: 314159, derivationPath: "m/44'/314159'/0'/0/0", rpcUrls: ['https://rpc.minepi.com'], explorerUrls: ['https://explorer.minepi.com'], enabled: true, isEVM: false, isLayer2: false, avgBlockTime: 5, gasSymbol: 'PI' }
 ];
 
 // ============================================================
