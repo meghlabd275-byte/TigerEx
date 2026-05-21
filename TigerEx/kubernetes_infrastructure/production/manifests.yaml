@@ -1,0 +1,304 @@
+# TigerEx Kubernetes Infrastructure
+# Production-grade K8s manifests
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tigerex-production
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tigerex-secrets
+  namespace: tigerex-production
+type: Opaque
+stringData:
+  database-url: "postgresql://postgres:password@postgres:5432/tigerex"
+  redis-password: "redis-password"
+  jwt-secret: "jwt-secret"
+---
+# Matching Engine - C++
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: matching-engine
+  namespace: tigerex-production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: matching-engine
+  template:
+    metadata:
+      labels:
+        app: matching-engine
+        tier: latency-critical
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: matching-engine
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: matching-engine
+        image: tigerex/matching-engine:v1.0.0
+        resources:
+          requests:
+            cpu: "4"
+            memory: "8Gi"
+          limits:
+            cpu: "8"
+            memory: "16Gi"
+        ports:
+        - containerPort: 9000
+        volumeMounts:
+        - name: hugepages
+          mountPath: /dev/hugepages
+      volumes:
+      - name: hugepages
+        emptyDir:
+          medium: HugePages
+---
+# API Gateway - Go
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: tigerex-production
+spec:
+  replicas: 10
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+      - name: api-gateway
+        image: tigerex/api-gateway:v1.0.0
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+        ports:
+        - containerPort: 8080
+---
+# WebSocket Gateway - Go
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ws-gateway
+  namespace: tigerex-production
+spec:
+  replicas: 20
+  selector:
+    matchLabels:
+      app: ws-gateway
+  template:
+    metadata:
+      labels:
+        app: ws-gateway
+    spec:
+      containers:
+      - name: ws-gateway
+        image: tigerex/ws-gateway:v1.0.0
+        env:
+        - name: MAX_CONNECTIONS
+          value: "1000000"
+---
+# Risk Engine - Rust
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: risk-engine
+  namespace: tigerex-production
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: risk-engine
+  template:
+    metadata:
+      labels:
+        app: risk-engine
+    spec:
+      containers:
+      - name: risk-engine
+        image: tigerex/risk-engine:v1.0.0
+---
+# Wallet Service - Rust
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wallet-service
+  namespace: tigerex-production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: wallet-service
+  template:
+    metadata:
+      labels:
+        app: wallet-service
+        tier: security-critical
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+      - name: wallet-service
+        image: tigerex/wallet-service:v1.0.0
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+---
+# Enterprise Backend - Java
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enterprise-backend
+  namespace: tigerex-production
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: enterprise-backend
+  template:
+    metadata:
+      labels:
+        app: enterprise-backend
+    spec:
+      containers:
+      - name: enterprise-backend
+        image: tigerex/enterprise-backend:v1.0.0
+        env:
+        - name: JAVA_OPTS
+          value: "-Xmx8g -XX:+UseG1GC"
+---
+# Frontend - TypeScript
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: tigerex-production
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: tigerex/frontend:v1.0.0
+        ports:
+        - containerPort: 3000
+---
+# PostgreSQL
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: tigerex-production
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: tigerex-production
+spec:
+  serviceName: postgres
+  replicas: 3
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 500Gi
+---
+# Redis Cache
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: tigerex-production
+spec:
+  serviceName: redis
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7
+        ports:
+        - containerPort: 6379
+        command: ["redis-server", "--appendonly", "yes"]
+        volumeMounts:
+        - name: data
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 100Gi
+---
+# HPA for API Gateway
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-gateway-hpa
+  namespace: tigerex-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-gateway
+  minReplicas: 10
+  maxReplicas: 100
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
