@@ -1,0 +1,1 @@
+/** Phone Support Platform */export class PhoneSupport { async call(): Promise<string> { return '+1234567890'; }async schedule(callback: boolean): Promise<void> { }}

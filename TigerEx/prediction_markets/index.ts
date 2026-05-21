@@ -1,0 +1,1 @@
+/** Prediction Markets Platform */export class PredictionMarkets { async createMarket(q: string): Promise< string> { return `PM-${Date.now()}`; }async resolve(marketId: string, outcome: string): Promise<void> { }}

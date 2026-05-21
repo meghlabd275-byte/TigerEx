@@ -1,0 +1,1 @@
+/** Governance DAO Platform */export class GovernancePlatform { async propose(title: string): Promise< string> { return `PROP-${Date.now()}`; }async vote(proposalId: string, userId: string): Promise<void> { }async execute(proposalId: string): Promise<void> { }}

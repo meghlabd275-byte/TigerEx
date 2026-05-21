@@ -1,0 +1,1 @@
+/** Institutional Services */export class InstitutionalServices { async openAccount(name: string): Promise< string> { return `INST-${Date.now()}`; }async getApiKey(userId: string): Promise<string> { return 'key_' + Date.now(); }}

@@ -1,0 +1,2 @@
+/** Regional Offices Platform */export class RegionalOffices { async findOffice(country: string): Promise<Office> { return { location: '', contact: '' }; }}
+interface Office { location: string; contact: string; }

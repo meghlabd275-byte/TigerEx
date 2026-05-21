@@ -1,0 +1,2 @@
+/** NFT Minting Platform */export class NFTMinting { async mint(to: string, uri: string): Promise< string> { return `NFT-${Date.now()}`; }async batchMint(to: string, uris: string[]): Promise< string[]> { return []; }}
+/** NFT Collateralized Loans */export class NFTCollateral { async borrow(nftId: string, amount: number): Promise<void> { }async liquidate(loanId: string): Promise<void> { }}

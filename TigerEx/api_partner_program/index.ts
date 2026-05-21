@@ -1,0 +1,2 @@
+/** API Partner Program */
+export class ApiPartnerProgram { async apply(name: string): Promise<string> { return `PARTNER-${Date.now()}`; }async getCommission(userId: string): Promise<number> { return 20; }}
