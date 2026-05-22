@@ -1,25 +1,31 @@
 /**
- * Trading Tournaments Platform
+ * TigerEx Trading Tournaments Platform
+ * Competitions, leaderboards, prizes
  */
-
 export class TournamentsPlatform {
-  async createTournament(config: TournamentConfig): Promise<Tournament> {
-    return {
-      id: `TOURNAMENT-${Date.now()}`,
-      name: config.name,
-      startTime: config.startTime,
-      endTime: config.endTime,
-      prizePool: config.prizePool,
-      status: 'upcoming',
-      participants: 0
-    };
+  private tournaments = new Map();
+  
+  async createTournament(params: { name: string; start_time: Date; end_time: Date; prize_pool: number; pairs: string[] }) {
+    const t = { id: `tourney_${Date.now()}`, ...params, status: 'upcoming', participants: 0, created_at: new Date() };
+    this.tournaments.set(t.id, t);
+    return t;
   }
   
-  async join(tournamentId: string, userId: string): Promise<void> { }
-  async getLeaderboard(tournamentId: string): Promise<Participant[]> { return []; }
-  async distributePrizes(tournamentId: string): Promise<void> { }
+  async join(tournamentId: string, userId: string) {
+    const t = this.tournaments.get(tournamentId);
+    if (!t) return { error: 'Tournament not found' };
+    t.participants++;
+    return { joined: true, position: t.participants };
+  }
+  
+  async getLeaderboard(tournamentId: string, limit?: number) {
+    return [];
+  }
+  
+  async distributePrizes(tournamentId: string) {
+    const t = this.tournaments.get(tournamentId);
+    if (!t) return { error: 'Not found' };
+    t.status = 'completed';
+    return { distributed: true };
+  }
 }
-
-interface TournamentConfig { name: string; startTime: Date; endTime: Date; prizePool: number; }
-interface Tournament { id: string; name: string; startTime: Date; endTime: Date; prizePool: number; status: string; participants: number; }
-interface Participant { userId: string; rank: number; pnl: number; }

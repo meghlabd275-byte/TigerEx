@@ -1,24 +1,46 @@
 /**
- * ActiveTrader - High-performance trading platform (Gemini style)
+ * TigerEx ActiveTrader Platform
+ * High-performance trading, charts
  */
-
-export class ActiveTrader {
-  async placeOrder(order: Order): Promise<OrderResult> {
-    return { id: `TRADE-${Date.now()}`, status: 'filled', price: 0 };
+export class ActiveTraderPlatform {
+  private orders = new Map();
+  private layouts = new Map();
+  
+  async placeOrder(params: { symbol: string; side: string; type: string; size: number; price?: number }) {
+    return { id: `order_${Date.now()}`, status: 'filled', price: params.price || 0, filled: params.size };
   }
-  async getAdvancedChart(pair: string): Promise<Chart> { return { timeframe: '', data: [] }; }
-  async getDepth(pair: string): Promise<Depth> { return { bids: [], asks: [] }; }
-  async setLayout(layout: Layout): Promise<void> { }
+  
+  async getAdvancedChart(symbol: string, timeframe: string) {
+    return { timeframe, data: [] };
+  }
+  
+  async getDepth(symbol: string) {
+    return { bids: [], asks: [] };
+  }
+  
+  async setLayout(params: { user_id: string; name: string; widgets: string[] }) {
+    return { saved: true };
+  }
 }
 
-interface Order { symbol: string; side: string; type: string; size: number; }
-interface OrderResult { id: string; status: string; price: number; }
-interface Chart { timeframe: string; data: any[]; }
-interface Depth { bids: any[]; asks: any[]; }
-interface Layout { name: string; widgets: string[]; }
+/** TigerEx Gemini Earn Style Staking */
+export class GeminiEarnPlatform {
+  async stake(params: { asset: string; amount: number; duration: number }) {
+    return { stake_id: `stake_${Date.now()}`, apy: 0.05, start_date: new Date() };
+  }
+  
+  async unstake(stakeId: string) {
+    return { withdrawn: true };
+  }
+}
 
-/** Gemini Earn */
-export class GeminiEarn { async stake(asset: string, amount: number): Promise<void> { } }
-
-/** Hardware Wallet Integration */
-export class LedgerWallet { async connect(): Promise<string> { return `LEDGER-${Date.now()}`; } }
+/** TigerEx Hardware Wallet Integration */
+export class LedgerWalletPlatform {
+  async connect() {
+    return { address: `0x${Math.random().toString(16).substr(2, 40)}`, device: 'Ledger Nano' };
+  }
+  
+  async signTransaction(tx: any) {
+    return { signature: `sig_${Date.now()}` };
+  }
+}

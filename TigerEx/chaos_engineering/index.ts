@@ -1,21 +1,23 @@
 /**
- * Chaos Engineering Platform
- * 
- * Failure injection, game days, chaos mesh
+ * TigerEx Chaos Engineering Platform
+ * Failure injection, game days
  */
-
 export class ChaosEngineeringPlatform {
-  async injectFailure(service: string, failureType: string): Promise<void> {
-    console.log(`Injecting ${failureType} into ${service}`);
+  private experiments = new Map();
+  
+  async injectFailure(params: { service: string; failure_type: string; duration: number }) {
+    return { experiment_id: `exp_${Date.now()}`, status: 'running' };
   }
-
-  async scheduleGameDay(config: GameDayConfig): Promise<void> {
-    console.log(`Game day scheduled: ${config.name}`);
+  
+  async scheduleGameDay(params: { name: string; services: string[]; scheduled_for: Date }) {
+    return { scheduled: true };
   }
-}
-
-interface GameDayConfig {
-  name: string;
-  services: string[];
-  scheduledFor: Date;
+  
+  async stopExperiment(experimentId: string) {
+    return { stopped: true };
+  }
+  
+  async getStatus() {
+    return { healthy: true, last_experiment: null };
+  }
 }
