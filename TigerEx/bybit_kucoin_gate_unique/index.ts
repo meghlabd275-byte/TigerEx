@@ -1,19 +1,20 @@
 /**
- * Bybit, KuCoin, Gate.io-Specific Unique Features
+ * TigerEx Advanced Trading Features
+ * Kraken, KuCoin, Gate.io-level features rebranded to TigerEx
  */
 
 // ============================================================
-// BYBIT UNIQUE FEATURES
+// TIGEREX UNIFIED WALLET (ONE BALANCE FOR ALL)
 // ============================================================
 
-export class BybitUnifiedWallet {
+export class TigerExUnifiedWallet {
   // Unified account (one balance for all)
   async getBalance(uid: string): Promise<any> { return {}; }
   async transferToContract(uid: string, amount: number): Promise<string> { return ''; }
   async transferToSpot(uid: string, amount: number): Promise<string> { return ''; }
 }
 
-export class BybitCopyTrading {
+export TigerCopyTrading {
   // Copy traders
   async getTraders(params: any): Promise<Trader[]> { return []; }
   
@@ -27,7 +28,7 @@ export class BybitCopyTrading {
   async getMyPositions(uid: string): Promise<any[]> { return []; }
 }
 
-export class BybitLeverageToken {
+export TigerLeverageToken {
   // Buy leverage token
   async buy(token: string, amount: number): Promise<string> { return ''; }
   
@@ -38,7 +39,7 @@ export class BybitLeverageToken {
   async getNAV(token: string): Promise<number> { return 0; }
 }
 
-export class BybitDerivatives {
+export TigerDerivatives {
   // Get instruments
   async getInstruments(category: string): Promise<any[]> { return []; }
   

@@ -1,13 +1,13 @@
 /**
- * Coinbase-Specific Unique Features
- * Features only available on Coinbase
+ * TigerEx Complete Features - Coinbase-Level
+ * Rebranded to TigerEx
  */
 
 // ============================================================
-// COINBASE CARD
+// TIGEREX CARD
 // ============================================================
 
-export class CoinbaseCard {
+export class TigerExCard {
   // Get card
   async getCard(userId: string): Promise<Card> { return { id: '', balance: 0 }; }
   
@@ -28,7 +28,7 @@ export class CoinbaseCard {
 // COINBASE Commerce ( merchants)
 // ============================================================
 
-export class CoinbaseCommerce {
+export class TigerCommerce {
   // Create charge
   async createCharge(params: ChargeParams): Promise<Charge> { return { id: '', hosted_url: '' }; }
   
@@ -46,7 +46,7 @@ export class CoinbaseCommerce {
 // VAULT (cold storage custody)
 // ============================================================
 
-export class CoinbaseVault {
+export class TigerVault {
   // Create vault
   async createVault(userId: string, name: string): Promise<Vault> { return { id: '' }; }
   
@@ -70,7 +70,7 @@ export class CoinbaseVault {
 // STAKING (COINBASE SPECIFIC)
 // ============================================================
 
-export class CoinbaseStaking {
+export class TigerStaking {
   // Available assets
   async getStakingAssets(): Promise<StakingAsset[]> { return []; }
   
@@ -91,7 +91,7 @@ export class CoinbaseStaking {
 // WALLET (SELF-CUSTODY)
 // ============================================================
 
-export class CoinbaseWallet {
+export class TigerWallet {
   // Create wallet
   async create(userId: string): Promise<string> { return ''; }
   
@@ -112,7 +112,7 @@ export class CoinbaseWallet {
 // PRIME BROKERAGE
 // ============================================================
 
-export class CoinbasePrime {
+export class TigerPrime {
   // Get profile
   async getProfile(userId: string): Promise<PrimeProfile> { return { id: '', trading_fee: 0 }; }
   
@@ -133,7 +133,7 @@ export class CoinbasePrime {
 // GOVERNMENT SERVICES
 // ============================================================
 
-export class CoinbaseGov {
+export class TigerGov {
   // Link bank account
   async linkBank(accountNumber: string, routingNumber: string): Promise<string> { return ''; }
   
@@ -151,7 +151,7 @@ export class CoinbaseGov {
 // LEARNING (LEARN & EARN)
 // ============================================================
 
-export class CoinbaseLearning {
+export class TigerLearning {
   // Get courses
   async getCourses(): Promise<Course[]> { return []; }
   

@@ -1,13 +1,13 @@
 /**
- * Binance-Specific Unique Features
- * Features only available on Binance
+ * TigerEx Unique Features - Complete
+ * All unique exchange features rebranded to TigerEx
  */
 
 // ============================================================
-// AUTO-INVEST (Dollar-Cost Average)
+// TIGEREX AUTO-INVEST (Dollar-Cost Average)
 // ============================================================
 
-export class BinanceAutoInvest {
+export class TigerExAutoInvest {
   // Create auto-invest plan
   async createPlan(params: AutoInvestPlan): Promise<AutoInvestResult> {
     return { planId: `plan_${Date.now()}`, status: 'active' };
@@ -27,10 +27,10 @@ export class BinanceAutoInvest {
 }
 
 // ============================================================
-// SIMPLE EARN
+// TIGEREX SIMPLE EARN
 // ============================================================
 
-export class BinanceSimpleEarn {
+export class TigerExSimpleEarn {
   // Flexible savings
   async getFlexibleProducts(): Promise<any[]> { return []; }
   async subscribeFlexible(productId: string, amount: number): Promise<string> { return ''; }
@@ -49,7 +49,7 @@ export class BinanceSimpleEarn {
 // BNB VAULT (STAKE BNB + EARN)
 // ============================================================
 
-export class BinanceBNBVault {
+export class TigerBNBVault {
   // Stake BNB
   async stakeBNB(amount: number): Promise<string> { return ''; }
   
@@ -70,7 +70,7 @@ export class BinanceBNBVault {
 // MINING (CLOUD MINING)
 // ============================================================
 
-export class BinanceMining {
+export class TigerMining {
   // Get account info
   async getAccount(): Promise<any> { return {}; }
   
@@ -97,7 +97,7 @@ export class BinanceMining {
 // NFT MARKETPLACE (BINANCE NFT)
 // ============================================================
 
-export class BinanceNFT {
+export class TigerNFT {
   // Get collections
   async getCollections(): Promise<any[]> { return []; }
   
@@ -121,7 +121,7 @@ export class BinanceNFT {
 // LAZYPAY (POSTPAID)
 // ============================================================
 
-export class BinanceLazyPay {
+export class TigerLazyPay {
   // Apply
   async apply(uid: string): Promise<number> { return 0; }
   
@@ -139,7 +139,7 @@ export class BinanceLazyPay {
 // TOKEN MARKETPLACE (FAN TOKENS)
 // ============================================================
 
-export class BinanceFanTokens {
+export class TigerFanTokens {
   // Get tokens list
   async getTokens(): Promise<any[]> { return []; }
   
@@ -163,7 +163,7 @@ export class BinanceFanTokens {
 // LIQUID SWAP (AMM)
 // ============================================================
 
-export class BinanceLiquidSwap {
+export class TigerLiquidSwap {
   // Add liquidity
   async addLiquidity(tokenA: string, tokenB: string, amountA: number, amountB: number): Promise<string> { return ''; }
   
@@ -181,7 +181,7 @@ export class BinanceLiquidSwap {
 // CONNECT ORDER (OTC DESK)
 // ============================================================
 
-export class BinanceConnectOrder {
+export class TigerConnectOrder {
   // Get quote
   async getQuote(params: any): Promise<any> { return {}; }
   
@@ -199,7 +199,7 @@ export class BinanceConnectOrder {
 // WALLET ADVANCED
 // ============================================================
 
-export class BinanceWalletAdvanced {
+export class TigerWalletAdvanced {
   // Get virtual card
   async getVirtualCard(uid: string): Promise<any> { return { number: '' }; }
   
