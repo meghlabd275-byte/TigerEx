@@ -149,7 +149,11 @@ Quote {
   gas: number;
 }
 
-P2PCounterparty {
+SwapParams {
+  fromToken: string;
+  toToken: string;
+  amountIn: number;
+}
   // Find counterparties
   async find(params: MatchParams): Promise<Counterparty[]> { return []; }
   
