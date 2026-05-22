@@ -1,6 +1,6 @@
 /**
  * TigerEx REST API Gateway
- * Complete REST API endpoints like Binance/Coinbase/Gate.io
+ * Complete REST API endpoints like TigerEx/TigerEx/TigerEx
  */
 export class RESTAPIGateway {
   // USER ENDPOINTS

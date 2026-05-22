@@ -1,5 +1,5 @@
 /**
- * TigerEx Complete Features - Coinbase-Level
+ * TigerEx Complete Features - TigerEx-Level
  * Rebranded to TigerEx
  */
 

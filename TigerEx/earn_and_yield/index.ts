@@ -1,7 +1,7 @@
 /**
  * TigerEx Earn & Yield Platform
  * 
- * Comprehensive DeFi yield products like Crypto.com Earn, Binance Earn, KuCoin Earn
+ * Comprehensive DeFi yield products like Crypto.com Earn, TigerEx Earn, TigerEx Earn
  * Features: Flexible Savings, Locked Staking, DeFi Staking, Dual Investment, 
  * Launchpools, Cloud Mining, Structured Products
  */

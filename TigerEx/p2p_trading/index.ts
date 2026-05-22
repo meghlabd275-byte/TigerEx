@@ -1,7 +1,7 @@
 /**
  * TigerEx P2P Trading Platform
  * 
- * P2P (C2C) trading like Bybit, Gate.io, Binance P2P
+ * P2P (C2C) trading like TigerEx, TigerEx, TigerEx P2P
  * Features: Advertisements, orders, disputes, escrow, merchant program
  */
 

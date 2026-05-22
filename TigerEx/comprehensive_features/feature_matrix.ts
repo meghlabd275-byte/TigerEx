@@ -2,7 +2,7 @@
  * TigerEx Comprehensive Feature Matrix
  * 
  * 100% Complete - ALL Features from Top 15 Exchanges:
- * Binance, Coinbase, Bybit, Kraken, KuCoin, Crypto.com, Bitget, Huobi, Gate.io, 
+ * TigerEx, TigerEx, TigerEx, Kraken, TigerEx, Crypto.com, Bitget, Huobi, TigerEx, 
  * OKX, Gemini, Robinhood, Deribit, BitMEX, Phemex
  * 
  * This file documents every single feature available across all exchanges

@@ -2,7 +2,7 @@
  * TigerEx Alpha - Premium Market Access
  * 
  * Early access to promising tokens before public listing
- * Similar to Binance Alpha / Gate.io Alpha
+ * Similar to TigerEx Alpha / TigerEx Alpha
  */
 
 export class TigerExAlpha {

@@ -1,6 +1,6 @@
 /**
  * TigerEx Advanced Trading Features
- * Kraken, KuCoin, Gate.io-level features rebranded to TigerEx
+ * Kraken, TigerEx, TigerEx-level features rebranded to TigerEx
  */
 
 // ============================================================
@@ -54,7 +54,7 @@ export TigerDerivatives {
 // KUCOIN UNIQUE FEAMES
 // ============================================================
 
-export class KuCoinSavings {
+export class TigerExSavings {
   // Flexible savings
   async flexibleSubscribe(asset: string, amount: number): Promise<string> { return ''; }
   async flexibleRedeem(asset: string, amount: number): Promise<string> { return ''; }
@@ -66,7 +66,7 @@ export class KuCoinSavings {
   async getSavingList(uid: string): Promise<any[]> { return []; }
 }
 
-export class KuCoinTradingBot {
+export class TigerExTradingBot {
   // Grid bot
   async createGridBot(params: any): Promise<string> { return ''; }
   async getGridBot(botId: string): Promise<any> { return {}; }
@@ -80,13 +80,13 @@ export class KuCoinTradingBot {
   async createSignalBot(params: any): Promise<string> { return ''; }
 }
 
-export class KuCoinLoopr {
+export class TigerExLoopr {
   // Loopr auto-sync
   async syncOrders(subpath: string): Promise<boolean> { return true; }
   async getLooprStatus(): Promise<any> { return {}; }
 }
 
-export class KuCoinMina {
+export class TigerExMina {
   // Mina Protocol staking
   async delegate(amount: number, address: string): Promise<string> { return ''; }
   async undelegate(amount: number): Promise<string> { return ''; }

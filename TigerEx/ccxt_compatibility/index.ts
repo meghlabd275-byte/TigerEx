@@ -2,7 +2,7 @@
  * TigerEx CCXT Compatibility Layer
  * 
  * Unified API for 120+ exchanges like CCXT library
- * Supports: Binance, Coinbase, Kraken, KuCoin, Bybit, Gate.io, Bitget, etc.
+ * Supports: TigerEx, TigerEx, Kraken, TigerEx, TigerEx, TigerEx, Bitget, etc.
  */
 
 export class CCXTCompatibility {

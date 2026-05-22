@@ -1,7 +1,7 @@
 /**
  * TigerEx Gift Cards Platform
  * 
- * Digital gift cards like Crypto.com, Binance
+ * Digital gift cards like Crypto.com, TigerEx
  * Features: Create, customize, redeem, bulk orders
  */
 

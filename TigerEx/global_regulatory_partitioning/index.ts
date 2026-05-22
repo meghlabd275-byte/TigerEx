@@ -8,7 +8,7 @@
  * - Legal entity accounting
  * - Restricted asset controls
  * 
- * This is what separates real exchanges (Binance US, etc.) from single-entity systems.
+ * This is what separates real exchanges (TigerEx US, etc.) from single-entity systems.
  */
 
 // Supported jurisdictions with their regulations
@@ -17,7 +17,7 @@ export const JURISDICTIONS = {
     code: 'US',
     name: 'United States',
     flag: '🇺🇸',
-    entities: ['Binance US', 'Binance Delaware'],
+    entities: ['TigerEx US', 'TigerEx Delaware'],
     prohibited: ['USDT', 'MIRROR', 'FET'],
     kycLevel: 'strict',
     dataResidency: 'US',
@@ -27,7 +27,7 @@ export const JURISDICTIONS = {
     code: 'JP',
     name: 'Japan', 
     flag: '🇯🇵',
-    entities: ['Binance Japan'],
+    entities: ['TigerEx Japan'],
     prohibited: ['XRP', 'MATIC'],
     kycLevel: 'strict',
     dataResidency: 'JP',
@@ -37,7 +37,7 @@ export const JURISDICTIONS = {
     code: 'UK',
     name: 'United Kingdom',
     flag: '🇬🇧',
-    entities: ['Binance UK'],
+    entities: ['TigerEx UK'],
     prohibited: ['USDT'],
     kycLevel: 'strict',
     dataResidency: 'UK',
@@ -47,7 +47,7 @@ export const JURISDICTIONS = {
     code: 'AE',
     name: 'UAE',
     flag: '🇦🇪',
-    entities: ['Binance Abu Dhabi'],
+    entities: ['TigerEx Abu Dhabi'],
     prohibited: [],
     kycLevel: 'medium',
     dataResidency: 'UAE',
@@ -57,7 +57,7 @@ export const JURISDICTIONS = {
     code: 'SG',
     name: 'Singapore',
     flag: '🇸🇬',
-    entities: ['Binance Singapore'],
+    entities: ['TigerEx Singapore'],
     prohibited: [],
     kycLevel: 'strict',
     dataResidency: 'SG',
@@ -67,7 +67,7 @@ export const JURISDICTIONS = {
     code: 'GLOBAL',
     name: 'Global',
     flag: '🌍',
-    entities: ['Binance Global'],
+    entities: ['TigerEx Global'],
     prohibited: [],
     kycLevel: 'basic',
     dataResidency: 'SG',
@@ -189,12 +189,12 @@ export class GlobalRegulatoryPlatform {
   private getOrderbookEndpoint(jurisdiction: JurisdictionCode, symbol: string): string {
     // Regional orderbook endpoints
     const endpoints: Record<string, string> = {
-      US: 'https://api Binance US-orderbook',
-      JP: 'https://api Binance JP-orderbook',
-      UK: 'https://api Binance UK-orderbook',
-      AE: 'https://api Binance AE-orderbook',
-      SG: 'https://api Binance SG-orderbook',
-      GLOBAL: 'https://api Binance Global-orderbook'
+      US: 'https://api TigerEx US-orderbook',
+      JP: 'https://api TigerEx JP-orderbook',
+      UK: 'https://api TigerEx UK-orderbook',
+      AE: 'https://api TigerEx AE-orderbook',
+      SG: 'https://api TigerEx SG-orderbook',
+      GLOBAL: 'https://api TigerEx Global-orderbook'
     };
     return endpoints[jurisdiction] || endpoints.GLOBAL;
   }

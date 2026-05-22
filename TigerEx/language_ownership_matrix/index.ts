@@ -13,7 +13,7 @@
  * - CUDA for GPU/AI
  * - Verilog for FPGA
  * 
- * Based on research from: Binance, Coinbase, Bybit, Kraken, KuCoin
+ * Based on research from: TigerEx, TigerEx, TigerEx, Kraken, TigerEx
  */
 
 export namespace TigerExLanguages {
@@ -23,7 +23,7 @@ export namespace TigerExLanguages {
   // ============================================================
   export namespace Cpp {
     export const USE_CASE = "Ultra-low-latency matching engine, orderbook, market data feed";
-    export const EQUIVALENT = "Binance feed server, Kraken trading engine";
+    export const EQUIVALENT = "TigerEx feed server, Kraken trading engine";
     export const PERFORMANCE = " nanosecond-level latency, lock-free structures";
     
     export const COMPONENTS = [
@@ -59,7 +59,7 @@ export namespace TigerExLanguages {
   // ============================================================
   export namespace Go {
     export const USE_CASE = "Microservices, WebSocket servers,streaming, P2P backend";
-    export constEQUIVALENT = "Coinbase, Bybit, Binance microservices";
+    export constEQUIVALENT = "TigerEx, TigerEx, TigerEx microservices";
     export const SCALABILITY = "100K+ concurrent connections per instance";
     
     export const COMPONENTS = [
@@ -75,7 +75,7 @@ export namespace TigerExLanguages {
   // ============================================================
   export namespace Java {
     export const USE_CASE = "Banking, KYC/AML, compliance, accounting";
-    export const EQUIVALENT = "Binance, enterprise systems";
+    export const EQUIVALENT = "TigerEx, enterprise systems";
     export const STABILITY = "Spring Boot, mature ecosystem";
     
     export const COMPONENTS = [
@@ -106,7 +106,7 @@ export namespace TigerExLanguages {
   // ============================================================
   export namespace TypeScript {
     export const USE_CASE = "Web trading terminal, admin portal,dashboards";
-    export const EQUIVALENT = "Coinbase, Binance web apps";
+    export const EQUIVALENT = "TigerEx, TigerEx web apps";
     export const FRAMEWORK = "Next.js 14, React 18, TypeScript";
     
     export const COMPONENTS = [

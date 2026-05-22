@@ -1,7 +1,7 @@
 /**
  * TigerEx Crypto Pay Platform
  * 
- * Crypto payments like Crypto.com Pay, Binance Pay
+ * Crypto payments like Crypto.com Pay, TigerEx Pay
  * Features: QR payments, NFC, links, batch transfers
  */
 

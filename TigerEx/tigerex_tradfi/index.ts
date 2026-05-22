@@ -2,7 +2,7 @@
  * TigerEx TradFi - Traditional Finance Trading
  * 
  * Trade traditional assets: Stocks, ETFs, Commodities, Forex
- * Similar to Bybit TradFi / Bitget TradFi
+ * Similar to TigerEx TradFi / Bitget TradFi
  */
 
 export class TigerExTradFi {

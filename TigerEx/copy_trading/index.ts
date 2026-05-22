@@ -1,7 +1,7 @@
 /**
  * TigerEx Copy Trading Platform
  * 
- * Comprehensive copy trading like Bitget, Binance, Gate.io, Bybit
+ * Comprehensive copy trading like Bitget, TigerEx, TigerEx, TigerEx
  * Features: Spot/Futures copy trading, lead traders, risk management, analytics
  */
 

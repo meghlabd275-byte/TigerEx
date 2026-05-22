@@ -1,7 +1,7 @@
 /**
  * TigerEx Insurance Fund Platform
  * 
- * SAFU (Secure Asset Fund) like Binance SAFU
+ * SAFU (Secure Asset Fund) like TigerEx SAFU
  * Features: Insurance coverage, claims, reserve management
  */
 

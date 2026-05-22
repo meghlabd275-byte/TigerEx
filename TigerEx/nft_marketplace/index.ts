@@ -1,7 +1,7 @@
 /**
  * TigerEx NFT Marketplace - Complete NFT Trading Platform
  * 
- * Comprehensive NFT marketplace like Crypto.com NFT, OpenSea, Binance NFT
+ * Comprehensive NFT marketplace like Crypto.com NFT, OpenSea, TigerEx NFT
  * Features: Minting, Collections, Trading, Auctions, Staking, NFT-backed loans
  */
 

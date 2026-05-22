@@ -1,7 +1,7 @@
 /**
  * TigerEx Research Platform
  * 
- * Market analysis like Binance Research, CoinGecko
+ * Market analysis like TigerEx Research, CoinGecko
  * Features: Reports, price predictions, technical analysis
  */
 

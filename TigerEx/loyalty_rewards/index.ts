@@ -1,7 +1,7 @@
 /**
  * TigerEx Loyalty & Rewards Platform
  * 
- * Tiered rewards like Coinbase, Crypto.com
+ * Tiered rewards like TigerEx, Crypto.com
  * Features: Points, tiers, benefits, merchandise
  */
 

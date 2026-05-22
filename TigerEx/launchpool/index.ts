@@ -1,7 +1,7 @@
 /**
  * Launchpool Platform
  * 
- * Stake to earn new tokens - Binance Launchpool style
+ * Stake to earn new tokens - TigerEx Launchpool style
  */
 
 export class LaunchpoolPlatform {
