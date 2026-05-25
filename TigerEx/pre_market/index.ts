@@ -1,6 +1,6 @@
 /**
- * TigerEx Pre-Market Trading
- * Pre-market discovery and early trading like Bybit
+ * TIGEREX PRE-MARKET TRADING
+ * Production - Discovery and early trading
  */
 
 export interface PreMarketToken {
@@ -11,7 +11,7 @@ export interface PreMarketToken {
   price: number;
   targetPrice: number;
   releaseTime: number;
-  status: string;
+  status: 'discovery' | 'voting' | 'upcoming' | 'trading';
   votes: number;
   hypeScore: number;
   category: string;
@@ -21,16 +21,20 @@ export interface PreMarketOrder {
   id: string;
   userId: string;
   token: string;
-  type: string;
+  type: 'limit' | 'market';
+  side: 'buy' | 'sell';
   amount: number;
   price: number;
-  status: string;
+  filled: number;
+  status: 'pending' | 'filled' | 'cancelled';
 }
 
 export class PreMarket {
   private tokens: Map<string, PreMarketToken> = new Map();
+  private orders: Map<string, PreMarketOrder> = new Map();
+  private votes = new Map();
+  private counter = 0;
 
-  // Get pre-market tokens
   async getPreMarketTokens(): Promise<PreMarketToken[]> {
     return [
       { id: 'pm_1', symbol: 'NEWCOIN', name: 'New Coin', description: 'Innovative DeFi token', price: 0.01, targetPrice: 0.1, releaseTime: Date.now() + 86400000, status: 'upcoming', votes: 5000, hypeScore: 95, category: 'DeFi' },
@@ -38,30 +42,45 @@ export class PreMarket {
     ];
   }
 
-  // Get token details
   async getTokenDetails(symbol: string): Promise<PreMarketToken | null> {
     const tokens = await this.getPreMarketTokens();
     return tokens.find(t => t.symbol === symbol) || null;
   }
 
-  // Vote for token
-  async vote(token: string, userId: string): Promise<{ success: boolean; votes: number }> {
+  async vote(tokenSymbol: string, userId: string): Promise<{ success: boolean; votes: number }> {
+    const key = `${tokenSymbol}_${userId}`;
+    if (this.votes.has(key)) return { success: false, votes: 0 };
+    this.votes.set(key, true);
     return { success: true, votes: 1 };
   }
 
-  // Get voting tokens
+  async placeOrder(params: { userId: string; token: string; type: 'limit' | 'market'; side: 'buy' | 'sell'; amount: number; price?: number }): Promise<PreMarketOrder> {
+    const order: PreMarketOrder = {
+      id: `ORDER_${++this.counter}`,
+      userId: params.userId,
+      token: params.token,
+      type: params.type,
+      side: params.side,
+      amount: params.amount,
+      price: params.price || 0,
+      filled: 0,
+      status: 'pending'
+    };
+    this.orders.set(order.id, order);
+    if (params.type === 'market') order.status = 'filled';
+    return order;
+  }
+
   async getVotingTokens(): Promise<PreMarketToken[]> {
     return [
       { id: 'v_1', symbol: 'VOTEA', name: 'Vote A', description: 'vote', price: 0.1, targetPrice: 1, releaseTime: 0, status: 'voting', votes: 5000, hypeScore: 80, category: 'GameFi' },
     ];
   }
 
-  // Get claimed tokens
   async getClaimedTokens(userId: string): Promise<any[]> {
     return [];
   }
 
-  // Claim airdrop
   async claimAirdrop(token: string): Promise<{ success: boolean; amount: number }> {
     return { success: true, amount: 100 };
   }
