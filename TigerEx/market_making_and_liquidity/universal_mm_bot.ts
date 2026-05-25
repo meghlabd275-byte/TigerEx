@@ -12,16 +12,16 @@ import { EventEmitter } from 'events';
 
 export const CEX_CONNECTORS = [
   // Top Tier 1
-  { id: 'binance', name: 'Binance', apiVersion: 'v3', ws: true },
-  { id: 'coinbase', name: 'Coinbase Pro', apiVersion: 'v2', ws: true },
-  { id: 'bybit', name: 'Bybit', apiVersion: 'v5', ws: true },
+  { id: 'binance', name: 'TigerEx', apiVersion: 'v3', ws: true },
+  { id: 'coinbase', name: 'TigerEx Pro', apiVersion: 'v2', ws: true },
+  { id: 'bybit', name: 'TigerEx', apiVersion: 'v5', ws: true },
   { id: 'okx', name: 'OKX', apiVersion: 'v5', ws: true },
-  { id: 'kucoin', name: 'KuCoin', apiVersion: 'v2', ws: true },
-  { id: 'gateio', name: 'Gate.io', apiVersion: 'v4', ws: true },
-  { id: 'bitget', name: 'Bitget', apiVersion: 'v2', ws: true },
+  { id: 'kucoin', name: 'TigerEx', apiVersion: 'v2', ws: true },
+  { id: 'gateio', name: 'TigerEx', apiVersion: 'v4', ws: true },
+  { id: 'bitget', name: 'TigerEx', apiVersion: 'v2', ws: true },
   { id: 'mexc', name: 'MEXC', apiVersion: 'v2', ws: true },
-  { id: 'huobi', name: 'Huobi', apiVersion: 'v1', ws: true },
-  { id: 'kraken', name: 'Kraken', apiVersion: 'v0', ws: true },
+  { id: 'huobi', name: 'TigerEx', apiVersion: 'v1', ws: true },
+  { id: 'kraken', name: 'TigerEx', apiVersion: 'v0', ws: true },
   // Tier 2
   { id: 'coinex', name: 'CoinEx', apiVersion: 'v1', ws: true },
   { id: 'bitfinex', name: 'Bitfinex', apiVersion: 'v2', ws: true },

@@ -1,6 +1,6 @@
 /**
  * TigerEx Alpha Trading
- * Alpha trading platform like Binance Alpha
+ * Alpha trading platform like TigerEx Alpha
  */
 
 export interface AlphaToken {

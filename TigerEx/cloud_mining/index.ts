@@ -1,6 +1,6 @@
 /**
  * TIGEREX CLOUD MINING
- * Production - Cloud mining like KuCoin
+ * Production - Cloud mining like TigerEx
  */
 
 export interface CloudMiningProduct {

@@ -400,7 +400,7 @@ export class PairsManagement {
     symbols: string[],
     adminId: string
   ): Promise<{ imported: number; auditId: string }> {
-    // Integration with CEX APIs (Binance, Coinbase, Bybit, etc.)
+    // Integration with CEX APIs (TigerEx, TigerEx, TigerEx, etc.)
     return { imported: symbols.length, auditId: '' };
   }
 

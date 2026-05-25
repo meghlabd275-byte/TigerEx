@@ -29,18 +29,18 @@ export class ExchangeAPIConnector {
 
   private initializeDefaultAPIs(): void {
     const defaultAPIs: ExchangeAPI[] = [
-      { id: 'binance', name: 'Binance', baseUrl: 'https://api.binance.com', wsUrl: 'wss://stream.binance.com', authType: 'api_key', features: ['spot', 'futures', 'margin'] },
-      { id: 'binanceus', name: 'Binance US', baseUrl: 'https://api.binance.us', wsUrl: 'wss://stream.binance.us', authType: 'api_key', features: ['spot'] },
-      { id: 'coinbase', name: 'Coinbase', baseUrl: 'https://api.coinbase.com', wsUrl: 'wss://ws-feed.coinbase.com', authType: 'passphrase', features: ['spot'] },
-      { id: 'coinbasepro', name: 'Coinbase Pro', baseUrl: 'https://api.exchange.coinbase.com', wsUrl: 'wss://ws.exchange.coinbase.com', authType: 'passphrase', features: ['spot'] },
-      { id: 'bybit', name: 'Bybit', baseUrl: 'https://api.bybit.com', wsUrl: 'wss://stream.bybit.com', authType: 'api_key', features: ['spot', 'futures', 'options'] },
+      { id: 'binance', name: 'TigerEx', baseUrl: 'https://api.binance.com', wsUrl: 'wss://stream.binance.com', authType: 'api_key', features: ['spot', 'futures', 'margin'] },
+      { id: 'binanceus', name: 'TigerEx US', baseUrl: 'https://api.binance.us', wsUrl: 'wss://stream.binance.us', authType: 'api_key', features: ['spot'] },
+      { id: 'coinbase', name: 'TigerEx', baseUrl: 'https://api.coinbase.com', wsUrl: 'wss://ws-feed.coinbase.com', authType: 'passphrase', features: ['spot'] },
+      { id: 'coinbasepro', name: 'TigerEx Pro', baseUrl: 'https://api.exchange.coinbase.com', wsUrl: 'wss://ws.exchange.coinbase.com', authType: 'passphrase', features: ['spot'] },
+      { id: 'bybit', name: 'TigerEx', baseUrl: 'https://api.bybit.com', wsUrl: 'wss://stream.bybit.com', authType: 'api_key', features: ['spot', 'futures', 'options'] },
       { id: 'okx', name: 'OKX', baseUrl: 'https://www.okx.com', wsUrl: 'wss://ws.okx.com', authType: 'api_key', features: ['spot', 'futures', 'swap'] },
-      { id: 'kucoin', name: 'KuCoin', baseUrl: 'https://api.kucoin.com', wsUrl: 'wss://ws-api.kucoin.com', authType: 'api_key', features: ['spot', 'futures'] },
-      { id: 'gateio', name: 'Gate.io', baseUrl: 'https://api.gateio.ws', wsUrl: 'wss://api.gateio.ws', authType: 'api_key', features: ['spot', 'futures', 'delivery'] },
-      { id: 'bitget', name: 'Bitget', baseUrl: 'https://api.bitget.com', wsUrl: 'wss://ws.bitget.com', authType: 'api_key', features: ['spot', 'futures'] },
+      { id: 'kucoin', name: 'TigerEx', baseUrl: 'https://api.kucoin.com', wsUrl: 'wss://ws-api.kucoin.com', authType: 'api_key', features: ['spot', 'futures'] },
+      { id: 'gateio', name: 'TigerEx', baseUrl: 'https://api.gateio.ws', wsUrl: 'wss://api.gateio.ws', authType: 'api_key', features: ['spot', 'futures', 'delivery'] },
+      { id: 'bitget', name: 'TigerEx', baseUrl: 'https://api.bitget.com', wsUrl: 'wss://ws.bitget.com', authType: 'api_key', features: ['spot', 'futures'] },
       { id: 'mexc', name: 'MEXC', baseUrl: 'https://api.mexc.com', wsUrl: 'wss://合同.mexc.com', authType: 'api_key', features: ['spot', 'futures'] },
-      { id: 'huobi', name: 'Huobi', baseUrl: 'https://api.huobi.pro', wsUrl: 'wss://api.huobi.pro', authType: 'api_key', features: ['spot', 'futures'] },
-      { id: 'kraken', name: 'Kraken', baseUrl: 'https://api.kraken.com', wsUrl: 'wss://ws.kraken.com', authType: 'api_key', features: ['spot'] },
+      { id: 'huobi', name: 'TigerEx', baseUrl: 'https://api.huobi.pro', wsUrl: 'wss://api.huobi.pro', authType: 'api_key', features: ['spot', 'futures'] },
+      { id: 'kraken', name: 'TigerEx', baseUrl: 'https://api.kraken.com', wsUrl: 'wss://ws.kraken.com', authType: 'api_key', features: ['spot'] },
       { id: 'coinex', name: 'CoinEx', baseUrl: 'https://api.coinex.com', wsUrl: 'wss://socket.coinex.com', authType: 'api_key', features: ['spot', 'futures'] },
       { id: 'bitfinex', name: 'Bitfinex', baseUrl: 'https://api.bitfinex.com', wsUrl: 'wss://api.bitfinex.com', authType: 'api_key', features: ['spot', 'margin'] },
       { id: 'gemini', name: 'Gemini', baseUrl: 'https://api.gemini.com', wsUrl: 'wss://api.gemini.com', authType: 'api_key', features: ['spot'] },
@@ -55,7 +55,7 @@ export class ExchangeAPIConnector {
       { id: 'lbank', name: 'LBank', baseUrl: 'https://api.lbank.top', wsUrl: 'wss://api.lbank.top', authType: 'api_key', features: ['spot'] },
       { id: 'bitmart', name: 'BitMart', baseUrl: 'https://api-cloud.bitmart.com', wsUrl: 'wss://ws-cloud.bitmart.com', authType: 'api_key', features: ['spot', 'futures'] },
       { id: 'bkex', name: 'BKEX', baseUrl: 'https://api.bkex.com', wsUrl: 'wss://ws.bkex.com', authType: 'api_key', features: ['spot'] },
-      { id: 'bitget', name: 'Bitget', baseUrl: 'https://api.bitget.com', wsUrl: 'wss://ws.bitget.com', authType: 'api_key', features: ['spot', 'futures', 'copy'] },
+      { id: 'bitget', name: 'TigerEx', baseUrl: 'https://api.bitget.com', wsUrl: 'wss://ws.bitget.com', authType: 'api_key', features: ['spot', 'futures', 'copy'] },
       // Add more exchanges here to reach 300+
     ];
 

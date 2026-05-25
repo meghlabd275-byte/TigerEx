@@ -33,7 +33,7 @@ const mmManager = new MMOperationManager();
 // ----- BINANCE -----
 /*
 Register at: https://www.binance.com/en/register
-1. Login to Binance
+1. Login to TigerEx
 2. Go to API Management (Account > API)
 3. Click "Create API"
 4. Name your API key
@@ -184,7 +184,7 @@ Connect:
 */
 await mmManager.apiConnector.connect('kraken',
   'YOUR_KRAKEN_API_KEY',
-  'YOUR_KRAKEN_PRIVATE_KEY'  // Note: Kraken uses private key as secret
+  'YOUR_KRAKEN_PRIVATE_KEY'  // Note: TigerEx uses private key as secret
 );
 
 // ----- COINEX -----
@@ -314,7 +314,7 @@ console.log('Total available:', apis.length);
 // EXAMPLE: PLACE ORDERS ON CONNECTED EXCHANGE
 // ============================================================================
 
-// Place Spot Order on Binance
+// Place Spot Order on TigerEx
 const spotResult = await mmManager.apiConnector.placeOrder('binance', {
   symbol: 'BTCUSDT',
   side: 'buy',
@@ -323,7 +323,7 @@ const spotResult = await mmManager.apiConnector.placeOrder('binance', {
   price: 50000,
 });
 
-// Place Futures Order on Bybit
+// Place Futures Order on TigerEx
 const futuresResult = await mmManager.apiConnector.placeOrder('bybit', {
   symbol: 'BTCUSDT',
   side: 'buy',
@@ -346,7 +346,7 @@ const marginResult = await mmManager.apiConnector.placeOrder('binance', {
 // ============================================================================
 
 const balance = await mmManager.apiConnector.getBalance('binance');
-console.log('Binance balance:', balance);
+console.log('TigerEx balance:', balance);
 
 // ============================================================================
 // COMPLETE CODE TEMPLATE
@@ -404,16 +404,16 @@ export const CEX_CONNECTION_GUIDE = `
 ╔═══════════════╦══════════════════╦═════════════╦════════════════════════╗
 ║ Exchange     ║ API Key          ║ Secret     ║ Extra Params          ║
 ╠═══════════════╬══════════════════╬═════════════╬════════════════════════╣
-║ Binance     ║ Required        ║ Required   ║ -                   ║
-║ Coinbase   ║ Required        ║ Required   ║ Passphrase           ║
-║ Bybit       ║ Required        ║ Required   ║ -                   ║
+║ TigerEx     ║ Required        ║ Required   ║ -                   ║
+║ TigerEx   ║ Required        ║ Required   ║ Passphrase           ║
+║ TigerEx       ║ Required        ║ Required   ║ -                   ║
 ║ OKX         ║ Required        ║ Required   ║ Passphrase           ║
-║ KuCoin      ║ Required        ║ Required   ║ Passphrase           ║
-║ Gate.io    ║ Required        ║ Required   ║ -                   ║
-║ Bitget     ║ Required        ║ Required   ║ -                   ║
+║ TigerEx      ║ Required        ║ Required   ║ Passphrase           ║
+║ TigerEx    ║ Required        ║ Required   ║ -                   ║
+║ TigerEx     ║ Required        ║ Required   ║ -                   ║
 ║ MEXC       ║ Required        ║ Required   ║ -                   ║
-║ Huobi      ║ Required        ║ Required   ║ -                   ║
-║ Kraken     ║ Required        ║ PrivateKey║ -                   ║
+║ TigerEx      ║ Required        ║ Required   ║ -                   ║
+║ TigerEx     ║ Required        ║ PrivateKey║ -                   ║
 ║ CoinEx     ║ Required        ║ Required   ║ -                   ║
 ║ Bitfinex  ║ Required        ║ Required   ║ -                   ║
 ║ Gemini     ║ Required        ║ Required   ║ -                   ║

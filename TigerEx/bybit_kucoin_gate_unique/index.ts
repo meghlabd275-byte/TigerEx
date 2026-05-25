@@ -1,6 +1,6 @@
 /**
  * TigerEx Advanced Trading Features
- * Kraken, TigerEx, TigerEx-level features rebranded to TigerEx
+ * TigerEx, TigerEx, TigerEx-level features rebranded to TigerEx
  */
 
 // ============================================================

@@ -1,6 +1,6 @@
 /**
  * TigerEx Red Packet / Promo
- * Red packets like Binance, lucky draws
+ * Red packets like TigerEx, lucky draws
  */
 
 export interface RedPacket {

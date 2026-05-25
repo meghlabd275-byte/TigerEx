@@ -1,6 +1,6 @@
 /**
  * TigerEx Trading Dashboard
- * Complete user trading dashboard like Binance
+ * Complete user trading dashboard like TigerEx
  */
 
 export interface MarketOverview {

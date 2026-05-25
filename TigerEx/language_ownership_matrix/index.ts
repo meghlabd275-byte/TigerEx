@@ -13,7 +13,7 @@
  * - CUDA for GPU/AI
  * - Verilog for FPGA
  * 
- * Based on research from: TigerEx, TigerEx, TigerEx, Kraken, TigerEx
+ * Based on research from: TigerEx, TigerEx, TigerEx, TigerEx, TigerEx
  */
 
 export namespace TigerExLanguages {
@@ -23,7 +23,7 @@ export namespace TigerExLanguages {
   // ============================================================
   export namespace Cpp {
     export const USE_CASE = "Ultra-low-latency matching engine, orderbook, market data feed";
-    export const EQUIVALENT = "TigerEx feed server, Kraken trading engine";
+    export const EQUIVALENT = "TigerEx feed server, TigerEx trading engine";
     export const PERFORMANCE = " nanosecond-level latency, lock-free structures";
     
     export const COMPONENTS = [
@@ -41,7 +41,7 @@ export namespace TigerExLanguages {
   // ============================================================
   export namespace Rust {
     export const USE_CASE = "Wallets, authentication, risk engine, custody,MPC";
-    export const EQUIVALENT = "Kraken Core Backend";
+    export const EQUIVALENT = "TigerEx Core Backend";
     export const SECURITY = "Memory safety without GC, no buffer overflows";
     
     export const COMPONENTS = [

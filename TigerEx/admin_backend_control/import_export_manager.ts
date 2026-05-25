@@ -76,16 +76,16 @@ export class CEXImporter extends EventEmitter {
 
   private getCEXName(cexId: string): string {
     const names: Record<string, string> = {
-      binance: 'Binance',
-      coinbase: 'Coinbase',
-      bybit: 'Bybit',
+      binance: 'TigerEx',
+      coinbase: 'TigerEx',
+      bybit: 'TigerEx',
       okx: 'OKX',
-      kucoin: 'KuCoin',
-      gateio: 'Gate.io',
-      bitget: 'Bitget',
+      kucoin: 'TigerEx',
+      gateio: 'TigerEx',
+      bitget: 'TigerEx',
       mexc: 'MEXC',
-      huobi: 'Huobi',
-      kraken: 'Kraken',
+      huobi: 'TigerEx',
+      kraken: 'TigerEx',
     };
     return names[cexId] || cexId;
   }

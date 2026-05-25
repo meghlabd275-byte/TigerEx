@@ -2,7 +2,7 @@
  * TigerEx CCXT Compatibility Layer
  * 
  * Unified API for 120+ exchanges like CCXT library
- * Supports: TigerEx, TigerEx, Kraken, TigerEx, TigerEx, TigerEx, Bitget, etc.
+ * Supports: TigerEx, TigerEx, TigerEx, TigerEx, TigerEx, TigerEx, TigerEx, etc.
  */
 
 export class CCXTCompatibility {
