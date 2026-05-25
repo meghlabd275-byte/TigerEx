@@ -258,7 +258,7 @@ export class EngineRouter extends EventEmitter {
     strategy: string;
   } {
     // Decide based on current load
-    if (currentTps < 10000) {
+    if (currentTPS < 10000) {
       return { engine: 'typescript', strategy: 'direct' };
     } else if (currentTPS < 100000) {
       return { engine: 'go', strategy: 'load-balance' };
@@ -392,9 +392,103 @@ export class EngineManager {
       latencyUs: 5,
       lastHealthCheck: Date.now(),
     });
+
+    // ===== UPGRADE 1: GEO-DISTRIBUTED MATCHING ENGINES =====
+    // Europe Matching (for EU customers)
+    this.router.registerEngine({
+      id: 'eu-matching',
+      type: 'matching',
+      language: 'cpp',
+      status: 'standby',
+      weight: 15,
+      tpsCapacity: 25000000,
+      currentTPS: 0,
+      latencyUs: 2,
+      lastHealthCheck: Date.now(),
+    });
+
+    // Asia-Pacific Matching (for Asian customers)
+    this.router.registerEngine({
+      id: 'apac-matching',
+      type: 'matching',
+      language: 'cpp',
+      status: 'standby',
+      weight: 15,
+      tpsCapacity: 25000000,
+      currentTPS: 0,
+      latencyUs: 2,
+      lastHealthCheck: Date.now(),
+    });
+
+    // US-East Matching (for US customers)
+    this.router.registerEngine({
+      id: 'useast-matching',
+      type: 'matching',
+      language: 'cpp',
+      status: 'standby',
+      weight: 15,
+      tpsCapacity: 25000000,
+      currentTPS: 0,
+      latencyUs: 2,
+      lastHealthCheck: Date.now(),
+    });
+
+    // ===== UPGRADE 2: ADDITIONAL RISK ENGINES =====
+    // Real-time Rust risk engine
+    this.router.registerEngine({
+      id: 'rust-risk-realtime',
+      type: 'risk',
+      language: 'rust',
+      status: 'standby',
+      weight: 15,
+      tpsCapacity: 750000,
+      currentTPS: 0,
+      latencyUs: 5,
+      lastHealthCheck: Date.now(),
+    });
+
+    // GPU-accelerated risk engine
+    this.router.registerEngine({
+      id: 'gpu-risk',
+      type: 'risk',
+      language: 'cpp',
+      status: 'standby',
+      weight: 20,
+      tpsCapacity: 2000000,
+      currentTPS: 0,
+      latencyUs: 1,
+      lastHealthCheck: Date.now(),
+    });
+
+    // ===== UPGRADE 3: ADDITIONAL LIQUIDATION ENGINES =====
+    // Hot backup liquidation
+    this.router.registerEngine({
+      id: 'liquidation-hot-backup',
+      type: 'liquidation',
+      language: 'cpp',
+      status: 'standby',
+      weight: 8,
+      tpsCapacity: 1000000,
+      currentTPS: 0,
+      latencyUs: 5,
+      lastHealthCheck: Date.now(),
+    });
+
+    // Cold storage liquidation (slow but reliable)
+    this.router.registerEngine({
+      id: 'liquidation-cold',
+      type: 'liquidation',
+      language: 'rust',
+      status: 'standby',
+      weight: 5,
+      tpsCapacity: 500000,
+      currentTPS: 0,
+      latencyUs: 50,
+      lastHealthCheck: Date.now(),
+    });
   }
 
-  // Get engine counts by type
+  // Get engine counts by type (UPGRADED)
   getEngineCounts(): { matching: number; risk: number; liquidation: number; total: number } {
     const all = Array.from(this.router.engines.values());
     return {
