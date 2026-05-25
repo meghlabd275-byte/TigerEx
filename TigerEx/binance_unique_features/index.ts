@@ -147,7 +147,10 @@ export class TigerMining {
   }
 
   async getResaleHistory(): Promise<{ id: string; hashrate: number; status: string }[]> {
-    return [];
+    return [
+      { id: 'rs_001', hashrate: 100, status: 'completed' },
+      { id: 'rs_002', hashrate: 50, status: 'active' }
+    ];
   }
 
   async getMiningCoins(): Promise<{ symbol: string; name: string; reward: number }[]> {
@@ -158,11 +161,17 @@ export class TigerMining {
   }
 
   async getEarnings(coin: string): Promise<{ date: number; amount: number }[]> {
-    return [];
+    return [
+      { date: Date.now() - 86400000, amount: 0.01 },
+      { date: Date.now() - 172800000, amount: 0.012 }
+    ];
   }
 
   async getWorkers(workerName: string): Promise<{ name: string; hashrate: number; status: string }[]> {
-    return [];
+    return [
+      { name: 'worker1', hashrate: 100, status: 'active' },
+      { name: 'worker2', hashrate: 50, status: 'inactive' }
+    ];
   }
 }
 
@@ -193,7 +202,10 @@ export class TigerNFT {
   }
 
   async getUserNFTs(uid: string): Promise<{ id: string; name: string }[]> {
-    return [];
+    return [
+      { id: 'nft_001', name: 'Tiger #1' },
+      { id: 'nft_002', name: 'Tiger #2' }
+    ];
   }
 
   async transfer(nftId: string, to: string): Promise<{ transferred: boolean }> {
@@ -224,7 +236,10 @@ export class TigerLazyPay {
   }
 
   async getBills(uid: string): Promise<{ id: string; amount: number; dueDate: number }[]> {
-    return [];
+    return [
+      { id: 'bill_001', amount: 500, dueDate: Date.now() + 86400000 },
+      { id: 'bill_002', amount: 750, dueDate: Date.now() + 172800000 }
+    ];
   }
 }
 

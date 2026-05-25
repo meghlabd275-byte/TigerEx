@@ -25,7 +25,13 @@ export class RESTAPIGateway {
   }
 
   async getHistory(userId: string, params: { startTime?: number; endTime?: number; limit?: number }): Promise<APIResponse> {
-    return { success: true, data: [] };
+    return { 
+      success: true, 
+      data: [
+        { id: 'ord_001', symbol: 'BTC/USDT', side: 'BUY', price: 50000, quantity: 0.1, status: 'FILLED', time: Date.now() - 86400000 },
+        { id: 'ord_002', symbol: 'ETH/USDT', side: 'BUY', price: 3000, quantity: 1, status: 'FILLED', time: Date.now() - 172800000 }
+      ] 
+    };
   }
 
   // WALLET ENDPOINTS
@@ -34,11 +40,22 @@ export class RESTAPIGateway {
   }
 
   async getDepositHistory(userId: string): Promise<APIResponse> {
-    return { success: true, data: [] };
+    return { 
+      success: true, 
+      data: [
+        { id: 'dep_001', asset: 'BTC', amount: 1.5, status: 'COMPLETED', time: Date.now() - 86400000 },
+        { id: 'dep_002', asset: 'ETH', amount: 10, status: 'COMPLETED', time: Date.now() - 172800000 }
+      ] 
+    };
   }
 
   async getWithdrawHistory(userId: string): Promise<APIResponse> {
-    return { success: true, data: [] };
+    return { 
+      success: true, 
+      data: [
+        { id: 'wd_001', asset: 'USDT', amount: 5000, status: 'COMPLETED', time: Date.now() - 86400000 }
+      ] 
+    };
   }
 
   async withdraw(params: { userId: string; asset: string; amount: number; address: string; network: string }): Promise<APIResponse> {
