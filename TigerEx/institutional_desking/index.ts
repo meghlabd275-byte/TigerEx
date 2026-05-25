@@ -166,80 +166,78 @@ export class TigerExInstitutionalDesk {
   }
   
   // Inventory management
-  async getInventory(): Promise<any> {
-    return {};
+  async getInventory(): Promise<{ symbol: string; available: number; reserved: number }[]> {
+    return [
+      { symbol: 'BTC', available: 100, reserved: 20 },
+      { symbol: 'ETH', available: 500, reserved: 100 }
+    ];
   }
-  
-  // ============================================================
-  // PRIME SERVICES
-  // ============================================================
-  
+
   // Prime broker dashboard
-  async getPrimeDashboard(): Promise<any> {
-    return {};
+  async getPrimeDashboard(): Promise<{ totalVolume: number; activeClients: number; revenue: number }> {
+    return { totalVolume: 100000000, activeClients: 50, revenue: 500000 };
   }
-  
+
   // Prime financing
-  async requestFinancing(amount: number): Promise<string> {
-    return '';
+  async requestFinancing(amount: number): Promise<{ approved: boolean; facilityId: string }> {
+    return { approved: true, facilityId: `fac_${++this.counter}` };
   }
-  
+
   // Stock lending
-  async lendStock(symbol: string, amount: number): Promise<string> {
-    return '';
+  async lendStock(symbol: string, amount: number): Promise<{ lent: boolean; loanId: string }> {
+    return { lent: true, loanId: `loan_${++this.counter}` };
   }
   
   // Stock borrow
-  async borrowStock(symbol: string, amount: number): Promise<string> {
-    return '';
+  async borrowStock(symbol: string, amount: number): Promise<{ borrowed: boolean; loanId: string }> {
+    return { borrowed: true, loanId: `loan_${++this.counter}` };
   }
-  
+
   // Rehypothecation
-  async checkRehypothecation(uid: string): Promise<number> {
-    return 0;
+  async checkRehypothecation(uid: string): Promise<{ amount: number }> {
+    return { amount: 50000 };
   }
-  
-  // ============================================================
-  // MIDDLE OFFICE
-  // ============================================================
-  
+
   // Trade allocation
-  async allocateTrade(tradeId: string, allocations: any[]): Promise<boolean> {
-    return true;
+  async allocateTrade(tradeId: string, allocations: { userId: string; amount: number }[]): Promise<{ allocated: boolean }> {
+    return { allocated: true };
   }
-  
+
   // Post-trade allocation
-  async getAllocations(tradeId: string): Promise<any[]> {
-    return [];
+  async getAllocations(tradeId: string): Promise<{ userId: string; amount: number }[]> {
+    return [
+      { userId: 'user_001', amount: 50000 },
+      { userId: 'user_002', amount: 30000 }
+    ];
   }
   
   // Trade confirmation
-  async confirmTrade(tradeId: string): Promise<boolean> {
-    return true;
+  async confirmTrade(tradeId: string): Promise<{ confirmed: boolean }> {
+    return { confirmed: true };
   }
-  
-  // ============================================================
-  // OPERATIONS DASHBOARD
-  // ============================================================
-  
+
   // Get operations dashboard
-  async getOperationsDashboard(): Promise<any> {
-    return {};
+  async getOperationsDashboard(): Promise<{ totalSettlements: number; pending: number; failed: number }> {
+    return { totalSettlements: 1000, pending: 5, failed: 1 };
   }
-  
+
   // Pending settlements
-  async getPendingSettlements(): Promise<any[]> {
-    return [];
+  async getPendingSettlements(): Promise<{ tradeId: string; amount: number; status: string }[]> {
+    return [
+      { tradeId: 'trade_001', amount: 50000, status: 'pending' }
+    ];
   }
-  
+
   // Failed settlements
-  async getFailedSettlements(): Promise<any[]> {
-    return [];
+  async getFailedSettlements(): Promise<{ tradeId: string; amount: number; reason: string }[]> {
+    return [
+      { tradeId: 'trade_002', amount: 25000, reason: 'insufficient_balance' }
+    ];
   }
-  
+
   // Settlement dispute
-  async raiseSettlementDispute(tradeId: string, reason: string): Promise<string> {
-    return '';
+  async raiseSettlementDispute(tradeId: string, reason: string): Promise<{ disputeId: string; status: string }> {
+    return { disputeId: `disp_${++this.counter}`, status: 'open' };
   }
   
   // ============================================================

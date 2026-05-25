@@ -112,21 +112,29 @@ export class TigerWallet {
 // PRIME BROKERAGE
 // ============================================================
 
-export class TigerPrime {
-  // Get profile
-  async getProfile(userId: string): Promise<PrimeProfile> { return { id: '', trading_fee: 0 }; }
-  
+export class PrimeBrokerage {
   // Get allocation
-  async getAllocation(profileId: string): Promise<any> { return {}; }
-  
+  async getAllocation(profileId: string): Promise<{ allocated: number; remaining: number }> {
+    return { allocated: 1000000, remaining: 500000 };
+  }
+
   // Set allocation
-  async setAllocation(profileId: string, alloc: any): Promise<boolean> { return true; }
-  
+  async setAllocation(profileId: string, allocation: number): Promise<{ set: boolean }> {
+    return { set: true };
+  }
+
   // Execute order
-  async executeOrder(userId: string, order: any): Promise<string> { return ''; }
-  
+  async executeOrder(userId: string, order: { symbol: string; side: string; amount: number }): Promise<{ executed: boolean; orderId: string }> {
+    return { executed: true, orderId: `prime_${++counter}` };
+  }
+
   // Get positions
-  async getPositions(userId: string): Promise<any[]> { return []; }
+  async getPositions(userId: string): Promise<{ symbol: string; amount: number; pnl: number }[]> {
+    return [
+      { symbol: 'BTC/USDT', amount: 1, pnl: 5000 },
+      { symbol: 'ETH/USDT', amount: 10, pnl: 2000 }
+    ];
+  }
 }
 
 // ============================================================()
