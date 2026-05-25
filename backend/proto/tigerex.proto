@@ -1,0 +1,393 @@
+syntax = "proto3";
+
+package tigerex;
+
+// ============ User Service ============
+
+service UserService {
+    rpc GetProfile(GetProfileRequest) returns (GetProfileResponse);
+    rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
+    rpc SubmitKYC(SubmitKYCRequest) returns (SubmitKYCResponse);
+    rpc GetVerificationStatus(GetVerificationRequest) returns (GetVerificationResponse);
+    rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+}
+
+message GetProfileRequest {
+    string user_id = 1;
+}
+
+message GetProfileResponse {
+    Profile profile = 1;
+}
+
+message UpdateProfileRequest {
+    string user_id = 1;
+    ProfileUpdate update = 2;
+}
+
+message UpdateProfileResponse {
+    bool success = 1;
+}
+
+message SubmitKYCRequest {
+    string user_id = 1;
+    KYCDocument document = 2;
+}
+
+message SubmitKYCResponse {
+    bool success = 1;
+    string status = 2;
+}
+
+message GetVerificationRequest {
+    string user_id = 1;
+}
+
+message GetVerificationResponse {
+    string status = 1;
+    int32 tier = 2;
+}
+
+message ListUsersRequest {
+    int32 page = 1;
+    int32 limit = 2;
+    string filter = 3;
+}
+
+message ListUsersResponse {
+    repeated Profile users = 1;
+    int32 total = 2;
+}
+
+message Profile {
+    string id = 1;
+    string email = 2;
+    string username = 3;
+    string status = 4;
+    bool two_factor_enabled = 5;
+    int64 created_at = 6;
+    KYCInfo kyc = 7;
+}
+
+message KYCInfo {
+    string status = 1;
+    int32 tier = 2;
+    int64 submitted_at = 3;
+}
+
+message ProfileUpdate {
+    string username = 1;
+    string phone = 2;
+    string language = 3;
+    string timezone = 4;
+}
+
+message KYCDocument {
+    string type = 1;
+    string number = 2;
+    string front_image = 3;
+    string back_image = 4;
+    string selfie = 5;
+}
+
+// ============ Trade Service ============
+
+service TradeService {
+    rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+    rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse);
+    rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+    rpc GetOrders(GetOrdersRequest) returns (GetOrdersResponse);
+    rpc GetTrades(GetTradesRequest) returns (GetTradesResponse);
+    rpc GetPositions(GetPositionsRequest) returns (GetPositionsResponse);
+}
+
+message CreateOrderRequest {
+    string user_id = 1;
+    string symbol = 2;
+    string side = 3;
+    string type = 4;
+    string quantity = 5;
+    string price = 6;
+    string stop_price = 7;
+    string time_in_force = 8;
+}
+
+message CreateOrderResponse {
+    string order_id = 1;
+    string status = 2;
+    repeated Trade fills = 3;
+}
+
+message CancelOrderRequest {
+    string user_id = 1;
+    string order_id = 2;
+}
+
+message CancelOrderResponse {
+    bool success = 1;
+}
+
+message GetOrderRequest {
+    string user_id = 1;
+    string order_id = 2;
+}
+
+message GetOrderResponse {
+    Order order = 1;
+}
+
+message GetOrdersRequest {
+    string user_id = 1;
+    string symbol = 2;
+    string status = 3;
+    int32 page = 4;
+    int32 limit = 5;
+}
+
+message GetOrdersResponse {
+    repeated Order orders = 1;
+    int32 total = 2;
+}
+
+message GetTradesRequest {
+    string user_id = 1;
+    string symbol = 2;
+    int32 page = 3;
+    int32 limit = 4;
+}
+
+message GetTradesResponse {
+    repeated Trade trades = 1;
+    int32 total = 2;
+}
+
+message GetPositionsRequest {
+    string user_id = 1;
+}
+
+message GetPositionsResponse {
+    repeated Position positions = 1;
+}
+
+message Order {
+    string order_id = 1;
+    string user_id = 2;
+    string symbol = 3;
+    string side = 4;
+    string type = 5;
+    string price = 6;
+    string quantity = 7;
+    string filled_quantity = 8;
+    string avg_price = 9;
+    string status = 10;
+    int64 created_at = 11;
+    int64 updated_at = 12;
+}
+
+message Trade {
+    string trade_id = 1;
+    string order_id = 2;
+    string user_id = 3;
+    string symbol = 4;
+    string side = 5;
+    string price = 6;
+    string quantity = 7;
+    string fee = 8;
+    int64 timestamp = 9;
+}
+
+message Position {
+    string symbol = 1;
+    string quantity = 2;
+    string entry_price = 3;
+    string unrealized_pnl = 4;
+}
+
+// ============ Wallet Service ============
+
+service WalletService {
+    rpc GetWallets(GetWalletsRequest) returns (GetWalletsResponse);
+    rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
+    rpc CreateDepositAddress(CreateDepositRequest) returns (CreateDepositResponse);
+    rpc RequestWithdrawal(RequestWithdrawalRequest) returns (RequestWithdrawalResponse);
+    rpc GetTransactions(GetTransactionsRequest) returns (GetTransactionsResponse);
+}
+
+message GetWalletsRequest {
+    string user_id = 1;
+}
+
+message GetWalletsResponse {
+    repeated Wallet wallets = 1;
+}
+
+message GetBalanceRequest {
+    string user_id = 1;
+    string currency = 2;
+}
+
+message GetBalanceResponse {
+    string available = 1;
+    string locked = 2;
+    string total = 3;
+}
+
+message CreateDepositRequest {
+    string user_id = 1;
+    string currency = 2;
+    string chain = 3;
+}
+
+message CreateDepositResponse {
+    string address = 1;
+    string memo = 2;
+}
+
+message RequestWithdrawalRequest {
+    string user_id = 1;
+    string currency = 2;
+    string amount = 3;
+    string address = 4;
+    string chain = 5;
+}
+
+message RequestWithdrawalResponse {
+    string transaction_id = 1;
+    string status = 2;
+    string fee = 3;
+}
+
+message GetTransactionsRequest {
+    string user_id = 1;
+    string currency = 2;
+    string type = 3;
+    int32 page = 4;
+    int32 limit = 5;
+}
+
+message GetTransactionsResponse {
+    repeated Transaction transactions = 1;
+    int32 total = 2;
+}
+
+message Wallet {
+    string id = 1;
+    string currency = 2;
+    string chain = 3;
+    string balance = 4;
+    string locked = 5;
+    string address = 6;
+}
+
+message Transaction {
+    string id = 1;
+    string currency = 2;
+    string amount = 3;
+    string status = 4;
+    string tx_hash = 5;
+    int64 created_at = 6;
+}
+
+// ============ Market Service ============
+
+service MarketService {
+    rpc GetMarkets(Empty) returns (GetMarketsResponse);
+    rpc GetTicker(GetTickerRequest) returns (GetTickerResponse);
+    rpc GetOrderBook(GetOrderBookRequest) returns (GetOrderBookResponse);
+    rpc GetTrades(GetMarketTradesRequest) returns (GetMarketTradesResponse);
+    rpc GetKlines(GetKlinesRequest) returns (GetKlinesResponse);
+    rpc Subscribe(SubscribeRequest) returns (stream MarketUpdate);
+}
+
+message Empty {}
+
+message GetMarketsResponse {
+    repeated Market markets = 1;
+}
+
+message GetTickerRequest {
+    string symbol = 1;
+}
+
+message GetTickerResponse {
+    string symbol = 1;
+    string last_price = 2;
+    string price_change = 3;
+    string price_change_percent = 4;
+    string high_price = 5;
+    string low_price = 6;
+    string volume = 7;
+    string quote_volume = 8;
+}
+
+message GetOrderBookRequest {
+    string symbol = 1;
+    int32 limit = 2;
+}
+
+message GetOrderBookResponse {
+    repeated PriceLevel bids = 1;
+    repeated PriceLevel asks = 2;
+}
+
+message GetMarketTradesRequest {
+    string symbol = 1;
+    int32 limit = 2;
+}
+
+message GetMarketTradesResponse {
+    repeated Trade trades = 1;
+}
+
+message GetKlinesRequest {
+    string symbol = 1;
+    string interval = 2;
+    int32 limit = 3;
+}
+
+message GetKlinesResponse {
+    repeated Kline klines = 1;
+}
+
+message SubscribeRequest {
+    repeated string symbols = 1;
+}
+
+message MarketUpdate {
+    string symbol = 1;
+    string type = 2;
+    oneof data {
+        Ticker ticker = 3;
+        Trade trade = 4;
+        OrderBook更新 update = 5;
+    }
+}
+
+message Market {
+    string symbol = 1;
+    string base_asset = 2;
+    string quote_asset = 3;
+    string status = 4;
+    string maker_fee = 5;
+    string taker_fee = 6;
+}
+
+message PriceLevel {
+    string price = 1;
+    string quantity = 2;
+}
+
+message Kline {
+    int64 open_time = 1;
+    string open = 2;
+    string high = 3;
+    string low = 4;
+    string close = 5;
+    string volume = 6;
+    int64 close_time = 7;
+}
+
+message OrderBook更新 {
+    map<string, PriceLevel> bids = 1;
+    map<string, PriceLevel> asks = 2;
+}

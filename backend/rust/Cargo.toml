@@ -1,0 +1,47 @@
+[package]
+name = "tigerex-security"
+version = "2.0.0"
+edition = "2021"
+authors = ["TigerEx Security Team"]
+description = "Security module for TigerEx exchange"
+license = "MIT"
+
+[dependencies]
+# Cryptography
+aes = "0.8.3"
+aes-gcm = "0.10.3"
+argon2 = "0.5.3"
+bcrypt = "0.15.1"
+ed25519-dalek = { version = "2.1.0", features = ["rand_core"] }
+secp256k1 = { version = "0.28.2", features = ["recovery", "rand_CORE"] }
+sha2 = "0.10.8"
+sha3 = "0.10.8"
+hmac = "0.12.1"
+ripemd160 = "0.10.0"
+padding = "1.4.1"
+
+# Utilities
+base64 = "0.22"
+hex = "0.4"
+rand = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async
+tokio = { version = "1.36", features = ["full"] }
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+criterion = "0.5"
+proptest = "1.4"
+
+[[bench]]
+name = "crypto"
+harness = false
