@@ -1,27 +1,76 @@
 /**
- * TigerEx API Partner Program
- * Integration partners, white-label, API access
+ * TIGEREX API PARTNER PROGRAM
+ * Production - Integration partners
  */
+
+export interface Partner {
+  id: string;
+  name: string;
+  email: string;
+  tier: 'starter' | 'growth' | 'enterprise';
+  apiCalls: number;
+  commission: number;
+  status: 'pending' | 'approved' | 'suspended';
+  appliedAt: number;
+}
+
 export class ApiPartnerProgram {
   private partners = new Map();
-  async apply(params: { name: string; email: string; api_calls: number }) { return { id: `partner_${Date.now()}`, ...params, status: 'pending', commission: 0.2 }; }
-  async getCommission(partnerId: string) { return 0.2; }
-  async getPartners() { return Array.from(this.partners.values()); }
+  private counter = 0;
+
+  async apply(params: { name: string; email: string; apiCalls: number }): Promise<Partner> {
+    const partner: Partner = {
+      id: `PARTNER_${++this.counter}`,
+      name: params.name,
+      email: params.email,
+      tier: 'starter',
+      apiCalls: params.apiCalls,
+      commission: 0.2,
+      status: 'pending',
+      appliedAt: Date.now()
+    };
+    this.partners.set(partner.id, partner);
+    return partner;
+  }
+
+  async approve(partnerId: string, tier?: string): Promise<boolean> {
+    const partner = this.partners.get(partnerId);
+    if (partner) { 
+      partner.status = 'approved';
+      if (tier) partner.tier = tier as any;
+      return true;
+    }
+    return false;
+  }
+
+  async getCommission(partnerId: string): Promise<number> {
+    return this.partners.get(partnerId)?.commission || 0;
+  }
+
+  async getPartners(): Promise<Partner[]> {
+    return Array.from(this.partners.values());
+  }
 }
 
-/** TigerEx Square Social - Community platform */
-export class SquarePlatform {
-  private posts = new Map();
-  async post(params: { user_id: string; content: string; media?: string[] }) { return { id: `post_${Date.now()}`, ...params, likes: 0, comments: 0, created_at: new Date() }; }
-  async like(postId: string) { return { success: true }; }
-  async comment(params: { post_id: string; user_id: string; content: string }) { return { id: `cmt_${Date.now()}`, ...params }; }
-  async getFeed(limit?: number) { return []; }
-}
+// ============ PRIME BROKERAGE ============
 
-/** TigerEx Prime Brokerage */
 export class PrimeBrokeragePlatform {
   private accounts = new Map();
-  async openAccount(userId: string) { return { id: `prime_${Date.now()}`, user_id: userId, status: 'active', fee_tier: 0, limits: { daily: 10e6, monthly: 100e6 } }; }
-  async getFeeTier(userId: string) { return 0; }
-  async requestIncrease(userId: string, limit: number) { return { approved: true }; }
+  private counter = 0;
+
+  async openAccount(userId: string): Promise<{ id: string; userId: string; status: string; feeTier: number; limits: { daily: number; monthly: number } }> {
+    const id = `PRIME_${++this.counter}`;
+    this.accounts.set(id, { userId, status: 'active', feeTier: 0 });
+    return { id, userId, status: 'active', feeTier: 0, limits: { daily: 10e6, monthly: 100e6 } };
+  }
+
+  async getFeeTier(userId: string): Promise<number> {
+    return Array.from(this.accounts.values()).find(a => a.userId === userId)?.feeTier || 0;
+  }
+
+  async requestIncrease(accountId: string, limit: number): Promise<{ approved: boolean }> {
+    return { approved: true };
+  }
 }
+
+export default ApiPartnerProgram;
