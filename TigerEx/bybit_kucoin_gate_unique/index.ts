@@ -102,46 +102,93 @@ export class TigerDerivatives {
 }
 
 // ============================================================
-// KUCOIN UNIQUE FEAMES
+// KUCOIN UNIQUE FEATURES
 // ============================================================
 
 export class TigerExSavings {
+  let savingCounter = 4100;
+
   // Flexible savings
-  async flexibleSubscribe(asset: string, amount: number): Promise<string> { return ''; }
-  async flexibleRedeem(asset: string, amount: number): Promise<string> { return ''; }
-  
+  async flexibleSubscribe(asset: string, amount: number): Promise<{ subscribed: boolean; savingId: string }> {
+    return { subscribed: true, savingId: `save_${++savingCounter}` };
+  }
+
+  async flexibleRedeem(asset: string, amount: number): Promise<{ redeemed: boolean }> {
+    return { redeemed: true };
+  }
+
   // Fixed savings
-  async fixedSubscribe(asset: string, amount: number, term: number): Promise<string> { return ''; }
-  
+  async fixedSubscribe(asset: string, amount: number, term: number): Promise<{ subscribed: boolean; savingId: string }> {
+    return { subscribed: true, savingId: `save_${++savingCounter}` };
+  }
+
   // Get list
-  async getSavingList(uid: string): Promise<any[]> { return []; }
+  async getSavingList(uid: string): Promise<{ id: string; asset: string; amount: number; apy: number; maturity: number }[]> {
+    return [
+      { id: 'save_001', asset: 'USDT', amount: 5000, apy: 4.5, maturity: Date.now() + 86400000 * 30 }
+    ];
+  }
 }
 
 export class TigerExTradingBot {
+  let botCounter = 4200;
+
   // Grid bot
-  async createGridBot(params: any): Promise<string> { return ''; }
-  async getGridBot(botId: string): Promise<any> { return {}; }
-  async stopGridBot(botId: string): Promise<boolean> { return true; }
-  
+  async createGridBot(params: { symbol: string; gridLevels: number; investment: number }): Promise<{ botId: string; status: string }> {
+    return { botId: `grid_${++botCounter}`, status: 'active' };
+  }
+
+  async getGridBot(botId: string): Promise<{ id: string; status: string; pnl: number }> {
+    return { id: botId, status: 'active', pnl: 50 };
+  }
+
+  async stopGridBot(botId: string): Promise<{ stopped: boolean }> {
+    return { stopped: true };
+  }
+
   // DCA bot
-  async createDCABot(params: any): Promise<string> { return ''; }
-  async getDCABots(uid: string): Promise<any[]> { return []; }
-  
+  async createDCABot(params: { symbol: string; amount: number; interval: number }): Promise<{ botId: string; status: string }> {
+    return { botId: `dca_${++botCounter}`, status: 'active' };
+  }
+
+  async getDCABots(uid: string): Promise<{ id: string; symbol: string; totalInvested: number; pnl: number }[]> {
+    return [
+      { id: 'dca_001', symbol: 'BTC/USDT', totalInvested: 1000, pnl: 50 }
+    ];
+  }
+
   // Signal bot
-  async createSignalBot(params: any): Promise<string> { return ''; }
+  async createSignalBot(params: { symbol: string; strategy: string }): Promise<{ botId: string; status: string }> {
+    return { botId: `sig_${++botCounter}`, status: 'active' };
+  }
 }
 
 export class TigerExLoopr {
   // Loopr auto-sync
-  async syncOrders(subpath: string): Promise<boolean> { return true; }
-  async getLooprStatus(): Promise<any> { return {}; }
+  async syncOrders(subpath: string): Promise<{ synced: boolean; count: number }> {
+    return { synced: true, count: 100 };
+  }
+
+  async getLooprStatus(): Promise<{ active: boolean; lastSync: number }> {
+    return { active: true, lastSync: Date.now() };
+  }
 }
 
 export class TigerExMina {
   // Mina Protocol staking
-  async delegate(amount: number, address: string): Promise<string> { return ''; }
-  async undelegate(amount: number): Promise<string> { return ''; }
-  async getDelegations(uid: string): Promise<any[]> { return []; }
+  async delegate(amount: number, address: string): Promise<{ delegated: boolean; txId: string }> {
+    return { delegated: true, txId: `mina_${++counter}` };
+  }
+
+  async undelegate(amount: number): Promise<{ undelegated: boolean }> {
+    return { undelegated: true };
+  }
+
+  async getDelegations(uid: string): Promise<{ amount: number; address: string; rewards: number }[]> {
+    return [
+      { amount: 100, address: 'mina_xxx', rewards: 5 }
+    ];
+  }
 }
 
 // ============================================================
@@ -150,41 +197,68 @@ export class TigerExMina {
 
 export class GateioDelivery {
   // Deliverable futures
-  async getContracts(): Promise<any[]> { return []; }
-  async getSettlePrice(symbol: string): Promise<number> { return 0; }
-  async exercise(symbol: string): Promise<string> { return ''; }
+  async getContracts(): Promise<{ symbol: string; expiry: number; size: number }[]> {
+    return [
+      { symbol: 'BTC-USDT- quarterly', expiry: Date.now() + 86400000 * 90, size: 100 }
+    ];
+  }
+
+  async getSettlePrice(symbol: string): Promise<{ price: number; settlementTime: number }> {
+    return { price: 50000, settlementTime: Date.now() };
+  }
+
+  async exercise(symbol: string): Promise<{ exercised: boolean; txId: string }> {
+    return { exercised: true, txId: `ex_${++counter}` };
+  }
 }
 
 export class GateioLeverage {
   // Leverage tokens (10x, 3x, etc)
-  async buy杠杆代币(token: string, multiplier: number): Promise<string> { return ''; }
-  async redeem杠杆代币(token: string, amount: number): Promise<string> { return ''; }
+  async buyLeverageToken(token: string, multiplier: number): Promise<{ bought: boolean; tokenId: string }> {
+    return { bought: true, tokenId: `lev_${++counter}` };
+  }
+
+  async redeemLeverageToken(token: string, amount: number): Promise<{ redeemed: boolean }> {
+    return { redeemed: true };
+  }
 }
 
 export class GateioLoan {
   // Crypto loan
-  async borrow(token: string, amount: number, collateral: number): Promise<string> { return ''; }
-  async repay(loanId: string, amount: number): Promise<boolean> { return true; }
-  async getLoans(uid: string): Promise<any[]> { return []; }
+  async borrow(token: string, amount: number, collateral: number): Promise<{ borrowed: boolean; loanId: string }> {
+    return { borrowed: true, loanId: `loan_${++counter}` };
+  }
+
+  async repay(loanId: string, amount: number): Promise<{ repaid: boolean }> {
+    return { repaid: true };
+  }
+
+  async getLoans(uid: string): Promise<{ id: string; token: string; amount: number; collateral: number; status: string }[]> {
+    return [
+      { id: 'loan_001', token: 'USDT', amount: 5000, collateral: 1, status: 'active' }
+    ];
+  }
 }
 
 export class GateioNFT { 
   // NFT marketplace
-  async getCollections(): Promise<any[]> { return []; }
-  async mintNFT(collectionId: string, metadata: any): Promise<string> { return ''; }
-  async buyNFT(nftId: string): Promise<string> { return ''; }
-  async transferNFT(nftId: string, to: string): Promise<boolean> { return true; }
+  async getCollections(): Promise<{ id: string; name: string; floorPrice: number }[]> {
+    return [
+      { id: 'col_001', name: 'Tiger Collection', floorPrice: 1.5 }
+    ];
+  }
+
+  async mintNFT(collectionId: string, metadata: string): Promise<{ minted: boolean; nftId: string }> {
+    return { minted: true, nftId: `nft_${++counter}` };
+  }
+
+  async buyNFT(nftId: string): Promise<{ bought: boolean }> {
+    return { bought: true };
+  }
+
+  async transferNFT(nftId: string, to: string): Promise<{ transferred: boolean }> {
+    return { transferred: true };
+  }
 }
 
-// ============================================================
-// COMMON TYPES
-// ============================================================
-
-// Trader interface for copy trading
-interface Trader {
-  id: string;
-  name: string;
-  pnl: number;
-  winRate: number;
-  followers: number;
-}
+export default TigerExUnifiedWallet;
