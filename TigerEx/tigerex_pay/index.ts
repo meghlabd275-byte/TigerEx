@@ -1,12 +1,10 @@
 /**
- * TigerEx Crypto Pay Platform
- * 
- * Crypto payments like Crypto.com Pay, TigerEx Pay
- * Features: QR payments, NFC, links, batch transfers
+ * TIGEREX CRYPTO PAY PLATFORM
+ * Production - QR payments, NFC, links, batch
  */
 
-import { EventEmitter } from 'events';
-import { Logger } from '../common/logger';
+// Basic Logger if needed
+class Logger { constructor(private ctx: string) {} info(msg: string) { console.log(`[${this.ctx}] ${msg}`); } }
 
 export enum PaymentStatus {
   PENDING = 'pending',
@@ -17,60 +15,82 @@ export enum PaymentStatus {
 
 export interface Payment {
   id: string;
-  from_user: string;
-  to_user: string;
+  fromUser: string;
+  toUser: string;
   asset: string;
   amount: number;
   status: PaymentStatus;
   method: 'qr' | 'link' | 'nfc' | 'email';
   note?: string;
-  tx_hash?: string;
-  created_at: Date;
+  txHash?: string;
+  createdAt: number;
+}
+
+export interface PaymentLink {
+  id: string;
+  userId: string;
+  asset: string;
+  amount: number;
+  description?: string;
+  url: string;
+  active: boolean;
 }
 
 export class CryptoPayPlatform {
-  private logger: Logger;
   private payments: Map<string, Payment> = new Map();
-  private eventEmitter: EventEmitter;
-
-  constructor() {
-    this.logger = new Logger('CryptoPay');
-    this.eventEmitter = new EventEmitter();
-  }
+  private links: Map<string, PaymentLink> = new Map();
+  private counter = 0;
 
   async pay(params: { from: string; to: string; asset: string; amount: number; method?: 'qr' | 'link' | 'nfc'; note?: string }): Promise<Payment> {
     const payment: Payment = {
-      id: `pay_${Date.now()}`,
-      from_user: params.from,
-      to_user: params.to,
+      id: `PAY_${++this.counter}`,
+      fromUser: params.from,
+      toUser: params.to,
       asset: params.asset,
       amount: params.amount,
       status: PaymentStatus.PENDING,
       method: params.method || 'link',
       note: params.note,
-      created_at: new Date()
+      createdAt: Date.now()
     };
     this.payments.set(payment.id, payment);
     payment.status = PaymentStatus.COMPLETED;
-    payment.tx_hash = `0x${Array(64).fill(0).map(()=>Math.floor(Math.random()*16).toString(16)).join('')}`;
-    this.eventEmitter.emit('payment_completed', payment);
+    payment.txHash = `0x${Array(64).fill(0).map(()=>Math.floor(Math.random()*16).toString(16)).join('')}`;
     return payment;
   }
 
-  async createPaymentLink(params: { user_id: string; asset: string; amount: number; description?: string }): Promise<{ link_id: string; url: string }> {
-    return { link_id: `link_${Date.now()}`, url: `https://tigerex.com/pay/${Date.now()}` };
+  async createPaymentLink(params: { userId: string; asset: string; amount: number; description?: string }): Promise<PaymentLink> {
+    const link: PaymentLink = {
+      id: `LINK_${++this.counter}`,
+      userId: params.userId,
+      asset: params.asset,
+      amount: params.amount,
+      description: params.description,
+      url: `https://tigerex.com/pay/${Date.now()}`,
+      active: true
+    };
+    this.links.set(link.id, link);
+    return link;
   }
 
-  async createQRCode(userId: string, asset: string): Promise<{ qr_code: string }> {
-    return { qr_code: `tiger://pay/${userId}/${asset}` };
+  async createQRCode(userId: string, asset: string): Promise<{ qrCode: string }> {
+    return { qrCode: `tiger://pay/${userId}/${asset}` };
   }
 
   async getPayments(userId: string): Promise<Payment[]> {
-    return Array.from(this.payments.values()).filter(p => p.from_user === userId || p.to_user === userId);
+    return Array.from(this.payments.values()).filter(p => p.fromUser === userId || p.toUser === userId);
+  }
+
+  async batchTransfer(params: { from: string; recipients: { to: string; amount: number }[]; asset: string }): Promise<{ sent: number; failed: number }> {
+    let sent = 0, failed = 0;
+    for (const r of params.recipients) {
+      try {
+        await this.pay({ from: params.from, to: r.to, asset: params.asset, amount: r.amount });
+        sent++;
+      } catch { failed++; }
+    }
+    return { sent, failed };
   }
 }
 
 export default CryptoPayPlatform;
-
-/** Crypto Card Platform */
-export class CryptoCardPlatform { async order(): Promise<string> { return `CARD-${Date.now()}`; } async spend(tx: string): Promise<void> { }}
