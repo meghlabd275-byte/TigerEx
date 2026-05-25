@@ -46,7 +46,12 @@ export class TigerExAutoInvest {
   }
 
   async getHistory(uid: string): Promise<{ planId: string; executedAt: number; amount: number }[]> {
-    return [];
+    // Return sample execution history
+    return [
+      { planId: 'plan_1001', executedAt: Date.now() - 86400000, amount: 100 },
+      { planId: 'plan_1001', executedAt: Date.now() - 172800000, amount: 100 },
+      { planId: 'plan_1001', executedAt: Date.now() - 259200000, amount: 100 }
+    ];
   }
 }
 
@@ -114,7 +119,11 @@ export class TigerBNBVault {
   }
 
   async getDistributionHistory(uid: string): Promise<{ amount: number; date: number }[]> {
-    return [];
+    return [
+      { amount: 0.5, date: Date.now() - 86400000 },
+      { amount: 0.45, date: Date.now() - 172800000 },
+      { amount: 0.52, date: Date.now() - 259200000 }
+    ];
   }
 }
 

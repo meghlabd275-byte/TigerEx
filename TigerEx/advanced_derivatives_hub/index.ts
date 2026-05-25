@@ -24,16 +24,45 @@ export class TigerExDerivativesPro {
   async executeDarkPool(params: { symbol: string; side: string; amount: number; price: number }): Promise<{ orderId: string; executed: boolean }> {
     return { orderId: `dp_${++counter}`, executed: true };
   }
-  async getDarkPoolHistory(uid: string): Promise<{ orderId: string; symbol: string; amount: number }[]> { return []; }
 
-  async getCalendarSpreads(): Promise<{ symbol: string; expiry1: string; expiry2: string; spread: number }[]> { return []; }
+  async getDarkPoolHistory(uid: string): Promise<{ orderId: string; symbol: string; amount: number }[]> {
+    return [
+      { orderId: 'dp_2001', symbol: 'BTC/USDT', amount: 0.5 },
+      { orderId: 'dp_2002', symbol: 'ETH/USDT', amount: 2 }
+    ];
+  }
+
+  async getCalendarSpreads(): Promise<{ symbol: string; expiry1: string; expiry2: string; spread: number }[]> {
+    return [
+      { symbol: 'BTC', expiry1: 'MAR25', expiry2: 'JUN25', spread: 0.02 },
+      { symbol: 'ETH', expiry1: 'MAR25', expiry2: 'JUN25', spread: 0.015 }
+    ];
+  }
+
   async tradeCalendarSpread(params: { product: string; amount: number }): Promise<{ orderId: string }> {
     return { orderId: `cs_${++counter}` };
   }
 
-  async getStockFutures(): Promise<{ symbol: string; name: string; multiplier: number }[]> { return []; }
-  async getIndexFutures(): Promise<{ symbol: string; name: string; tickSize: number }[]> { return []; }
-  async getForexFutures(): Promise<{ symbol: string; pair: string }[]> { return []; }
+  async getStockFutures(): Promise<{ symbol: string; name: string; multiplier: number }[]> {
+    return [
+      { symbol: 'AAPL', name: 'Apple Inc', multiplier: 100 },
+      { symbol: 'TSLA', name: 'Tesla Inc', multiplier: 100 }
+    ];
+  }
+
+  async getIndexFutures(): Promise<{ symbol: string; name: string; tickSize: number }[]> {
+    return [
+      { symbol: 'SPX', name: 'S&P 500', tickSize: 0.1 },
+      { symbol: 'NDX', name: 'Nasdaq 100', tickSize: 0.05 }
+    ];
+  }
+
+  async getForexFutures(): Promise<{ symbol: string; pair: string }[]> {
+    return [
+      { symbol: 'EUR/USD', pair: 'EUR/USD' },
+      { symbol: 'GBP/USD', pair: 'GBP/USD' }
+    ];
+  }
 
   // ============================================================
   // BITGET/OKX-STYLE FEATURES
@@ -69,7 +98,13 @@ export class TigerExDerivativesPro {
     return { redeemed: true, amount: 0 };
   }
 
-  async getDualCurrencyProducts(): Promise<{ id: string; asset: string; tenor: number; apy: number }[]> { return []; }
+  async getDualCurrencyProducts(): Promise<{ id: string; asset: string; tenor: number; apy: number }[]> {
+    return [
+      { id: 'dc_1', asset: 'BTC', tenor: 7, apy: 8 },
+      { id: 'dc_2', asset: 'ETH', tenor: 14, apy: 6 }
+    ];
+  }
+
   async subscribeDualCurrency(params: { asset: string; amount: number; tenor: number }): Promise<{ subscribed: boolean }> {
     return { subscribed: true };
   }
@@ -88,7 +123,13 @@ export class TigerExDerivativesPro {
 
   async unstakeMX(): Promise<{ unstaked: boolean }> { return { unstaked: true }; }
 
-  async getLaunchpadProjects(): Promise<{ id: string; name: string; hardcap: number; allocation: number }[]> { return []; }
+  async getLaunchpadProjects(): Promise<{ id: string; name: string; hardcap: number; allocation: number }[]> {
+    return [
+      { id: 'lp_1', name: 'TigerEx Token', hardcap: 1000000, allocation: 100 },
+      { id: 'lp_2', name: 'New Coin', hardcap: 500000, allocation: 50 }
+    ];
+  }
+
   async allocateToProject(projectId: string, amount: number): Promise<{ allocated: boolean }> {
     return { allocated: true };
   }
