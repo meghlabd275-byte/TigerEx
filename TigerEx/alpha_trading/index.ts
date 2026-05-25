@@ -59,12 +59,13 @@ export class AlphaTrading {
     return { success: true, points: 100 };
   }
 
-  // Get user quest progress
-  async getQuestProgress(userId: string): Promise<any[]> {
-    return [];
+  async getQuestProgress(userId: string): Promise<{ questId: string; taskId: string; completed: boolean }[]> {
+    return [
+      { questId: 'q_001', taskId: 't_001', completed: true },
+      { questId: 'q_001', taskId: 't_002', completed: false }
+    ];
   }
 
-  // Claim alpha rewards
   async claimRewards(questId: string): Promise<{ success: boolean; amount: number }> {
     return { success: true, amount: 100 };
   }
