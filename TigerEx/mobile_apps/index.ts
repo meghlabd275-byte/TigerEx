@@ -26,9 +26,22 @@ export class TigerExMobile {
   async resetPassword(token: string, newPass: string): Promise<{ success: boolean }> { return { success: true }; }
   
   // Portfolio
-  async getWallet(): Promise<{ balance: Record<string, number>; totalUSD: number }> { return { balance: {}, totalUSD: 0 }; }
-  async getBalances(): Promise<{ asset: string; free: number; locked: number }[]> { return []; }
-  async getTransactions(page: number): Promise<{ id: string; type: string; amount: number; status: string }[]> { return []; }
+  async getWallet(): Promise<{ balance: Record<string, number>; totalUSD: number }> { 
+    return { balance: { BTC: 1.5, ETH: 10, USDT: 50000 }, totalUSD: 150000 }; 
+  }
+  async getBalances(): Promise<{ asset: string; free: number; locked: number }[]> { 
+    return [
+      { asset: 'BTC', free: 1, locked: 0.5 },
+      { asset: 'ETH', free: 8, locked: 2 },
+      { asset: 'USDT', free: 40000, locked: 10000 }
+    ]; 
+  }
+  async getTransactions(page: number): Promise<{ id: string; type: string; amount: number; status: string }[]> { 
+    return [
+      { id: 'tx_001', type: 'deposit', amount: 1000, status: 'completed' },
+      { id: 'tx_002', type: 'withdrawal', amount: 500, status: 'completed' }
+    ]; 
+  }
   
   // Trading
   async placeOrder(params: { symbol: string; side: string; type: string; qty: number; price?: number }): Promise<{ orderId: string; status: string }> {
