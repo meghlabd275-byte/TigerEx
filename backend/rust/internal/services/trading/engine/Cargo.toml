@@ -1,0 +1,8 @@
+[package]
+name = "tigerex-trading-engine"
+version = "1.0.0"
+edition = "2021"
+description = "TigerEx Trading Engine"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
