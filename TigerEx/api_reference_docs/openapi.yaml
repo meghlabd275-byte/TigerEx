@@ -1,0 +1,38 @@
+openapi: 3.0.3
+info:
+  title: TigerEx API
+  version: 1.0.0
+  description: Professional crypto exchange API
+servers:
+  - url: https://api.tigerex.io
+    description: Production
+paths:
+  /api/v1/user/profile:
+    get:
+      summary: Get user profile
+      responses:
+        '200':
+          description: OK
+  /api/v1/market/ticker:
+    get:
+      summary: Get ticker
+      parameters:
+        - name: symbol
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+  /api/v1/order:
+    post:
+      summary: Place order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: OK
