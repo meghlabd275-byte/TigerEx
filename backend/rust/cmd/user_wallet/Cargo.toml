@@ -1,0 +1,8 @@
+[package]
+name = "tigerex-user-wallet"
+version = "1.0.0"
+edition = "2021"
+description = "TigerEx User Wallet Service"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
