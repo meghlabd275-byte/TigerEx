@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: tigerex
+  labels:
+    app: user-service
+spec:
+  replicas: 10
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      containers:
+      - name: user-service
+        image: tigerex/user-service:latest
+        ports:
+        - containerPort: 8081
+        env:
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: tigerex-secrets
+              key: jwt-secret
+        - name: DB_HOST
+          value: "postgres.tigerex.svc.cluster.local"
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: tigerex
+spec:
+  clusterIP: None
+  ports:
+  - port: 8081
+    targetPort: 8081
+  selector:
+    app: user-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: tigerex
+  labels:
+    app: order-service
+spec:
+  replicas: 15
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      containers:
+      - name: order-service
+        image: tigerex/order-service:latest
+        ports:
+        - containerPort: 8082
+        env:
+        - name: MATCHING_ENGINE_URL
+          value: "http://matching-engine:8080"
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 512Mi
+          limits:
+            cpu: 2000m
+            memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: tigerex
+spec:
+  clusterIP: None
+  ports:
+  - port: 8082
+    targetPort: 8082
+  selector:
+    app: order-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wallet-service
+  namespace: tigerex
+  labels:
+    app: wallet-service
+spec:
+  replicas: 10
+  selector:
+    matchLabels:
+      app: wallet-service
+  template:
+    metadata:
+      labels:
+        app: wallet-service
+    spec:
+      containers:
+      - name: wallet-service
+        image: tigerex/wallet-service:latest
+        ports:
+        - containerPort: 8083
+        env:
+        - name: HOT_WALLET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: tigerex-secrets
+              key: hot-wallet-key
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wallet-service
+  namespace: tigerex
+spec:
+  clusterIP: None
+  ports:
+  - port: 8083
+    targetPort: 8083
+  selector:
+    app: wallet-service

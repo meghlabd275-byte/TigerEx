@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tigerex-config
+  namespace: tigerex
+data:
+  DATABASE_HOST: "postgres.tigerex.svc.cluster.local"
+  DATABASE_PORT: "5432"
+  REDIS_HOST: "redis.tigerex.svc.cluster.local"
+  REDIS_PORT: "6379"
+  KAFKA_BOOTSTRAP_SERVERS: "kafka.tigerex.svc.cluster.local:9092"
+  LOG_LEVEL: "info"
+  ENVIRONMENT: "production"
+  MAX_CONNECTIONS: "1000"
+  RATE_LIMIT: "1000000"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tigerex-secrets
+  namespace: tigerex
+type: Opaque
+stringData:
+  jwt-secret: "change-this-in-production-32-char-min!"
+  hot-wallet-key: "change-this-in-production"
+  api密钥: "change-this-in-production"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: tigerex
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: ssd
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: tigerex
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: ssd
