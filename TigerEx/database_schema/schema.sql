@@ -325,6 +325,24 @@ ANALYZE transactions;
 ALTER TABLE users ALTER COLUMN status SET STATISTICS 100;
 ALTER TABLE orders ALTER COLUMN status SET STATISTICS 100;
 
+-- =============================================================================
+-- LEDGER TABLE (for transaction history)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS ledger (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    type VARCHAR(50) NOT NULL, -- deposit, withdrawal, trade, fee, adjustment
+    amount DECIMAL(36, 18) NOT NULL,
+    balance DECIMAL(36, 18) NOT NULL,
+    reference VARCHAR(255),
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_ledger_account ON ledger(account_id);
+CREATE INDEX idx_ledger_type ON ledger(type);
+CREATE INDEX idx_ledger_created ON ledger(created_at);
+
 -- Vacuum regularly
 CREATE CONCURRENTLY IF NOT EXISTS vacuum_schedule(
     job_name TEXT,
