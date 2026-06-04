@@ -12,13 +12,26 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./TigerEx/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
       
   # Redis Cache
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
-      
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # Kafka for event streaming
   kafka:
     image: confluentinc/cp-kafka:7.5.0
@@ -55,6 +68,66 @@ services:
     depends_on:
       - elasticsearch
 
+  # TigerEx API Server
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: tigerex-api
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: tigerex
+      DB_USER: postgres
+      DB_PASSWORD: dev
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # WebSocket Server
+  websocket:
+    build:
+      context: .
+      dockerfile: Dockerfile.ws
+    container_name: tigerex-websocket
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+
+  # Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: tigerex-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  # Admin Panel
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    container_name: tigerex-admin
+    ports:
+      - "3001:3001"
+    depends_on:
+      - api
+
 volumes:
   postgres_data:
   es_data:
+  redis_data:
+
+networks:
+  default:
+    name: tigerex-network
