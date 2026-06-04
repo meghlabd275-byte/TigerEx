@@ -130,3 +130,66 @@ func GetUserID(c *gin.Context) string {
 func InitDB(pool *pgxpool.Pool) {
 	models.Pool = pool
 }
+
+// Admin authentication middleware
+func AdminAuthRequired() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Authorization required"}})
+			c.Abort()
+			return
+		}
+
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		if tokenString == authHeader {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Bearer token required"}})
+			c.Abort()
+			return
+		}
+
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			return JWTSecret, nil
+		})
+
+		if err != nil || !token.Valid {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Invalid token"}})
+			c.Abort()
+			return
+		}
+
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Invalid claims"}})
+			c.Abort()
+			return
+		}
+
+		adminID, ok := claims["admin_id"].(string)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Admin ID not found"}})
+			c.Abort()
+			return
+		}
+
+		username, _ := claims["username"].(string)
+		role, _ := claims["role"].(string)
+		perms, _ := claims["permissions"].([]interface{})
+
+		// Convert permissions to string slice
+		var permStrings []string
+		for _, p := range perms {
+			if ps, ok := p.(string); ok {
+				permStrings = append(permStrings, ps)
+			}
+		}
+
+		// Set admin info in context
+		c.Set("admin_id", adminID)
+		c.Set("admin_username", username)
+		c.Set("admin_role", role)
+		c.Set("admin_permissions", permStrings)
+
+		c.Next()
+	}
+}

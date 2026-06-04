@@ -1,5 +1,5 @@
 // TigerEx Main Entry Point - Go + Rust Backend
-// Complete exchange: Spot, Futures, Margin, Options, P2P, Earn, Staking
+// Complete exchange: Spot, Futures, Margin, Options, P2P, Earn, Staking, Admin
 package main
 
 import (
@@ -17,7 +17,6 @@ import (
 	"tigerex/server/handlers"
 	"tigerex/server/middleware"
 	"tigerex/server/models"
-)
 
 // @title TigerEx API
 // @version 1.0
@@ -197,6 +196,74 @@ func main() {
 			user.POST("/kyc", handlers.SubmitKYC)
 			user.GET("/kyc/status", handlers.GetKYCStatus)
 			user.POST("/change-password", handlers.ChangePassword)
+		}
+	}
+
+	// Admin routes (separate domain /app)
+	admin := r.Group("/admin")
+	{
+		admin.POST("/login", handlers.AdminLogin)
+		admin.POST("/logout", handlers.AdminLogout)
+
+		// Admin middleware for protected routes
+		adminAuth := admin.Group("")
+		adminAuth.Use(middleware.AdminAuthRequired())
+		{
+			// Admin Management
+			adminAuth.GET("/admins", handlers.GetAllAdmins)
+			adminAuth.POST("/admins", handlers.CreateAdmin)
+			adminAuth.PUT("/admins/:adminId", handlers.UpdateAdmin)
+			adminAuth.DELETE("/admins/:adminId", handlers.DeleteAdmin)
+
+			// User Management
+			adminAuth.GET("/users", handlers.GetAllUsers)
+			adminAuth.GET("/users/:userId", handlers.GetUserDetail)
+			adminAuth.PUT("/users/:userId", handlers.UpdateUser)
+			adminAuth.DELETE("/users/:userId", handlers.DeleteUser)
+			adminAuth.POST("/users/:userId/reset-password", handlers.ForceResetPassword)
+
+			// KYC Management
+			adminAuth.GET("/kyc", handlers.GetAllKYCDocuments)
+			adminAuth.PUT("/kyc/:docId", handlers.ApproveKYC)
+
+			// Pairs Management
+			adminAuth.GET("/pairs", handlers.GetAllPairs)
+			adminAuth.POST("/pairs", handlers.CreatePair)
+			adminAuth.PUT("/pairs/:pairId", handlers.UpdatePair)
+			adminAuth.DELETE("/pairs/:pairId", handlers.DeletePair)
+			adminAuth.POST("/pairs/import", handlers.ImportPairsFromCEX)
+
+			// Fees Management
+			adminAuth.GET("/fees", handlers.GetAllFeeStructures)
+			adminAuth.POST("/fees", handlers.CreateFeeStructure)
+
+			// Withdrawals
+			adminAuth.GET("/withdrawals", handlers.GetAllWithdrawals)
+			adminAuth.PUT("/withdrawals/:withdrawalId", handlers.ProcessWithdrawal)
+
+			// Support Tickets
+			adminAuth.GET("/tickets", handlers.GetAllTickets)
+			adminAuth.PUT("/tickets/:ticketId", handlers.RespondToTicket)
+
+			// Analytics
+			adminAuth.GET("/analytics", handlers.GetAnalytics)
+
+			// API Keys
+			adminAuth.GET("/api-keys", handlers.GetAPIManagement)
+			adminAuth.PUT("/api-keys/:keyId/revoke", handlers.RevokeAPIKey)
+
+			// Tokens
+			adminAuth.POST("/tokens", handlers.CreateToken)
+
+			// NFTs
+			adminAuth.POST("/nfts", handlers.CreateNFTCollection)
+
+			// Cloud Mining
+			adminAuth.GET("/cloud-mining", handlers.GetCloudMiningProducts)
+			adminAuth.POST("/cloud-mining", handlers.CreateCloudMiningProduct)
+
+			// Audit Log
+			adminAuth.GET("/audit-log", handlers.GetAuditLog)
 		}
 	}
 
