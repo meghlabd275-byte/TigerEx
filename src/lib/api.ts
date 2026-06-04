@@ -1,5 +1,7 @@
-// TigerEx API Client Library
-// Complete TypeScript SDK for interacting with TigerEx Backend
+// TigerEx API Client Library - Updated for Go Backend
+// Point to local backend during development
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
 
 // =============================================================================
 // TYPES
@@ -175,7 +177,7 @@ export class TigerExClient {
   private accessToken: string | null = null;
   private refreshToken: string | null = null;
 
-  constructor(baseURL: string = 'https://api.tigerex.com') {
+  constructor(baseURL: string = API_BASE_URL) {
     this.baseURL = baseURL;
     this.loadTokens();
   }
@@ -192,7 +194,7 @@ export class TigerExClient {
     referralCode?: string;
     termsAccepted: boolean;
   }): Promise<APIResponse<AuthTokens>> {
-    const response = await this.request('/api/v3/user/register', {
+    const response = await this.request('/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -205,7 +207,7 @@ export class TigerExClient {
   }
 
   async login(email: string, password: string): Promise<APIResponse<AuthTokens>> {
-    const response = await this.request('/api/v3/user/login', {
+    const response = await this.request('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
@@ -218,7 +220,7 @@ export class TigerExClient {
   }
 
   async logout(): Promise<APIResponse<void>> {
-    const response = await this.request('/api/v3/user/logout', {
+    const response = await this.request('/auth/logout', {
       method: 'POST',
     });
     
@@ -229,7 +231,7 @@ export class TigerExClient {
   async refreshAccessToken(): Promise<boolean> {
     if (!this.refreshToken) return false;
     
-    const response = await this.request('/api/v3/user/refresh', {
+    const response = await this.request('/auth/refresh', {
       method: 'POST',
       body: JSON.stringify({ refreshToken: this.refreshToken }),
     });
@@ -247,15 +249,15 @@ export class TigerExClient {
   // ==========================================================================
 
   async getAccountInfo(): Promise<APIResponse<User>> {
-    return this.request('/api/v3/account/info');
+    return this.request('/api/v1/account/info');
   }
 
   async getProfile(): Promise<APIResponse<User>> {
-    return this.request('/api/v3/account/profile');
+    return this.request('/api/v1/account/profile');
   }
 
   async updateProfile(data: Partial<User>): Promise<APIResponse<User>> {
-    return this.request('/api/v3/account/profile', {
+    return this.request('/api/v1/account/profile', {
       method: 'PUT',
       body: JSON.stringify(data),
     });
@@ -267,7 +269,7 @@ export class TigerExClient {
 
   async getBalances(walletType?: string): Promise<APIResponse<Balance[]>> {
     const params = walletType ? `?walletType=${walletType}` : '';
-    return this.request(`/api/v3/account/balance${params}`);
+    return this.request(`/api/v1/account/balance${params}`);
   }
 
   async getDepositAddress(currency: string, network?: string): Promise<APIResponse<{
@@ -278,11 +280,11 @@ export class TigerExClient {
   }>> {
     const params = new URLSearchParams({ currency });
     if (network) params.append('network', network);
-    return this.request(`/api/v3/account/deposit/address?${params}`);
+    return this.request(`/api/v1/account/deposit/address?${params}`);
   }
 
   async getDeposits(limit: number = 50): Promise<APIResponse<Deposit[]>> {
-    return this.request(`/api/v3/account/deposits?limit=${limit}`);
+    return this.request(`/api/v1/account/deposits?limit=${limit}`);
   }
 
   async requestWithdrawal(data: {
@@ -291,14 +293,14 @@ export class TigerExClient {
     toAddress: string;
     network?: string;
   }): Promise<APIResponse<Withdrawal>> {
-    return this.request('/api/v3/account/withdraw', {
+    return this.request('/api/v1/account/withdraw', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
   async getWithdrawals(limit: number = 50): Promise<APIResponse<Withdrawal[]>> {
-    return this.request(`/api/v3/account/withdrawals?limit=${limit}`);
+    return this.request(`/api/v1/account/withdrawals?limit=${limit}`);
   }
 
   async transfer(data: {
@@ -306,7 +308,7 @@ export class TigerExClient {
     currency: string;
     amount: number;
   }): Promise<APIResponse<void>> {
-    return this.request('/api/v3/account/transfer', {
+    return this.request('/api/v1/account/transfer', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -317,23 +319,23 @@ export class TigerExClient {
   // ==========================================================================
 
   async getExchangeInfo(): Promise<APIResponse<ExchangeInfo>> {
-    return this.request('/api/v3/exchangeinfo');
+    return this.request('/api/v1/exchangeinfo');
   }
 
   async getMarkets(): Promise<APIResponse<Market[]>> {
-    return this.request('/api/v3/markets');
+    return this.request('/api/v1/markets');
   }
 
   async getOrderBook(symbol: string, limit: number = 20): Promise<APIResponse<OrderBook>> {
-    return this.request(`/api/v3/depth/${symbol}?limit=${limit}`);
+    return this.request(`/api/v1/depth/${symbol}?limit=${limit}`);
   }
 
   async getTicker(symbol: string): Promise<APIResponse<Ticker>> {
-    return this.request(`/api/v3/ticker/${symbol}`);
+    return this.request(`/api/v1/ticker/${symbol}`);
   }
 
   async getAllTickers(): Promise<APIResponse<Ticker[]>> {
-    return this.request('/api/v3/ticker/price');
+    return this.request('/api/v1/ticker/price');
   }
 
   async placeOrder(data: {
@@ -346,33 +348,33 @@ export class TigerExClient {
     timeInForce?: 'GTC' | 'IOC' | 'FOK';
     clientOrderId?: string;
   }): Promise<APIResponse<Order>> {
-    return this.request('/api/v3/order', {
+    return this.request('/api/v1/order', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
   async cancelOrder(orderId: string): Promise<APIResponse<Order>> {
-    return this.request(`/api/v3/order/${orderId}`, {
+    return this.request(`/api/v1/order/${orderId}`, {
       method: 'DELETE',
     });
   }
 
   async getOpenOrders(symbol?: string): Promise<APIResponse<Order[]>> {
     const params = symbol ? `?symbol=${symbol}` : '';
-    return this.request(`/api/v3/openOrders${params}`);
+    return this.request(`/api/v1/openOrders${params}`);
   }
 
   async getOrderHistory(symbol?: string, limit: number = 50): Promise<APIResponse<Order[]>> {
     const params = new URLSearchParams({ limit: limit.toString() });
     if (symbol) params.append('symbol', symbol);
-    return this.request(`/api/v3/allOrders?${params}`);
+    return this.request(`/api/v1/allOrders?${params}`);
   }
 
   async getMyTrades(symbol?: string, limit: number = 50): Promise<APIResponse<Trade[]>> {
     const params = new URLSearchParams({ limit: limit.toString() });
     if (symbol) params.append('symbol', symbol);
-    return this.request(`/api/v3/myTrades?${params}`);
+    return this.request(`/api/v1/myTrades?${params}`);
   }
 
   // ==========================================================================
@@ -380,21 +382,21 @@ export class TigerExClient {
   // ==========================================================================
 
   async getEarnProducts(): Promise<APIResponse<any[]>> {
-    return this.request('/api/v3/earn/products');
+    return this.request('/api/v1/earn/products');
   }
 
   async subscribeToEarn(data: {
     productId: string;
     amount: number;
   }): Promise<APIResponse<void>> {
-    return this.request('/api/v3/earn/subscribe', {
+    return this.request('/api/v1/earn/subscribe', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
   async getEarnPositions(): Promise<APIResponse<any[]>> {
-    return this.request('/api/v3/earn/positions');
+    return this.request('/api/v1/earn/positions');
   }
 
   // ==========================================================================
@@ -411,18 +413,18 @@ export class TigerExClient {
     keyPrefix: string;
     expiresAt?: string;
   }>> {
-    return this.request('/api/v3/api-keys', {
+    return this.request('/api/v1/api-keys', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
   async getAPIKeys(): Promise<APIResponse<any[]>> {
-    return this.request('/api/v3/api-keys');
+    return this.request('/api/v1/api-keys');
   }
 
   async revokeAPIKey(keyId: string): Promise<APIResponse<void>> {
-    return this.request(`/api/v3/api-keys/${keyId}`, {
+    return this.request(`/api/v1/api-keys/${keyId}`, {
       method: 'DELETE',
     });
   }
