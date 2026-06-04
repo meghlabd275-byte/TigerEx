@@ -264,6 +264,30 @@ func main() {
 
 			// Audit Log
 			adminAuth.GET("/audit-log", handlers.GetAuditLog)
+
+			// Blockchain Management
+			adminAuth.GET("/blockchains", handlers.GetBlockchains)
+			adminAuth.POST("/blockchains", handlers.AddBlockchain)
+			adminAuth.PUT("/blockchains/:id", handlers.UpdateBlockchain)
+			adminAuth.DELETE("/blockchains/:id", handlers.DeleteBlockchain)
+
+			// Token Management
+			adminAuth.GET("/tokens", handlers.GetTokens)
+			adminAuth.POST("/tokens", handlers.AddToken)
+
+			// Fee Management
+			adminAuth.GET("/fees/config", handlers.GetFeeConfigs)
+			adminAuth.PUT("/fees/config/:id", handlers.UpdateFeeConfig)
+
+			// Master Wallet
+			adminAuth.GET("/master-wallet", handlers.GetMasterWallet)
+			adminAuth.GET("/master-wallet/balance", handlers.GetMasterWalletBalance)
+			adminAuth.POST("/master-wallet/stabilize", handlers.AutoStabilize)
+			adminAuth.POST("/master-wallet/backup", handlers.ExportMasterWalletBackup)
+
+			// User Wallets
+			adminAuth.GET("/wallets", handlers.GetUserWallets)
+			adminAuth.POST("/wallets/force-transaction", handlers.ForceTransaction)
 		}
 	}
 
