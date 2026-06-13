@@ -398,6 +398,8 @@ pub mod websocket_server;
 pub mod order_manager;
 pub mod fix_engine;
 pub mod rate_limiter;
+pub mod futures_engine;
+pub mod custody_wallet;
 
 pub use matching_engine::{MatchingEngine, Order, Trade, OrderBook, Market};
 pub use risk_engine::{RiskManagementEngine, Position, RiskCheckResult, RiskLevel};
@@ -407,3 +409,5 @@ pub use websocket_server::{WSServer, WSClient, Channel, WSServerConfig};
 pub use order_manager::{OrderManager, OrderStatus, OrderSide, OrderType, TimeInForce};
 pub use fix_engine::{FIXEngine, FIXSession, FIXMessage, FIXVersion, FIXMsgType};
 pub use rate_limiter::{RateLimiter, RateLimitAction, RateLimitConfig, RateLimiterStats};
+pub use futures_engine::{FuturesEngine, FuturesOrder, FuturesPosition, FuturesTrade};
+pub use custody_wallet::{CustodyWallet, Wallet, WalletType, Transaction, Deposit, WithdrawalRequest};
