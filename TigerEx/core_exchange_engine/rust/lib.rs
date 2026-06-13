@@ -400,6 +400,9 @@ pub mod fix_engine;
 pub mod rate_limiter;
 pub mod futures_engine;
 pub mod custody_wallet;
+pub mod options_engine;
+pub mod blockchain_nodes;
+pub mod distributed_cache;
 
 pub use matching_engine::{MatchingEngine, Order, Trade, OrderBook, Market};
 pub use risk_engine::{RiskManagementEngine, Position, RiskCheckResult, RiskLevel};
@@ -411,3 +414,6 @@ pub use fix_engine::{FIXEngine, FIXSession, FIXMessage, FIXVersion, FIXMsgType};
 pub use rate_limiter::{RateLimiter, RateLimitAction, RateLimitConfig, RateLimiterStats};
 pub use futures_engine::{FuturesEngine, FuturesOrder, FuturesPosition, FuturesTrade};
 pub use custody_wallet::{CustodyWallet, Wallet, WalletType, Transaction, Deposit, WithdrawalRequest};
+pub use options_engine::{OptionsEngine, Greeks};
+pub use blockchain_nodes::{BlockchainNodeManager, Chain, Node, BlockchainTx};
+pub use distributed_cache::{DistributedCache, CacheStats};
