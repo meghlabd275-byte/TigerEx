@@ -31,17 +31,26 @@ export default function HomePage() {
             <Link href="/markets" className="text-sm text-gray-300 hover:text-white transition-colors">
               Markets
             </Link>
-            <Link href="/trade" className="text-sm text-gray-300 hover:text-white transition-colors">
-              Trade
-            </Link>
-            <Link href="/earn" className="text-sm text-gray-300 hover:text-white transition-colors">
-              Earn
+            <Link href="/trade/BTC-USDT" className="text-sm text-gray-300 hover:text-white transition-colors">
+              Spot
             </Link>
             <Link href="/futures" className="text-sm text-gray-300 hover:text-white transition-colors">
               Futures
             </Link>
-            <Link href="/nft" className="text-sm text-gray-300 hover:text-white transition-colors">
-              NFT
+            <Link href="/margin" className="text-sm text-gray-300 hover:text-white transition-colors">
+              Margin
+            </Link>
+            <Link href="/options" className="text-sm text-gray-300 hover:text-white transition-colors">
+              Options
+            </Link>
+            <Link href="/p2p" className="text-sm text-gray-300 hover:text-white transition-colors">
+              P2P
+            </Link>
+            <Link href="/earn" className="text-sm text-gray-300 hover:text-white transition-colors">
+              Earn
+            </Link>
+            <Link href="/wallet" className="text-sm text-gray-300 hover:text-white transition-colors">
+              Wallet
             </Link>
           </nav>
 
