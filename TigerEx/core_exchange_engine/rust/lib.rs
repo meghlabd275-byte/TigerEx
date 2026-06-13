@@ -385,3 +385,25 @@ pub enum BcError {
     ConfirmationTimeout,
     InvalidTx,
 }
+
+// ============================================================================
+// MODULE EXPORTS
+// ============================================================================
+
+pub mod matching_engine;
+pub mod risk_engine;
+pub mod liquidation_engine;
+pub mod market_data;
+pub mod websocket_server;
+pub mod order_manager;
+pub mod fix_engine;
+pub mod rate_limiter;
+
+pub use matching_engine::{MatchingEngine, Order, Trade, OrderBook, Market};
+pub use risk_engine::{RiskManagementEngine, Position, RiskCheckResult, RiskLevel};
+pub use liquidation_engine::{LiquidationEngine, LiquidationEvent, LiquidationStatus, LiquidationConfig};
+pub use market_data::{MarketAggregator, MarketStats, OrderBookSnapshot, Trade as MarketTrade, Kline};
+pub use websocket_server::{WSServer, WSClient, Channel, WSServerConfig};
+pub use order_manager::{OrderManager, OrderStatus, OrderSide, OrderType, TimeInForce};
+pub use fix_engine::{FIXEngine, FIXSession, FIXMessage, FIXVersion, FIXMsgType};
+pub use rate_limiter::{RateLimiter, RateLimitAction, RateLimitConfig, RateLimiterStats};
