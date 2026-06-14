@@ -183,6 +183,62 @@ integrations/
 └── rust/                # Rust core library
 ```
 
+## 🔗 Unified Integration Layer
+
+### Quick Start (New Unified API)
+
+```typescript
+import { 
+  // Core components
+  TigerExProvider,
+  getTigerExConfig,
+  getPlatformInfo,
+  initializeTigerEx,
+  
+  // Products
+  tigerWallet,
+  tigerswapDEX,
+  tigerSmartChain,
+  feeCollector,
+  
+  // Hooks
+  useWallet,
+  useSwap,
+  useChain,
+  useFee,
+  useCrossChainSwap,
+  useStaking
+} from './integrations';
+
+// Initialize at app startup
+async function init() {
+  const { wallet, dex, chain, fees } = await initializeTigerEx();
+  
+  // Get platform info
+  const info = getPlatformInfo();
+  console.log(`Platform: ${info.name} v${info.version}`);
+  console.log(`Chains: ${info.chains.total} (${info.chains.evm} EVM + ${info.chains.nonevm} Non-EVM)`);
+  console.log(`Tokens: ${info.tokens.total}`);
+  console.log(`Pools: ${info.pools}`);
+  console.log(`Bridges: ${info.bridges}`);
+}
+```
+
+### Fee Collection System
+
+| Source | Fee Type |
+|--------|---------|
+| Exchange | Trading fees (0.1%) |
+| DEX | Swap fees (0.3%) |
+| Bridge | Cross-chain fees (0.1%) |
+| Wallet | Transaction fees |
+
+### Platform Revenue Distribution
+- Platform: 15%
+- Team: 10%
+- Rewards: 25%
+- Treasury: 50%
+
 ## 🔗 External Links
 
 - [TigerWallet Repository](https://github.com/meghlabd275-byte/TigerWallet)
