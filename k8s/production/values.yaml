@@ -1,0 +1,75 @@
+# TigerEx Kubernetes Production Deployment - Complete
+
+# API Gateway
+api-gateway:
+  enabled: true
+  replicaCount: 10
+  autoscaling:
+    minReplicas: 10
+    maxReplicas: 50
+
+# Matching Engine (Rust) - Ultra Low Latency
+matching-engine:
+  enabled: true
+  replicaCount: 3
+
+# Risk Engine (Rust)
+risk-engine:
+  enabled: true
+  replicaCount: 5
+
+# Wallet Service (Rust)
+wallet-service:
+  enabled: true
+  replicaCount: 5
+
+# Cold Wallet (Rust) - Maximum Security
+cold-wallet:
+  enabled: true
+  replicaCount: 1
+
+# WebSocket
+websocket:
+  enabled: true
+  replicaCount: 20
+
+# PostgreSQL
+postgresql:
+  enabled: true
+  architecture: replication
+  replicaCount: 2
+
+# Redis
+redis:
+  enabled: true
+  architecture: replication
+  replicaCount: 3
+
+# Kafka
+kafka:
+  enabled: true
+  replicaCount: 6
+
+# ClickHouse
+clickhouse:
+  enabled: true
+  replicaCount: 3
+
+# Prometheus
+prometheus:
+  enabled: true
+  retention: 30d
+
+# Grafana
+grafana:
+  enabled: true
+
+# OpenSearch
+opensearch:
+  enabled: true
+  replicaCount: 3
+
+# Frontend
+frontend:
+  enabled: true
+  replicaCount: 20
