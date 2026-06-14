@@ -29,6 +29,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (mounted) {
       document.documentElement.setAttribute("data-theme", theme);
+      document.documentElement.classList.toggle("dark", theme === "dark");
       localStorage.setItem("tigerex-theme", theme);
     }
   }, [theme, mounted]);

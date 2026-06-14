@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"tigerex/backend/internal/config"
 	"tigerex/backend/internal/auth"
+	"tigerex/backend/internal/config"
 	"tigerex/backend/internal/kyc"
 	"tigerex/backend/internal/matching"
 	"tigerex/backend/internal/security"
@@ -16,32 +16,32 @@ import (
 )
 
 type Router struct {
-	AuthService     auth.AuthService
+	AuthService    auth.AuthService
 	KYCService     kyc.KYCService
 	WalletService  wallet.WalletService
 	TradingService trading.TradingService
 	SecurityLayer  security.SecurityLayer
-	Config        *config.Config
-	mux          *http.ServeMux
+	Config         *config.Config
+	mux            *http.ServeMux
 }
 
 type RouterConfig struct {
-	AuthService     auth.AuthService
+	AuthService    auth.AuthService
 	KYCService     kyc.KYCService
 	WalletService  wallet.WalletService
 	TradingService trading.TradingService
 	SecurityLayer  security.SecurityLayer
-	Config        *config.Config
+	Config         *config.Config
 }
 
 func NewRouter(cfg RouterConfig) *Router {
 	r := &Router{
-		AuthService:     cfg.AuthService,
+		AuthService:    cfg.AuthService,
 		KYCService:     cfg.KYCService,
 		WalletService:  cfg.WalletService,
 		TradingService: cfg.TradingService,
 		SecurityLayer:  cfg.SecurityLayer,
-		Config:        cfg.Config,
+		Config:         cfg.Config,
 	}
 
 	r.mux = http.NewServeMux()
@@ -77,9 +77,9 @@ func (r *Router) setupRoutes() {
 
 func (r *Router) healthCheck(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "healthy",
+		"status":    "healthy",
 		"timestamp": time.Now().Unix(),
-		"version": "1.0.0",
+		"version":   "1.0.0",
 	})
 }
 
@@ -104,6 +104,20 @@ func (r *Router) handleAPIv1(w http.ResponseWriter, req *http.Request) {
 		r.handlePasswordReset(w, req)
 	case "/api/v1/auth/password/change":
 		r.handlePasswordChange(w, req)
+	case "/api/v1/auth/identifier/check":
+		r.handleIdentifierCheck(w, req)
+	case "/api/v1/auth/verify-code":
+		r.handleVerificationCode(w, req)
+	case "/api/v1/auth/2fa/reset":
+		r.handleTwoFAReset(w, req)
+	case "/api/v1/auth/social":
+		r.handleAuthOperation(w, req, "social")
+	case "/api/v1/auth/metamask":
+		r.handleAuthOperation(w, req, "metamask")
+	case "/api/v1/auth/passkey":
+		r.handleAuthOperation(w, req, "passkey")
+	case "/api/v1/auth/biometric":
+		r.handleAuthOperation(w, req, "biometric")
 
 	// KYC routes
 	case "/api/v1/kyc/submit":
@@ -112,6 +126,8 @@ func (r *Router) handleAPIv1(w http.ResponseWriter, req *http.Request) {
 		r.handleKYCStatus(w, req)
 	case "/api/v1/kyc/selfie":
 		r.handleKYCSelfie(w, req)
+	case "/api/v1/kyc/liveness":
+		r.handleKYCLiveness(w, req)
 
 	// Wallet routes
 	case "/api/v1/wallet/balance":
@@ -126,6 +142,16 @@ func (r *Router) handleAPIv1(w http.ResponseWriter, req *http.Request) {
 		r.handleGetAddress(w, req)
 	case "/api/v1/wallet/generate-address":
 		r.handleGenerateAddress(w, req)
+	case "/api/v1/wallet/history":
+		r.handleWalletHistory(w, req)
+	case "/api/v1/wallet/internal-transfer":
+		r.handleWalletTransfer(w, req, "internal")
+	case "/api/v1/wallet/user-transfer":
+		r.handleWalletTransfer(w, req, "user")
+	case "/api/v1/account/contact-change":
+		r.handleContactChange(w, req)
+	case "/api/v1/account/delete-request":
+		r.handleDeleteRequest(w, req)
 
 	// Trading routes
 	case "/api/v1/trading/order":
@@ -146,6 +172,10 @@ func (r *Router) handleAPIv1(w http.ResponseWriter, req *http.Request) {
 		r.handleMarketTrades(w, req)
 	case "/api/v1/market/klines":
 		r.handleKlines(w, req)
+	case "/api/v1/features/user":
+		r.handleUserFeatures(w, req)
+	case "/api/v1/products/operate":
+		r.handleProductOperation(w, req)
 
 	default:
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -188,7 +218,7 @@ func (r *Router) handleRegister(w http.ResponseWriter, req *http.Request) {
 
 	var reqBody struct {
 		Email    string `json:"email"`
-		Phone   string `json:"phone"`
+		Phone    string `json:"phone"`
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
@@ -206,7 +236,7 @@ func (r *Router) handleRegister(w http.ResponseWriter, req *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
-		"user":   user,
+		"user":    user,
 	})
 }
 
@@ -246,7 +276,7 @@ func (r *Router) handleRefreshToken(w http.ResponseWriter, req *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":    true,
+		"success":      true,
 		"access_token": token,
 	})
 }
@@ -286,6 +316,65 @@ func (r *Router) handleVerify2FA(w http.ResponseWriter, req *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
+	})
+}
+
+func (r *Router) handleIdentifierCheck(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var reqBody struct {
+		Identifier string `json:"identifier"`
+		Type       string `json:"type"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	registered := reqBody.Identifier != "" && (len(reqBody.Identifier) >= 4)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":            true,
+		"registered":         registered,
+		"type":               reqBody.Type,
+		"two_factor_enabled": registered,
+		"withdrawal_locked_hours_after_security_change": 48,
+	})
+}
+
+func (r *Router) handleVerificationCode(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "verified": true})
+}
+
+func (r *Router) handleTwoFAReset(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":                    true,
+		"previous_two_factor_erased": true,
+		"new_two_factor_ready":       true,
+		"withdrawals_disabled_until": time.Now().Add(48 * time.Hour).Unix(),
+	})
+}
+
+func (r *Router) handleAuthOperation(w http.ResponseWriter, req *http.Request, provider string) {
+	if req.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":       true,
+		"provider":      provider,
+		"status":        "verified",
+		"session_bound": true,
 	})
 }
 
@@ -416,6 +505,19 @@ func (r *Router) handleKYCSelfie(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
+func (r *Router) handleKYCLiveness(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":        true,
+		"face_match":     true,
+		"liveness_score": 0.98,
+		"status":         "submitted_for_admin_review",
+	})
+}
+
 func (r *Router) handleGetBalance(w http.ResponseWriter, req *http.Request) {
 	if req.Method != "GET" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -468,7 +570,7 @@ func (r *Router) handleWithdraw(w http.ResponseWriter, req *http.Request) {
 
 	var reqBody struct {
 		Symbol    string  `json:"symbol"`
-		Amount   float64 `json:"amount"`
+		Amount    float64 `json:"amount"`
 		ToAddress string  `json:"to_address"`
 	}
 
@@ -495,9 +597,9 @@ func (r *Router) handleTransfer(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var reqBody struct {
-		ToUser  string  `json:"to_user"`
-		Symbol  string  `json:"symbol"`
-		Amount  float64 `json:"amount"`
+		ToUser string  `json:"to_user"`
+		Symbol string  `json:"symbol"`
+		Amount float64 `json:"amount"`
 	}
 
 	if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
@@ -513,6 +615,47 @@ func (r *Router) handleTransfer(w http.ResponseWriter, req *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
+	})
+}
+
+func (r *Router) handleWalletHistory(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"history": []map[string]interface{}{
+			{"type": "deposit", "asset": "USDT", "amount": 2500, "chain": "TRC20", "status": "completed"},
+			{"type": "transfer", "asset": "BTC", "amount": 0.05, "from_wallet": "spot", "to_wallet": "futures", "status": "completed"},
+		},
+	})
+}
+
+func (r *Router) handleWalletTransfer(w http.ResponseWriter, req *http.Request, transferType string) {
+	if req.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var reqBody struct {
+		FromWallet string  `json:"from_wallet"`
+		ToWallet   string  `json:"to_wallet"`
+		ToUser     string  `json:"to_user"`
+		Asset      string  `json:"asset"`
+		Amount     float64 `json:"amount"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":       true,
+		"transfer_type": transferType,
+		"asset":         reqBody.Asset,
+		"amount":        reqBody.Amount,
+		"status":        "completed",
 	})
 }
 
@@ -560,6 +703,31 @@ func (r *Router) handleGenerateAddress(w http.ResponseWriter, req *http.Request)
 	})
 }
 
+func (r *Router) handleContactChange(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":                    true,
+		"contact_swapped":            true,
+		"withdrawals_disabled_until": time.Now().Add(48 * time.Hour).Unix(),
+	})
+}
+
+func (r *Router) handleDeleteRequest(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":                     true,
+		"logout":                      true,
+		"scheduled_delete_at":         time.Now().Add(30 * 24 * time.Hour).Unix(),
+		"cancel_if_login_within_days": 30,
+	})
+}
+
 func (r *Router) handleOrder(w http.ResponseWriter, req *http.Request) {
 	if req.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -568,9 +736,9 @@ func (r *Router) handleOrder(w http.ResponseWriter, req *http.Request) {
 
 	var reqBody struct {
 		Symbol   string  `json:"symbol"`
-		Side    string  `json:"side"`
-		Type    string  `json:"type"`
-		Price   float64 `json:"price"`
+		Side     string  `json:"side"`
+		Type     string  `json:"type"`
+		Price    float64 `json:"price"`
 		Quantity float64 `json:"quantity"`
 	}
 
@@ -580,7 +748,7 @@ func (r *Router) handleOrder(w http.ResponseWriter, req *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
+		"success":  true,
 		"order_id": "order-123",
 	})
 }
@@ -637,7 +805,7 @@ func (r *Router) handleTicker(w http.ResponseWriter, req *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"price": "67000.00",
+		"price":  "67000.00",
 		"change": "2.5%",
 	})
 }
@@ -664,6 +832,52 @@ func (r *Router) handleKlines(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
+func (r *Router) handleUserFeatures(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"admin_access":   false,
+		"trader_control": "full",
+		"markets":        []string{"market", "spot", "alpha", "futures", "margin", "options", "p2p", "tradfi", "quick_trade", "complete_trade", "pairs", "trading_pair", "pre_market"},
+		"defi_etf":       []string{"launchpad", "launchpool", "staking", "earn", "etf", "liquidity_mining", "cloud_mining"},
+		"wallet":         []string{"deposit", "withdraw", "transfer", "history", "addresses", "multi_currency", "multi_chain", "multi_asset"},
+		"auth":           []string{"login", "register", "2fa", "kyc", "social", "metamask", "passkey", "biometric"},
+		"rewards":        []string{"coupon", "red_packet"},
+	})
+}
+
+func (r *Router) handleProductOperation(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var reqBody struct {
+		Product string  `json:"product"`
+		Action  string  `json:"action"`
+		Symbol  string  `json:"symbol"`
+		Side    string  `json:"side"`
+		Amount  float64 `json:"amount"`
+		Price   float64 `json:"price"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":      true,
+		"operation_id": "op-" + reqBody.Product + "-" + reqBody.Action,
+		"product":      reqBody.Product,
+		"action":       reqBody.Action,
+		"symbol":       reqBody.Symbol,
+		"status":       "accepted",
+	})
+}
+
 func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 	// Upgrade to WebSocket
 	log.Println("WebSocket connection established")
@@ -671,8 +885,8 @@ func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleRoot(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"name": "TigerEx API",
+		"name":    "TigerEx API",
 		"version": "1.0.0",
-		"status": "running",
+		"status":  "running",
 	})
 }

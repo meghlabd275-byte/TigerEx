@@ -26,6 +26,7 @@ export function ThemeToggle({ className = "" }: ThemeToggleProps) {
     setTheme(newTheme);
     localStorage.setItem("tigerex-theme", newTheme);
     document.documentElement.setAttribute("data-theme", newTheme);
+    document.documentElement.classList.toggle("dark", newTheme === "dark");
   };
 
   if (!mounted) {
