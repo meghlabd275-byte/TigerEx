@@ -106,7 +106,7 @@ struct NFTInfo {
     NFTInfo() : standard(TokenStandard::ERC721), balance(1) {}
 };
 
-// SmartChain Network
+// SmartChain Network - Dynamic & Scalable
 class TigerSmartChain {
 private:
     std::unordered_map<std::string, ChainConfig> chains_;
@@ -118,6 +118,11 @@ private:
     // TGR token address
     std::string tgr_token_address_ = "0x000000000000000000000000000000000000TGR";
     std::string rusd_token_address_ = "0x000000000000000000000000000000000RUSD";
+    
+    // Dynamic chain/token counters
+    std::atomic<uint64_t> total_chains_{0};
+    std::atomic<uint64_t> total_tokens_{0};
+    std::atomic<uint64_t> total_bridges_{0};
     
 public:
     TigerSmartChain() {
@@ -472,6 +477,197 @@ public:
     std::string get_rusd_token() const {
         return rusd_token_address_;
     }
+    
+    // ==================== DYNAMIC CHAIN MANAGEMENT ====================
+    
+    /**
+     * Add a new EVM blockchain dynamically at runtime
+     * Supports unlimited chains addition
+     */
+    bool add_evm_chain(const std::string& key, const std::string& name, const std::string& chain_id,
+                       const std::string& rpc_url, const std::string& explorer, const std::string& symbol,
+                       uint8_t decimals, uint64_t block_time = 15000) {
+        std::unique_lock lock(mutex_);
+        
+        ChainConfig config;
+        config.chain_id = chain_id;
+        config.name = name;
+        config.rpc_url = rpc_url;
+        config.explorer_url = explorer;
+        config.symbol = symbol;
+        config.decimals = decimals;
+        config.block_time = block_time;
+        config.is_active = true;
+        
+        chains_[key] = config;
+        total_chains_.fetch_add(1);
+        
+        return true;
+    }
+    
+    /**
+     * Add a new Non-EVM blockchain dynamically at runtime
+     * Supports Solana, Near, Aptos, Cosmos ecosystem, etc.
+     */
+    bool add_nonevm_chain(const std::string& key, const std::string& name, const std::string& chain_id,
+                         const std::string& rpc_url, const std::string& explorer, const std::string& symbol,
+                         uint8_t decimals, uint64_t block_time = 3000) {
+        std::unique_lock lock(mutex_);
+        
+        ChainConfig config;
+        config.chain_id = chain_id;
+        config.name = name;
+        config.rpc_url = rpc_url;
+        config.explorer_url = explorer;
+        config.symbol = symbol;
+        config.decimals = decimals;
+        config.block_time = block_time;
+        config.is_active = true;
+        
+        chains_[key] = config;
+        total_chains_.fetch_add(1);
+        
+        return true;
+    }
+    
+    /**
+     * Add a new token dynamically at runtime
+     * Supports unlimited token addition
+     */
+    bool add_token(const std::string& address, const std::string& symbol, const std::string& name,
+                   uint8_t decimals, TokenStandard standard, uint64_t supply, double price_usd = 0.0) {
+        std::unique_lock lock(mutex_);
+        
+        TokenInfo token;
+        token.address = address;
+        token.symbol = symbol;
+        token.name = name;
+        token.decimals = decimals;
+        token.standard = standard;
+        token.total_supply = supply;
+        token.price_usd = price_usd;
+        token.is_verified = true;
+        token.is_trading_enabled = true;
+        
+        tokens_[symbol] = token;
+        tokens_[address] = token;
+        total_tokens_.fetch_add(1);
+        
+        return true;
+    }
+    
+    /**
+     * Add a new bridge connection dynamically
+     */
+    bool add_bridge(const std::string& chain_key, const std::string& bridge_addr,
+                    const std::string& source, const std::string& target,
+                    double min_amt, double max_amt, double fee_pct, uint64_t time_est) {
+        std::unique_lock lock(mutex_);
+        
+        BridgeConfig bridge;
+        bridge.bridge_address = bridge_addr;
+        bridge.source_chain = source;
+        bridge.target_chain = target;
+        bridge.min_amount = min_amt;
+        bridge.max_amount = max_amt;
+        bridge.fee_percentage = fee_pct;
+        bridge.estimated_time = time_est;
+        bridge.is_active = true;
+        
+        bridges_[chain_key].push_back(bridge);
+        total_bridges_.fetch_add(1);
+        
+        return true;
+    }
+    
+    /**
+     * Remove a chain (deactivate)
+     */
+    bool deactivate_chain(const std::string& key) {
+        std::unique_lock lock(mutex_);
+        
+        auto it = chains_.find(key);
+        if (it != chains_.end()) {
+            it->second.is_active = false;
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Reactivate a chain
+     */
+    bool activate_chain(const std::string& key) {
+        std::unique_lock lock(mutex_);
+        
+        auto it = chains_.find(key);
+        if (it != chains_.end()) {
+            it->second.is_active = true;
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Get statistics
+     */
+    uint64_t get_total_chains() const { return total_chains_.load(); }
+    uint64_t get_total_tokens() const { return total_tokens_.load(); }
+    uint64_t get_total_bridges() const { return total_bridges_.load(); }
+    
+    /**
+     * Get all active chains (filter)
+     */
+    std::vector<std::pair<std::string, ChainConfig>> get_active_chains() const {
+        std::shared_lock lock(mutex_);
+        std::vector<std::pair<std::string, ChainConfig>> result;
+        
+        for (const auto& [key, chain] : chains_) {
+            if (chain.is_active) {
+                result.push_back({key, chain});
+            }
+        }
+        return result;
+    }
+    
+    /**
+     * Search chains by name or symbol
+     */
+    std::vector<std::pair<std::string, ChainConfig>> search_chains(const std::string& query) const {
+        std::shared_lock lock(mutex_);
+        std::vector<std::pair<std::string, ChainConfig>> result;
+        
+        std::string lower_query = query;
+        std::transform(lower_query.begin(), lower_query.end(), lower_query.begin(), ::tolower);
+        
+        for (const auto& [key, chain] : chains_) {
+            std::string lower_name = chain.name;
+            std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+            
+            std::string lower_symbol = chain.symbol;
+            std::transform(lower_symbol.begin(), lower_symbol.end(), lower_symbol.begin(), ::tolower);
+            
+            if (lower_name.find(lower_query) != std::string::npos ||
+                lower_symbol.find(lower_query) != std::string::npos) {
+                result.push_back({key, chain});
+            }
+        }
+        return result;
+    }
+    
+    /**
+     * Get chain by symbol
+     */
+    std::optional<ChainConfig> get_chain_by_symbol(const std::string& symbol) const {
+        std::shared_lock lock(mutex_);
+        
+        for (const auto& [key, chain] : chains_) {
+            if (chain.symbol == symbol) {
+                return chain;
+            }
+        }
+        return std::nullopt;
+    }
 };
 
 // ============================================================
@@ -759,6 +955,149 @@ public:
     // Get total fees collected
     uint64_t get_total_fees() const {
         return total_fees_collected_.load();
+    }
+    
+    // ==================== DYNAMIC TOKEN/POOL MANAGEMENT ====================
+    
+    /**
+     * Create a new liquidity pool for any token pair
+     * Dynamically add new trading pairs
+     */
+    bool create_pool(const std::string& token_a, const std::string& token_b, double fee_rate = 0.003) {
+        std::unique_lock lock(mutex_);
+        
+        std::string pool_id = "pool_" + std::to_string(next_pool_id_.fetch_add(1));
+        
+        LiquidityPool pool;
+        pool.pool_id = pool_id;
+        pool.token_a = token_a;
+        pool.token_b = token_b;
+        pool.fee_rate = fee_rate;
+        pool.pool_type = "volatile";
+        
+        pools_[pool_id] = pool;
+        
+        // Add to token pools mapping
+        token_pools_[token_a].push_back(pool_id);
+        token_pools_[token_b].push_back(pool_id);
+        
+        return true;
+    }
+    
+    /**
+     * Remove/deactivate a pool
+     */
+    bool deactivate_pool(const std::string& pool_id) {
+        std::unique_lock lock(mutex_);
+        
+        auto it = pools_.find(pool_id);
+        if (it != pools_.end()) {
+            it->second.fee_rate = 0;  // Mark as inactive
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Update pool fee rate dynamically
+     */
+    bool update_pool_fee(const std::string& pool_id, double new_fee) {
+        std::unique_lock lock(mutex_);
+        
+        auto it = pools_.find(pool_id);
+        if (it != pools_.end()) {
+            it->second.fee_rate = new_fee;
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Get all pools for a token
+     */
+    std::vector<LiquidityPool> get_all_pools_for_token(const std::string& token) const {
+        std::shared_lock lock(mutex_);
+        
+        std::vector<LiquidityPool> result;
+        auto pools = get_token_pools(token);
+        
+        for (const auto& p : pools) {
+            if (p.fee_rate > 0) {
+                result.push_back(p);
+            }
+        }
+        return result;
+    }
+    
+    /**
+     * Get all active pools
+     */
+    std::vector<LiquidityPool> get_active_pools() const {
+        std::shared_lock lock(mutex_);
+        
+        std::vector<LiquidityPool> result;
+        for (const auto& [id, pool] : pools_) {
+            if (pool.fee_rate > 0) {
+                result.push_back(pool);
+            }
+        }
+        return result;
+    }
+    
+    /**
+     * Get pool count
+     */
+    uint64_t get_pool_count() const {
+        return next_pool_id_.load();
+    }
+    
+    /**
+     * Get active farm count
+     */
+    uint64_t get_farm_count() const {
+        uint64_t count = 0;
+        for (const auto& [id, farm] : farms_) {
+            if (farm.is_active) count++;
+        }
+        return count;
+    }
+    
+    /**
+     * Create new farm
+     */
+    bool create_farm(const std::string& pool_id, const std::string& reward_token, 
+                    uint64_t reward_rate, double apy, uint64_t duration_days) {
+        std::unique_lock lock(mutex_);
+        
+        std::string farm_id = "farm_" + std::to_string(farms_.size() + 1);
+        
+        FarmStaking farm;
+        farm.farm_id = farm_id;
+        farm.pool_id = pool_id;
+        farm.reward_token = reward_token;
+        farm.reward_rate = reward_rate;
+        farm.apy = apy;
+        farm.lock_period = duration_days * 24 * 60 * 60 * 1000;
+        farm.start_time = std::chrono::system_clock::now().time_since_epoch().count();
+        farm.end_time = farm.start_time + farm.lock_period;
+        farm.is_active = true;
+        
+        farms_[farm_id] = farm;
+        return true;
+    }
+    
+    /**
+     * End farm
+     */
+    bool end_farm(const std::string& farm_id) {
+        std::unique_lock lock(mutex_);
+        
+        auto it = farms_.find(farm_id);
+        if (it != farms_.end()) {
+            it->second.is_active = false;
+            return true;
+        }
+        return false;
     }
 };
 
