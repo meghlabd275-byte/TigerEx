@@ -17,7 +17,15 @@ pub enum OrderType {
     StopMarket,
     StopLimit,
     TakeProfit,
+    TakeProfitLimit,
     TrailingStop,
+    OCO,        // One-Cancels-Other
+    Iceberg,
+    TWAP,       // Time-Weighted Average Price
+    VWAP,       // Volume-Weighted Average Price
+    GTC,        // Good Till Cancel (alias for Limit)
+    IOC,        // Immediate Or Cancel
+    FOK,       // Fill Or Kill
 }
 
 impl Default for OrderType {
@@ -77,6 +85,17 @@ pub struct Order {
     pub updated_at: u64,
     // Optional fields
     pub rejected_reason: Option<String>,
+    // Advanced order fields
+    pub oco_order_id: Option<String>,      // For OCO orders
+    pub trailing_distance: Option<u64>,   // For trailing stop
+    pub iceberg_display_qty: Option<u64>, // For iceberg orders
+    pub twap_interval_ms: Option<u64>,  // For TWAP orders
+    pub vwap_duration_ms: Option<u64>,  // For VWAP orders
+    pub original_quantity: Option<u64>, // For partial fills
+    pub trigger_price: Option<u64>,     // Trigger price for stop orders
+    pub activate_price: Option<u64>,   // Activation price
+    pub is_post_only: bool,            // Post-only flag
+    pub is_reduce_only: bool,          // Reduce-only flag
 }
 
 impl Order {
@@ -110,6 +129,144 @@ impl Order {
             created_at: now,
             updated_at: now,
             rejected_reason: None,
+            // Advanced order fields
+            oco_order_id: None,
+            trailing_distance: None,
+            iceberg_display_qty: None,
+            twap_interval_ms: None,
+            vwap_duration_ms: None,
+            original_quantity: None,
+            trigger_price: None,
+            activate_price: None,
+            is_post_only: false,
+            is_reduce_only: false,
+        }
+    }
+    
+    // Create an OCO (One-Cancels-Other) order pair
+    pub fn create_oco_order(
+        user_id: String,
+        symbol: String,
+        side: OrderSide,
+        quantity: u64,
+        limit_price: Option<u64>,
+        stop_price: u64,
+        time_in_force: TimeInForce,
+    ) -> (Order, Order) {
+        let limit_order = Order::new(
+            user_id.clone(),
+            symbol.clone(),
+            side,
+            OrderType::Limit,
+            quantity,
+            limit_price,
+            time_in_force,
+        );
+        
+        let stop_order = Order::new(
+            user_id,
+            symbol,
+            side,
+            OrderType::StopMarket,
+            quantity,
+            None,
+            time_in_force,
+        );
+        
+        (limit_order, stop_order)
+    }
+    
+    // Create a trailing stop order
+    pub fn create_trailing_stop(
+        user_id: String,
+        symbol: String,
+        side: OrderSide,
+        quantity: u64,
+        trailing_distance: u64,
+    ) -> Self {
+        let mut order = Order::new(
+            user_id,
+            symbol,
+            side,
+            OrderType::TrailingStop,
+            quantity,
+            None,
+            TimeInForce::GTC,
+        );
+        order.trailing_distance = Some(trailing_distance);
+        order
+    }
+    
+    // Create an iceberg order
+    pub fn create_iceberg(
+        user_id: String,
+        symbol: String,
+        side: OrderSide,
+        quantity: u64,
+        price: Option<u64>,
+        display_qty: u64,
+    ) -> Self {
+        let mut order = Order::new(
+            user_id,
+            symbol,
+            side,
+            OrderType::Iceberg,
+            quantity,
+            price,
+            TimeInForce::GTC,
+        );
+        order.iceberg_display_qty = Some(display_qty);
+        order.original_quantity = Some(quantity);
+        order
+    }
+    
+    // Check if order should trigger based on market price
+    pub fn should_trigger(&self, current_price: u64) -> bool {
+        match self.order_type {
+            OrderType::StopMarket | OrderType::StopLimit => {
+                if let Some(stop_price) = self.stop_price {
+                    match self.side {
+                        OrderSide::Buy => current_price >= stop_price,
+                        OrderSide::Sell => current_price <= stop_price,
+                    }
+                } else {
+                    false
+                }
+            }
+            OrderType::TakeProfit | OrderType::TakeProfitLimit => {
+                if let Some(trigger_price) = self.trigger_price {
+                    match self.side {
+                        OrderSide::Sell => current_price >= trigger_price,
+                        OrderSide::Buy => current_price <= trigger_price,
+                    }
+                } else {
+                    false
+                }
+            }
+            OrderType::TrailingStop => {
+                if let Some(trailing_dist) = self.trailing_distance {
+                    match self.side {
+                        OrderSide::Buy => {
+                            // Trigger when price rises above activation price by trailing distance
+                            if let Some(activation) = self.activate_price {
+                                current_price >= activation + trailing_dist
+                            } else {
+                                false
+                            }
+                        }
+                        OrderSide::Sell => {
+                            if let Some(activation) = self.activate_price {
+                                current_price <= activation.saturating_sub(trailing_dist)
+                            } else {
+                                false
+                            }
+                        }
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => true, // Other orders don't need trigger
         }
     }
 }
