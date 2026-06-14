@@ -1,251 +1,105 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Button } from '@/components/ui/button';
-import { 
-  TrendingUp, Users, Shield, Zap, CreditCard, 
-  Globe, Smartphone, Wallet, ArrowRight,
-  Mail, Lock, Eye, EyeOff, AlertCircle, Check
-} from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { AlertCircle, Apple, CheckCircle, ChevronDown, Chrome, Eye, EyeOff, Loader2, Lock, Wallet } from 'lucide-react';
+import { ThemeToggle } from '@/components/theme-toggle';
+import { isProbablyRegistered, passwordStrength, socialProviders } from '@/lib/authFlow';
+import { SmartIdentityInput } from '@/components/auth/SmartIdentityInput';
+import { buildIdentityState } from '@/lib/identity';
+
+type Step = 'identifier' | 'verify' | 'password';
 
 export default function RegisterPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('');
+  const [step, setStep] = useState<Step>('identifier');
+  const [identifier, setIdentifier] = useState('');
+  const [country, setCountry] = useState('US');
+  const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [agreeTerms, setAgreeTerms] = useState(false);
+  const [referralCode, setReferralCode] = useState('');
+  const [terms, setTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [socialOpen, setSocialOpen] = useState(false);
+  const identity = buildIdentityState(identifier, country);
+  const fullIdentifier = identity.normalized;
+  const strength = passwordStrength(password);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
+  const continueIdentifier = async () => {
     setError('');
-
-    if (!email || !password || !confirmPassword) {
-      setError('Please fill in all fields');
-      setLoading(false);
+    if (!identity.isValid) return setError(identity.validationMessage);
+    setLoading(true);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    setLoading(false);
+    if (isProbablyRegistered(fullIdentifier)) {
+      setMessage('Account already exists. Redirecting to Login...');
+      setTimeout(() => router.push('/login'), 700);
       return;
     }
-
-    if (password !== confirmPassword) {
-      setError('Passwords do not match');
-      setLoading(false);
-      return;
-    }
-
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters');
-      setLoading(false);
-      return;
-    }
-
-    if (!agreeTerms) {
-      setError('Please agree to the Terms of Service');
-      setLoading(false);
-      return;
-    }
-
-    setTimeout(() => {
-      setLoading(false);
-      router.push('/trading/BTC-USDT');
-    }, 1500);
+    setStep('verify');
   };
 
-  // Password strength check
-  const getPasswordStrength = () => {
-    let strength = 0;
-    if (password.length >= 8) strength++;
-    if (password.match(/[a-z]/)) strength++;
-    if (password.match(/[A-Z]/)) strength++;
-    if (password.match(/[0-9]/)) strength++;
-    if (password.match(/[^a-zA-Z0-9]/)) strength++;
-    return strength;
+  const verifyCode = () => {
+    if (code.length !== 6) return setError('Enter the six digit verification code.');
+    setError('');
+    setStep('password');
   };
 
-  const passwordStrength = getPasswordStrength();
-  const strengthLabels = ['Very Weak', 'Weak', 'Fair', 'Good', 'Strong'];
-  const strengthColors = ['bg-red-500', 'bg-orange-500', 'bg-yellow-500', 'bg-green-500', 'bg-green-500'];
+  const register = async () => {
+    setError('');
+    if (password.length < 8) return setError('Password must be at least 8 characters long.');
+    if (strength.label === 'Weak') return setError('Use a stronger password with letters, numbers and symbols.');
+    if (password !== confirmPassword) return setError('Password and confirm password must match.');
+    if (!terms) return setError('Accept Terms & Conditions to continue.');
+    setLoading(true);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    localStorage.setItem('tigerex-authenticated', 'true');
+    router.push('/features');
+  };
+
+  const social = async (provider: string) => {
+    setLoading(true);
+    setMessage(`${provider} signup started...`);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    if (provider === 'MetaMask') setMessage('MetaMask connected for built-in DEX access only.');
+    else router.push('/features');
+    setLoading(false);
+  };
 
   return (
-    <div className="min-h-screen flex">
-      {/* Left Panel - Form */}
-      <div className="flex-1 flex items-center justify-center p-8">
-        <div className="w-full max-w-md space-y-8">
-          {/* Logo */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-orange-500 flex items-center justify-center">
-              <span className="text-xl font-bold text-white">T</span>
-            </div>
-            <span className="text-2xl font-bold text-white">TigerEx</span>
-          </div>
+    <main className="min-h-screen bg-background px-4 py-8 text-foreground">
+      <div className="mx-auto max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl">
+        <div className="mb-6 flex items-center justify-between"><Link href="/" className="font-bold text-primary">← Back to home</Link><ThemeToggle /></div>
+        <h1 className="text-3xl font-bold">Create TigerEx account</h1>
+        <p className="mt-2 text-muted-foreground">Verify your contact, set a strong password and start trading.</p>
+        {error && <div className="mt-4 flex gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400"><AlertCircle className="h-4 w-4" />{error}</div>}
+        {message && <div className="mt-4 flex gap-2 rounded-xl border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-400"><CheckCircle className="h-4 w-4" />{message}</div>}
 
-          {/* Heading */}
-          <div>
-            <h1 className="text-3xl font-bold text-white">Create Account</h1>
-            <p className="text-gray-400 mt-2">Start your crypto journey today</p>
-          </div>
-
-          {/* Error Message */}
-          {error && (
-            <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
-              <AlertCircle className="h-4 w-4" />
-              {error}
-            </div>
-          )}
-
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Email */}
-            <div>
-              <label className="block text-sm text-gray-300 mb-1.5">Email</label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-500" />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full bg-white/5 border border-white/10 rounded-lg pl-11 pr-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-orange-500"
-                />
-              </div>
-            </div>
-
-            {/* Password */}
-            <div>
-              <label className="block text-sm text-gray-300 mb-1.5">Password</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-500" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-white/5 border border-white/10 rounded-lg pl-11 pr-11 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-orange-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
-                >
-                  {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-                </button>
-              </div>
-              
-              {/* Password Strength */}
-              {password && (
-                <div className="mt-2">
-                  <div className="flex gap-1 mb-1">
-                    {[1, 2, 3, 4, 5].map((i) => (
-                      <div
-                        key={i}
-                        className={`h-1 flex-1 rounded-full ${
-                          i <= passwordStrength ? strengthColors[passwordStrength - 1] : 'bg-white/10'
-                        }`}
-                      />
-                    ))}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    Password strength: {strengthLabels[passwordStrength - 1] || 'Very Weak'}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Confirm Password */}
-            <div>
-              <label className="block text-sm text-gray-300 mb-1.5">Confirm Password</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-500" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-white/5 border border-white/10 rounded-lg pl-11 pr-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-orange-500"
-                />
-              </div>
-              {confirmPassword && password === confirmPassword && (
-                <div className="flex items-center gap-1 mt-1 text-xs text-green-400">
-                  <Check className="h-3 w-3" /> Passwords match
-                </div>
-              )}
-            </div>
-
-            {/* Terms */}
-            <div>
-              <label className="flex items-start gap-2 text-sm text-gray-400">
-                <input 
-                  type="checkbox" 
-                  checked={agreeTerms}
-                  onChange={(e) => setAgreeTerms(e.target.checked)}
-                  className="mt-0.5 rounded bg-white/5 border-white/10" 
-                />
-                <span>
-                  I agree to the{' '}
-                  <Link href="/terms" className="text-orange-500 hover:underline">
-                    Terms of Service
-                  </Link>{' '}
-                  and{' '}
-                  <Link href="/privacy" className="text-orange-500 hover:underline">
-                    Privacy Policy
-                  </Link>
-                </span>
-              </label>
-            </div>
-
-            {/* Submit */}
-            <Button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white font-medium"
-            >
-              {loading ? 'Creating account...' : 'Create Account'}
-            </Button>
-          </form>
-
-          {/* Sign In Link */}
-          <div className="text-center text-sm text-gray-400">
-            Already have an account?{' '}
-            <Link href="/login" className="text-orange-500 hover:underline font-medium">
-              Sign in
-            </Link>
-          </div>
+        <div className="mt-6 space-y-4">
+          {step === 'identifier' && <>
+            <SmartIdentityInput value={identifier} country={country} onValueChange={setIdentifier} onCountryChange={setCountry} />
+            <button onClick={continueIdentifier} className="w-full rounded-xl bg-primary py-3 font-bold text-primary-foreground">{loading ? <Loader2 className="mx-auto h-5 w-5 animate-spin" /> : 'Continue'}</button>
+          </>}
+          {step === 'verify' && <><div className="rounded-xl border border-border p-4"><h2 className="font-semibold">{identity.type === 'phone' ? 'Phone verification required' : 'Mail verification required'}</h2><p className="text-sm text-muted-foreground">Enter the six digit code to continue.</p></div><input maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} className="w-full rounded-xl border border-border bg-background p-4 text-center text-2xl tracking-[0.5em]" placeholder="000000" /><button onClick={verifyCode} className="w-full rounded-xl bg-primary py-3 font-bold text-primary-foreground">Continue</button></>}
+          {step === 'password' && <>
+            {[['Password', password, setPassword], ['Confirm password', confirmPassword, setConfirmPassword]].map(([label, value, setter]) => <div key={label as string}><label className="mb-1 block text-sm font-medium">{label as string}</label><div className="relative"><Lock className="absolute left-3 top-3.5 h-5 w-5 text-muted-foreground" /><input type={showPassword ? 'text' : 'password'} value={value as string} onChange={(e) => (setter as (value: string) => void)(e.target.value)} className="w-full rounded-xl border border-border bg-background py-3 pl-11 pr-12" placeholder="At least 8 characters" /><button onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-3.5">{showPassword ? <EyeOff /> : <Eye />}</button></div></div>)}
+            <div><div className="mb-1 flex justify-between text-xs"><span>Password strength</span><span className={strength.text}>{strength.label}</span></div><div className="h-2 rounded-full bg-muted"><div className={`h-2 rounded-full ${strength.color}`} style={{ width: `${Math.max(20, strength.score * 20)}%` }} /></div></div>
+            {confirmPassword && password === confirmPassword && <p className="text-sm text-green-400">✓ Passwords match</p>}
+            <input value={referralCode} onChange={(e) => setReferralCode(e.target.value)} className="w-full rounded-xl border border-border bg-background p-3" placeholder="Referral code (optional)" />
+            <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} /> I agree to TigerEx Terms & Conditions.</label>
+            <button onClick={register} className="w-full rounded-xl bg-primary py-3 font-bold text-primary-foreground">{loading ? <Loader2 className="mx-auto h-5 w-5 animate-spin" /> : 'Register'}</button>
+          </>}
         </div>
+        <div className="mt-6 grid grid-cols-2 gap-3"><button onClick={() => social('Google')} className="rounded-xl border border-border p-3"><Chrome className="mx-auto" />Google</button><button onClick={() => social('Apple')} className="rounded-xl border border-border p-3"><Apple className="mx-auto" />Apple</button></div>
+        <button onClick={() => setSocialOpen(!socialOpen)} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-border p-3">More social authentication <ChevronDown className="h-4 w-4" /></button>
+        {socialOpen && <div className="mt-3 grid grid-cols-2 gap-2">{socialProviders.slice(2).map((provider) => <button key={provider} onClick={() => social(provider)} className="rounded-lg bg-muted p-2 text-sm">{provider}</button>)}</div>}
+        <div className="mt-3 grid grid-cols-2 gap-3"><button onClick={() => social('Passkey')} className="rounded-xl border border-border p-3">Passkey</button><button onClick={() => social('MetaMask')} className="rounded-xl border border-border p-3"><Wallet className="mx-auto" />MetaMask DEX</button></div>
       </div>
-
-      {/* Right Panel - Background */}
-      <div className="hidden lg:flex flex-1 bg-gradient-to-br from-orange-500/20 to-purple-500/20 items-center justify-center p-12">
-        <div className="max-w-lg text-center">
-          <div className="grid grid-cols-3 gap-8 mb-8">
-            {[
-              { icon: TrendingUp, label: '99.9% Uptime' },
-              { icon: Shield, label: 'Bank-Grade Security' },
-              { icon: Zap, label: 'Fast Execution' },
-              { icon: Globe, label: '150+ Countries' },
-              { icon: Users, label: '10M+ Users' },
-              { icon: CreditCard, label: '200+ Assets' },
-            ].map((item, i) => (
-              <div key={i} className="flex flex-col items-center gap-2">
-                <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center">
-                  <item.icon className="h-6 w-6 text-orange-500" />
-                </div>
-                <span className="text-sm text-gray-300">{item.label}</span>
-              </div>
-            ))}
-          </div>
-          
-          <h2 className="text-3xl font-bold text-white mb-4">
-            Trade with Confidence
-          </h2>
-          <p className="text-gray-400">
-            Join millions of traders worldwide on the most secure cryptocurrency exchange platform.
-          </p>
-        </div>
-      </div>
-    </div>
+    </main>
   );
 }

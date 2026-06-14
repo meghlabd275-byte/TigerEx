@@ -52,6 +52,9 @@ export default function HomePage() {
             <Link href="/wallet" className="text-sm text-gray-300 hover:text-white transition-colors">
               Wallet
             </Link>
+            <Link href="/features" className="text-sm text-gray-300 hover:text-white transition-colors">
+              User Features
+            </Link>
           </nav>
 
           <div className="flex items-center gap-4">
