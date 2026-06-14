@@ -1,6 +1,7 @@
 // TigerEx REST API Gateway - Production-Grade
 // Ultra-low latency, high security, Binance-level functionality
 // Language: Go for maximum performance and concurrency
+// Features: Spot, Margin, Futures, OCO, Trailing Stop, Stop-Loss
 
 package main
 
@@ -13,12 +14,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -28,6 +31,162 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/time/rate"
 )
+
+// ============================================================================
+// ADVANCED ORDER TYPES - OCO, Trailing Stop, Stop-Loss
+// ============================================================================
+
+// OCOOrder - One Cancels Other order (Bracket Order)
+type OCOOrder struct {
+	ID                string    `json:"orderListId"`
+	Symbol            string    `json:"symbol"`
+	Orders            []OCOOrderItem `json:"orderReports"`
+	ContingencyType   string    `json:"contingencyType"` // ONE_CANCELS_ONE
+	ListOrderType    string    `json:"listOrderType"` // OCO
+	Total            int       `json:"listClientOrderId"`
+	ListStatus      string    `json:"listStatus"` // EXEC_STARTED, ALL_DONE, OCO_CANCELLED
+	Pending          int       `json:"listOrdersStatus,omitempty"`
+	ContractID      int64     `json:"listNoOfOrders"`
+	DisplayID       int64     `json:"listClientOrderId"`
+	DateTime        int64     `json:"datetime"`
+	DateTimeStr    string    `json:"datetimeStr,omitempty"`
+}
+
+// OCOOrderItem - Individual order in OCO
+type OCOOrderItem struct {
+	Symbol            string  `json:"symbol"`
+	OrderID           int64   `json:"orderId"`
+	ClientOrderID     string  `json:"clientOrderId"`
+	Side             string  `json:"side"`
+	OrderType        string  `json:"orderType"`
+	TimeInForce      string  `json:"timeInForce,omitempty"`
+	Price           float64 `json:"price"`
+	StopPrice        float64 `json:"stopPrice,omitempty"`
+	IcebergQty       float64 `json:"icebergQty,omitempty"`
+	OrigQty         float64 `json:"origQty"`
+	ExecutedQty      float64 `json:"executedQty"`
+	OrigQuoteQty    float64 `json:"origQuoteQty"`
+	ExecutedQuoteQty float64 `json:"executedQuoteQty"`
+	Status          string  `json:"status"`
+	TimeInForce     string  `json:"timeInForce"`
+	Type           string  `json:"type"`
+	Side           string  `json:"side"`
+}
+
+// TrailingStopOrder - Trailing Stop Order
+type TrailingStopOrder struct {
+	OrderID          int64   `json:"orderId"`
+	Symbol          string  `json:"symbol"`
+	Side            string  `json:"side"`
+	Type            string  `json:"orderType"` // TRAILING_STOP, TRAILING_STOP_LIMIT
+	Quantity        float64 `json:"quantity"`
+	Price           float64 `json:"price,omitempty"`
+	StopPrice       float64 `json:"stopPrice"`
+	TrailingDelta   float64 `json:"trailingDelta"`
+	ActivationTime int64   `json:"activationTime,omitempty"`
+	TimeInForce    string  `json:"timeInForce"` // GTC, IOC, FOK
+	Status         string  `json:"status"`
+	CreatedAt      int64   `json:"createTime"`
+	UpdatedAt      int64   `json:"updateTime"`
+}
+
+// SOROrder - Smart Order Routing
+type SOROrder struct {
+	OrderID            int64       `json:"orderId"`
+	Symbol             string      `json:"symbol"`
+	Side               string      `json:"side"`
+	Type               string      `json:"type"`
+	Quantity          float64     `json:"quantity"`
+	Price             float64     `json:"price"`
+	SORResults         []SORResult `json:"sorResults"`
+	TotalExecutedQty   float64    `json:"totalExecutedQty"`
+	TotalExecutedQuote float64    `json:"totalExecutedQuote"`
+	CommissionAsset   string      `json:"commissionAsset"`
+	Commission       float64     `json:"commission"`
+	TimeInForce      string      `json:"timeInForce"`
+	Status           string      `json:"status"`
+}
+
+// SORResult - Smart Order Routing result
+type SORResult struct {
+	Exchange string  `json:"exchange"`
+	Side    string  `json:"side"`
+	Price   float64 `json:"price"`
+	Quantity float64 `json:"quantity"`
+}
+
+// MarginCallOrder - Margin call order
+type MarginCallOrder struct {
+	OrderID     int64   `json:"orderId"`
+	MarginCallID int64   `json:"marginCallId"`
+	AccountID  int64   `json:"accountId"`
+	PositionID int64   `json:"positionId"`
+	Symbol     string `json:"symbol"`
+	Side       string `json:"side"`
+	Quantity  float64 `json:"quantity"`
+	Type      string `json:"type"`
+	Status    string `json:"status"`
+	CreatedAt  int64  `json:"createTime"`
+}
+
+// LiquidationOrder - Forced liquidation order
+type LiquidationOrder struct {
+	OrderID       int64   `json:"orderId"`
+	Symbol         string  `json:"symbol"`
+	Side           string  `json:"side"`
+	Type           string  `json:"type"`
+	Price          float64 `json:"price"`
+	OriginalQty    float64 `json:"originalQty"`
+	ExecutedQty    float64 `json:"executedQty"`
+	RemainingQty  float64 `json:"remainingQty"`
+	Status        string  `json:"status"`
+	LiquidationPrice float64 `json:"liquidationPrice"`
+	MarginCall    bool    `json:"marginCall"`
+	CreatedAt    int64   `json:"createTime"`
+	UpdatedAt    int64   `json:"updateTime"`
+}
+
+// BlvtToken - Leveraged Token (BLVT)
+type BlvtToken struct {
+	Symbol          string  `json:"symbol"`
+	TokenName       string  `json:"tokenName"`
+	Network        string  `json:"network"`
+	TotalSupply    float64 `json:"totalSupply"`
+	CirculatingSupply float64 `json:"circulatingSupply"`
+	LockedSupply   float64 `json:"lockedSupply"`
+	MaxSupply     float64 `json:"maxSupply"`
+	NAV           float64 `json:"nav"`
+	NAVChange     float64 `json:"navChange"`
+	NAVChangePct  float64 `json:"navChangePct"`
+	MaxDailyDown  float64 `json:"maxDailyDown"`
+	MaxDailyUp    float64 `json:"maxDailyUp"`
+	TotalStaked   float64 `json:"totalStaked"`
+}
+
+// BlvtSubscribe - BLVT subscription
+type BlvtSubscribe struct {
+	ID              int64   `json:"id"`
+	TokenSymbol     string  `json:"tokenSymbol"`
+	Amount         float64 `json:"amount"`
+	Cost           float64 `json:"cost"`
+	Status         string  `json:"status"`
+	Reference      string  `json:"reference"`
+	CreatedAt      int64   `json:"createTime"`
+	ProcessedAt    int64   `json:"processedTime"`
+}
+
+// BlvtRedeem - BLVT redemption
+type BlvtRedeem struct {
+	ID              int64   `json:"id"`
+	TokenSymbol     string  `json:"tokenSymbol"`
+	Amount         float64 `json:"amount"`
+	ReceivedAsset string  `json:"receivedAsset"`
+	ReceivedQty   float64 `json:"receivedQty"`
+	Status        string  `json:"status"`
+	Reference     string  `json:"reference"`
+	CreatedAt     int64   `json:"createTime"`
+	ProcessedAt   int64   `json:"processedTime"`
+}
 
 // ============================================================================
 // CONFIGURATION & CONSTANTS
