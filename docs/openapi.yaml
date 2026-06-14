@@ -1,0 +1,2510 @@
+openapi: 3.0.3
+info:
+  title: TigerEx API
+  description: |
+    TigerEx Cryptocurrency Exchange API - Production-Grade Trading Platform
+    
+    ## Authentication
+    All endpoints require authentication via API key or JWT token. Include the following headers:
+    - `X-API-Key` for API key authentication
+    - `Authorization: Bearer <token>` for JWT authentication
+    
+    ## Rate Limits
+    - Public endpoints: 1200 requests/minute
+    - Trading endpoints: 600 requests/minute
+    - Withdrawals: 60 requests/minute
+    
+    ## API Versioning
+    Current version: v2. Use `Accept: application/json` header.
+    
+    ## Response Format
+    All responses follow this structure:
+    ```json
+    {
+      "code": 0,
+      "message": "success",
+      "data": { ... },
+      "timestamp": 1234567890
+    }
+    ```
+    
+    ## Error Codes
+    | Code | Description |
+    |------|-------------|
+    | 0 | Success |
+    | 10001 | Invalid parameter |
+    | 10002 | Missing parameter |
+    | 10003 | Invalid API key |
+    | 10004 | Invalid signature |
+    | 10005 | Invalid timestamp |
+    | 10006 | Rate limit exceeded |
+    | 20001 | Insufficient balance |
+    | 20002 | Order not found |
+    | 20003 | Duplicate order |
+    | 20004 | Market closed |
+    | 20005 | Trading disabled |
+    | 30001 | KYC required |
+    | 30002 | Account locked |
+    | 30003 | Withdrawal suspended |
+    | 40001 | System error |
+  version: 2.0.0
+  contact:
+    name: TigerEx API Support
+    email: api@tigerex.com
+  license:
+    name: Proprietary
+    url: https://tigerex.com/license
+
+servers:
+  - url: https://api.tigerex.com
+    description: Production server
+  - url: https://testnet.tigerex.com
+    description: Testnet server
+
+tags:
+  - name: Market Data
+    description: Public market data endpoints
+  - name: Trading
+    description: Trading and order management
+  - name: Account
+    description: Account and user management
+  - name: Wallet
+    description: Deposits, withdrawals, and transfers
+  - name: Portfolio
+    description: Portfolio and positions
+  - name: Sub-Accounts
+    description: Sub-account management
+  - name: WebSocket
+    description: WebSocket streams
+  - name: Staking
+    description: Staking and DeFi
+  - name: Earn
+    description: Earn products
+  - name: NFT
+    description: NFT trading
+
+paths:
+  # ============================================================================
+  # MARKET DATA ENDPOINTS
+  # ============================================================================
+  
+  /api/v2/exchangeInfo:
+    get:
+      summary: Exchange Information
+      description: Get current exchange configuration including trading rules and symbol info
+      operationId: getExchangeInfo
+      tags:
+        - Market Data
+      parameters:
+        - name: symbol
+          in: query
+          description: Trading pair symbol (e.g., BTCUSDT)
+          schema:
+            type: string
+        - name: symbols
+          in: query
+          description: Comma-separated list of symbols
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Exchange information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeInfo'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  
+  /api/v2/depth:
+    get:
+      summary: Order Book
+      description: Get order book depth for a trading pair
+      operationId: getDepth
+      tags:
+        - Market Data
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          description: Trading pair symbol
+          schema:
+            type: string
+            example: BTCUSDT
+        - name: limit
+          in: query
+          description: Number of levels to return (1-100)
+          schema:
+            type: integer
+            default: 100
+            maximum: 100
+      responses:
+        '200':
+          description: Order book
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderBook'
+  
+  /api/v2/trades:
+    get:
+      summary: Recent Trades
+      description: Get recent trades for a symbol
+      operationId: getTrades
+      tags:
+        - Market Data
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          description: Trading pair symbol
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Number of trades to return (1-1000)
+          schema:
+            type: integer
+            default: 500
+            maximum: 1000
+        - name: fromId
+          in: query
+          description: Trade ID to start from
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Trade list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Trade'
+  
+  /api/v2/historicalTrades:
+    get:
+      summary: Historical Trades
+      description: Get historical trades for a symbol (requires API key)
+      operationId: getHistoricalTrades
+      tags:
+        - Market Data
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          description: Trading pair symbol
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Number of trades to return
+          schema:
+            type: integer
+            default: 500
+            maximum: 1000
+        - name: startTime
+          in: query
+          description: Start time in milliseconds
+          schema:
+            type: integer
+        - name: endTime
+          in: query
+          description: End time in milliseconds
+          schema:
+            type: integer
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Historical trades
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HistoricalTrade'
+  
+  /api/v2/klines:
+    get:
+      summary: Kline/Candlestick Data
+      description: Get kline/candlestick data for a symbol
+      operationId: getKlines
+      tags:
+        - Market Data
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          description: Trading pair symbol
+          schema:
+            type: string
+        - name: interval
+          in: query
+          required: true
+          description: Kline interval
+          schema:
+            type: string
+            enum: [1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 3d, 1w, 1M]
+        - name: startTime
+          in: query
+          description: Start time in milliseconds
+          schema:
+            type: integer
+        - name: endTime
+          in: query
+          description: End time in milliseconds
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          description: Number of klines to return
+          schema:
+            type: integer
+            default: 500
+            maximum: 1500
+      responses:
+        '200':
+          description: Kline data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Kline'
+  
+  /api/v2/ticker/24hr:
+    get:
+      summary: 24hr Ticker
+      description: Get 24hr price change statistics for a symbol or all symbols
+      operationId: get24hrTicker
+      tags:
+        - Market Data
+      parameters:
+        - name: symbol
+          in: query
+          description: Trading pair symbol
+          schema:
+            type: string
+        - name: symbols
+          in: query
+          description: Comma-separated symbols
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Ticker data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticker24hr'
+  
+  /api/v2/ticker/price:
+    get:
+      summary: Symbol Price Ticker
+      description: Get latest price for a symbol
+      operationId: getPriceTicker
+      tags:
+        - Market Data
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          description: Trading pair symbol
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Price ticker
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceTicker'
+  
+  /api/v2/ticker/bookTicker:
+    get:
+      summary: Book Ticker
+      description: Get best price/qty on the order book
+      operationId: getBookTicker
+      tags:
+        - Market Data
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          description: Trading pair symbol
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Book ticker
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookTicker'
+
+  # ============================================================================
+  # TRADING ENDPOINTS
+  # ============================================================================
+  
+  /api/v2/order:
+    post:
+      summary: New Order
+      description: |
+        Place a new order. Supports LIMIT, MARKET, STOP_LOSS, STOP_LOSS_LIMIT, 
+        TAKE_PROFIT, TAKE_PROFIT_LIMIT, OCO, TRAILING_STOP orders.
+      operationId: newOrder
+      tags:
+        - Trading
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewOrderRequest'
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: Order placed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimitExceeded'
+    
+    delete:
+      summary: Cancel Order
+      description: Cancel a pending order
+      operationId: cancelOrder
+      tags:
+        - Trading
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          description: Trading pair symbol
+          schema:
+            type: string
+        - name: orderId
+          in: query
+          description: Order ID
+          schema:
+            type: integer
+            format: int64
+        - name: origClientOrderId
+          in: query
+          description: Client order ID
+          schema:
+            type: string
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: Order cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+  
+  /api/v2/order/test:
+    post:
+      summary: Test New Order
+      description: Validate order without placing it
+      operationId: testNewOrder
+      tags:
+        - Trading
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewOrderRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Validation successful
+  
+  /api/v2/openOrders:
+    get:
+      summary: Current Orders
+      description: Get all open orders for the account
+      operationId: getOpenOrders
+      tags:
+        - Trading
+      parameters:
+        - name: symbol
+          in: query
+          description: Trading pair symbol
+          schema:
+            type: string
+        - name: timestamp
+          in: query
+          description: Start time in milliseconds
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          description: Number of orders to return
+          schema:
+            type: integer
+            default: 500
+            maximum: 1000
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: Open orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+  
+  /api/v2/allOrders:
+    get:
+      summary: All Orders
+      description: Get all orders (including history)
+      operationId: getAllOrders
+      tags:
+        - Trading
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          description: Trading pair symbol
+          schema:
+            type: string
+        - name: orderId
+          in: query
+          description: Order ID to start from
+          schema:
+            type: integer
+            format: int64
+        - name: startTime
+          in: query
+          description: Start time in milliseconds
+          schema:
+            type: integer
+        - name: endTime
+          in: query
+          description: End time in milliseconds
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          description: Number of orders to return
+          schema:
+            type: integer
+            default: 500
+            maximum: 1000
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: Order history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+  
+  /api/v2/myTrades:
+    get:
+      summary: Account Trades
+      description: Get trades for the account
+      operationId: getMyTrades
+      tags:
+        - Trading
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          description: Trading pair symbol
+          schema:
+            type: string
+        - name: orderId
+          in: query
+          description: Filter by order ID
+          schema:
+            type: integer
+            format: int64
+        - name: startTime
+          in: query
+          description: Start time in milliseconds
+          schema:
+            type: integer
+        - name: endTime
+          in: query
+          description: End time in milliseconds
+          schema:
+            type: integer
+        - name: fromId
+          in: query
+          description: Trade ID to start from
+          schema:
+            type: integer
+            format: int64
+        - name: limit
+          in: query
+          description: Number of trades to return
+          schema:
+            type: integer
+            default: 500
+            maximum: 1000
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: Trade history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Trade'
+  
+  /api/v2/ocoOrder:
+    post:
+      summary: Place OCO Order
+      description: Place One Cancels Other (OCO) order
+      operationId: placeOCOOrder
+      tags:
+        - Trading
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OCOOrderRequest'
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: OCO order placed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OCOResponse'
+    
+    delete:
+      summary: Cancel OCO Order
+      description: Cancel an OCO order
+      operationId: cancelOCOOrder
+      tags:
+        - Trading
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          description: Trading pair symbol
+          schema:
+            type: string
+        - name: orderListId
+          in: query
+          required: true
+          description: Order list ID
+          schema:
+            type: integer
+            format: int64
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: OCO order cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OCOResponse'
+  
+  /api/v2/myPreventedMatches:
+    get:
+      summary: Prevented Matches
+      description: Get prevented matches due to STP
+      operationId: getPreventedMatches
+      tags:
+        - Trading
+      parameters:
+        - name: symbol
+          in: query
+          description: Trading pair symbol
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Number of matches
+          schema:
+            type: integer
+            default: 500
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Prevented matches
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PreventedMatch'
+
+  # ============================================================================
+  # ACCOUNT ENDPOINTS
+  # ============================================================================
+  
+  /api/v2/account:
+    get:
+      summary: Account Information
+      description: Get current account information
+      operationId: getAccount
+      tags:
+        - Account
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: Account info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+    
+    put:
+      summary: Update Account
+      description: Update account settings
+      operationId: updateAccount
+      tags:
+        - Account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountUpdate'
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: Account updated
+  
+  /api/v2/account/commission:
+    get:
+      summary: Commission Information
+      description: Get account commission rates
+      operationId: getCommission
+      tags:
+        - Account
+      parameters:
+        - name: symbol
+          in: query
+          description: Trading pair symbol
+          schema:
+            type: string
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Commission rates
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Commission'
+  
+  /api/v2/account/status:
+    get:
+      summary: Account Status
+      description: Get detailed account status
+      operationId: getAccountStatus
+      tags:
+        - Account
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: Account status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountStatus'
+  
+  /api/v2/apiKeys:
+    get:
+      summary: API Keys
+      description: Get all API keys for the account
+      operationId: getApiKeys
+      tags:
+        - Account
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: API keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiKey'
+    
+    post:
+      summary: Create API Key
+      description: Create a new API key
+      operationId: createApiKey
+      tags:
+        - Account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApiKeyRequest'
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: API key created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+  
+  /api/v2/apiKeys/{keyId}:
+    delete:
+      summary: Delete API Key
+      description: Delete an API key
+      operationId: deleteApiKey
+      tags:
+        - Account
+      parameters:
+        - name: keyId
+          in: path
+          required: true
+          description: API key ID
+          schema:
+            type: string
+      security:
+        - ApiKeyAuth: []
+        - JWTAuth: []
+      responses:
+        '200':
+          description: API key deleted
+
+  # ============================================================================
+  # WALLET ENDPOINTS
+  # ============================================================================
+  
+  /api/v2/capital/deposit/address:
+    get:
+      summary: Deposit Address
+      description: Get deposit address for a currency
+      operationId: getDepositAddress
+      tags:
+        - Wallet
+      parameters:
+        - name: coin
+          in: query
+          required: true
+          description: Currency code
+          schema:
+            type: string
+        - name: network
+          in: query
+          description: Network
+          schema:
+            type: string
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Deposit address
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepositAddress'
+  
+  /api/v2/capital/deposit:
+    get:
+      summary: Deposit History
+      description: Get deposit history
+      operationId: getDepositHistory
+      tags:
+        - Wallet
+      parameters:
+        - name: coin
+          in: query
+          description: Currency code
+          schema:
+            type: string
+        - name: startTime
+          in: query
+          description: Start time in milliseconds
+          schema:
+            type: integer
+        - name: endTime
+          in: query
+          description: End time in milliseconds
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          description: Number of records
+          schema:
+            type: integer
+            default: 1000
+        - name: offset
+          in: query
+          description: Offset
+          schema:
+            type: integer
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Deposit history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Deposit'
+  
+  /api/v2/capital/withdraw/apply:
+    post:
+      summary: Withdraw
+      description: Submit a withdrawal request
+      operationId: withdraw
+      tags:
+        - Wallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WithdrawRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Withdrawal submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WithdrawResult'
+  
+  /api/v2/capital/withdraw/history:
+    get:
+      summary: Withdrawal History
+      description: Get withdrawal history
+      operationId: getWithdrawHistory
+      tags:
+        - Wallet
+      parameters:
+        - name: coin
+          in: query
+          description: Currency code
+          schema:
+            type: string
+        - name: startTime
+          in: query
+          description: Start time in milliseconds
+          schema:
+            type: integer
+        - name: endTime
+          in: query
+          description: End time in milliseconds
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          description: Number of records
+          schema:
+            type: integer
+            default: 1000
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Withdrawal history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Withdrawal'
+  
+  /api/v2/capital/balance:
+    get:
+      summary: Account Balance
+      description: Get account balances
+      operationId: getBalance
+      tags:
+        - Wallet
+      parameters:
+        - name: coin
+          in: query
+          description: Currency code
+          schema:
+            type: string
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Balances
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Balance'
+  
+  /api/v2/capital/transfer:
+    post:
+      summary: Internal Transfer
+      description: Transfer between accounts
+      operationId: transfer
+      tags:
+        - Wallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Transfer successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+  
+  /api/v2/capital/convert:
+    post:
+      summary: Convert
+      description: Convert between currencies
+      operationId: convert
+      tags:
+        - Wallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConvertRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Conversion successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConvertResult'
+
+  # ============================================================================
+  # MARGIN ENDPOINTS
+  # ============================================================================
+  
+  /api/v2/margin/transfer:
+    post:
+      summary: Margin Transfer
+      description: Transfer to/from margin account
+      operationId: marginTransfer
+      tags:
+        - Portfolio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarginTransferRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Transfer successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+  
+  /api/v2/margin/borrow:
+    post:
+      summary: Borrow
+      description: Borrow margin
+      operationId: borrow
+      tags:
+        - Portfolio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BorrowRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Borrow successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BorrowResult'
+  
+  /api/v2/margin/repay:
+    post:
+      summary: Repay
+      description: Repay margin borrow
+      operationId: repay
+      tags:
+        - Portfolio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepayRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Repay successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepayResult'
+  
+  /api/v2/margin/account:
+    get:
+      summary: Margin Account
+      description: Get margin account info
+      operationId: getMarginAccount
+      tags:
+        - Portfolio
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Margin account info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarginAccount'
+  
+  /api/v2/margin/position:
+    get:
+      summary: Margin Position
+      description: Get margin position
+      operationId: getMarginPosition
+      tags:
+        - Portfolio
+      parameters:
+        - name: symbol
+          in: query
+          description: Trading pair symbol
+          schema:
+            type: string
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Margin position
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarginPosition'
+
+  # ============================================================================
+  # FUTURES ENDPOINTS
+  # ============================================================================
+  
+  /api/v2/futures/transfer:
+    post:
+      summary: Futures Transfer
+      description: Transfer to/from futures account
+      operationId: futuresTransfer
+      tags:
+        - Portfolio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FuturesTransferRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Transfer successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+  
+  /api/v2/futures/account:
+    get:
+      summary: Futures Account
+      description: Get futures account info
+      operationId: getFuturesAccount
+      tags:
+        - Portfolio
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Futures account info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FuturesAccount'
+  
+  /api/v2/futures/position:
+    get:
+      summary: Futures Position
+      description: Get futures position
+      operationId: getFuturesPosition
+      tags:
+        - Portfolio
+      parameters:
+        - name: symbol
+          in: query
+          description: Trading pair symbol
+          schema:
+            type: string
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Futures position
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FuturesPosition'
+  
+  /api/v2/futures/order:
+    post:
+      summary: Futures Order
+      description: Place futures order
+      operationId: newFuturesOrder
+      tags:
+        - Trading
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FuturesOrderRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Order placed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FuturesOrder'
+
+  # ============================================================================
+  # STAKING ENDPOINTS
+  # ============================================================================
+  
+  /api/v2/staking/pool:
+    get:
+      summary: Staking Pools
+      description: Get available staking pools
+      operationId: getStakingPools
+      tags:
+        - Staking
+      parameters:
+        - name: product
+          in: query
+          description: Product type
+          schema:
+            type: string
+            enum: [STAKING, SAVING, DEFI]
+      responses:
+        '200':
+          description: Staking pools
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StakingPool'
+  
+  /api/v2/staking/stake:
+    post:
+      summary: Stake
+      description: Stake assets
+      operationId: stake
+      tags:
+        - Staking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StakeRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Stake successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StakeResult'
+  
+  /api/v2/staking/unstake:
+    post:
+      summary: Unstake
+      description: Unstake assets
+      operationId: unstake
+      tags:
+        - Staking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnstakeRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Unstake successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnstakeResult'
+  
+  /api/v2/staking/positions:
+    get:
+      summary: Staking Positions
+      description: Get staking positions
+      operationId: getStakingPositions
+      tags:
+        - Staking
+      parameters:
+        - name: product
+          in: query
+          description: Product type
+          schema:
+            type: string
+        - name: asset
+          in: query
+          description: Asset
+          schema:
+            type: string
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Staking positions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StakingPosition'
+
+  # ============================================================================
+  # SUB-ACCOUNTS (INSTITUTIONAL)
+  # ============================================================================
+  
+  /api/v2/subAccount/transfer:
+    post:
+      summary: Sub-Account Transfer
+      description: Transfer between sub-accounts
+      operationId: subAccountTransfer
+      tags:
+        - Sub-Accounts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubAccountTransferRequest'
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Transfer successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubAccountTransfer'
+  
+  /api/v2/subAccount/list:
+    get:
+      summary: Sub-Account List
+      description: Get sub-account list
+      operationId: getSubAccounts
+      tags:
+        - Sub-Accounts
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Sub-account list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SubAccount'
+  
+  /api/v2/subAccount/status:
+    get:
+      summary: Sub-Account Status
+      description: Get sub-account status
+      operationId: getSubAccountStatus
+      tags:
+        - Sub-Accounts
+      parameters:
+        - name: email
+          in: query
+          required: true
+          description: Sub-account email
+          schema:
+            type: string
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Sub-account status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubAccount'
+
+  # ============================================================================
+  # WEBOCKET STREAMS
+  # ============================================================================
+  
+  /stream:
+    get:
+      summary: WebSocket Stream
+      description: Connect to WebSocket stream
+      operationId: wsConnect
+      tags:
+        - WebSocket
+      parameters:
+        - name: streams
+          in: query
+          description: Stream names (comma-separated)
+          schema:
+            type: string
+      responses:
+        '101':
+          description: WebSocket connection established
+
+  /ws/{streamType}:
+    get:
+      summary: Combined Streams
+      description: Combined WebSocket stream
+      operationId: wsCombined
+      tags:
+        - WebSocket
+      parameters:
+        - name: streamType
+          in: path
+          required: true
+          description: Stream type
+          schema:
+            type: string
+            enum: [all, miniTicker, ticker, kline, depth, trade]
+        - name: streams
+          in: query
+          description: Stream names
+          schema:
+            type: string
+      responses:
+        '101':
+          description: WebSocket connection established
+
+# ============================================================================
+# COMPONENTS
+# ============================================================================
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API Key authentication
+    JWTAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT authentication
+
+  schemas:
+    # ============================================================================
+    # REQUEST SCHEMAS
+    # ============================================================================
+    
+    NewOrderRequest:
+      type: object
+      required:
+        - symbol
+        - side
+        - type
+        - quantity
+      properties:
+        symbol:
+          type: string
+          description: Trading pair symbol
+          example: BTCUSDT
+        side:
+          type: string
+          enum: [BUY, SELL]
+          description: Order side
+        type:
+          type: string
+          enum: [LIMIT, MARKET, STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, OCO, TRAILING_STOP]
+          description: Order type
+        timeInForce:
+          type: string
+          enum: [GTC, IOC, FOK, GTX]
+          description: Time in force
+        quantity:
+          type: number
+          format: double
+          description: Order quantity
+        price:
+          type: number
+          format: double
+          description: Order price
+        stopPrice:
+          type: number
+          format: double
+          description: Stop price
+        icebergQty:
+          type: number
+          format: double
+          description: Iceberg quantity
+        newClientOrderId:
+          type: string
+          description: Client order ID
+        sideEffectType:
+          type: string
+          enum: [NO_SIDE_EFFECT, MARGIN_BORROW, AUTO_REPAY]
+          description: Side effect type
+        selfTradePreventionMode:
+          type: string
+          enum: [EXPIRE_TAKER, EXPIRE_MAKER, EXPIRE_BOTH, NONE]
+          description: STP mode
+    
+    OCOOrderRequest:
+      type: object
+      required:
+        - symbol
+        - side
+        - quantity
+        - listClientOrderId
+        - price
+        - stopPrice
+      properties:
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [BUY, SELL]
+        quantity:
+          type: number
+          format: double
+        listClientOrderId:
+          type: string
+        price:
+          type: number
+          format: double
+        stopPrice:
+          type: number
+          format: double
+        stopLimitPrice:
+          type: number
+          format: double
+        stopLimitTimeInForce:
+          type: string
+          enum: [GTC, IOC, FOK]
+    
+    AccountUpdate:
+      type: object
+      properties:
+        autoRepayAtCancel:
+          type: boolean
+        spotMarginEnable:
+          type: boolean
+    
+    CreateApiKeyRequest:
+      type: object
+      properties:
+        label:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+            enum: [TRADE, WITHDRAW, MARGIN]
+        ipWhitelist:
+          type: string
+    
+    WithdrawRequest:
+      type: object
+      required:
+        - coin
+        - address
+        - amount
+      properties:
+        coin:
+          type: string
+          description: Currency code
+        address:
+          type: string
+          description: Withdrawal address
+        addressTag:
+          type: string
+          description: Memo/tag (XRP, XMR, etc.)
+        network:
+          type: string
+          description: Network
+        amount:
+          type: number
+          format: double
+          description: Amount
+        fee:
+          type: number
+          format: double
+          description: Withdrawal fee
+    
+    TransferRequest:
+      type: object
+      required:
+        - asset
+        - amount
+        - type
+      properties:
+        asset:
+          type: string
+        amount:
+          type: number
+          format: double
+        type:
+          type: string
+          enum: [INTERNAL, EXTERNAL]
+        fromAccountType:
+          type: string
+          enum: [SPOT, MARGIN, FUTURES]
+        toAccountType:
+          type: string
+          enum: [SPOT, MARGIN, FUTURES]
+    
+    ConvertRequest:
+      type: object
+      required:
+        - fromAsset
+        - toAsset
+        - amount
+      properties:
+        fromAsset:
+          type: string
+        toAsset:
+          type: string
+        amount:
+          type: number
+          format: double
+    
+    MarginTransferRequest:
+      type: object
+      required:
+        - asset
+        - amount
+        - type
+      properties:
+        asset:
+          type: string
+        amount:
+          type: number
+          format: double
+        type:
+          type: string
+          enum: [SPOT_TO_MARGIN, MARGIN_TO_SPOT]
+    
+    BorrowRequest:
+      type: object
+      required:
+        - asset
+        - amount
+      properties:
+        asset:
+          type: string
+        amount:
+          type: number
+          format: double
+        isIsolated:
+          type: boolean
+          description: Isolated margin symbol
+    
+    RepayRequest:
+      type: object
+      required:
+        - asset
+        - amount
+      properties:
+        asset:
+          type: string
+        amount:
+          type: number
+          format: double
+        isIsolated:
+          type: boolean
+    
+    FuturesTransferRequest:
+      type: object
+      required:
+        - asset
+        - amount
+        - type
+      properties:
+        asset:
+          type: string
+        amount:
+          type: number
+          format: double
+        type:
+          type: string
+          enum: [TO_FUTURES, FROM_FUTURES]
+    
+    FuturesOrderRequest:
+      type: object
+      required:
+        - symbol
+        - side
+        - quantity
+      properties:
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [BUY, SELL]
+        positionSide:
+          type: string
+          enum: [SHORT, LONG, BOTH]
+        quantity:
+          type: number
+          format: double
+        price:
+          type: number
+          format: double
+        stopPrice:
+          type: number
+          format: double
+        reduceOnly:
+          type: boolean
+        newOrderResponseType:
+          type: string
+          enum: [FULL, ACK]
+        timeInForce:
+          type: string
+          enum: [GTC, IOC, FOK, GTX]
+    
+    StakeRequest:
+      type: object
+      required:
+        - product
+        - asset
+        - amount
+      properties:
+        product:
+          type: string
+          enum: [STAKING, SAVING, DEFI]
+        asset:
+          type: string
+        amount:
+          type: number
+          format: double
+        lockPeriod:
+          type: integer
+          description: Lock period in days
+    
+    UnstakeRequest:
+      type: object
+      required:
+        - product
+        - asset
+      properties:
+        product:
+          type: string
+        asset:
+          type: string
+    
+    SubAccountTransferRequest:
+      type: object
+      required:
+        - toEmail
+        - asset
+        - amount
+      properties:
+        toEmail:
+          type: string
+        asset:
+          type: string
+        amount:
+          type: number
+          format: double
+
+    # ============================================================================
+    # RESPONSE SCHEMAS
+    # ============================================================================
+    
+    ExchangeInfo:
+      type: object
+      properties:
+        timezone:
+          type: string
+        serverTime:
+          type: integer
+          format: int64
+        symbols:
+          type: array
+          items:
+            $ref: '#/components/schemas/Symbol'
+    
+    Symbol:
+      type: object
+      properties:
+        symbol:
+          type: string
+        status:
+          type: string
+        baseAsset:
+          type: string
+        baseAssetPrecision:
+          type: integer
+        quoteAsset:
+          type: string
+        quotePrecision:
+          type: integer
+        quoteAssetPrecision:
+          type: integer
+        orderTypes:
+          type: array
+          items:
+            type: string
+        icebergAllowed:
+          type: boolean
+        ocoAllowed:
+          type: boolean
+        isSpotTradingAllowed:
+          type: boolean
+        isMarginTradingAllowed:
+          type: boolean
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/SymbolFilter'
+    
+    SymbolFilter:
+      type: object
+      properties:
+        filterType:
+          type: string
+        minPrice:
+          type: string
+        maxPrice:
+          type: string
+        tickSize:
+          type: string
+        minQty:
+          type: string
+        maxQty:
+          type: string
+        stepSize:
+          type: string
+        minNotional:
+          type: string
+    
+    OrderBook:
+      type: object
+      properties:
+        lastUpdateId:
+          type: integer
+          format: int64
+        bids:
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+              format: double
+        asks:
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+              format: double
+    
+    Trade:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        price:
+          type: number
+          format: double
+        qty:
+          type: number
+          format: double
+        time:
+          type: integer
+          format: int64
+        isBuyerMaker:
+          type: boolean
+    
+    HistoricalTrade:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        price:
+          type: number
+          format: double
+        qty:
+          type: number
+          format: double
+        time:
+          type: integer
+          format: int64
+        isBuyerMaker:
+          type: boolean
+        isBestMatch:
+          type: boolean
+    
+    Kline:
+      type: array
+      items:
+        - type: integer
+        - type: number
+        - type: number
+        - type: number
+        - type: number
+        - type: integer
+    
+    Ticker24hr:
+      type: object
+      properties:
+        symbol:
+          type: string
+        priceChange:
+          type: number
+          format: double
+        priceChangePercent:
+          type: number
+          format: double
+        weightedAvgPrice:
+          type: number
+          format: double
+        prevClosePrice:
+          type: number
+          format: double
+        lastPrice:
+          type: number
+          format: double
+        lastQty:
+          type: number
+          format: double
+        bidPrice:
+          type: number
+          format: double
+        bidQty:
+          type: number
+          format: double
+        askPrice:
+          type: number
+          format: double
+        askQty:
+          type: number
+          format: double
+        openPrice:
+          type: number
+          format: double
+        highPrice:
+          type: number
+          format: double
+        lowPrice:
+          type: number
+          format: double
+        volume:
+          type: number
+          format: double
+        quoteVolume:
+          type: number
+          format: double
+        openTime:
+          type: integer
+          format: int64
+        closeTime:
+          type: integer
+          format: int64
+        firstId:
+          type: integer
+          format: int64
+        lastId:
+          type: integer
+          format: int64
+        count:
+          type: integer
+    
+    PriceTicker:
+      type: object
+      properties:
+        symbol:
+          type: string
+        price:
+          type: string
+    
+    BookTicker:
+      type: object
+      properties:
+        symbol:
+          type: string
+        bidPrice:
+          type: string
+        bidQty:
+          type: string
+        askPrice:
+          type: string
+        askQty:
+          type: string
+    
+    Order:
+      type: object
+      properties:
+        symbol:
+          type: string
+        orderId:
+          type: integer
+          format: int64
+        orderListId:
+          type: integer
+          format: int64
+        clientOrderId:
+          type: string
+        transactTime:
+          type: integer
+        price:
+          type: number
+          format: double
+        origQty:
+          type: number
+          format: double
+        executedQty:
+          type: number
+          format: double
+        cummulativeQuoteQty:
+          type: number
+          format: double
+        status:
+          type: string
+        timeInForce:
+          type: string
+        type:
+          type: string
+        side:
+          type: string
+        workingTime:
+          type: integer
+          format: int64
+        selfTradePreventionMode:
+          type: string
+        fills:
+          type: array
+          items:
+            $ref: '#/components/schemas/Fill'
+    
+    Fill:
+      type: object
+      properties:
+        price:
+          type: number
+          format: double
+        qty:
+          type: number
+          format: double
+        commission:
+          type: number
+          format: double
+        commissionAsset:
+          type: string
+    
+    OCOResponse:
+      type: object
+      properties:
+        orderListId:
+          type: integer
+          format: int64
+        contigencyType:
+          type: string
+        listStatusType:
+          type: string
+        listOrderStatus:
+          type: string
+        rejectReason:
+          type: string
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Order'
+    
+    PreventedMatch:
+      type: object
+      properties:
+        preventedMatchId:
+          type: integer
+          format: int64
+        symbol:
+          type: string
+        takerOrderId:
+          type: integer
+          format: int64
+        makerOrderId:
+          type: integer
+          format: int64
+        preventedQuantity:
+          type: number
+          format: double
+    
+    Account:
+      type: object
+      properties:
+        makerCommission:
+          type: integer
+        takerCommission:
+          type: integer
+        buyerCommission:
+          type: integer
+        sellerCommission:
+          type: integer
+        canTrade:
+          type: boolean
+        canWithdraw:
+          type: boolean
+        canDeposit:
+          type: boolean
+        updateTime:
+          type: integer
+          format: int64
+        accountType:
+          type: string
+        balances:
+          type: array
+          items:
+            $ref: '#/components/schemas/Balance'
+    
+    AccountStatus:
+      type: object
+      properties:
+        email:
+          type: string
+        isCurrentPasswordValid:
+          type: boolean
+        isAPIKeyValid:
+          type: boolean
+        canTrade:
+          type: boolean
+        canWithdraw:
+          type: boolean
+        canDeposit:
+          type: boolean
+        enableFutures:
+          type: boolean
+        enableOptions:
+          type: boolean
+    
+    Commission:
+      type: object
+      properties:
+        symbol:
+          type: string
+        makerCommission:
+          type: integer
+        takerCommission:
+          type: integer
+    
+    ApiKey:
+      type: object
+      properties:
+        keyId:
+          type: integer
+        key:
+          type: string
+        name:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+        ipWhitelist:
+          type: string
+        createTime:
+          type: integer
+          format: int64
+    
+    DepositAddress:
+      type: object
+      properties:
+        address:
+          type: string
+        coin:
+          type: string
+        tag:
+          type: string
+        url:
+          type: string
+    
+    Deposit:
+      type: object
+      properties:
+        id:
+          type: string
+        txHash:
+          type: string
+        asset:
+          type: string
+        amount:
+          type: number
+          format: double
+        status:
+          type: integer
+    
+    Withdrawal:
+      type: object
+      properties:
+        id:
+          type: string
+        txHash:
+          type: string
+        asset:
+          type: string
+        amount:
+          type: number
+          format: double
+        status:
+          type: integer
+        address:
+          type: string
+        tag:
+          type: string
+        fee:
+          type: number
+          format: double
+    
+    WithdrawResult:
+      type: object
+      properties:
+        id:
+          type: string
+    
+    Balance:
+      type: object
+      properties:
+        asset:
+          type: string
+        free:
+          type: number
+          format: double
+        locked:
+          type: number
+          format: double
+    
+    Transfer:
+      type: object
+      properties:
+        txnId:
+          type: integer
+          format: int64
+    
+    ConvertResult:
+      type: object
+      properties:
+        txnId:
+          type: integer
+          format: int64
+    
+    MarginAccount:
+      type: object
+      properties:
+        marginLevel:
+          type: string
+        totalAssetOfBtc:
+          type: string
+        totalLiabilityOfBtc:
+          type: string
+        netAssetOfBtc:
+          type: string
+        balances:
+          type: array
+          items:
+            $ref: '#/components/schemas/Balance'
+        debts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Debt'
+    
+    Debt:
+      type: object
+      properties:
+        asset:
+          type: string
+        borrowed:
+          type: number
+          format: double
+        interest:
+          type: number
+          format: double
+        net:
+          type: number
+          format: double
+    
+    MarginPosition:
+      type: object
+      properties:
+        symbol:
+          type: string
+        isolated:
+          type: boolean
+        marginLevel:
+          type: string
+        marginLevelRatio:
+          type: string
+        marginRatio:
+          type: string
+        indexPrice:
+          type: string
+        positionSide:
+          type: string
+        positionAmt:
+          type: number
+          format: double
+        autoRepayAtCancel:
+          type: boolean
+    
+    BorrowResult:
+      type: object
+      properties:
+        txnId:
+          type: integer
+          format: int64
+    
+    RepayResult:
+      type: object
+      properties:
+        txnId:
+          type: integer
+          format: int64
+    
+    FuturesAccount:
+      type: object
+      properties:
+        totalAssetOfBtc:
+          type: string
+        totalLiabilityOfBtc:
+          type: string
+        netAssetOfBtc:
+          type: string
+        canDeposit:
+          type: boolean
+        canWithdraw:
+          type: boolean
+        updateTime:
+          type: integer
+        balances:
+          type: array
+          items:
+            $ref: '#/components/schemas/Balance'
+    
+    FuturesPosition:
+      type: object
+      properties:
+        symbol:
+          type: string
+        positionSide:
+          type: string
+        positionAmt:
+          type: number
+          format: double
+        entryPrice:
+          type: string
+        breakEvenPrice:
+          type: string
+        prePrice:
+          type: string
+        liquidationPrice:
+          type: string
+        markPrice:
+          type: string
+        unrealizedPnL:
+          type: string
+        marginRatio:
+          type: string
+    
+    FuturesOrder:
+      type: object
+      properties:
+        orderId:
+          type: integer
+          format: int64
+        clientOrderId:
+          type: string
+        symbol:
+          type: string
+        positionSide:
+          type: string
+        side:
+          type: string
+        type:
+          type: string
+        status:
+          type: string
+        workingTime:
+          type: integer
+          format: int64
+        price:
+          type: number
+          format: double
+        avgPrice:
+          type: number
+          format: double
+        quantity:
+          type: number
+          format: double
+    
+    StakingPool:
+      type: object
+      properties:
+        poolId:
+          type: string
+        poolName:
+          type: string
+        asset:
+          type: string
+        yield:
+          type: string
+        durationDays:
+          type: integer
+        minStake:
+          type: string
+        maxStake:
+          type: string
+    
+    StakeResult:
+      type: object
+      properties:
+        positionId:
+          type: string
+    
+    UnstakeResult:
+      type: object
+      properties:
+        positionId:
+          type: string
+    
+    StakingPosition:
+      type: object
+      properties:
+        positionId:
+          type: string
+        poolId:
+          type: string
+        asset:
+          type: string
+        amount:
+          type: number
+          format: double
+        startTime:
+          type: integer
+          format: int64
+    
+    SubAccount:
+      type: object
+      properties:
+        email:
+          type: string
+        isActive:
+          type: boolean
+        enabled:
+          type: boolean
+        makerCommission:
+          type: integer
+        takerCommission:
+          type: integer
+    
+    SubAccountTransfer:
+      type: object
+      properties:
+        txnId:
+          type: integer
+          format: int64
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: 10001
+            message: Invalid parameter
+            timestamp: 1234567890
+    
+    RateLimitExceeded:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: 10006
+            message: Rate limit exceeded
+            timestamp: 1234567890
+    
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        timestamp:
+          type: integer
+          format: int64
+
+externalDocs:
+  description: TigerEx API Documentation
+  url: https://docs.tigerex.com
