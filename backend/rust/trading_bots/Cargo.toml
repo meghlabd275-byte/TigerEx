@@ -1,0 +1,26 @@
+[package]
+name = "tigerex-trading-bots"
+version = "1.0.0"
+edition = "2021"
+description = "TigerEx Trading Bots - Grid, DCA, TWAP, Arbitrage"
+authors = ["TigerEx Trading Team"]
+
+[dependencies]
+tokio = { version = "1.41", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+rand = "0.8"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+[lib]
+name = "tigerex_bots"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tigerex-bots"
+path = "src/main.rs"
