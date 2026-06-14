@@ -1,0 +1,21 @@
+//! TigerEx Leveraged Tokens - Auto-compounding leveraged tokens
+
+[package]
+name = "tigerex-leveraged-tokens"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.41", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+tracing = "0.1"
+rand = "0.8"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "tigerex-leveraged-tokens"
+path = "src/main.rs"
