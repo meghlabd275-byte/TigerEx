@@ -3,7 +3,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,12 +10,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-)
 
-// Import all routes and services
 	"tigerex/server/handlers"
 	"tigerex/server/middleware"
 	"tigerex/server/models"
+)
 
 // @title TigerEx API
 // @version 1.0
@@ -209,6 +207,10 @@ func main() {
 		adminAuth := admin.Group("")
 		adminAuth.Use(middleware.AdminAuthRequired())
 		{
+			// Dynamic backend operations (permissions enforced per resource type)
+			handlers.RegisterAdminOperationsRoutes(adminAuth)
+			handlers.RegisterWhiteLabelRoutes(adminAuth)
+
 			// Admin Management
 			adminAuth.GET("/admins", handlers.GetAllAdmins)
 			adminAuth.POST("/admins", handlers.CreateAdmin)

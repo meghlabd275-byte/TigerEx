@@ -1,0 +1,9 @@
+[package]
+name = "tigerex-withdrawal-risk-engine"
+version = "0.1.0"
+edition = "2021"
+description = "TigerEx deterministic withdrawal risk scoring and policy enforcement engine"
+license = "Proprietary"
+
+[lib]
+path = "src/lib.rs"

@@ -1,7 +1,7 @@
 // Master Wallet & Blockchain Management
 // Admin backend for managing master wallet, blockchains, and tokens
 
-package main
+package handlers
 
 import (
 	"encoding/hex"
@@ -12,6 +12,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+
+	"tigerex/server/models"
 )
 
 // ============================================================================
@@ -19,18 +21,18 @@ import (
 // ============================================================================
 
 type Blockchain struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Symbol         string    `json:"symbol"`
-	ChainID        int64     `json:"chainId"`
-	RPCURL         string    `json:"rpcUrl"`
-	ExplorerURL    string    `json:"explorerUrl"`
-	TokenType      string    `json:"tokenType"` // "evm", "solana", "ton", "bitcoin"
-	Decimals       int       `json:"decimals"`
-	Status         string    `json:"status"` // "active", "inactive"
-	GasToken       string    `json:"gasToken"`
-	ExplorerAPI   string    `json:"explorerApi"`
-	CreatedAt      time.Time `json:"createdAt"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Symbol      string    `json:"symbol"`
+	ChainID     int64     `json:"chainId"`
+	RPCURL      string    `json:"rpcUrl"`
+	ExplorerURL string    `json:"explorerUrl"`
+	TokenType   string    `json:"tokenType"` // "evm", "solana", "ton", "bitcoin"
+	Decimals    int       `json:"decimals"`
+	Status      string    `json:"status"` // "active", "inactive"
+	GasToken    string    `json:"gasToken"`
+	ExplorerAPI string    `json:"explorerApi"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 type Token struct {
@@ -81,27 +83,27 @@ var Blockchains = []Blockchain{
 // ============================================================================
 
 type MasterWallet struct {
-	ID              string    `json:"id"`
-	Address         string    `json:"address"`
-	PrivateKeyHash  string    `json:"-"`
-	Mnemonic        string    `json:"-"`
-	BlockchainID    string    `json:"blockchainId"`
-	Balance         string    `json:"balance"`
-	Status          string    `json:"status"`
-	CreatedAt       time.Time `json:"createdAt"`
-	LastActivity    time.Time `json:"lastActivity"`
+	ID             string    `json:"id"`
+	Address        string    `json:"address"`
+	PrivateKeyHash string    `json:"-"`
+	Mnemonic       string    `json:"-"`
+	BlockchainID   string    `json:"blockchainId"`
+	Balance        string    `json:"balance"`
+	Status         string    `json:"status"`
+	CreatedAt      time.Time `json:"createdAt"`
+	LastActivity   time.Time `json:"lastActivity"`
 }
 
 type FeeConfig struct {
-	ID             string  `json:"id"`
-	FeeType        string  `json:"feeType"` // "withdraw", "swap", "transfer"
-	BlockchainID   string  `json:"blockchainId"`
-	TokenSymbol    string  `json:"tokenSymbol"`
-	FeeAmount      float64 `json:"feeAmount"`
-	FeePercentage  float64 `json:"feePercentage"`
-	MinFee         float64 `json:"minFee"`
-	MaxFee         float64 `json:"maxFee"`
-	Status         string  `json:"status"`
+	ID            string  `json:"id"`
+	FeeType       string  `json:"feeType"` // "withdraw", "swap", "transfer"
+	BlockchainID  string  `json:"blockchainId"`
+	TokenSymbol   string  `json:"tokenSymbol"`
+	FeeAmount     float64 `json:"feeAmount"`
+	FeePercentage float64 `json:"feePercentage"`
+	MinFee        float64 `json:"minFee"`
+	MaxFee        float64 `json:"maxFee"`
+	Status        string  `json:"status"`
 }
 
 // ============================================================================
@@ -112,7 +114,7 @@ type FeeConfig struct {
 func GetBlockchains(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"success": true,
-		"data":   Blockchains,
+		"data":    Blockchains,
 	})
 }
 
@@ -136,11 +138,11 @@ func AddBlockchain(c *gin.Context) {
 	Blockchains = append(Blockchains, req)
 
 	// Log action
-	logAdminAction(adminID, c.GetString("admin_username"), "ADD_BLOCKCHAIN", "blockchain", req.ID, nil)
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "ADD_BLOCKCHAIN", "blockchain", req.ID, nil)
 
 	c.JSON(201, gin.H{
 		"success": true,
-		"data": gin.H{"message": "Blockchain added", "id": req.ID},
+		"data":    gin.H{"message": "Blockchain added", "id": req.ID},
 	})
 }
 
@@ -156,7 +158,7 @@ func UpdateBlockchain(c *gin.Context) {
 	var req struct {
 		RPCURL      *string `json:"rpcUrl"`
 		ExplorerURL *string `json:"explorerUrl"`
-		Status     *string `json:"status"`
+		Status      *string `json:"status"`
 	}
 	c.ShouldBindJSON(&req)
 
@@ -172,7 +174,7 @@ func UpdateBlockchain(c *gin.Context) {
 				Blockchains[i].Status = *req.Status
 			}
 
-			logAdminAction(adminID, c.GetString("admin_username"), "UPDATE_BLOCKCHAIN", "blockchain", blockchainID, nil)
+			logWalletAdminAction(adminID, c.GetString("admin_username"), "UPDATE_BLOCKCHAIN", "blockchain", blockchainID, nil)
 			break
 		}
 	}
@@ -196,7 +198,7 @@ func DeleteBlockchain(c *gin.Context) {
 		}
 	}
 
-	logAdminAction(adminID, c.GetString("admin_username"), "DELETE_BLOCKCHAIN", "blockchain", blockchainID, nil)
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "DELETE_BLOCKCHAIN", "blockchain", blockchainID, nil)
 
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Blockchain deleted"}})
 }
@@ -264,26 +266,26 @@ func AddToken(c *gin.Context) {
 	}
 
 	var req struct {
-		BlockchainID    string  `json:"blockchainId" binding:"required"`
-		Name           string  `json:"name" binding:"required"`
-		Symbol         string  `json:"symbol" binding:"required"`
-		ContractAddress string  `json:"contractAddress"`
-		Decimals       int     `json:"decimals"`
-		TokenType      string  `json:"tokenType"`
-		LogoURL        string  `json:"logoUrl"`
+		BlockchainID    string `json:"blockchainId" binding:"required"`
+		Name            string `json:"name" binding:"required"`
+		Symbol          string `json:"symbol" binding:"required"`
+		ContractAddress string `json:"contractAddress"`
+		Decimals        int    `json:"decimals"`
+		TokenType       string `json:"tokenType"`
+		LogoURL         string `json:"logoUrl"`
 	}
 	c.ShouldBindJSON(&req)
 
 	tokenID := fmt.Sprintf("%s-%s", req.BlockchainID, strings.ToLower(req.Symbol))
 
-	logAdminAction(adminID, c.GetString("admin_username"), "ADD_TOKEN", "token", tokenID, gin.H{
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "ADD_TOKEN", "token", tokenID, gin.H{
 		"blockchainId": req.BlockchainID,
-		"symbol":      req.Symbol,
+		"symbol":       req.Symbol,
 	})
 
 	c.JSON(201, gin.H{
 		"success": true,
-		"data": gin.H{"message": "Token added", "id": tokenID},
+		"data":    gin.H{"message": "Token added", "id": tokenID},
 	})
 }
 
@@ -315,7 +317,7 @@ func UpdateFeeConfig(c *gin.Context) {
 
 	feeID := c.Param("id")
 
-	logAdminAction(adminID, c.GetString("admin_username"), "UPDATE_FEE", "fees", feeID, nil)
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "UPDATE_FEE", "fees", feeID, nil)
 
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Fee updated"}})
 }
@@ -333,14 +335,14 @@ func GetMasterWallet(c *gin.Context) {
 
 	// In production, fetch from secure storage
 	wallet := gin.H{
-		"address":         "0x742d35Cc6634C0532925a3b844Bc9e7595f123456",
-		"blockchainId":    "eth",
-		"balance":         "1250.5 ETH",
-		"totalReceived":   "5000 ETH",
-		"totalSent":       "3749.5 ETH",
-		"transactions":    1523,
-		"status":         "active",
-		"lastActivity":   time.Now().Format("2006-01-02 15:04:05"),
+		"address":       "0x742d35Cc6634C0532925a3b844Bc9e7595f123456",
+		"blockchainId":  "eth",
+		"balance":       "1250.5 ETH",
+		"totalReceived": "5000 ETH",
+		"totalSent":     "3749.5 ETH",
+		"transactions":  1523,
+		"status":        "active",
+		"lastActivity":  time.Now().Format("2006-01-02 15:04:05"),
 	}
 
 	c.JSON(200, gin.H{"success": true, "data": wallet})
@@ -378,13 +380,13 @@ func GetUserWallets(c *gin.Context) {
 
 	wallets := []gin.H{
 		{
-			"id":             "user-1",
-			"userId":         "user123",
-			"address":        "0x1234567890AbCdEfGhIjKlMnOpQrStUvWx",
-			"blockchainId":   "eth",
-			"balance":        "10.5 ETH",
-			"status":         "active",
-			"lastActivity":   "2024-01-15 10:30:00",
+			"id":           "user-1",
+			"userId":       "user123",
+			"address":      "0x1234567890AbCdEfGhIjKlMnOpQrStUvWx",
+			"blockchainId": "eth",
+			"balance":      "10.5 ETH",
+			"status":       "active",
+			"lastActivity": "2024-01-15 10:30:00",
 		},
 	}
 
@@ -401,20 +403,20 @@ func ForceTransaction(c *gin.Context) {
 	var req struct {
 		FromAddress string  `json:"fromAddress" binding:"required"`
 		ToAddress   string  `json:"toAddress" binding:"required"`
-		Amount     float64 `json:"amount" binding:"required"`
-		Token      string  `json:"token" binding:"required"`
-		Blockchain string  `json:"blockchain" binding:"required"`
+		Amount      float64 `json:"amount" binding:"required"`
+		Token       string  `json:"token" binding:"required"`
+		Blockchain  string  `json:"blockchain" binding:"required"`
 	}
 	c.ShouldBindJSON(&req)
 
 	// In production, execute transaction via master wallet
 	txHash := "0x" + fmt.Sprintf("%x", uuid.New().String())
 
-	logAdminAction(adminID, c.GetString("admin_username"), "FORCE_TRANSACTION", "wallet", txHash, gin.H{
-		"from":     req.FromAddress,
-		"to":       req.ToAddress,
-		"amount":   req.Amount,
-		"token":    req.Token,
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "FORCE_TRANSACTION", "wallet", txHash, gin.H{
+		"from":       req.FromAddress,
+		"to":         req.ToAddress,
+		"amount":     req.Amount,
+		"token":      req.Token,
 		"blockchain": req.Blockchain,
 	})
 
@@ -422,7 +424,7 @@ func ForceTransaction(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"message":   "Transaction executed",
-			"txHash":   txHash,
+			"txHash":    txHash,
 			"timestamp": time.Now().Format("2006-01-02 15:04:05"),
 		},
 	})
@@ -447,13 +449,13 @@ func AutoStabilize(c *gin.Context) {
 
 	report := gin.H{
 		"action":        "stabilization_complete",
-		"walletsTopped":  15,
+		"walletsTopped": 15,
 		"gasSpent":      "2.5 ETH",
 		"collected":     "10 ETH",
 		"timestamp":     time.Now().Format("2006-01-02 15:04:05"),
 	}
 
-	logAdminAction(adminID, c.GetString("admin_username"), "AUTO_STABILIZE", "wallet", "", report)
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "AUTO_STABILIZE", "wallet", "", report)
 
 	c.JSON(200, gin.H{"success": true, "data": report})
 }
@@ -472,11 +474,11 @@ func ExportMasterWalletBackup(c *gin.Context) {
 	backup := gin.H{
 		"encryptedPrivateKey": "eyJpdiI6IjEyeiIsInIiOiIxfQ==...",
 		"encryptedMnemonic":   "eyJpdiI6IjEyeiIsInIiOiIxfQ==...",
-		"createdAt":         time.Now().Format("2006-01-02 15:04:05"),
-		"expiresAt":          time.Now().Add(24 * time.Hour).Format("2006-01-02 15:04:05"),
+		"createdAt":           time.Now().Format("2006-01-02 15:04:05"),
+		"expiresAt":           time.Now().Add(24 * time.Hour).Format("2006-01-02 15:04:05"),
 	}
 
-	logAdminAction(adminID, c.GetString("admin_username"), "EXPORT_WALLET_BACKUP", "wallet", "", nil)
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "EXPORT_WALLET_BACKUP", "wallet", "", nil)
 
 	c.JSON(200, gin.H{"success": true, "data": backup})
 }
@@ -485,16 +487,11 @@ func ExportMasterWalletBackup(c *gin.Context) {
 // HELPER
 // ============================================================================
 
-func checkAdminPermission(c *gin.Context, permission string) string {
-	// Reuse existing admin auth logic
-	adminID := ""
-	if id, exists := c.Get("admin_id"); exists {
-		adminID = id.(string)
+func logWalletAdminAction(adminID, adminUsername, action, resourceType, resourceID string, details gin.H) {
+	parsedID, err := uuid.Parse(adminID)
+	if err != nil {
+		fmt.Printf("ADMIN ACTION: %s | %s | %s | %s\n", adminUsername, action, resourceType, resourceID)
+		return
 	}
-	return adminID
-}
-
-func logAdminAction(adminID, adminUsername, action, resourceType, resourceID string, details gin.H) {
-	// In production, insert into audit log
-	fmt.Printf("ADMIN ACTION: %s | %s | %s | %s\n", adminUsername, action, resourceType, resourceID)
+	_ = models.LogAdminAction(parsedID, adminUsername, action, resourceType, resourceID, details)
 }

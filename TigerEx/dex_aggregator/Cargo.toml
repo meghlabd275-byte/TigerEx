@@ -1,0 +1,9 @@
+[package]
+name = "tigerex-dex-aggregator"
+version = "0.1.0"
+edition = "2021"
+description = "TigerEx native DEX liquidity aggregation and deterministic route execution engine"
+license = "Proprietary"
+
+[lib]
+path = "src/lib.rs"
