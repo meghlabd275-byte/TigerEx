@@ -2,57 +2,57 @@
 package models
 
 import (
-"context"
-"time"
+	"context"
+	"time"
 
-"github.com/google/uuid"
+	"github.com/google/uuid"
 )
 
 // Admin user roles
 const (
-RoleSuperAdmin  = "super_admin"
-RoleAdmin       = "admin"
-RoleModerator   = "moderator"
-RoleSupport    = "support"
-RoleCompliance = "compliance"
-RoleFinance    = "finance"
-RoleTrader     = "trader"
+	RoleSuperAdmin = "super_admin"
+	RoleAdmin      = "admin"
+	RoleModerator  = "moderator"
+	RoleSupport    = "support"
+	RoleCompliance = "compliance"
+	RoleFinance    = "finance"
+	RoleTrader     = "trader"
 )
 
 // Permission constants
 const (
-PermUserManagement       = "users"
-PermAdminManagement      = "admins"
-PermKYCManagement       = "kyc"
-PermPairsManagement     = "pairs"
-PermLiquidityManagement  = "liquidity"
-PermFeesManagement      = "fees"
-PermCSManagement        = "cs"
-PermIOUManagement       = "iou"
-PermVirtualCoins        = "virtual_coins"
-PermMarketMaker        = "market_maker"
-PermListingManagement   = "listing"
-PermWhitelabelClients   = "whitelabel_clients"
-PermWhitelabelWallets  = "whitelabel_wallets"
-PermBlockchainMgmt     = "blockchain"
-PermBlockExplorer      = "block_explorer"
-PermCEXDEXMgmt         = "cex_dex"
-PermInstitutional      = "institutional"
-PermBrokerageMgmt      = "brokerage"
-PermTokenCreate       = "token_create"
-PermNftManagement     = "nft"
-PermMultisend         = "multisend"
-PermCloudMining       = "cloud_mining"
-PermWithdrawals       = "withdrawals"
-PermAPIManagement    = "api"
-PermAnalytics        = "analytics"
-PermFullAccess       = "*"
+	PermUserManagement      = "users"
+	PermAdminManagement     = "admins"
+	PermKYCManagement       = "kyc"
+	PermPairsManagement     = "pairs"
+	PermLiquidityManagement = "liquidity"
+	PermFeesManagement      = "fees"
+	PermCSManagement        = "cs"
+	PermIOUManagement       = "iou"
+	PermVirtualCoins        = "virtual_coins"
+	PermMarketMaker         = "market_maker"
+	PermListingManagement   = "listing"
+	PermWhitelabelClients   = "whitelabel_clients"
+	PermWhitelabelWallets   = "whitelabel_wallets"
+	PermBlockchainMgmt      = "blockchain"
+	PermBlockExplorer       = "block_explorer"
+	PermCEXDEXMgmt          = "cex_dex"
+	PermInstitutional       = "institutional"
+	PermBrokerageMgmt       = "brokerage"
+	PermTokenCreate         = "token_create"
+	PermNftManagement       = "nft"
+	PermMultisend           = "multisend"
+	PermCloudMining         = "cloud_mining"
+	PermWithdrawals         = "withdrawals"
+	PermAPIManagement       = "api"
+	PermAnalytics           = "analytics"
+	PermFullAccess          = "*"
 )
 
 // Create admin tables
 func initAdminTables(ctx context.Context) error {
-// Administrators table
-_, err := Pool.Exec(ctx, `
+	// Administrators table
+	_, err := Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS admins (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		username VARCHAR(100) UNIQUE NOT NULL,
@@ -67,12 +67,12 @@ _, err := Pool.Exec(ctx, `
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// Admin sessions
-_, err = Pool.Exec(ctx, `
+	// Admin sessions
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS admin_sessions (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		admin_id UUID NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
@@ -84,12 +84,12 @@ _, err = Pool.Exec(ctx, `
 		status VARCHAR(20) DEFAULT 'active'
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// Audit log (every admin action is recorded)
-_, err = Pool.Exec(ctx, `
+	// Audit log (every admin action is recorded)
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS admin_audit_log (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		admin_id UUID NOT NULL REFERENCES admins(id) ON DELETE SET NULL,
@@ -103,12 +103,12 @@ _, err = Pool.Exec(ctx, `
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// Market pairs
-_, err = Pool.Exec(ctx, `
+	// Market pairs
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS market_pairs (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		symbol VARCHAR(50) UNIQUE NOT NULL,
@@ -130,12 +130,12 @@ _, err = Pool.Exec(ctx, `
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// Liquidity pools
-_, err = Pool.Exec(ctx, `
+	// Liquidity pools
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS liquidity_pools (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		pair_id UUID REFERENCES market_pairs(id) ON DELETE SET NULL,
@@ -145,12 +145,12 @@ _, err = Pool.Exec(ctx, `
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// Fee structures
-_, err = Pool.Exec(ctx, `
+	// Fee structures
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS fee_structures (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		fee_type VARCHAR(50) NOT NULL,
@@ -164,12 +164,12 @@ _, err = Pool.Exec(ctx, `
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// API keys management
-_, err = Pool.Exec(ctx, `
+	// API keys management
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS api_keys_management (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -185,12 +185,12 @@ _, err = Pool.Exec(ctx, `
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// Analytics
-_, err = Pool.Exec(ctx, `
+	// Analytics
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS analytics_events (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		event_type VARCHAR(100) NOT NULL,
@@ -201,12 +201,12 @@ _, err = Pool.Exec(ctx, `
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// Cloud mining products
-_, err = Pool.Exec(ctx, `
+	// Cloud mining products
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS cloud_mining_products (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		name VARCHAR(100) NOT NULL,
@@ -220,12 +220,12 @@ _, err = Pool.Exec(ctx, `
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// Token listings
-_, err = Pool.Exec(ctx, `
+	// Token listings
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS token_listings (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		token_name VARCHAR(100) NOT NULL,
@@ -242,12 +242,12 @@ _, err = Pool.Exec(ctx, `
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// NFT collections
-_, err = Pool.Exec(ctx, `
+	// NFT collections
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS nft_collections (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		name VARCHAR(100) NOT NULL,
@@ -260,12 +260,12 @@ _, err = Pool.Exec(ctx, `
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// Market maker configs
-_, err = Pool.Exec(ctx, `
+	// Market maker configs
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS market_maker_configs (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		name VARCHAR(100) NOT NULL,
@@ -278,12 +278,12 @@ _, err = Pool.Exec(ctx, `
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// Support tickets
-_, err = Pool.Exec(ctx, `
+	// Support tickets
+	_, err = Pool.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS support_tickets (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		user_id UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -296,79 +296,149 @@ _, err = Pool.Exec(ctx, `
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
 `)
-if err != nil {
-	return err
-}
+	if err != nil {
+		return err
+	}
 
-// Create indexes
-_, _ = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_admin_audit_admin ON admin_audit_log(admin_id)`)
-_, _ = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_admin_audit_action ON admin_audit_log(action)`)
-_, _ = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_pairs_symbol ON market_pairs(symbol)`)
-_, _ = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`)
-_, _ = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_kyc_user ON kyc_documents(user_id)`)
+	// Editable white-label exchange ecosystems.
+	_, err = Pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS white_label_exchanges (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			name VARCHAR(160) NOT NULL,
+			slug VARCHAR(120) UNIQUE NOT NULL,
+			status VARCHAR(30) DEFAULT 'draft',
+			branding JSONB DEFAULT '{}'::jsonb,
+			domains TEXT[] DEFAULT '{}',
+			liquidity_sources TEXT[] DEFAULT '{}',
+			trading_pair_sources TEXT[] DEFAULT '{}',
+			infrastructure JSONB DEFAULT '{}'::jsonb,
+			modules JSONB DEFAULT '{}'::jsonb,
+			admin_permissions TEXT[] DEFAULT '{}',
+			deployment_config JSONB DEFAULT '{}'::jsonb,
+			created_by UUID REFERENCES admins(id) ON DELETE SET NULL,
+			updated_by UUID REFERENCES admins(id) ON DELETE SET NULL,
+			deployed_at TIMESTAMP WITH TIME ZONE,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		return err
+	}
 
-return nil
+	_, err = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_white_label_exchanges_status ON white_label_exchanges(status)`)
+	if err != nil {
+		return err
+	}
+
+	// Managed backend resources for dynamic admin operations across exchange services.
+	_, err = Pool.Exec(ctx, `
+	CREATE TABLE IF NOT EXISTS admin_managed_resources (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		resource_type VARCHAR(80) NOT NULL,
+		name VARCHAR(160) NOT NULL,
+		status VARCHAR(30) DEFAULT 'active',
+		source_exchange VARCHAR(80),
+		integration_ref VARCHAR(255),
+		config JSONB DEFAULT '{}'::jsonb,
+		permissions TEXT[] DEFAULT '{}',
+		created_by UUID REFERENCES admins(id) ON DELETE SET NULL,
+		updated_by UUID REFERENCES admins(id) ON DELETE SET NULL,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+	)
+`)
+	if err != nil {
+		return err
+	}
+
+	_, err = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_admin_managed_resources_type ON admin_managed_resources(resource_type)`)
+	if err != nil {
+		return err
+	}
+
+	// Create indexes
+	_, _ = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_admin_audit_admin ON admin_audit_log(admin_id)`)
+	_, _ = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_admin_audit_action ON admin_audit_log(action)`)
+	_, _ = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_pairs_symbol ON market_pairs(symbol)`)
+	_, _ = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`)
+	_, _ = Pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_kyc_user ON kyc_documents(user_id)`)
+
+	return nil
 }
 
 // Log admin action
-func LogAdminAction(adminID uuid.UUID, adminUsername, action, resourceType, resourceID string, details map[string]interface{}) error {
-ctx := context.Background()
-_, err := Pool.Exec(ctx, `
+func LogAdminAction(adminID interface{}, adminUsername, action, resourceType, resourceID string, details map[string]interface{}) error {
+	ctx := context.Background()
+	var parsedID uuid.UUID
+	switch id := adminID.(type) {
+	case uuid.UUID:
+		parsedID = id
+	case string:
+		var err error
+		parsedID, err = uuid.Parse(id)
+		if err != nil {
+			return err
+		}
+	default:
+		return nil
+	}
+	_, err := Pool.Exec(ctx, `
 	INSERT INTO admin_audit_log 
 	(admin_id, admin_username, action, resource_type, resource_id, details)
 	VALUES ($1, $2, $3, $4, $5, $6)
-`, adminID, adminUsername, action, resourceType, resourceID, details)
-return err
+`, parsedID, adminUsername, action, resourceType, resourceID, details)
+	return err
 }
 
 // Check admin permission
 func (a *Admin) HasPermission(permission string) bool {
-for _, p := range a.Permissions {
-	if p == PermFullAccess || p == permission {
-		return true
+	for _, p := range a.Permissions {
+		if p == PermFullAccess || p == permission {
+			return true
+		}
 	}
-}
-return false
+	return false
 }
 
 type Admin struct {
-ID           uuid.UUID   `json:"id"`
-Username    string     `json:"username"`
-Email       string     `json:"email"`
-PasswordHash string   `json:"-"`
-Role        string     `json:"role"`
-Status     string     `json:"status"`
-Permissions []string `json:"permissions"`
-SuperAdminID *uuid.UUID `json:"superAdminId,omitempty"`
-LastLogin   *time.Time `json:"lastLogin,omitempty"`
-CreatedAt  time.Time `json:"createdAt"`
-UpdatedAt  time.Time `json:"updatedAt"`
+	ID           uuid.UUID  `json:"id"`
+	Username     string     `json:"username"`
+	Email        string     `json:"email"`
+	PasswordHash string     `json:"-"`
+	Role         string     `json:"role"`
+	Status       string     `json:"status"`
+	Permissions  []string   `json:"permissions"`
+	SuperAdminID *uuid.UUID `json:"superAdminId,omitempty"`
+	LastLogin    *time.Time `json:"lastLogin,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
 // Create default super admin
 func CreateDefaultAdmin() error {
-ctx := context.Background()
+	ctx := context.Background()
 
-// Check if admin exists
-var count int
-err := Pool.QueryRow(ctx, "SELECT COUNT(*) FROM admins").Scan(&count)
-if err != nil {
-	return err
-}
-
-if count == 0 {
-	// Create default super admin
-	salt := GenerateSalt()
-PWHash := HashPassword("admin123", salt)
-	
-	_, err = Pool.Exec(ctx, `
-		INSERT INTO admins (id, username, email, password_hash, password_salt, role, status, permissions, super_admin_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, uuid.New(), "superadmin", "admin@tigerex.com", PWHash, salt, RoleSuperAdmin, "active", []string{PermFullAccess}, nil)
+	// Check if admin exists
+	var count int
+	err := Pool.QueryRow(ctx, "SELECT COUNT(*) FROM admins").Scan(&count)
 	if err != nil {
 		return err
 	}
-}
 
-return nil
+	if count == 0 {
+		// Create default super admin
+		salt := GenerateSalt()
+		PWHash := HashPassword("admin123", salt)
+
+		_, err = Pool.Exec(ctx, `
+		INSERT INTO admins (id, username, email, password_hash, password_salt, role, status, permissions, super_admin_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, uuid.New(), "superadmin", "admin@tigerex.com", PWHash, salt, RoleSuperAdmin, "active", []string{PermFullAccess}, nil)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

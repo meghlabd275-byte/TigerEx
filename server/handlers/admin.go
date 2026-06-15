@@ -52,7 +52,7 @@ func AdminLogin(c *gin.Context) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"admin_id":  admin.ID.String(),
+		"admin_id": admin.ID.String(),
 		"username": admin.Username,
 		"role":     admin.Role,
 		"exp":      time.Now().Add(24 * time.Hour).Unix(),
@@ -66,13 +66,13 @@ func AdminLogin(c *gin.Context) {
 	models.LogAdminAction(admin.ID, admin.Username, "LOGIN", "admin", admin.ID.String(), nil)
 
 	c.JSON(200, gin.H{"success": true, "data": gin.H{
-		"token":       tokenStr,
-		"expiresIn":  86400,
+		"token":     tokenStr,
+		"expiresIn": 86400,
 		"admin": gin.H{
 			"id":          admin.ID,
 			"username":    admin.Username,
-			"email":      admin.Email,
-			"role":       admin.Role,
+			"email":       admin.Email,
+			"role":        admin.Role,
 			"permissions": admin.Permissions,
 		},
 	}})
@@ -81,11 +81,11 @@ func AdminLogin(c *gin.Context) {
 func AdminLogout(c *gin.Context) {
 	adminID := getAdminID(c)
 	username := c.GetString("admin_username")
-	
+
 	if adminID != "" {
 		models.LogAdminAction(adminID, username, "LOGOUT", "admin", adminID, nil)
 	}
-	
+
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Logged out"}})
 }
 
@@ -198,9 +198,9 @@ func UpdateUser(c *gin.Context) {
 	userID := c.Param("userId")
 
 	var req struct {
-		KycLevel    *int    `json:"kycLevel"`
-		Status     *string `json:"status"`
-		RiskScore  *int    `json:"riskScore"`
+		KycLevel     *int    `json:"kycLevel"`
+		Status       *string `json:"status"`
+		RiskScore    *int    `json:"riskScore"`
 		RiskCategory *string `json:"riskCategory"`
 	}
 	c.ShouldBindJSON(&req)
@@ -266,7 +266,7 @@ func DeleteUser(c *gin.Context) {
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "User deleted"}})
 }
 
-func ForceResetUser Password(c *gin.Context) {
+func ForceResetPassword(c *gin.Context) {
 	adminID := checkAdminPermission(c, "users")
 	if adminID == "" {
 		return
@@ -282,7 +282,7 @@ func ForceResetUser Password(c *gin.Context) {
 	salt := models.GenerateSalt()
 	newHash, _ := bcrypt.GenerateFromPassword([]byte(req.NewPassword+salt), bcrypt.DefaultCost)
 
-	_, err := models.Pool.Exec(c.Request.Context(), 
+	_, err := models.Pool.Exec(c.Request.Context(),
 		"UPDATE users SET password_hash = $1, password_salt = $2 WHERE id = $3", string(newHash), salt, userID)
 
 	if err != nil {
@@ -306,8 +306,8 @@ func CreateAdmin(c *gin.Context) {
 	var req struct {
 		Username    string   `json:"username" binding:"required"`
 		Email       string   `json:"email" binding:"required"`
-		Password   string   `json:"password" binding:"required"`
-		Role       string   `json:"role"`
+		Password    string   `json:"password" binding:"required"`
+		Role        string   `json:"role"`
 		Permissions []string `json:"permissions"`
 	}
 	c.ShouldBindJSON(&req)
@@ -347,8 +347,8 @@ func UpdateAdmin(c *gin.Context) {
 	targetID := c.Param("adminId")
 
 	var req struct {
-		Role        *string  `json:"role"`
-		Status     *string  `json:"status"`
+		Role        *string   `json:"role"`
+		Status      *string   `json:"status"`
 		Permissions *[]string `json:"permissions"`
 	}
 	c.ShouldBindJSON(&req)
@@ -575,13 +575,13 @@ func CreatePair(c *gin.Context) {
 
 	var req struct {
 		Symbol            string  `json:"symbol" binding:"required"`
-		BaseCurrency     string  `json:"baseCurrency" binding:"required"`
-		QuoteCurrency   string  `json:"quoteCurrency" binding:"required"`
-		PricePrecision int     `json:"pricePrecision"`
-		QuantityPrecision int `json:"quantityPrecision"`
-		MakerFee       float64 `json:"makerFee"`
-		TakerFee       float64 `json:"takerFee"`
-		SourceExchange string  `json:"sourceExchange"`
+		BaseCurrency      string  `json:"baseCurrency" binding:"required"`
+		QuoteCurrency     string  `json:"quoteCurrency" binding:"required"`
+		PricePrecision    int     `json:"pricePrecision"`
+		QuantityPrecision int     `json:"quantityPrecision"`
+		MakerFee          float64 `json:"makerFee"`
+		TakerFee          float64 `json:"takerFee"`
+		SourceExchange    string  `json:"sourceExchange"`
 	}
 	c.ShouldBindJSON(&req)
 
@@ -626,11 +626,11 @@ func UpdatePair(c *gin.Context) {
 	pairID := c.Param("pairId")
 
 	var req struct {
-		PricePrecision *int     `json:"pricePrecision"`
-		QuantityPrecision *int `json:"quantityPrecision"`
-		MakerFee     *float64 `json:"makerFee"`
-		TakerFee     *float64 `json:"takerFee"`
-		Status      *string  `json:"status"`
+		PricePrecision    *int     `json:"pricePrecision"`
+		QuantityPrecision *int     `json:"quantityPrecision"`
+		MakerFee          *float64 `json:"makerFee"`
+		TakerFee          *float64 `json:"takerFee"`
+		Status            *string  `json:"status"`
 	}
 	c.ShouldBindJSON(&req)
 
@@ -711,12 +711,12 @@ func ImportPairsFromCEX(c *gin.Context) {
 
 	// Mock import from exchanges
 	importPairs := map[string][]string{
-		"binance":  {"BTC-USDT", "ETH-USDT", "BNB-USDT", "SOL-USDT", "XRP-USDT", "ADA-USDT", "DOGE-USDT"},
+		"binance": {"BTC-USDT", "ETH-USDT", "BNB-USDT", "SOL-USDT", "XRP-USDT", "ADA-USDT", "DOGE-USDT"},
 		"bybit":   {"BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT"},
-		"okx":    {"BTC-USDT", "ETH-USDT", "BNB-USDT", "SOL-USDT"},
-		"kucoin": {"BTC-USDT", "ETH-USDT", "KCS-USDT", "SOL-USDT"},
-		"gate":   {"BTC-USDT", "ETH-USDT", "GT-USDT", "SOL-USDT"},
-		"	"huobi": { "BTC-USDT", "ETH-USDT", "HT-USDT", "SOL-USDT"},
+		"okx":     {"BTC-USDT", "ETH-USDT", "BNB-USDT", "SOL-USDT"},
+		"kucoin":  {"BTC-USDT", "ETH-USDT", "KCS-USDT", "SOL-USDT"},
+		"gate":    {"BTC-USDT", "ETH-USDT", "GT-USDT", "SOL-USDT"},
+		"huobi":   {"BTC-USDT", "ETH-USDT", "HT-USDT", "SOL-USDT"},
 	}
 
 	pairs := importPairs[req.Source]
@@ -744,7 +744,7 @@ func ImportPairsFromCEX(c *gin.Context) {
 
 	c.JSON(200, gin.H{"success": true, "data": gin.H{
 		"imported": imported,
-		"message": fmt.Sprintf("Imported %d pairs from %s", imported, req.Source),
+		"message":  fmt.Sprintf("Imported %d pairs from %s", imported, req.Source),
 	}})
 }
 
@@ -758,12 +758,12 @@ func CreateFeeStructure(c *gin.Context) {
 
 	var req struct {
 		FeeType     string  `json:"feeType" binding:"required"`
-		Currency  string  `json:"currency"`
-		Tier     string  `json:"tier"`
-		MakerFee  float64 `json:"makerFee"`
-		TakerFee  float64 `json:"takerFee"`
+		Currency    string  `json:"currency"`
+		Tier        string  `json:"tier"`
+		MakerFee    float64 `json:"makerFee"`
+		TakerFee    float64 `json:"takerFee"`
 		WithdrawFee float64 `json:"withdrawFee"`
-		DepositFee float64 `json:"depositFee"`
+		DepositFee  float64 `json:"depositFee"`
 	}
 	c.ShouldBindJSON(&req)
 
@@ -783,6 +783,7 @@ func CreateFeeStructure(c *gin.Context) {
 	models.LogAdminAction(adminID, c.GetString("admin_username"), "CREATE_FEE", "fees", feeID.String(), nil)
 
 	c.JSON(201, gin.H{"success": true, "data": gin.H{"id": feeID, "message": "Fee structure created"}})
+}
 
 func GetAllFeeStructures(c *gin.Context) {
 	adminID := checkAdminPermission(c, "fees")
@@ -804,7 +805,7 @@ func GetAllFeeStructures(c *gin.Context) {
 	fees := []gin.H{}
 	for rows.Next() {
 		var f gin.H
-		rows.Scan(&f["id"], &f["feeType"], &f["currency"], &f["tier"], 
+		rows.Scan(&f["id"], &f["feeType"], &f["currency"], &f["tier"],
 			&f["makerFee"], &f["takerFee"], &f["withdrawFee"], &f["depositFee"], &f["status"])
 		fees = append(fees, f)
 	}
@@ -957,7 +958,7 @@ func RespondToTicket(c *gin.Context) {
 	ticketID := c.Param("ticketId")
 
 	var req struct {
-		Status    string `json:"status" binding:"required"`
+		Status   string `json:"status" binding:"required"`
 		Reply    string `json:"reply"`
 		AssignTo string `json:"assignTo"`
 	}
@@ -1010,13 +1011,13 @@ func GetAnalytics(c *gin.Context) {
 	stats["volume24h"] = 150000000.0
 
 	// Total deposits
-	models.Pool.QueryRow(c.Request.Context(), 
-		"SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = 'deposit' AND created_at > NOW() - INTERVAL '24 hours'", 
+	models.Pool.QueryRow(c.Request.Context(),
+		"SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = 'deposit' AND created_at > NOW() - INTERVAL '24 hours'",
 	).Scan(&stats["deposits24h"])
 
 	// Total withdrawals
-	models.Pool.QueryRow(c.Request.Context(), 
-		"SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = 'withdraw' AND created_at > NOW() - INTERVAL '24 hours'", 
+	models.Pool.QueryRow(c.Request.Context(),
+		"SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = 'withdraw' AND created_at > NOW() - INTERVAL '24 hours'",
 	).Scan(&stats["withdrawals24h"])
 
 	// KYC pending
@@ -1053,7 +1054,7 @@ func GetAPIManagement(c *gin.Context) {
 	keys := []gin.H{}
 	for rows.Next() {
 		var k gin.H
-		rows.Scan(&k["id"], &k["userId"], &k["keyId"], &k["name"], 
+		rows.Scan(&k["id"], &k["userId"], &k["keyId"], &k["name"],
 			&k["permissions"], &k["ipWhitelist"], &k["rateLimit"],
 			&k["status"], &k["lastUsedAt"], &k["createdAt"])
 		keys = append(keys, k)
@@ -1070,7 +1071,7 @@ func RevokeAPIKey(c *gin.Context) {
 
 	keyID := c.Param("keyId")
 
-	_, err := models.Pool.Exec(c.Request.Context(), 
+	_, err := models.Pool.Exec(c.Request.Context(),
 		"UPDATE api_keys_management SET status = 'revoked' WHERE id = $1", keyID)
 
 	if err != nil {
@@ -1092,14 +1093,14 @@ func CreateToken(c *gin.Context) {
 	}
 
 	var req struct {
-		TokenName    string `json:"tokenName" binding:"required"`
-		TokenSymbol string `json:"tokenSymbol" binding:"required"`
-		Blockchain string `json:"blockchain" binding:"required"`
-		ContractAddr string `json:"contractAddress" binding:"required"`
-		TotalSupply float64 `json:"totalSupply"`
+		TokenName    string  `json:"tokenName" binding:"required"`
+		TokenSymbol  string  `json:"tokenSymbol" binding:"required"`
+		Blockchain   string  `json:"blockchain" binding:"required"`
+		ContractAddr string  `json:"contractAddress" binding:"required"`
+		TotalSupply  float64 `json:"totalSupply"`
 		InitialPrice float64 `json:"initialPrice"`
-		ListingFee float64 `json:"listingFee"`
-		ListingType string `json:"listingType"`
+		ListingFee   float64 `json:"listingFee"`
+		ListingType  string  `json:"listingType"`
 	}
 	c.ShouldBindJSON(&req)
 
@@ -1133,11 +1134,11 @@ func CreateNFTCollection(c *gin.Context) {
 	}
 
 	var req struct {
-		Name       string `json:"name" binding:"required"`
-		Symbol    string `json:"symbol" binding:"required"`
-		Blockchain string `json:"blockchain" binding:"required"`
-		ContractAddr string `json:"contractAddress"`
-		RoyaltyFee float64 `json:"royaltyFee"`
+		Name         string  `json:"name" binding:"required"`
+		Symbol       string  `json:"symbol" binding:"required"`
+		Blockchain   string  `json:"blockchain" binding:"required"`
+		ContractAddr string  `json:"contractAddress"`
+		RoyaltyFee   float64 `json:"royaltyFee"`
 	}
 	c.ShouldBindJSON(&req)
 
@@ -1155,7 +1156,7 @@ func CreateNFTCollection(c *gin.Context) {
 
 	models.LogAdminAction(adminID, c.GetString("admin_username"), "CREATE_NFT", "nft", nftID.String(), nil)
 
-	c.JSON(201, gin.H{"success": true, "data": gin.H{"id": nftID, "message": "NFT collection created"]])
+	c.JSON(201, gin.H{"success": true, "data": gin.H{"id": nftID, "message": "NFT collection created"}})
 }
 
 // ============ CLOUD MINING ============
@@ -1167,13 +1168,13 @@ func CreateCloudMiningProduct(c *gin.Context) {
 	}
 
 	var req struct {
-		Name           string  `json:"name" binding:"required"`
+		Name          string  `json:"name" binding:"required"`
 		Currency      string  `json:"currency" binding:"required"`
 		DailyOutput   float64 `json:"dailyOutput" binding:"required"`
-		PricePerTH   float64 `json:"pricePerTh" binding:"required"`
+		PricePerTH    float64 `json:"pricePerTh" binding:"required"`
 		MinInvestment float64 `json:"minInvestment"`
 		MaxInvestment float64 `json:"maxInvestment"`
-		Duration     int     `json:"duration"`
+		Duration      int     `json:"duration"`
 	}
 	c.ShouldBindJSON(&req)
 
@@ -1186,7 +1187,7 @@ func CreateCloudMiningProduct(c *gin.Context) {
 		INSERT INTO cloud_mining_products 
 		(id, name, currency, daily_output, price_per_th, min_investment, max_investment, contract_duration, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, productID, req.Name, req.Currency, req.DailyOutput, req.PricePerTH, 
+	`, productID, req.Name, req.Currency, req.DailyOutput, req.PricePerTH,
 		req.MinInvestment, req.MaxInvestment, req.Duration, adminID)
 
 	if err != nil {
@@ -1300,8 +1301,8 @@ func checkAdminPermission(c *gin.Context, permission string) string {
 	}
 
 	role := c.GetString("admin_role")
-	
-	// Super admin has all permissions
+
+	// Super admin has full platform access; sub-admin roles are permission based.
 	if role == models.RoleSuperAdmin {
 		return adminID
 	}
@@ -1329,7 +1330,7 @@ func getUserWallets(userID string) ([]gin.H, error) {
 	wallets := []gin.H{}
 	for rows.Next() {
 		var w gin.H
-		rows.Scan(&w["currency"], &w["network"], &w["type"], 
+		rows.Scan(&w["currency"], &w["network"], &w["type"],
 			&w["balance"], &w["locked"], &w["available"])
 		wallets = append(wallets, w)
 	}
