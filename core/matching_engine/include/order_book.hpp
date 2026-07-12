@@ -32,6 +32,7 @@
 #include <iomanip>
 #include <sstream>
 #include <fstream>
+#include <map>
 
 // Platform-specific optimizations
 #ifdef __linux__
@@ -1028,9 +1029,9 @@ public:
         auto asset_it = it->second.find(asset);
         if (asset_it == it->second.end()) return;
         
-        if (asset_balance.locked >= quantity) {
-            asset_balance.locked -= quantity;
-            asset_balance.free += quantity;
+        if (asset_it->second.locked >= quantity) {
+            asset_it->second.locked -= quantity;
+            asset_it->second.free += quantity;
         }
     }
     

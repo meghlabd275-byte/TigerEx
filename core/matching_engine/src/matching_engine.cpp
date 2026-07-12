@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <x86intrin.h>
 
 // Lock-free ring buffer for high-performance logging
 template<typename T, size_t N>
@@ -166,47 +167,45 @@ public:
 
 // Matching engine statistics
 struct EngineStats {
-    std::atomic<uint64_t> total_orders_{0};
-    std::atomic<uint64_t> total_trades_{0};
-    std::atomic<uint64_t> total_volume_{0};
-    std::atomic<uint64_t> total_rejects_{0};
-    std::atomic<uint64_t> avg_latency_ns_{0};
-    std::atomic<uint64_t> max_latency_ns_{0};
-    std::atomic<uint64_t> min_latency_ns_{0};
-    std::atomic<uint64_t> last_update_{0};
-    std::atomic<uint32_t> order_book_updates_{0};
-    std::atomic<uint32_t> health_status_{0};  // 0 = healthy, 1 = degraded, 2 = unhealthy
+    uint64_t total_orders_{0};
+    uint64_t total_trades_{0};
+    uint64_t total_volume_{0};
+    uint64_t total_rejects_{0};
+    uint64_t avg_latency_ns_{0};
+    uint64_t max_latency_ns_{0};
+    uint64_t min_latency_ns_{0};
+    uint64_t last_update_{0};
+    uint32_t order_book_updates_{0};
+    uint32_t health_status_{0};  // 0 = healthy, 1 = degraded, 2 = unhealthy
     
     void record_order() {
-        total_orders_.fetch_add(1, std::memory_order_relaxed);
+        total_orders_++;
     }
     
     void record_trade(uint64_t volume) {
-        total_trades_.fetch_add(1, std::memory_order_relaxed);
-        total_volume_.fetch_add(volume, std::memory_order_relaxed);
+        total_trades_++;
+        total_volume_ += volume;
     }
     
     void record_reject() {
-        total_rejects_.fetch_add(1, std::memory_order_relaxed);
+        total_rejects_++;
     }
     
     void record_latency(uint64_t latency_ns) {
-        uint64_t current_avg = avg_latency_ns_.load(std::memory_order_relaxed);
-        uint64_t current_count = total_orders_.load(std::memory_order_relaxed);
+        uint64_t current_avg = avg_latency_ns_;
+        uint64_t current_count = total_orders_;
         
         if (current_count > 0) {
             uint64_t new_avg = (current_avg * (current_count - 1) + latency_ns) / current_count;
-            avg_latency_ns_.store(new_avg, std::memory_order_relaxed);
+            avg_latency_ns_ = new_avg;
         }
         
-        uint64_t current_max = max_latency_ns_.load(std::memory_order_relaxed);
-        while (latency_ns > current_max) {
-            max_latency_ns_.compare_exchange_weak(current_max, latency_ns);
+        if (latency_ns > max_latency_ns_) {
+            max_latency_ns_ = latency_ns;
         }
         
-        uint64_t current_min = min_latency_ns_.load(std::memory_order_relaxed);
-        if (current_min == 0 || latency_ns < current_min) {
-            min_latency_ns_.store(latency_ns, std::memory_order_relaxed);
+        if (min_latency_ns_ == 0 || latency_ns < min_latency_ns_) {
+            min_latency_ns_ = latency_ns;
         }
     }
 };
@@ -222,7 +221,7 @@ private:
     
     // Order books per symbol
     std::unordered_map<std::string, std::unique_ptr<tigerex::matching::OrderBook>> order_books_;
-    std::shared_mutex order_books_mutex_;
+    mutable std::shared_mutex order_books_mutex_;
     
     // Order ID generator
     tigerex::matching::OrderIdGenerator order_id_gen_;
@@ -710,8 +709,8 @@ private:
     // Stats loop
     void stats_loop() {
         while (running_.load()) {
-            stats_.last_update_.store(timer_->timestamp_ms());
-            stats_.order_book_updates_.store(0);
+            stats_.last_update_ = timer_->timestamp_ms();
+            stats_.order_book_updates_ = 0;
             
             // Update shared memory
             if (shm_addr_ != nullptr && shm_addr_ != MAP_FAILED) {
@@ -777,17 +776,17 @@ int main(int argc, char** argv) {
     
     // Print stats
     auto stats = engine.get_stats();
-    std::cout << "Total orders: " << stats.total_orders_.load() << std::endl;
-    std::cout << "Avg latency: " << stats.avg_latency_ns_.load() << " ns" << std::endl;
+    std::cout << "Total orders: " << stats.total_orders_ << std::endl;
+    std::cout << "Avg latency: " << stats.avg_latency_ns_ << " ns" << std::endl;
     
     // Keep running
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(10));
         
         auto stats = engine.get_stats();
-        std::cout << "Stats - Orders: " << stats.total_orders_.load() 
-                  << ", Trades: " << stats.total_trades_.load()
-                  << ", Avg latency: " << stats.avg_latency_ns_.load() << " ns" << std::endl;
+        std::cout << "Stats - Orders: " << stats.total_orders_ 
+                  << ", Trades: " << stats.total_trades_
+                  << ", Avg latency: " << stats.avg_latency_ns_ << " ns" << std::endl;
     }
     
     return 0;
