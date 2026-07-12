@@ -18,17 +18,53 @@ import (
 
 var Pool *pgxpool.Pool
 
+// Config holds database configuration
+type Config struct {
+	Host     string
+	Port     string
+	User     string
+	Password string
+	DBName   string
+}
+
+// GetConfig returns database configuration from environment
+func GetConfig() Config {
+	return Config{
+		Host:     getEnv("DB_HOST", "localhost"),
+		Port:     getEnv("DB_PORT", "5432"),
+		User:     getEnv("DB_USER", "postgres"),
+		Password: getEnv("DB_PASSWORD", "postgres"),
+		DBName:   getEnv("DB_NAME", "tigerex"),
+	}
+}
+
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
 // Connect to database
 func InitDB() error {
+	cfg := GetConfig()
+	
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
-		url = "postgres://postgres:postgres@localhost:5432/tigerex?sslmode=disable"
+		url = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+			cfg.User, cfg.Password, cfg.Host, cfg.Port, cfg.DBName)
 	}
 
 	config, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return fmt.Errorf("failed to parse database config: %v", err)
 	}
+
+	// Configure connection pool
+	config.MaxConns = 50
+	config.MinConns = 10
+	config.MaxConnLifetime = time.Hour
+	config.MaxConnIdleTime = 30 * time.Minute
 
 	ctx := context.Background()
 	Pool, err = pgxpool.NewWithConfig(ctx, config)
