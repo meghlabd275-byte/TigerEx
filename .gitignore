@@ -11,3 +11,4 @@ coverage/
 tmp/
 temp/
 build/
+server/tigerex.db
