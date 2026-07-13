@@ -67,10 +67,10 @@ docker-compose up
 
 ## Tech Stack
 
-- **Backend**: Node.js, TypeScript
+- **Backend**: go , rust , c++ , ruby , java
 - **Database**: PostgreSQL, Redis, Kafka
 - **Infrastructure**: Kubernetes, Terraform
-- **Frontend**: React, Next.js, React Native
+- **Frontend**: typeScript , React, Next.js, React Native
 
 ## Documentation
 
