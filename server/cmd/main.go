@@ -275,7 +275,7 @@ func main() {
 
 			// Token Management
 			adminAuth.GET("/tokens", handlers.GetTokens)
-			adminAuth.POST("/tokens", handlers.AddToken)
+			adminAuth.POST("/tokens/add", handlers.AddToken)
 
 			// Fee Management
 			adminAuth.GET("/fees/config", handlers.GetFeeConfigs)
