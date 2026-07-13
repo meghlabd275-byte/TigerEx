@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
-import { TrendingUp, TrendingDown, Star, Search, Filter, Grid, List } from 'lucide-react';
+import { TrendingUp, TrendingDown, Star, Search, Filter, Grid, List, ChevronUp, ChevronDown } from 'lucide-react';
 
 // Market interface
 interface Market {
+  id: string;
   symbol: string;
   baseAsset: string;
   quoteAsset: string;
@@ -16,11 +17,29 @@ interface Market {
   high24h: number;
   low24h: number;
   trades24h: number;
+  marketCap: number;
+  circulatingSupply: number;
+  maxSupply: number;
   isFavorite?: boolean;
 }
 
-// Demo markets
+// Real trading pairs (14 initial pairs)
 const demoMarkets: Market[] = [
+  { id: 'btcusdt', symbol: 'BTC/USDT', baseAsset: 'BTC', quoteAsset: 'USDT', price: 67245.50, change24h: 1234.50, changePercent24h: 1.87, volume24h: 2850000000, high24h: 68000, low24h: 65800, trades24h: 425000, marketCap: 1320000000000, circulatingSupply: 19600000, maxSupply: 21000000 },
+  { id: 'ethusdt', symbol: 'ETH/USDT', baseAsset: 'ETH', quoteAsset: 'USDT', price: 3456.20, change24h: -45.30, changePercent24h: -1.29, volume24h: 1250000000, high24h: 3520, low24h: 3400, trades24h: 380000, marketCap: 415000000000, circulatingSupply: 120200000, maxSupply: nil },
+  { id: 'bnbusdt', symbol: 'BNB/USDT', baseAsset: 'BNB', quoteAsset: 'USDT', price: 580.40, change24h: -12.30, changePercent24h: -2.08, volume24h: 420000000, high24h: 595, low24h: 570, trades24h: 95000, marketCap: 87000000000, circulatingSupply: 150000000, maxSupply: 200000000 },
+  { id: 'solusdt', symbol: 'SOL/USDT', baseAsset: 'SOL', quoteAsset: 'USDT', price: 145.80, change24h: 8.20, changePercent24h: 5.96, volume24h: 850000000, high24h: 148, low24h: 136, trades24h: 125000, marketCap: 64000000000, circulatingSupply: 440000000, maxSupply: nil },
+  { id: 'xrpusdt', symbol: 'XRP/USDT', baseAsset: 'XRP', quoteAsset: 'USDT', price: 0.5234, change24h: 0.0123, changePercent24h: 2.41, volume24h: 380000000, high24h: 0.54, low24h: 0.50, trades24h: 280000, marketCap: 28000000000, circulatingSupply: 53500000000, maxSupply: 100000000000 },
+  { id: 'adausdt', symbol: 'ADA/USDT', baseAsset: 'ADA', quoteAsset: 'USDT', price: 0.452, change24h: -0.008, changePercent24h: -1.74, volume24h: 180000000, high24h: 0.47, low24h: 0.44, trades24h: 95000, marketCap: 16000000000, circulatingSupply: 35000000000, maxSupply: 45000000000 },
+  { id: 'dogeusdt', symbol: 'DOGE/USDT', baseAsset: 'DOGE', quoteAsset: 'USDT', price: 0.1234, change24h: 0.0045, changePercent24h: 3.79, volume24h: 145000000, high24h: 0.13, low24h: 0.11, trades24h: 75000, marketCap: 17500000000, circulatingSupply: 142000000000, maxSupply: nil },
+  { id: 'dotusdt', symbol: 'DOT/USDT', baseAsset: 'DOT', quoteAsset: 'USDT', price: 7.23, change24h: -0.15, changePercent24h: -2.03, volume24h: 95000000, high24h: 7.45, low24h: 7.05, trades24h: 45000, marketCap: 9500000000, circulatingSupply: 1314000000, maxSupply: nil },
+  { id: 'avaxusdt', symbol: 'AVAX/USDT', baseAsset: 'AVAX', quoteAsset: 'USDT', price: 35.80, change24h: 2.30, changePercent24h: 6.87, volume24h: 245000000, high24h: 36.5, low24h: 33.2, trades24h: 125000, marketCap: 13500000000, circulatingSupply: 377000000, maxSupply: 720000000 },
+  { id: 'maticusdt', symbol: 'MATIC/USDT', baseAsset: 'MATIC', quoteAsset: 'USDT', price: 0.856, change24h: 0.023, changePercent24h: 2.76, volume24h: 78000000, high24h: 0.88, low24h: 0.82, trades24h: 65000, marketCap: 7800000000, circulatingSupply: 9100000000, maxSupply: 10000000000 },
+  { id: 'linkusdt', symbol: 'LINK/USDT', baseAsset: 'LINK', quoteAsset: 'USDT', price: 14.52, change24h: 0.32, changePercent24h: 2.26, volume24h: 125000000, high24h: 14.85, low24h: 14.10, trades24h: 55000, marketCap: 8500000000, circulatingSupply: 585000000, maxSupply: 1000000000 },
+  { id: 'atomusdt', symbol: 'ATOM/USDT', baseAsset: 'ATOM', quoteAsset: 'USDT', price: 8.45, change24h: 0.18, changePercent24h: 2.18, volume24h: 55000000, high24h: 8.60, low24h: 8.20, trades24h: 32000, marketCap: 3200000000, circulatingSupply: 379000000, maxSupply: nil },
+  { id: 'ltcusdt', symbol: 'LTC/USDT', baseAsset: 'LTC', quoteAsset: 'USDT', price: 85.20, change24h: -1.50, changePercent24h: -1.73, volume24h: 95000000, high24h: 87.50, low24h: 84.20, trades24h: 42000, marketCap: 6400000000, circulatingSupply: 75000000, maxSupply: 84000000 },
+  { id: 'uniusdt', symbol: 'UNI/USDT', baseAsset: 'UNI', quoteAsset: 'USDT', price: 9.85, change24h: -0.22, changePercent24h: -2.18, volume24h: 64000000, high24h: 10.15, low24h: 9.65, trades24h: 35000, marketCap: 5900000000, circulatingSupply: 599000000, maxSupply: 1000000000 },
+];
   { symbol: 'BTC/USDT', baseAsset: 'BTC', quoteAsset: 'USDT', price: 67245.50, change24h: 1234.50, changePercent24h: 1.87, volume24h: 2850000000, high24h: 68000, low24h: 65800, trades24h: 425000 },
   { symbol: 'ETH/USDT', baseAsset: 'ETH', quoteAsset: 'USDT', price: 3456.20, change24h: -45.30, changePercent24h: -1.29, volume24h: 1250000000, high24h: 3520, low24h: 3400, trades24h: 380000 },
   { symbol: 'SOL/USDT', baseAsset: 'SOL', quoteAsset: 'USDT', price: 145.80, change24h: 8.20, changePercent24h: 5.96, volume24h: 850000000, high24h: 148, low24h: 136, trades24h: 125000 },
