@@ -5,21 +5,27 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Eye, EyeOff, Loader2, AlertCircle, CheckCircle, Info } from 'lucide-react';
 
-interface RegisterResponse {
+interface AuthResponse {
   success: boolean;
   data?: {
-    access_token: string;
-    refresh_token: string;
-    expires_at: number;
+    accessToken?: string;
+    access_token?: string;
+    refreshToken?: string;
+    refresh_token?: string;
+    expiresIn?: number;
+    expires_at?: number;
+    tokenType?: string;
     user?: {
       id: string;
       email: string;
       username: string;
-      kyc_level: number;
+      kycLevel?: number;
+      kyc_level?: number;
+      status?: string;
     };
   };
   error?: {
-    code: number;
+    code?: number;
     message: string;
   };
 }
@@ -34,8 +40,6 @@ interface ValidationErrors {
 
 export default function RegisterPage() {
   const router = useRouter();
-  
-  // Form state
   const [formData, setFormData] = useState({
     username: '',
     email: '',
@@ -45,45 +49,33 @@ export default function RegisterPage() {
     agreeTerms: false,
     agreePrivacy: false,
   });
-  
-  // UI state
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<ValidationErrors>({});
-  
-  // Password strength
   const [passwordStrength, setPasswordStrength] = useState({
     score: 0,
     label: '',
     color: '',
   });
 
-  // Validate email format
-  const isValidEmail = (email: string) => {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  };
+  const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  const isValidUsername = (value: string) => /^[a-zA-Z0-9_]{3,20}$/.test(value);
 
-  // Validate username format
-  const isValidUsername = (username: string) => {
-    return /^[a-zA-Z0-9_]{3,20}$/.test(username);
-  };
-
-  // Calculate password strength
   useEffect(() => {
     const password = formData.password;
     let score = 0;
-    
+
     if (password.length >= 8) score++;
     if (password.length >= 12) score++;
     if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score++;
     if (/\d/.test(password)) score++;
     if (/[!@#$%^&*(),.?":{}|<>]/.test(password)) score++;
-    
+
     const labels = ['Very Weak', 'Weak', 'Fair', 'Good', 'Strong'];
     const colors = ['bg-red-500', 'bg-orange-500', 'bg-yellow-500', 'bg-green-400', 'bg-green-500'];
-    
+
     setPasswordStrength({
       score,
       label: labels[Math.min(score, 4)],
@@ -91,25 +83,21 @@ export default function RegisterPage() {
     });
   }, [formData.password]);
 
-  // Validate form
   const validateForm = (): boolean => {
     const newErrors: ValidationErrors = {};
-    
-    // Username validation
+
     if (!formData.username.trim()) {
       newErrors.username = 'Username is required';
     } else if (!isValidUsername(formData.username)) {
       newErrors.username = 'Username must be 3-20 characters (letters, numbers, underscores)';
     }
-    
-    // Email validation
+
     if (!formData.email.trim()) {
       newErrors.email = 'Email is required';
     } else if (!isValidEmail(formData.email)) {
       newErrors.email = 'Please enter a valid email address';
     }
-    
-    // Password validation
+
     if (!formData.password) {
       newErrors.password = 'Password is required';
     } else if (formData.password.length < 8) {
@@ -123,44 +111,40 @@ export default function RegisterPage() {
     } else if (!/[!@#$%^&*]/.test(formData.password)) {
       newErrors.password = 'Password must contain at least one special character (!@#$%^&*)';
     }
-    
-    // Confirm password
+
     if (formData.password !== formData.confirmPassword) {
       newErrors.confirmPassword = 'Passwords do not match';
     }
-    
-    // Terms acceptance
+
     if (!formData.agreeTerms || !formData.agreePrivacy) {
       setError('You must agree to the Terms of Service and Privacy Policy');
+      setErrors(newErrors);
       return false;
     }
-    
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  // Handle input changes
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target;
     setFormData(prev => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : value,
     }));
-    
-    // Clear specific error when user types
+
     if (errors[name as keyof ValidationErrors]) {
       setErrors(prev => ({ ...prev, [name]: undefined }));
     }
     setError('');
   };
 
-  // Handle form submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
-    
-    // Validate form
+    setErrors({});
+
     if (!validateForm()) {
       return;
     }
@@ -177,51 +161,50 @@ export default function RegisterPage() {
 
       const response = await fetch('/api/auth/register', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
       });
 
-      const payload: RegisterResponse = await response.json();
+      const data: AuthResponse = await response.json();
 
       if (!response.ok) {
-        const msg = payload.error?.message || 'Registration failed';
-        
-        // Handle specific error cases
+        const msg = data.error?.message || 'Registration failed';
         if (msg.toLowerCase().includes('email')) {
           setErrors(prev => ({ ...prev, email: msg }));
         } else if (msg.toLowerCase().includes('username')) {
           setErrors(prev => ({ ...prev, username: msg }));
         } else {
-          throw new Error(msg);
+          setError(msg);
         }
         return;
       }
 
-      if (!payload.success || !payload.data) {
+      if (!data.success || !data.data) {
         throw new Error('Invalid response from server');
       }
 
-      const { access_token, refresh_token, expires_at, user } = payload.data;
+      const accessToken = data.data.accessToken || data.data.access_token;
+      const refreshToken = data.data.refreshToken || data.data.refresh_token;
+      const expiresAt = data.data.expiresIn || data.data.expires_at;
+      const user = data.data.user;
 
-      // Store tokens securely
-      localStorage.setItem('tigerex_token', access_token);
-      localStorage.setItem('tigerex_refresh_token', refresh_token || '');
-      localStorage.setItem('tigerex_token_expires', String(expires_at));
-      
-      // Store user info
+      if (accessToken) {
+        localStorage.setItem('tigerex_token', accessToken);
+      }
+      if (refreshToken) {
+        localStorage.setItem('tigerex_refresh_token', refreshToken);
+      }
+      if (expiresAt !== undefined) {
+        localStorage.setItem('tigerex_token_expires', String(expiresAt));
+      }
       if (user) {
         localStorage.setItem('tigerex_user', JSON.stringify(user));
       }
 
       setSuccess('Account created successfully! Redirecting...');
-      
-      // Redirect to dashboard
       setTimeout(() => {
         router.push('/dashboard');
-      }, 1000);
-      
+      }, 800);
     } catch (err: any) {
       setError(err.message || 'Registration failed. Please try again.');
     } finally {
@@ -238,7 +221,6 @@ export default function RegisterPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Error Message */}
           {error && (
             <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg text-sm">
               <AlertCircle className="w-5 h-5 flex-shrink-0" />
@@ -246,7 +228,6 @@ export default function RegisterPage() {
             </div>
           )}
 
-          {/* Success Message */}
           {success && (
             <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/50 text-green-400 px-4 py-3 rounded-lg text-sm">
               <CheckCircle className="w-5 h-5 flex-shrink-0" />
@@ -254,7 +235,6 @@ export default function RegisterPage() {
             </div>
           )}
 
-          {/* Username */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">Username</label>
             <input
@@ -267,12 +247,9 @@ export default function RegisterPage() {
               autoComplete="username"
               disabled={loading}
             />
-            {errors.username && (
-              <p className="text-red-400 text-xs mt-1">{errors.username}</p>
-            )}
+            {errors.username && <p className="text-red-400 text-xs mt-1">{errors.username}</p>}
           </div>
 
-          {/* Email */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">Email</label>
             <input
@@ -285,12 +262,9 @@ export default function RegisterPage() {
               autoComplete="email"
               disabled={loading}
             />
-            {errors.email && (
-              <p className="text-red-400 text-xs mt-1">{errors.email}</p>
-            )}
+            {errors.email && <p className="text-red-400 text-xs mt-1">{errors.email}</p>}
           </div>
 
-          {/* Password */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">Password</label>
             <div className="relative">
@@ -312,17 +286,13 @@ export default function RegisterPage() {
                 {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
               </button>
             </div>
-            
-            {/* Password Strength Indicator */}
             {formData.password && (
               <div className="mt-2">
                 <div className="flex gap-1 mb-1">
-                  {[1, 2, 3, 4, 5].map((level) => (
+                  {[1, 2, 3, 4, 5].map(level => (
                     <div
                       key={level}
-                      className={`h-1 flex-1 rounded-full transition-all ${
-                        level <= passwordStrength.score ? passwordStrength.color : 'bg-gray-700'
-                      }`}
+                      className={`h-1 flex-1 rounded-full transition-all ${level <= passwordStrength.score ? passwordStrength.color : 'bg-gray-700'}`}
                     />
                   ))}
                 </div>
@@ -331,13 +301,9 @@ export default function RegisterPage() {
                 </div>
               </div>
             )}
-            
-            {errors.password && (
-              <p className="text-red-400 text-xs mt-1">{errors.password}</p>
-            )}
+            {errors.password && <p className="text-red-400 text-xs mt-1">{errors.password}</p>}
           </div>
 
-          {/* Confirm Password */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">Confirm Password</label>
             <input
@@ -350,12 +316,9 @@ export default function RegisterPage() {
               autoComplete="new-password"
               disabled={loading}
             />
-            {errors.confirmPassword && (
-              <p className="text-red-400 text-xs mt-1">{errors.confirmPassword}</p>
-            )}
+            {errors.confirmPassword && <p className="text-red-400 text-xs mt-1">{errors.confirmPassword}</p>}
           </div>
 
-          {/* Referral Code (Optional) */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">Referral Code (Optional)</label>
             <input
@@ -369,7 +332,6 @@ export default function RegisterPage() {
             />
           </div>
 
-          {/* Terms and Privacy */}
           <div className="space-y-3">
             <label className="flex items-start gap-3 cursor-pointer">
               <input
@@ -385,7 +347,7 @@ export default function RegisterPage() {
                 <Link href="/terms" className="text-purple-400 hover:text-purple-300">Terms of Service</Link>
               </span>
             </label>
-            
+
             <label className="flex items-start gap-3 cursor-pointer">
               <input
                 type="checkbox"
@@ -402,7 +364,6 @@ export default function RegisterPage() {
             </label>
           </div>
 
-          {/* Submit Button */}
           <button
             type="submit"
             disabled={loading}
@@ -418,7 +379,6 @@ export default function RegisterPage() {
             )}
           </button>
 
-          {/* Password Requirements */}
           <div className="bg-gray-900/50 rounded-lg p-4">
             <div className="flex items-center gap-2 text-sm text-gray-400 mb-2">
               <Info className="w-4 h-4" />

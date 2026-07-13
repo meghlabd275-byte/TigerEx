@@ -8,14 +8,20 @@ import { Eye, EyeOff, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 interface LoginResponse {
   success: boolean;
   data?: {
-    access_token: string;
-    refresh_token: string;
-    expires_at: number;
+    accessToken?: string;
+    access_token?: string;
+    refreshToken?: string;
+    refresh_token?: string;
+    expiresIn?: number;
+    expires_at?: number;
+    tokenType?: string;
+    requiresTwoFactor?: boolean;
     user?: {
       id: string;
       email: string;
       username: string;
-      kyc_level: number;
+      kycLevel?: number;
+      kyc_level?: number;
       status: string;
     };
   };
@@ -121,16 +127,27 @@ export default function LoginPage() {
         throw new Error('Invalid response from server');
       }
 
-      const { access_token, refresh_token, expires_at, user } = payload.data;
+      if (payload.data.requiresTwoFactor) {
+        setShow2FA(true);
+        setError('Two-factor authentication is required. Please enter your 2FA code.');
+        return;
+      }
 
-      if (!access_token) {
+      const accessToken = payload.data?.accessToken || payload.data?.access_token;
+      const refreshToken = payload.data?.refreshToken || payload.data?.refresh_token;
+      const expiresAt = payload.data?.expiresIn || payload.data?.expires_at;
+      const user = payload.data?.user;
+
+      if (!accessToken) {
         throw new Error('No access token returned');
       }
 
       // Store tokens securely
-      localStorage.setItem('tigerex_token', access_token);
-      localStorage.setItem('tigerex_refresh_token', refresh_token || '');
-      localStorage.setItem('tigerex_token_expires', String(expires_at));
+      localStorage.setItem('tigerex_token', accessToken);
+      localStorage.setItem('tigerex_refresh_token', refreshToken || '');
+      if (expiresAt !== undefined) {
+        localStorage.setItem('tigerex_token_expires', String(expiresAt));
+      }
       
       // Store user info
       if (user) {
