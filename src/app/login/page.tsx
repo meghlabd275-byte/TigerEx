@@ -17,23 +17,27 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const response = await fetch('/api/v1/auth/login', {
+      const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await response.json();
+      const payload = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Login failed');
+        const msg = payload.error || (payload?.error?.message) || 'Login failed';
+        throw new Error(msg);
       }
 
+      const token = payload?.data?.accessToken || payload?.data?.token;
+      if (!token) throw new Error('No access token returned');
+
       // Store token
-      localStorage.setItem('tigerex_token', data.token);
+      localStorage.setItem('tigerex_token', token);
       router.push('/dashboard');
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Login failed');
     } finally {
       setLoading(false);
     }

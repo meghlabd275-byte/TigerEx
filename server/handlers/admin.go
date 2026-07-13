@@ -138,9 +138,27 @@ func GetAllUsers(c *gin.Context) {
 
 	users := []gin.H{}
 	for rows.Next() {
-		var u gin.H
-		rows.Scan(&u["id"], &u["email"], &u["username"], &u["kycLevel"], &u["status"],
-			&u["emailVerified"], &u["twoFactorEnabled"], &u["createdAt"], &u["lastLoginAt"])
+		var id uuid.UUID
+		var email, username, status string
+		var kycLevel int
+		var emailVerified, twoFactorEnabled bool
+		var createdAt, lastLoginAt *time.Time
+
+		if err := rows.Scan(&id, &email, &username, &kycLevel, &status, &emailVerified, &twoFactorEnabled, &createdAt, &lastLoginAt); err != nil {
+			continue
+		}
+
+		u := gin.H{
+			"id":               id,
+			"email":            email,
+			"username":         username,
+			"kycLevel":         kycLevel,
+			"status":           status,
+			"emailVerified":    emailVerified,
+			"twoFactorEnabled": twoFactorEnabled,
+			"createdAt":        createdAt,
+			"lastLoginAt":      lastLoginAt,
+		}
 		users = append(users, u)
 	}
 
@@ -158,20 +176,46 @@ func GetUserDetail(c *gin.Context) {
 
 	userID := c.Param("userId")
 
-	var user gin.H
+	var (
+		id                                                    uuid.UUID
+		email, username, status                               string
+		kycLevel                                              int
+		emailVerified, phoneVerified, twoFactorEnabled        bool
+		riskScore                                             float64
+		riskCategory, jurisdiction, referralCode, lastLoginIp string
+		createdAt, lastLoginAt                                *time.Time
+	)
+
 	err := models.Pool.QueryRow(c.Request.Context(), `
 		SELECT id, email, username, kyc_level, status, email_verified, phone_verified,
-		       two_factor_enabled, risk_score, risk_category, jurisdiction, referral_code,
-		       created_at, last_login_at, last_login_ip
+			   two_factor_enabled, COALESCE(NULL,0)::double precision as risk_score, risk_category, jurisdiction, referral_code,
+			   created_at, last_login_at, last_login_ip
 		FROM users WHERE id = $1
-	`, userID).Scan(&user["id"], &user["email"], &user["username"], &user["kycLevel"],
-		&user["status"], &user["emailVerified"], &user["phoneVerified"], &user["twoFactorEnabled"],
-		&user["riskScore"], &user["riskCategory"], &user["jurisdiction"], &user["referralCode"],
-		&user["createdAt"], &user["lastLoginAt"], &user["lastLoginIp"])
+	`, userID).Scan(&id, &email, &username, &kycLevel, &status, &emailVerified, &phoneVerified,
+		&twoFactorEnabled, &riskScore, &riskCategory, &jurisdiction, &referralCode,
+		&createdAt, &lastLoginAt, &lastLoginIp)
 
-	if err != nil || user["id"] == "" {
+	if err != nil || id == uuid.Nil {
 		c.JSON(404, gin.H{"success": false, "error": gin.H{"code": 404, "message": "User not found"}})
 		return
+	}
+
+	user := gin.H{
+		"id":               id,
+		"email":            email,
+		"username":         username,
+		"kycLevel":         kycLevel,
+		"status":           status,
+		"emailVerified":    emailVerified,
+		"phoneVerified":    phoneVerified,
+		"twoFactorEnabled": twoFactorEnabled,
+		"riskScore":        riskScore,
+		"riskCategory":     riskCategory,
+		"jurisdiction":     jurisdiction,
+		"referralCode":     referralCode,
+		"createdAt":        createdAt,
+		"lastLoginAt":      lastLoginAt,
+		"lastLoginIp":      lastLoginIp,
 	}
 
 	// Get user wallets
@@ -430,9 +474,24 @@ func GetAllAdmins(c *gin.Context) {
 
 	admins := []gin.H{}
 	for rows.Next() {
-		var a gin.H
-		rows.Scan(&a["id"], &a["username"], &a["email"], &a["role"], &a["status"],
-			&a["permissions"], &a["createdAt"], &a["lastLoginAt"])
+		var id uuid.UUID
+		var username, email, role, status string
+		var permissions []string
+		var createdAt, lastLoginAt *time.Time
+
+		if err := rows.Scan(&id, &username, &email, &role, &status, &permissions, &createdAt, &lastLoginAt); err != nil {
+			continue
+		}
+		a := gin.H{
+			"id":          id,
+			"username":    username,
+			"email":       email,
+			"role":        role,
+			"status":      status,
+			"permissions": permissions,
+			"createdAt":   createdAt,
+			"lastLoginAt": lastLoginAt,
+		}
 		admins = append(admins, a)
 	}
 
@@ -471,9 +530,24 @@ func GetAllKYCDocuments(c *gin.Context) {
 
 	documents := []gin.H{}
 	for rows.Next() {
-		var d gin.H
-		rows.Scan(&d["id"], &d["userId"], &d["username"], &d["documentType"],
-			&d["documentNumber"], &d["status"], &d["createdAt"], &d["updatedAt"])
+		var id uuid.UUID
+		var userId uuid.UUID
+		var username, documentType, documentNumber, status string
+		var createdAt, updatedAt *time.Time
+
+		if err := rows.Scan(&id, &userId, &username, &documentType, &documentNumber, &status, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+		d := gin.H{
+			"id":             id,
+			"userId":         userId,
+			"username":       username,
+			"documentType":   documentType,
+			"documentNumber": documentNumber,
+			"status":         status,
+			"createdAt":      createdAt,
+			"updatedAt":      updatedAt,
+		}
 		documents = append(documents, d)
 	}
 
@@ -557,10 +631,31 @@ func GetAllPairs(c *gin.Context) {
 
 	pairs := []gin.H{}
 	for rows.Next() {
-		var p gin.H
-		rows.Scan(&p["id"], &p["symbol"], &p["baseCurrency"], &p["quoteCurrency"],
-			&p["pricePrecision"], &p["quantityPrecision"], &p["makerFee"], &p["takerFee"],
-			&p["status"], &p["isDefault"], &p["sourceExchange"], &p["createdAt"])
+		var id uuid.UUID
+		var symbol, baseCurrency, quoteCurrency, status, sourceExchange string
+		var pricePrecision, quantityPrecision int
+		var makerFee, takerFee float64
+		var isDefault bool
+		var createdAt *time.Time
+
+		if err := rows.Scan(&id, &symbol, &baseCurrency, &quoteCurrency, &pricePrecision, &quantityPrecision, &makerFee, &takerFee, &status, &isDefault, &sourceExchange, &createdAt); err != nil {
+			continue
+		}
+
+		p := gin.H{
+			"id":                id,
+			"symbol":            symbol,
+			"baseCurrency":      baseCurrency,
+			"quoteCurrency":     quoteCurrency,
+			"pricePrecision":    pricePrecision,
+			"quantityPrecision": quantityPrecision,
+			"makerFee":          makerFee,
+			"takerFee":          takerFee,
+			"status":            status,
+			"isDefault":         isDefault,
+			"sourceExchange":    sourceExchange,
+			"createdAt":         createdAt,
+		}
 		pairs = append(pairs, p)
 	}
 
@@ -804,9 +899,24 @@ func GetAllFeeStructures(c *gin.Context) {
 
 	fees := []gin.H{}
 	for rows.Next() {
-		var f gin.H
-		rows.Scan(&f["id"], &f["feeType"], &f["currency"], &f["tier"],
-			&f["makerFee"], &f["takerFee"], &f["withdrawFee"], &f["depositFee"], &f["status"])
+		var id uuid.UUID
+		var feeType, currency, tier, status string
+		var makerFee, takerFee, withdrawFee, depositFee float64
+
+		if err := rows.Scan(&id, &feeType, &currency, &tier, &makerFee, &takerFee, &withdrawFee, &depositFee, &status); err != nil {
+			continue
+		}
+		f := gin.H{
+			"id":          id,
+			"feeType":     feeType,
+			"currency":    currency,
+			"tier":        tier,
+			"makerFee":    makerFee,
+			"takerFee":    takerFee,
+			"withdrawFee": withdrawFee,
+			"depositFee":  depositFee,
+			"status":      status,
+		}
 		fees = append(fees, f)
 	}
 
@@ -852,9 +962,27 @@ func GetAllWithdrawals(c *gin.Context) {
 
 	withdrawals := []gin.H{}
 	for rows.Next() {
-		var w gin.H
-		rows.Scan(&w["id"], &w["userId"], &w["currency"], &w["amount"], &w["fee"],
-			&w["status"], &w["toAddress"], &w["network"], &w["createdAt"], &w["completedAt"])
+		var id uuid.UUID
+		var userId uuid.UUID
+		var currency, status, toAddress, network string
+		var amount, fee float64
+		var createdAt, completedAt *time.Time
+
+		if err := rows.Scan(&id, &userId, &currency, &amount, &fee, &status, &toAddress, &network, &createdAt, &completedAt); err != nil {
+			continue
+		}
+		w := gin.H{
+			"id":          id,
+			"userId":      userId,
+			"currency":    currency,
+			"amount":      amount,
+			"fee":         fee,
+			"status":      status,
+			"toAddress":   toAddress,
+			"network":     network,
+			"createdAt":   createdAt,
+			"completedAt": completedAt,
+		}
 		withdrawals = append(withdrawals, w)
 	}
 
@@ -940,9 +1068,26 @@ func GetAllTickets(c *gin.Context) {
 
 	tickets := []gin.H{}
 	for rows.Next() {
-		var t gin.H
-		rows.Scan(&t["id"], &t["userId"], &t["username"], &t["subject"], &t["description"],
-			&t["priority"], &t["status"], &t["assignedTo"], &t["createdAt"], &t["updatedAt"])
+		var id uuid.UUID
+		var userId uuid.UUID
+		var username, subject, description, priority, status, assignedTo string
+		var createdAt, updatedAt *time.Time
+
+		if err := rows.Scan(&id, &userId, &username, &subject, &description, &priority, &status, &assignedTo, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+		t := gin.H{
+			"id":          id,
+			"userId":      userId,
+			"username":    username,
+			"subject":     subject,
+			"description": description,
+			"priority":    priority,
+			"status":      status,
+			"assignedTo":  assignedTo,
+			"createdAt":   createdAt,
+			"updatedAt":   updatedAt,
+		}
 		tickets = append(tickets, t)
 	}
 
@@ -1002,29 +1147,41 @@ func GetAnalytics(c *gin.Context) {
 	stats := gin.H{}
 
 	// Total users
-	models.Pool.QueryRow(c.Request.Context(), "SELECT COUNT(*) FROM users").Scan(&stats["totalUsers"])
+	var totalUsers int
+	_ = models.Pool.QueryRow(c.Request.Context(), "SELECT COUNT(*) FROM users").Scan(&totalUsers)
+	stats["totalUsers"] = totalUsers
 
 	// Active users
-	models.Pool.QueryRow(c.Request.Context(), "SELECT COUNT(*) FROM users WHERE status = 'active'").Scan(&stats["activeUsers"])
+	var activeUsers int
+	_ = models.Pool.QueryRow(c.Request.Context(), "SELECT COUNT(*) FROM users WHERE status = 'active'").Scan(&activeUsers)
+	stats["activeUsers"] = activeUsers
 
 	// Total trading volume 24h (mock)
 	stats["volume24h"] = 150000000.0
 
 	// Total deposits
-	models.Pool.QueryRow(c.Request.Context(),
+	var deposits24h float64
+	_ = models.Pool.QueryRow(c.Request.Context(),
 		"SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = 'deposit' AND created_at > NOW() - INTERVAL '24 hours'",
-	).Scan(&stats["deposits24h"])
+	).Scan(&deposits24h)
+	stats["deposits24h"] = deposits24h
 
 	// Total withdrawals
-	models.Pool.QueryRow(c.Request.Context(),
+	var withdrawals24h float64
+	_ = models.Pool.QueryRow(c.Request.Context(),
 		"SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = 'withdraw' AND created_at > NOW() - INTERVAL '24 hours'",
-	).Scan(&stats["withdrawals24h"])
+	).Scan(&withdrawals24h)
+	stats["withdrawals24h"] = withdrawals24h
 
 	// KYC pending
-	models.Pool.QueryRow(c.Request.Context(), "SELECT COUNT(*) FROM kyc_documents WHERE status = 'pending'").Scan(&stats["kycPending"])
+	var kycPending int
+	_ = models.Pool.QueryRow(c.Request.Context(), "SELECT COUNT(*) FROM kyc_documents WHERE status = 'pending'").Scan(&kycPending)
+	stats["kycPending"] = kycPending
 
 	// Support tickets open
-	models.Pool.QueryRow(c.Request.Context(), "SELECT COUNT(*) FROM support_tickets WHERE status = 'open'").Scan(&stats["ticketsOpen"])
+	var ticketsOpen int
+	_ = models.Pool.QueryRow(c.Request.Context(), "SELECT COUNT(*) FROM support_tickets WHERE status = 'open'").Scan(&ticketsOpen)
+	stats["ticketsOpen"] = ticketsOpen
 
 	models.LogAdminAction(adminID, c.GetString("admin_username"), "VIEW_ANALYTICS", "analytics", "", nil)
 
@@ -1053,10 +1210,29 @@ func GetAPIManagement(c *gin.Context) {
 
 	keys := []gin.H{}
 	for rows.Next() {
-		var k gin.H
-		rows.Scan(&k["id"], &k["userId"], &k["keyId"], &k["name"],
-			&k["permissions"], &k["ipWhitelist"], &k["rateLimit"],
-			&k["status"], &k["lastUsedAt"], &k["createdAt"])
+		var id uuid.UUID
+		var userId uuid.UUID
+		var keyId, name, status string
+		var permissions []string
+		var ipWhitelist []string
+		var rateLimit int
+		var lastUsedAt, createdAt *time.Time
+
+		if err := rows.Scan(&id, &userId, &keyId, &name, &permissions, &ipWhitelist, &rateLimit, &status, &lastUsedAt, &createdAt); err != nil {
+			continue
+		}
+		k := gin.H{
+			"id":          id,
+			"userId":      userId,
+			"keyId":       keyId,
+			"name":        name,
+			"permissions": permissions,
+			"ipWhitelist": ipWhitelist,
+			"rateLimit":   rateLimit,
+			"status":      status,
+			"lastUsedAt":  lastUsedAt,
+			"createdAt":   createdAt,
+		}
 		keys = append(keys, k)
 	}
 
@@ -1215,10 +1391,27 @@ func GetCloudMiningProducts(c *gin.Context) {
 
 	products := []gin.H{}
 	for rows.Next() {
-		var p gin.H
-		rows.Scan(&p["id"], &p["name"], &p["currency"], &p["dailyOutput"],
-			&p["pricePerTh"], &p["minInvestment"], &p["maxInvestment"],
-			&p["duration"], &p["status"], &p["createdAt"])
+		var id uuid.UUID
+		var name, currency, status string
+		var dailyOutput, pricePerTh, minInvestment, maxInvestment float64
+		var duration int
+		var createdAt *time.Time
+
+		if err := rows.Scan(&id, &name, &currency, &dailyOutput, &pricePerTh, &minInvestment, &maxInvestment, &duration, &status, &createdAt); err != nil {
+			continue
+		}
+		p := gin.H{
+			"id":            id,
+			"name":          name,
+			"currency":      currency,
+			"dailyOutput":   dailyOutput,
+			"pricePerTh":    pricePerTh,
+			"minInvestment": minInvestment,
+			"maxInvestment": maxInvestment,
+			"duration":      duration,
+			"status":        status,
+			"createdAt":     createdAt,
+		}
 		products = append(products, p)
 	}
 
@@ -1275,9 +1468,23 @@ func GetAuditLog(c *gin.Context) {
 
 	logs := []gin.H{}
 	for rows.Next() {
-		var l gin.H
-		rows.Scan(&l["id"], &l["adminUsername"], &l["action"], &l["resourceType"],
-			&l["resourceId"], &l["details"], &l["ipAddress"], &l["createdAt"])
+		var id uuid.UUID
+		var adminUsername, action, resourceType, resourceId, details, ipAddress string
+		var createdAt *time.Time
+
+		if err := rows.Scan(&id, &adminUsername, &action, &resourceType, &resourceId, &details, &ipAddress, &createdAt); err != nil {
+			continue
+		}
+		l := gin.H{
+			"id":            id,
+			"adminUsername": adminUsername,
+			"action":        action,
+			"resourceType":  resourceType,
+			"resourceId":    resourceId,
+			"details":       details,
+			"ipAddress":     ipAddress,
+			"createdAt":     createdAt,
+		}
 		logs = append(logs, l)
 	}
 
@@ -1329,9 +1536,19 @@ func getUserWallets(userID string) ([]gin.H, error) {
 
 	wallets := []gin.H{}
 	for rows.Next() {
-		var w gin.H
-		rows.Scan(&w["currency"], &w["network"], &w["type"],
-			&w["balance"], &w["locked"], &w["available"])
+		var currency, network, walletType string
+		var balance, locked, available float64
+		if err := rows.Scan(&currency, &network, &walletType, &balance, &locked, &available); err != nil {
+			continue
+		}
+		w := gin.H{
+			"currency":  currency,
+			"network":   network,
+			"type":      walletType,
+			"balance":   balance,
+			"locked":    locked,
+			"available": available,
+		}
 		wallets = append(wallets, w)
 	}
 
@@ -1339,15 +1556,26 @@ func getUserWallets(userID string) ([]gin.H, error) {
 }
 
 func GetUserKYC(userID string) (gin.H, error) {
-	var kyc gin.H
+	var id uuid.UUID
+	var documentType, documentNumber, status string
+	var createdAt, updatedAt *time.Time
+
 	err := models.Pool.QueryRow(context.Background(), `
 		SELECT id, document_type, document_number, status, created_at, updated_at
 		FROM kyc_documents WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1
-	`, userID).Scan(&kyc["id"], &kyc["documentType"], &kyc["documentNumber"],
-		&kyc["status"], &kyc["createdAt"], &kyc["updatedAt"])
+	`, userID).Scan(&id, &documentType, &documentNumber, &status, &createdAt, &updatedAt)
 
 	if err != nil {
 		return gin.H{"status": "none"}, nil
+	}
+
+	kyc := gin.H{
+		"id":             id,
+		"documentType":   documentType,
+		"documentNumber": documentNumber,
+		"status":         status,
+		"createdAt":      createdAt,
+		"updatedAt":      updatedAt,
 	}
 
 	return kyc, nil

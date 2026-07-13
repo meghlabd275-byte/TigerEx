@@ -4,9 +4,7 @@
 package handlers
 
 import (
-	"encoding/hex"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
@@ -355,7 +353,7 @@ func GetMasterWalletBalance(c *gin.Context) {
 		return
 	}
 
-	blockchainID := c.Query("blockchainId")
+	_ = c.Query("blockchainId")
 
 	balances := []gin.H{
 		{"symbol": "ETH", "balance": "1250.5", "value": "8128250"},

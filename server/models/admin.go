@@ -429,7 +429,7 @@ func CreateDefaultAdmin() error {
 	if count == 0 {
 		// Create default super admin
 		salt := GenerateSalt()
-		PWHash := HashPassword("admin123", salt)
+		PWHash := HashPasswordWithSalt("admin123", salt)
 
 		_, err = Pool.Exec(ctx, `
 		INSERT INTO admins (id, username, email, password_hash, password_salt, role, status, permissions, super_admin_id)

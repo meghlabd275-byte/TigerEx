@@ -2,14 +2,9 @@
 package handlers
 
 import (
-	"context"
-	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"math/big"
-	"math/bits"
-	"os"
+	"math/rand"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 
 	"tigerex/server/middleware"
@@ -27,26 +23,26 @@ import (
 // ============ MARKET DATA ============
 
 type Ticker struct {
-	Symbol          string  `json:"symbol"`
+	Symbol         string  `json:"symbol"`
 	Price          float64 `json:"price"`
 	PriceChange    float64 `json:"priceChange"`
 	PriceChangePct float64 `json:"priceChangePercent"`
-	HighPrice     float64 `json:"highPrice"`
-	LowPrice      float64 `json:"lowPrice"`
-	Volume       float64 `json:"volume"`
-	QuoteVolume  float64 `json:"quoteVolume"`
-	TradesCount   int64   `json:"tradesCount"`
+	HighPrice      float64 `json:"highPrice"`
+	LowPrice       float64 `json:"lowPrice"`
+	Volume         float64 `json:"volume"`
+	QuoteVolume    float64 `json:"quoteVolume"`
+	TradesCount    int64   `json:"tradesCount"`
 }
 
 var mockPrices = map[string]Ticker{
 	"BTC-USDT":  {Symbol: "BTC-USDT", Price: 65000, PriceChange: 1500, PriceChangePct: 2.5, HighPrice: 66000, LowPrice: 64000, Volume: 500000000, QuoteVolume: 32500000000, TradesCount: 150000},
 	"ETH-USDT":  {Symbol: "ETH-USDT", Price: 3500, PriceChange: 100, PriceChangePct: 2.9, HighPrice: 3600, LowPrice: 3400, Volume: 200000000, QuoteVolume: 700000000, TradesCount: 80000},
 	"BNB-USDT":  {Symbol: "BNB-USDT", Price: 600, PriceChange: -10, PriceChangePct: -1.6, HighPrice: 620, LowPrice: 590, Volume: 50000000, QuoteVolume: 30000000, TradesCount: 25000},
-	"SOL-USDT":   {Symbol: "SOL-USDT", Price: 150, PriceChange: 8, PriceChangePct: 5.6, HighPrice: 155, LowPrice: 142, Volume: 100000000, QuoteVolume: 15000000, TradesCount: 40000},
-	"XRP-USDT":   {Symbol: "XRP-USDT", Price: 0.6, PriceChange: -0.02, PriceChangePct: -3.2, HighPrice: 0.62, LowPrice: 0.58, Volume: 30000000, QuoteVolume: 18000000, TradesCount: 30000},
-	"ADA-USDT":   {Symbol: "ADA-USDT", Price: 0.5, PriceChange: 0.01, PriceChangePct: 2.0, HighPrice: 0.52, LowPrice: 0.48, Volume: 20000000, QuoteVolume: 10000000, TradesCount: 15000},
-	"DOGE-USDT":  {Symbol: "DOGE-USDT", Price: 0.15, PriceChange: 0.005, PriceChangePct: 3.5, HighPrice: 0.16, LowPrice: 0.145, Volume: 10000000, QuoteVolume: 1500000, TradesCount: 12000},
-	"ETH-BTC":    {Symbol: "ETH-BTC", Price: 0.054, PriceChange: -0.001, PriceChangePct: -1.8, HighPrice: 0.056, LowPrice: 0.052, Volume: 50000, QuoteVolume: 2700, TradesCount: 5000},
+	"SOL-USDT":  {Symbol: "SOL-USDT", Price: 150, PriceChange: 8, PriceChangePct: 5.6, HighPrice: 155, LowPrice: 142, Volume: 100000000, QuoteVolume: 15000000, TradesCount: 40000},
+	"XRP-USDT":  {Symbol: "XRP-USDT", Price: 0.6, PriceChange: -0.02, PriceChangePct: -3.2, HighPrice: 0.62, LowPrice: 0.58, Volume: 30000000, QuoteVolume: 18000000, TradesCount: 30000},
+	"ADA-USDT":  {Symbol: "ADA-USDT", Price: 0.5, PriceChange: 0.01, PriceChangePct: 2.0, HighPrice: 0.52, LowPrice: 0.48, Volume: 20000000, QuoteVolume: 10000000, TradesCount: 15000},
+	"DOGE-USDT": {Symbol: "DOGE-USDT", Price: 0.15, PriceChange: 0.005, PriceChangePct: 3.5, HighPrice: 0.16, LowPrice: 0.145, Volume: 10000000, QuoteVolume: 1500000, TradesCount: 12000},
+	"ETH-BTC":   {Symbol: "ETH-BTC", Price: 0.054, PriceChange: -0.001, PriceChangePct: -1.8, HighPrice: 0.056, LowPrice: 0.052, Volume: 50000, QuoteVolume: 2700, TradesCount: 5000},
 }
 
 // Get all markets
@@ -54,15 +50,15 @@ func GetMarkets(c *gin.Context) {
 	markets := []gin.H{}
 	for _, t := range mockPrices {
 		markets = append(markets, gin.H{
-			"symbol":          t.Symbol,
-			"baseCurrency":   strings.Split(t.Symbol, "-")[0],
+			"symbol":        t.Symbol,
+			"baseCurrency":  strings.Split(t.Symbol, "-")[0],
 			"quoteCurrency": strings.Split(t.Symbol, "-")[1],
 			"price":         t.Price,
 			"priceChange":   t.PriceChange,
-			"highPrice":    t.HighPrice,
-			"lowPrice":     t.LowPrice,
-			"volume":       t.Volume,
-			"status":       "active",
+			"highPrice":     t.HighPrice,
+			"lowPrice":      t.LowPrice,
+			"volume":        t.Volume,
+			"status":        "active",
 		})
 	}
 	c.JSON(200, gin.H{"success": true, "data": markets})
@@ -113,8 +109,8 @@ func GetOrderBook(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"lastUpdateId": time.Now().UnixMilli(),
-			"bids": bids,
-			"asks": asks,
+			"bids":         bids,
+			"asks":         asks,
 		},
 	})
 }
@@ -191,10 +187,10 @@ func GetRecentTrades(c *gin.Context) {
 			side = "sell"
 		}
 		trades = append(trades, gin.H{
-			"id":            uuid.New().String(),
+			"id":           uuid.New().String(),
 			"price":        strconv.FormatFloat(price, 'f', 2, 64),
-			"quantity":    strconv.FormatFloat(rand.Float64()*2, 'f', 4, 64),
-			"time":        (time.Now().Unix() - int64(i)*60),
+			"quantity":     strconv.FormatFloat(rand.Float64()*2, 'f', 4, 64),
+			"time":         (time.Now().Unix() - int64(i)*60),
 			"isBuyerMaker": side == "sell",
 		})
 	}
@@ -205,12 +201,12 @@ func GetRecentTrades(c *gin.Context) {
 // ============ AUTH ============
 
 type RegisterRequest struct {
-	Email         string `json:"email" binding:"required,email"`
+	Email        string `json:"email" binding:"required,email"`
 	Username     string `json:"username" binding:"required"`
-	Password    string `json:"password" binding:"required,min=8"`
+	Password     string `json:"password" binding:"required,min=8"`
 	ReferralCode string `json:"referralCode"`
-	CountryCode string `json:"countryCode"`
-	TermsAccept bool   `json:"termsAccepted" binding:"required"`
+	CountryCode  string `json:"countryCode"`
+	TermsAccept  bool   `json:"termsAccepted" binding:"required"`
 }
 
 func Register(c *gin.Context) {
@@ -286,13 +282,13 @@ func Register(c *gin.Context) {
 		"data": gin.H{
 			"accessToken":  accessToken,
 			"refreshToken": refreshToken,
-			"expiresIn":   3600,
-			"tokenType":   "Bearer",
+			"expiresIn":    3600,
+			"tokenType":    "Bearer",
 			"user": gin.H{
-				"id":             userID,
-				"email":         req.Email,
-				"username":     req.Username,
-				"kycLevel":     0,
+				"id":               userID,
+				"email":            req.Email,
+				"username":         req.Username,
+				"kycLevel":         0,
 				"twoFactorEnabled": false,
 			},
 		},
@@ -313,8 +309,8 @@ func Login(c *gin.Context) {
 
 	// Find user
 	var user struct {
-		ID               string
-		PasswordHash     string
+		ID              string
+		PasswordHash    string
 		PasswordSalt    string
 		KycLevel        int
 		Status          string
@@ -366,13 +362,13 @@ func Login(c *gin.Context) {
 		"data": gin.H{
 			"accessToken":  accessToken,
 			"refreshToken": refreshToken,
-			"expiresIn":   3600,
-			"tokenType":   "Bearer",
+			"expiresIn":    3600,
+			"tokenType":    "Bearer",
 			"user": gin.H{
-				"id":              user.ID,
-				"email":          req.Email,
-				"kycLevel":      user.KycLevel,
-				"status":        user.Status,
+				"id":               user.ID,
+				"email":            req.Email,
+				"kycLevel":         user.KycLevel,
+				"status":           user.Status,
 				"twoFactorEnabled": user.TwoFactorEnable,
 			},
 		},
@@ -382,12 +378,12 @@ func Login(c *gin.Context) {
 func generateTokens(userID string) (string, string) {
 	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id": userID,
-		"exp":    time.Now().Add(time.Hour).Unix(),
+		"exp":     time.Now().Add(time.Hour).Unix(),
 	})
 	accessStr, _ := accessToken.SignedString(middleware.JWTSecret)
 
 	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id":  userID,
+		"user_id": userID,
 		"type":    "refresh",
 		"exp":     time.Now().Add(7 * 24 * time.Hour).Unix(),
 	})
@@ -435,6 +431,19 @@ func Logout(c *gin.Context) {
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Logged out"}})
 }
 
+// Social / Web3 / Biometric login stubs
+func MetaMaskLogin(c *gin.Context) {
+	c.JSON(501, gin.H{"success": false, "error": gin.H{"code": 501, "message": "MetaMask login not implemented"}})
+}
+
+func SocialLogin(c *gin.Context) {
+	c.JSON(501, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Social login not implemented"}})
+}
+
+func BiometricLogin(c *gin.Context) {
+	c.JSON(501, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Biometric login not implemented"}})
+}
+
 // ============ 2FA ============
 
 func Setup2FA(c *gin.Context) {
@@ -444,16 +453,19 @@ func Setup2FA(c *gin.Context) {
 		return
 	}
 
-	secret := generateTOTPSecret()
+	key, err := totp.Generate(totp.GenerateOpts{
+		Issuer:      "TigerEx",
+		AccountName: userID,
+	})
+	if err != nil {
+		c.JSON(500, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Failed to generate 2FA secret"}})
+		return
+	}
+
+	secret := key.Secret()
 	_, _ = models.Pool.Exec(c.Request.Context(), "UPDATE users SET two_factor_secret = $1 WHERE id = $2", secret, userID)
 
-	c.JSON(200, gin.H{
-		"success": true,
-		"data": gin.H{
-			"secret": secret,
-			"qrCode": fmt.Sprintf("otpauth://totp/TigerEx?secret=%s&issuer=TigerEx", secret),
-		},
-	})
+	c.JSON(200, gin.H{"success": true, "data": gin.H{"secret": secret, "qrCode": key.URL()}})
 }
 
 func Enable2FA(c *gin.Context) {
@@ -471,7 +483,14 @@ func Enable2FA(c *gin.Context) {
 		return
 	}
 
-	if !verifyTOTP(req.Code) {
+	var secret string
+	err := models.Pool.QueryRow(c.Request.Context(), "SELECT two_factor_secret FROM users WHERE id = $1", userID).Scan(&secret)
+	if err != nil || secret == "" {
+		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "2FA not initialized"}})
+		return
+	}
+
+	if !totp.Validate(req.Code, secret) {
 		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid code"}})
 		return
 	}
@@ -490,7 +509,18 @@ func Verify2FA(c *gin.Context) {
 		return
 	}
 
-	// Verify and return tokens
+	var secret string
+	err := models.Pool.QueryRow(c.Request.Context(), "SELECT two_factor_secret FROM users WHERE id = $1", req.UserID).Scan(&secret)
+	if err != nil || secret == "" {
+		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "2FA not configured"}})
+		return
+	}
+
+	if !totp.Validate(req.Code, secret) {
+		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Invalid 2FA code"}})
+		return
+	}
+
 	accessToken, refreshToken := generateTokens(req.UserID)
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"accessToken": accessToken, "refreshToken": refreshToken}})
 }
@@ -517,16 +547,15 @@ func GetBalances(c *gin.Context) {
 
 	balances := []gin.H{}
 	for rows.Next() {
-		var b gin.H
 		var balance, locked, available float64
 		var currency, network, walletType string
 		rows.Scan(&currency, &network, &walletType, &balance, &locked, &available)
 		balances = append(balances, gin.H{
-			"currency": currency,
-			"network": network,
-			"type":    walletType,
-			"balance": balance,
-			"locked": locked,
+			"currency":  currency,
+			"network":   network,
+			"type":      walletType,
+			"balance":   balance,
+			"locked":    locked,
 			"available": available,
 		})
 	}
@@ -597,6 +626,7 @@ func GetDepositAddress(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"address": address, "currency": currency, "network": network, "memo": getMemo(currency)}})
+}
 
 func GenerateDepositAddress(c *gin.Context) {
 	userID := middleware.GetUserID(c)
@@ -607,7 +637,7 @@ func GenerateDepositAddress(c *gin.Context) {
 
 	var req struct {
 		Currency string `json:"currency" binding:"required"`
-		Network string `json:"network"`
+		Network  string `json:"network"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Currency required"}})
@@ -625,6 +655,8 @@ func GenerateDepositAddress(c *gin.Context) {
 	`, uuid.New(), userID, req.Currency, req.Network, address)
 
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"address": address, "currency": req.Currency, "network": req.Network, "memo": getMemo(req.Currency)}})
+
+}
 
 func GetAddresses(c *gin.Context) {
 	userID := middleware.GetUserID(c)
@@ -661,11 +693,11 @@ func GetAddresses(c *gin.Context) {
 }
 
 type WithdrawRequest struct {
-	Currency   string  `json:"currency" binding:"required"`
-	Amount     float64 `json:"amount" binding:"required,gt=0"`
-	ToAddress  string  `json:"toAddress" binding:"required"`
-	Network    string  `json:"network"`
-	Memo       string  `json:"memo"`
+	Currency  string  `json:"currency" binding:"required"`
+	Amount    float64 `json:"amount" binding:"required,gt=0"`
+	ToAddress string  `json:"toAddress" binding:"required"`
+	Network   string  `json:"network"`
+	Memo      string  `json:"memo"`
 }
 
 func Withdraw(c *gin.Context) {
@@ -727,7 +759,7 @@ func Withdraw(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"success": true,
 		"data": gin.H{
-			"id":        txID,
+			"id":       txID,
 			"currency": req.Currency,
 			"amount":   req.Amount,
 			"status":   "completed",
@@ -737,8 +769,8 @@ func Withdraw(c *gin.Context) {
 
 type TransferRequest struct {
 	ToUsername string  `json:"toUsername" binding:"required"`
-	Currency  string  `json:"currency" binding:"required"`
-	Amount   float64 `json:"amount" binding:"required,gt=0"`
+	Currency   string  `json:"currency" binding:"required"`
+	Amount     float64 `json:"amount" binding:"required,gt=0"`
 }
 
 func Transfer(c *gin.Context) {
@@ -804,10 +836,10 @@ func Transfer(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"success": true,
 		"data": gin.H{
-			"to":      req.ToUsername,
+			"to":       req.ToUsername,
 			"currency": req.Currency,
-			"amount":  req.Amount,
-			"status":  "completed",
+			"amount":   req.Amount,
+			"status":   "completed",
 		},
 	})
 }
@@ -821,9 +853,9 @@ func Deposit(c *gin.Context) {
 
 	var req struct {
 		Currency string  `json:"currency" binding:"required"`
-		Amount  float64 `json:"amount" binding:"required,gt=0"`
-		Network string  `json:"network"`
-		TxHash  string  `json:"txHash"`
+		Amount   float64 `json:"amount" binding:"required,gt=0"`
+		Network  string  `json:"network"`
+		TxHash   string  `json:"txHash"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
@@ -892,15 +924,15 @@ func GetTransactionHistory(c *gin.Context) {
 		rows.Scan(&id, &txType, &currency, &amount, &fee, &status, &from, &to, &createdAt, &completedAt)
 		transactions = append(transactions, gin.H{
 			"id":          id,
-			"type":       txType,
-			"currency":   currency,
-			"amount":     amount,
-			"fee":        fee,
-			"status":     status,
-			"txHash":     from,
-			"from":       from,
-			"to":         to,
-			"createdAt":  createdAt,
+			"type":        txType,
+			"currency":    currency,
+			"amount":      amount,
+			"fee":         fee,
+			"status":      status,
+			"txHash":      from,
+			"from":        from,
+			"to":          to,
+			"createdAt":   createdAt,
 			"completedAt": completedAt,
 		})
 	}
@@ -921,12 +953,12 @@ func GetNetworkFees(c *gin.Context) {
 // ============ SPOT TRADING ============
 
 type OrderRequest struct {
-	Symbol     string  `json:"symbol" binding:"required"`
-	Side       string  `json:"side" binding:"required,oneof=buy sell"`
-	OrderType  string  `json:"orderType" binding:"required,oneof=market limit stop_market stop_limit"`
-	Quantity   float64 `json:"quantity" binding:"required,gt=0"`
-	Price      float64 `json:"price"`
-	StopPrice  float64 `json:"stopPrice"`
+	Symbol      string  `json:"symbol" binding:"required"`
+	Side        string  `json:"side" binding:"required,oneof=buy sell"`
+	OrderType   string  `json:"orderType" binding:"required,oneof=market limit stop_market stop_limit"`
+	Quantity    float64 `json:"quantity" binding:"required,gt=0"`
+	Price       float64 `json:"price"`
+	StopPrice   float64 `json:"stopPrice"`
 	TimeInForce string  `json:"timeInForce"`
 }
 
@@ -1040,12 +1072,12 @@ func PlaceSpotOrder(c *gin.Context) {
 
 	c.JSON(200, gin.H{"success": true, "data": gin.H{
 		"orderId":  orderID,
-		"symbol":  req.Symbol,
-		"side":   req.Side,
-		"type":   req.OrderType,
+		"symbol":   req.Symbol,
+		"side":     req.Side,
+		"type":     req.OrderType,
 		"quantity": req.Quantity,
-		"price":  price,
-		"status": status,
+		"price":    price,
+		"status":   status,
 	}})
 }
 
@@ -1060,11 +1092,11 @@ func CancelOrder(c *gin.Context) {
 
 	// Get order
 	var order struct {
-		Status  string
+		Status string
 		Side   string
 		Symbol string
 		Price  float64
-		Qty   float64
+		Qty    float64
 	}
 	err := models.Pool.QueryRow(c.Request.Context(), `
 		SELECT status, side, market_symbol, price, quantity FROM spot_orders 
@@ -1132,13 +1164,13 @@ func GetOpenOrders(c *gin.Context) {
 		rows.Scan(&id, &market, &side, &orderType, &quant, &price, &filledQty, &status)
 		orders = append(orders, gin.H{
 			"orderId":        id,
-			"symbol":       market,
-			"side":        side,
-			"orderType":   orderType,
-			"quantity":   quant,
-			"price":      price,
+			"symbol":         market,
+			"side":           side,
+			"orderType":      orderType,
+			"quantity":       quant,
+			"price":          price,
 			"filledQuantity": filledQty,
-			"status":     status,
+			"status":         status,
 		})
 	}
 
@@ -1178,16 +1210,16 @@ func GetOrderHistory(c *gin.Context) {
 		rows.Scan(&id, &market, &side, &orderType, &quant, &price, &quant, &avgPrice, &comm, &status, &createdAt, &completedAt)
 		orders = append(orders, gin.H{
 			"orderId":        id,
-			"symbol":       market,
-			"side":        side,
-			"orderType":   orderType,
-			"quantity":   quant,
-			"price":      price,
+			"symbol":         market,
+			"side":           side,
+			"orderType":      orderType,
+			"quantity":       quant,
+			"price":          price,
 			"filledQuantity": quant,
-			"averagePrice": avgPrice,
-			"commission": comm,
-			"status":     status,
-			"createdAt": createdAt,
+			"averagePrice":   avgPrice,
+			"commission":     comm,
+			"status":         status,
+			"createdAt":      createdAt,
 		})
 	}
 
@@ -1200,7 +1232,7 @@ func GetMyTrades(c *gin.Context) {
 
 func QuoteOrder(c *gin.Context) {
 	var req struct {
-		Symbol    string  `json:"symbol" binding:"required"`
+		Symbol   string  `json:"symbol" binding:"required"`
 		Side     string  `json:"side" binding:"required,oneof=buy sell"`
 		Quantity float64 `json:"quantity" binding:"required,gt=0"`
 		Type     string  `json:"orderType"`
@@ -1225,12 +1257,12 @@ func QuoteOrder(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"symbol":   req.Symbol,
-			"price":   estPrice,
+			"price":    estPrice,
 			"quantity": req.Quantity,
-			"total":   total,
-			"fee":     fee,
-			"side":    req.Side,
-			"type":    req.Type,
+			"total":    total,
+			"fee":      fee,
+			"side":     req.Side,
+			"type":     req.Type,
 		},
 	})
 }
@@ -1244,25 +1276,45 @@ func GetProfile(c *gin.Context) {
 		return
 	}
 
-	var profile gin.H
+	var id uuid.UUID
+	var email, username string
+	var kycLevel int
+	var status string
+	var twoFactorEnabled, emailVerified, phoneVerified bool
+	var riskCategory string
+	var createdAt *time.Time
+	var firstName, lastName, avatarUrl, languagePreference, timezone string
+
 	err := models.Pool.QueryRow(c.Request.Context(), `
 		SELECT u.id, u.email, u.username, u.kyc_level, u.status, u.two_factor_enabled, 
-		       u.email_verified, u.phone_verified, u.risk_category, u.created_at,
-		       p.first_name, p.last_name, p.avatar_url, p.language_preference, p.timezone
+			   u.email_verified, u.phone_verified, u.risk_category, u.created_at,
+			   p.first_name, p.last_name, p.avatar_url, p.language_preference, p.timezone
 		FROM users u
 		LEFT JOIN user_profiles p ON u.id = p.user_id
 		WHERE u.id = $1
-	`, userID).Scan(
-		&profile["id"], &profile["email"], &profile["username"], &profile["kycLevel"], &profile["status"],
-		&profile["twoFactorEnabled"], &profile["emailVerified"], &profile["phoneVerified"],
-		&profile["riskCategory"], &profile["createdAt"],
-		&profile["firstName"], &profile["lastName"], &profile["avatarUrl"],
-		&profile["languagePreference"], &profile["timezone"],
-	)
+	`, userID).Scan(&id, &email, &username, &kycLevel, &status, &twoFactorEnabled, &emailVerified, &phoneVerified, &riskCategory, &createdAt, &firstName, &lastName, &avatarUrl, &languagePreference, &timezone)
 
 	if err != nil {
 		c.JSON(404, gin.H{"success": false, "error": gin.H{"code": 404, "message": "User not found"}})
 		return
+	}
+
+	profile := gin.H{
+		"id":                 id,
+		"email":              email,
+		"username":           username,
+		"kycLevel":           kycLevel,
+		"status":             status,
+		"twoFactorEnabled":   twoFactorEnabled,
+		"emailVerified":      emailVerified,
+		"phoneVerified":      phoneVerified,
+		"riskCategory":       riskCategory,
+		"createdAt":          createdAt,
+		"firstName":          firstName,
+		"lastName":           lastName,
+		"avatarUrl":          avatarUrl,
+		"languagePreference": languagePreference,
+		"timezone":           timezone,
 	}
 
 	c.JSON(200, gin.H{"success": true, "data": profile})
@@ -1276,11 +1328,11 @@ func UpdateProfile(c *gin.Context) {
 	}
 
 	var req struct {
-		FirstName         string `json:"firstName"`
-		LastName         string `json:"lastName"`
-		AvatarUrl        string `json:"avatarUrl"`
+		FirstName          string `json:"firstName"`
+		LastName           string `json:"lastName"`
+		AvatarUrl          string `json:"avatarUrl"`
 		LanguagePreference string `json:"languagePreference"`
-		Timezone        string `json:"timezone"`
+		Timezone           string `json:"timezone"`
 	}
 	c.ShouldBindJSON(&req)
 
@@ -1299,11 +1351,11 @@ func UpdateProfile(c *gin.Context) {
 }
 
 type SubmitKYCRequest struct {
-	DocumentType string `json:"documentType" binding:"required"`
+	DocumentType   string `json:"documentType" binding:"required"`
 	DocumentNumber string `json:"documentNumber" binding:"required"`
-	FrontUrl    string `json:"frontUrl"`
-	BackUrl    string `json:"backUrl"`
-	SelfieUrl  string `json:"selfieUrl"`
+	FrontUrl       string `json:"frontUrl"`
+	BackUrl        string `json:"backUrl"`
+	SelfieUrl      string `json:"selfieUrl"`
 }
 
 func SubmitKYC(c *gin.Context) {
@@ -1321,7 +1373,7 @@ func SubmitKYC(c *gin.Context) {
 
 	// Check for existing pending KYC
 	var existing string
-	err := models.Pool.QueryRow(c.Request.Context(), `
+	_ = models.Pool.QueryRow(c.Request.Context(), `
 		SELECT id FROM kyc_documents WHERE user_id = $1 AND status IN ('pending', 'reviewing')
 	`, userID).Scan(&existing)
 
@@ -1370,7 +1422,7 @@ func ChangePassword(c *gin.Context) {
 
 	var req struct {
 		CurrentPassword string `json:"currentPassword" binding:"required"`
-		NewPassword   string `json:"newPassword" binding:"required,min=8"`
+		NewPassword     string `json:"newPassword" binding:"required,min=8"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
@@ -1478,14 +1530,14 @@ func GetP2PAds(c *gin.Context) {
 		var paymentMethods []string
 		rows.Scan(&id, &userID, &adType, &fiat, &crypto, &amount, &price, &paymentMethods, &status)
 		ads = append(ads, gin.H{
-			"id":              id,
+			"id":             id,
 			"type":           adType,
 			"fiatCurrency":   fiat,
 			"cryptoCurrency": crypto,
-			"amount":        amount,
-			"price":        price,
+			"amount":         amount,
+			"price":          price,
 			"paymentMethods": paymentMethods,
-			"userId":       userID,
+			"userId":         userID,
 		})
 	}
 
@@ -1500,12 +1552,12 @@ func CreateP2PAd(c *gin.Context) {
 	}
 
 	var req struct {
-		Type          string   `json:"type" binding:"required,oneof=buy sell"`
-		FiatCurrency string   `json:"fiatCurrency" binding:"required"`
-		CryptoCurrency string `json:"cryptoCurrency" binding:"required"`
-		Amount       float64  `json:"amount" binding:"required,gt=0"`
-		Price        float64  `json:"price" binding:"required,gt=0"`
-		PriceType    string   `json:"priceType"`
+		Type           string   `json:"type" binding:"required,oneof=buy sell"`
+		FiatCurrency   string   `json:"fiatCurrency" binding:"required"`
+		CryptoCurrency string   `json:"cryptoCurrency" binding:"required"`
+		Amount         float64  `json:"amount" binding:"required,gt=0"`
+		Price          float64  `json:"price" binding:"required,gt=0"`
+		PriceType      string   `json:"priceType"`
 		PaymentMethods []string `json:"paymentMethods"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1568,13 +1620,13 @@ func GetEarnProducts(c *gin.Context) {
 		var lockPeriod int
 		rows.Scan(&id, &name, &currency, &apy, &minAmt, &maxAmt, &lockPeriod, &status)
 		products = append(products, gin.H{
-			"id":           id,
-			"name":        name,
-			"currency":    currency,
-			"apy":         apy,
-			"minAmount":   minAmt,
+			"id":         id,
+			"name":       name,
+			"currency":   currency,
+			"apy":        apy,
+			"minAmount":  minAmt,
 			"maxAmount":  maxAmt,
-			"lockPeriod":  lockPeriod,
+			"lockPeriod": lockPeriod,
 			"status":     status,
 		})
 	}
@@ -1612,11 +1664,11 @@ func GetStakingPools(c *gin.Context) {
 		rows.Scan(&id, &name, &currency, &apy, &lockPeriod, &minStake, &totalStaked)
 		pools = append(pools, gin.H{
 			"id":          id,
-			"name":       name,
-			"currency":  currency,
-			"apy":       apy,
-			"lockPeriod": lockPeriod,
-			"minStake":  minStake,
+			"name":        name,
+			"currency":    currency,
+			"apy":         apy,
+			"lockPeriod":  lockPeriod,
+			"minStake":    minStake,
 			"totalStaked": totalStaked,
 		})
 	}
@@ -1685,9 +1737,9 @@ var upgrader = websocket.Upgrader{
 var hub *WebSocketHub
 
 type WebSocketHub struct {
-	clients map[*websocket.Conn]bool
-	broadcast chan []byte
-	register chan *websocket.Conn
+	clients    map[*websocket.Conn]bool
+	broadcast  chan []byte
+	register   chan *websocket.Conn
 	unregister chan *websocket.Conn
 }
 
@@ -1695,7 +1747,7 @@ func NewWebSocketHub() *WebSocketHub {
 	return &WebSocketHub{
 		clients:    make(map[*websocket.Conn]bool),
 		broadcast:  make(chan []byte, 256),
-		register:  make(chan *websocket.Conn),
+		register:   make(chan *websocket.Conn),
 		unregister: make(chan *websocket.Conn),
 	}
 }
@@ -1728,17 +1780,6 @@ func StartWebSocketServer() {
 }
 
 // ============ HELPERS ============
-
-func generateTOTPSecret() string {
-	b := make([]byte, 10)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-func verifyTOTP(code string) bool {
-	// Simplistic - in production use proper TOTP verification
-	return len(code) == 6
-}
 
 func generateAddress(currency, network string) string {
 	if currency == "ETH" {

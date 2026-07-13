@@ -3,17 +3,12 @@ package models
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"math/big"
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var Pool *pgxpool.Pool
@@ -48,7 +43,7 @@ func getEnv(key, defaultValue string) string {
 // Connect to database
 func InitDB() error {
 	cfg := GetConfig()
-	
+
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
 		url = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
@@ -450,7 +445,7 @@ func SeedMarkets() {
 	ctx := context.Background()
 	defaultMarkets := []struct {
 		Symbol        string
-		BaseCurrency string
+		BaseCurrency  string
 		QuoteCurrency string
 	}{
 		{"BTC-USDT", "BTC", "USDT"},
@@ -474,7 +469,7 @@ func SeedMarkets() {
 	// Seed futures contracts
 	futuresContracts := []struct {
 		Symbol        string
-		BaseCurrency string
+		BaseCurrency  string
 		QuoteCurrency string
 	}{
 		{"BTC-USDT-PERP", "BTC", "USDT"},
@@ -495,7 +490,7 @@ func SeedMarkets() {
 	earnProducts := []struct {
 		Name     string
 		Currency string
-		APY     float64
+		APY      float64
 	}{
 		{"USDT Flexible", "USDT", 4.5},
 		{"USDT 30 Days", "USDT", 5.2},
@@ -522,7 +517,7 @@ func SeedMarkets() {
 	stakingPools := []struct {
 		Name     string
 		Currency string
-		APY     float64
+		APY      float64
 	}{
 		{"ETH 2.0", "ETH", 5.5},
 		{"SOL 2.0", "SOL", 8.0},
@@ -540,17 +535,7 @@ func SeedMarkets() {
 	fmt.Println("✓ Seeded market data")
 }
 
-// Helper functions
-func GenerateSalt() string {
-	b := make([]byte, 32)
-	rand.Read(b)
-	return hex.EncodeToString(b)[:32]
-}
-
-func HashPassword(password, salt string) string {
-	hash := sha256.Sum256([]byte(password + salt))
-	return hex.EncodeToString(hash[:])
-}
+// Helper functions (common helpers are implemented in user.go)
 
 func ParseUUID(s string) (uuid.UUID, error) {
 	return uuid.Parse(s)
@@ -560,7 +545,4 @@ func Now() time.Time {
 	return time.Now().UTC()
 }
 
-func RandFloat64(max float64) float64 {
-	f, _ := rand.Float64()
-	return f * max
-}
+// RandFloat64 removed (use math/rand where needed)
