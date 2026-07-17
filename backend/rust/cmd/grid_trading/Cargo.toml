@@ -1,0 +1,22 @@
+[package]
+name = "tigerex-grid"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "grid_trading"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

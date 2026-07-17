@@ -1,0 +1,9 @@
+[package]
+name = "tigerex-predictive-analytics"
+version = "1.0.0"
+edition = "2021"
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+rand = "0.8"
+[lib]
+path = "src/lib.rs"
