@@ -22,15 +22,19 @@ Owners: custody, wallets, settlement, risk_engine, blockchain_nodes, payment_cor
 - Pre-trade risk checks
 - Blockchain node operators
 
-## Go : Distributed Systems
+## Go : Distributed Systems & APIs (PRIMARY)
 
-Owners: microservices, websocket_infrastructure, grpc_services, streaming_platforms, distributed_systems, realtime_apis, orchestration_services, cloud_native_infrastructure
+Owners: microservices, websocket_infrastructure, grpc_services, streaming_platforms, distributed_systems, realtime_apis, orchestration_services, cloud_native_infrastructure, rest_api_v2, websocket_v2, fix_api, order_service, trading_service, future_trading, margin_trading, options_trading, derivatives, marketdata, funding, p2p_trading, otc, dex_aggregator, copy_trading, social_trading, grid_trading, dca, liquidity_mining, referral, payment_gateway, fiat_rails, staking, auto_invest, p2p_service, reports, api_gateway
 
 **Use Cases:**
-- API Gateways
+- API Gateways (PRIMARY)
 - WebSocket servers
 - Event streaming
 - Microservices
+- REST API v2
+- FIX API
+- Trading APIs
+- Payment Gateways
 
 ## Java : Enterprise Finance
 
@@ -115,17 +119,25 @@ Owners: fpga_matching_acceleration, packet_processing, feed_handlers, smartnic_l
 
 ## Summary Table
 
-| Language | Count | Primary Use |
-|---------|-------|-----------|
-| C++ | 8 | Matching Engine |
-| Rust | 10 | Security Infra |
-| Go | 8 | Distributed Backend |
-| Java | 8 | Enterprise Finance |
-| Python | 8 | AI/ML |
-| TypeScript | 7 | Frontend |
-| Kotlin | 4 | Android |
-| Swift | 5 | iOS |
-| Solidty | 5 | Smart Contracts |
-| Zig | 4 | Experimental |
-| CUDA | 4 | GPU Computing |
-| Verilog/VHDL | 5 | Hardware |
+| Language | Count | Primary Use | Status |
+|---------|-------|-----------|--------|
+| C++ | 8 | Matching Engine | Unchanged |
+| Rust | 10 | Security Infra | Kept for safety-critical |
+| Go | 45 | Distributed Backend & APIs | **PRIMARY** (converted from Rust) |
+| Java | 8 | Enterprise Finance | Unchanged |
+| Python | 8 | AI/ML | Unchanged |
+| TypeScript | 7 | Frontend | Unchanged |
+| Kotlin | 4 | Android | Unchanged |
+| Swift | 5 | iOS | Unchanged |
+| Solidty | 5 | Smart Contracts | Unchanged |
+| Zig | 4 | Experimental | Unchanged |
+| CUDA | 4 | GPU Computing | Unchanged |
+| Verilog/VHDL | 5 | Hardware | Unchanged |
+
+## Migration Notes
+
+**2024-07-17: API Migration Complete**
+- 45 Rust APIs converted to Go for better performance and safety
+- Rust cmd services moved to `backend/rust-legacy/` for reference
+- Rust kept for safety-critical components: matching_engine, cold_wallet, wallet, derivatives, lending_protocol, leveraged_tokens, trading_bots
+- Go is now the PRIMARY language for all exchange APIs
