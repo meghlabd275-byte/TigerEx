@@ -1,0 +1,8 @@
+[package]
+name = "tigerex-liquidation"
+version = "1.0.0"
+edition = "2021"
+description = "TigerEx Liquidation Engine - Risk Management"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }

@@ -1,0 +1,17 @@
+[package]
+name = "tigerex-matcher"
+version = "1.0.0"
+edition = "2021"
+authors = ["TigerEx Team"]
+description = "TigerEx Ultra-Low Latency Matching Engine"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+rand = "0.8"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "matching"
+harness = false

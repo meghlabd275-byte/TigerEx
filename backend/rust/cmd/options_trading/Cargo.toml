@@ -1,0 +1,8 @@
+[package]
+name = "tigerex-options"
+version = "1.0.0"
+edition = "2021"
+description = "TigerEx Options Trading"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }

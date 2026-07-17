@@ -1,0 +1,11 @@
+[package]
+name = "tigerex-order-service"
+version = "1.0.0"
+edition = "2021"
+description = "TigerEx Order Service in Rust"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+
+[[test]]
+name = "tests"
