@@ -1,406 +1,709 @@
 "use client";
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Eye, EyeOff, Loader2, AlertCircle, CheckCircle, Info } from 'lucide-react';
+import { 
+  Loader2, 
+  AlertCircle, 
+  CheckCircle, 
+  ArrowRight,
+  Mail,
+  Phone,
+  Chrome,
+  Apple,
+  Send,
+  ArrowLeft,
+  Wallet,
+  User,
+  FileText
+} from 'lucide-react';
+import SmartInput, { InputMode, Country, countries } from '@/components/auth/SmartInput';
+import OtpInput from '@/components/auth/OtpInput';
+import PasswordInput from '@/components/auth/PasswordInput, { PasswordStrength } from '@/components/auth/PasswordInput';
+import { ThemeToggle } from '@/components/theme-toggle';
 
-interface AuthResponse {
-  success: boolean;
-  data?: {
-    accessToken?: string;
-    access_token?: string;
-    refreshToken?: string;
-    refresh_token?: string;
-    expiresIn?: number;
-    expires_at?: number;
-    tokenType?: string;
-    user?: {
-      id: string;
-      email: string;
-      username: string;
-      kycLevel?: number;
-      kyc_level?: number;
-      status?: string;
-    };
-  };
-  error?: {
-    code?: number;
-    message: string;
-  };
-}
-
-interface ValidationErrors {
-  username?: string;
-  email?: string;
-  password?: string;
-  confirmPassword?: string;
-  referralCode?: string;
-}
+// Register steps
+type RegisterStep = 'identity' | 'otp' | 'password' | 'success';
 
 export default function RegisterPage() {
   const router = useRouter();
-  const [formData, setFormData] = useState({
-    username: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
-    referralCode: '',
-    agreeTerms: false,
-    agreePrivacy: false,
-  });
-  const [showPassword, setShowPassword] = useState(false);
+  const searchParams = useSearchParams();
+  
+  // Form state
+  const [identity, setIdentity] = useState(searchParams.get('emailOrPhone') || '');
+  const [identityType, setIdentityType] = useState<InputMode>('email');
+  const [selectedCountry, setSelectedCountry] = useState<Country>(countries.find(c => c.code === 'US') || countries[0]);
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [referralCode, setReferralCode] = useState('');
+  const [agreeToTerms, setAgreeToTerms] = useState(false);
+  const [otp, setOtp] = useState('');
+  
+  // UI state
+  const [step, setStep] = useState<RegisterStep>('identity');
+  const [loading, setLoading] = useState(false);
+  const [checkingAccount, setCheckingAccount] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [errors, setErrors] = useState<ValidationErrors>({});
-  const [passwordStrength, setPasswordStrength] = useState({
-    score: 0,
-    label: '',
-    color: '',
-  });
+  
+  // Password strength
+  const [passwordStrength, setPasswordStrength] = useState<PasswordStrength>('weak');
+  
+  // OTP timer
+  const [otpTimer, setOtpTimer] = useState(0);
+  
+  // Social login dropdown
+  const [showSocialDropdown, setShowSocialDropdown] = useState(false);
 
-  const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-  const isValidUsername = (value: string) => /^[a-zA-Z0-9_]{3,20}$/.test(value);
-
-  useEffect(() => {
-    const password = formData.password;
-    let score = 0;
-
-    if (password.length >= 8) score++;
-    if (password.length >= 12) score++;
-    if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score++;
-    if (/\d/.test(password)) score++;
-    if (/[!@#$%^&*(),.?":{}|<>]/.test(password)) score++;
-
-    const labels = ['Very Weak', 'Weak', 'Fair', 'Good', 'Strong'];
-    const colors = ['bg-red-500', 'bg-orange-500', 'bg-yellow-500', 'bg-green-400', 'bg-green-500'];
-
-    setPasswordStrength({
-      score,
-      label: labels[Math.min(score, 4)],
-      color: colors[Math.min(score, 4)],
-    });
-  }, [formData.password]);
-
-  const validateForm = (): boolean => {
-    const newErrors: ValidationErrors = {};
-
-    if (!formData.username.trim()) {
-      newErrors.username = 'Username is required';
-    } else if (!isValidUsername(formData.username)) {
-      newErrors.username = 'Username must be 3-20 characters (letters, numbers, underscores)';
-    }
-
-    if (!formData.email.trim()) {
-      newErrors.email = 'Email is required';
-    } else if (!isValidEmail(formData.email)) {
-      newErrors.email = 'Please enter a valid email address';
-    }
-
-    if (!formData.password) {
-      newErrors.password = 'Password is required';
-    } else if (formData.password.length < 8) {
-      newErrors.password = 'Password must be at least 8 characters';
-    } else if (!/[A-Z]/.test(formData.password)) {
-      newErrors.password = 'Password must contain at least one uppercase letter';
-    } else if (!/[a-z]/.test(formData.password)) {
-      newErrors.password = 'Password must contain at least one lowercase letter';
-    } else if (!/\d/.test(formData.password)) {
-      newErrors.password = 'Password must contain at least one number';
-    } else if (!/[!@#$%^&*]/.test(formData.password)) {
-      newErrors.password = 'Password must contain at least one special character (!@#$%^&*)';
-    }
-
-    if (formData.password !== formData.confirmPassword) {
-      newErrors.confirmPassword = 'Passwords do not match';
-    }
-
-    if (!formData.agreeTerms || !formData.agreePrivacy) {
-      setError('You must agree to the Terms of Service and Privacy Policy');
-      setErrors(newErrors);
-      return false;
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value,
-    }));
-
-    if (errors[name as keyof ValidationErrors]) {
-      setErrors(prev => ({ ...prev, [name]: undefined }));
-    }
-    setError('');
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-    setErrors({});
-
-    if (!validateForm()) {
-      return;
-    }
-
-    setLoading(true);
-
+  // Check if account already exists
+  const checkAccountExists = useCallback(async (value: string, type: InputMode) => {
+    if (!value || value.length < 3) return false;
+    
     try {
-      const requestBody = {
-        username: formData.username.trim(),
-        email: formData.email.trim().toLowerCase(),
-        password: formData.password,
-        referralCode: formData.referralCode.trim() || undefined,
-      };
-
-      const response = await fetch('/api/auth/register', {
+      const response = await fetch('/api/auth/check-account', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify({ 
+          emailOrPhone: value,
+          type: type === 'phone' ? 'phone' : 'email'
+        }),
       });
+      
+      const data = await response.json();
+      
+      if (response.ok && data.exists) {
+        // Account exists - redirect to login
+        router.push(`/login?emailOrPhone=${encodeURIComponent(value)}`);
+        return true;
+      }
+      
+      return false;
+    } catch (err) {
+      return false;
+    }
+  }, [router]);
 
-      const data: AuthResponse = await response.json();
-
+  // Handle identity submission
+  const handleIdentitySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    
+    if (!identity.trim()) {
+      setError('Please enter your email or phone number');
+      return;
+    }
+    
+    setCheckingAccount(true);
+    
+    // Check if account already exists
+    const exists = await checkAccountExists(identity, identityType);
+    if (exists) {
+      setCheckingAccount(false);
+      return;
+    }
+    
+    setCheckingAccount(false);
+    
+    // Send OTP
+    setLoading(true);
+    try {
+      const response = await fetch('/api/auth/send-register-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          emailOrPhone: identity,
+          type: identityType === 'phone' ? 'phone' : 'email'
+        }),
+      });
+      
+      const data = await response.json();
+      
       if (!response.ok) {
-        const msg = data.error?.message || 'Registration failed';
-        if (msg.toLowerCase().includes('email')) {
-          setErrors(prev => ({ ...prev, email: msg }));
-        } else if (msg.toLowerCase().includes('username')) {
-          setErrors(prev => ({ ...prev, username: msg }));
-        } else {
-          setError(msg);
-        }
+        setError(data.error?.message || 'Failed to send verification code');
         return;
       }
-
-      if (!data.success || !data.data) {
-        throw new Error('Invalid response from server');
-      }
-
-      const accessToken = data.data.accessToken || data.data.access_token;
-      const refreshToken = data.data.refreshToken || data.data.refresh_token;
-      const expiresAt = data.data.expiresIn || data.data.expires_at;
-      const user = data.data.user;
-
-      if (accessToken) {
-        localStorage.setItem('tigerex_token', accessToken);
-      }
-      if (refreshToken) {
-        localStorage.setItem('tigerex_refresh_token', refreshToken);
-      }
-      if (expiresAt !== undefined) {
-        localStorage.setItem('tigerex_token_expires', String(expiresAt));
-      }
-      if (user) {
-        localStorage.setItem('tigerex_user', JSON.stringify(user));
-      }
-
-      setSuccess('Account created successfully! Redirecting...');
-      setTimeout(() => {
-        router.push('/dashboard');
-      }, 800);
-    } catch (err: any) {
-      setError(err.message || 'Registration failed. Please try again.');
+      
+      setStep('otp');
+      startOtpTimer();
+      setSuccess('Verification code sent!');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError('Network error. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
+  // Handle OTP verification
+  const handleOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (otp.length !== 6) {
+      setError('Please enter the 6-digit code');
+      return;
+    }
+    
+    setLoading(true);
+    setError('');
+    
+    try {
+      const response = await fetch('/api/auth/verify-register-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          emailOrPhone: identity,
+          code: otp,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        setError(data.error?.message || 'Invalid verification code');
+        return;
+      }
+      
+      setStep('password');
+    } catch (err) {
+      setError('Verification failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle resend OTP
+  const handleResendOtp = async () => {
+    if (otpTimer > 0) return;
+    
+    setLoading(true);
+    try {
+      await fetch('/api/auth/send-register-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          emailOrPhone: identity,
+          type: identityType === 'phone' ? 'phone' : 'email'
+        }),
+      });
+      startOtpTimer();
+      setSuccess('Code resent successfully');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError('Failed to resend code');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle password submission
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    
+    // Validation
+    if (!password) {
+      setError('Please enter a password');
+      return;
+    }
+    
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+    
+    if (password !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+    
+    if (!agreeToTerms) {
+      setError('You must agree to the Terms of Service');
+      return;
+    }
+    
+    setLoading(true);
+    
+    try {
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          emailOrPhone: identity,
+          password,
+          referralCode: referralCode || undefined,
+          agreeToTerms,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        setError(data.error?.message || 'Registration failed');
+        return;
+      }
+      
+      setStep('success');
+      setTimeout(() => {
+        router.push('/dashboard');
+      }, 2000);
+    } catch (err) {
+      setError('Registration failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Start OTP timer
+  const startOtpTimer = () => {
+    setOtpTimer(60);
+    const interval = setInterval(() => {
+      setOtpTimer((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  // Social login handlers
+  const handleSocialLogin = (provider: string) => {
+    window.location.href = `/api/auth/social/${provider}?redirect=/dashboard`;
+  };
+
+  // MetaMask login
+  const handleMetaMaskLogin = async () => {
+    if (typeof window.ethereum === 'undefined') {
+      setError('Please install MetaMask to use this feature');
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      const accounts = await window.ethereum.request({ 
+        method: 'eth_requestAccounts' 
+      });
+      
+      const response = await fetch('/api/auth/metamask/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: accounts[0] }),
+      });
+      
+      if (!response.ok) {
+        const data = await response.json();
+        setError(data.error?.message || 'MetaMask registration failed');
+        return;
+      }
+      
+      router.push('/dashboard');
+    } catch (err) {
+      setError('MetaMask registration failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Check password strength
+  useEffect(() => {
+    const checkStrength = () => {
+      let score = 0;
+      if (password.length >= 8) score++;
+      if (/[A-Z]/.test(password)) score++;
+      if (/[a-z]/.test(password)) score++;
+      if (/[0-9]/.test(password)) score++;
+      if (/[!@#$%^&*(),.?":{}|<>]/.test(password)) score++;
+      
+      if (score <= 2) return 'weak';
+      if (score <= 4) return 'medium';
+      return 'strong';
+    };
+    
+    setPasswordStrength(checkStrength());
+  }, [password]);
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 py-12 px-4">
-      <div className="bg-gray-800/50 backdrop-blur-xl p-8 rounded-2xl shadow-2xl border border-gray-700/50 w-full max-w-lg">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-white">Create Account</h1>
-          <p className="text-gray-400 mt-2">Join TigerEx and start trading</p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-5">
-          {error && (
-            <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg text-sm">
-              <AlertCircle className="w-5 h-5 flex-shrink-0" />
-              {error}
-            </div>
-          )}
-
-          {success && (
-            <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/50 text-green-400 px-4 py-3 rounded-lg text-sm">
-              <CheckCircle className="w-5 h-5 flex-shrink-0" />
-              {success}
-            </div>
-          )}
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Username</label>
-            <input
-              type="text"
-              name="username"
-              value={formData.username}
-              onChange={handleChange}
-              className={`w-full px-4 py-3 bg-gray-900/50 border rounded-lg text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all ${errors.username ? 'border-red-500' : 'border-gray-600'}`}
-              placeholder="Choose a username"
-              autoComplete="username"
-              disabled={loading}
-            />
-            {errors.username && <p className="text-red-400 text-xs mt-1">{errors.username}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Email</label>
-            <input
-              type="email"
-              name="email"
-              value={formData.email}
-              onChange={handleChange}
-              className={`w-full px-4 py-3 bg-gray-900/50 border rounded-lg text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all ${errors.email ? 'border-red-500' : 'border-gray-600'}`}
-              placeholder="your@email.com"
-              autoComplete="email"
-              disabled={loading}
-            />
-            {errors.email && <p className="text-red-400 text-xs mt-1">{errors.email}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Password</label>
-            <div className="relative">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                name="password"
-                value={formData.password}
-                onChange={handleChange}
-                className={`w-full px-4 py-3 pr-12 bg-gray-900/50 border rounded-lg text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all ${errors.password ? 'border-red-500' : 'border-gray-600'}`}
-                placeholder="Create a strong password"
-                autoComplete="new-password"
-                disabled={loading}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white transition-colors"
-              >
-                {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-              </button>
-            </div>
-            {formData.password && (
-              <div className="mt-2">
-                <div className="flex gap-1 mb-1">
-                  {[1, 2, 3, 4, 5].map(level => (
-                    <div
-                      key={level}
-                      className={`h-1 flex-1 rounded-full transition-all ${level <= passwordStrength.score ? passwordStrength.color : 'bg-gray-700'}`}
-                    />
-                  ))}
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
+      {/* Header */}
+      <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center">
+              <Link href="/" className="flex items-center space-x-2">
+                <div className="w-10 h-10 bg-gradient-to-br from-orange-500 to-red-500 rounded-lg flex items-center justify-center">
+                  <span className="text-white font-bold text-xl">T</span>
                 </div>
-                <div className="flex justify-between items-center">
-                  <p className="text-xs text-gray-400">Strength: <span className={passwordStrength.color.replace('bg-', 'text-')}>{passwordStrength.label}</span></p>
+                <span className="text-2xl font-bold text-gray-900 dark:text-white">TigerEx</span>
+              </Link>
+            </div>
+            <div className="flex items-center space-x-4">
+              <ThemeToggle />
+              <Link 
+                href="/" 
+                className="flex items-center text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+              >
+                <ArrowLeft className="w-4 h-4 mr-1" />
+                Back to Home
+              </Link>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex items-center justify-center min-h-[calc(100vh-4rem)] py-12 px-4">
+        <div className="w-full max-w-md">
+          {/* Progress Steps */}
+          {step !== 'success' && (
+            <div className="mb-8">
+              <div className="flex items-center justify-center space-x-2">
+                <div className={`w-3 h-3 rounded-full ${step === 'identity' ? 'bg-blue-500' : 'bg-green-500'}`} />
+                <div className={`w-8 h-0.5 ${['otp', 'password', 'success'].includes(step) ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+                <div className={`w-3 h-3 rounded-full ${step === 'otp' ? 'bg-blue-500' : ['otp', 'password', 'success'].includes(step) ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+                <div className={`w-8 h-0.5 ${['password', 'success'].includes(step) ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+                <div className={`w-3 h-3 rounded-full ${step === 'password' ? 'bg-blue-500' : step === 'success' ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+              </div>
+            </div>
+          )}
+
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8">
+            {/* Step 1: Identity */}
+            {step === 'identity' && (
+              <form onSubmit={handleIdentitySubmit}>
+                <div className="text-center mb-8">
+                  <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
+                    Create Account
+                  </h1>
+                  <p className="text-gray-600 dark:text-gray-400">
+                    Enter your email or phone number to get started
+                  </p>
+                </div>
+
+                <div className="space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Email or Phone Number
+                    </label>
+                    <SmartInput
+                      value={identity}
+                      onChange={(value, type) => {
+                        setIdentity(value);
+                        setIdentityType(type);
+                      }}
+                      onCountryChange={setSelectedCountry}
+                      selectedCountry={selectedCountry}
+                      placeholder="Enter email or phone number"
+                      autoFocus
+                    />
+                    {checkingAccount && (
+                      <div className="flex items-center mt-2 text-sm text-blue-500">
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Checking account...
+                      </div>
+                    )}
+                  </div>
+
+                  {error && (
+                    <div className="flex items-center p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                      <AlertCircle className="w-5 h-5 text-red-500 mr-2" />
+                      <span className="text-sm text-red-600 dark:text-red-400">{error}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={checkingAccount || !identity.trim()}
+                    className="w-full flex items-center justify-center px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-lg hover:from-orange-600 hover:to-red-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {checkingAccount ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <>
+                        Continue
+                        <ArrowRight className="w-5 h-5 ml-2" />
+                      </>
+                    )}
+                  </button>
+
+                  <div className="relative">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-gray-300 dark:border-gray-600" />
+                    </div>
+                    <div className="relative flex justify-center text-sm">
+                      <span className="px-2 bg-white dark:bg-gray-800 text-gray-500">or continue with</span>
+                    </div>
+                  </div>
+
+                  {/* Social Login Buttons */}
+                  <div className="grid grid-cols-4 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleSocialLogin('google')}
+                      className="flex items-center justify-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <Chrome className="w-5 h-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSocialLogin('apple')}
+                      className="flex items-center justify-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <Apple className="w-5 h-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowSocialDropdown(!showSocialDropdown)}
+                      className="flex items-center justify-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors relative"
+                    >
+                      <Send className="w-5 h-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleMetaMaskLogin}
+                      className="flex items-center justify-center p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <Wallet className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {showSocialDropdown && (
+                    <div className="absolute mt-1 w-48 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg z-10">
+                      {['telegram', 'twitter', 'discord', 'facebook'].map((provider) => (
+                        <button
+                          key={provider}
+                          type="button"
+                          onClick={() => {
+                            handleSocialLogin(provider);
+                            setShowSocialDropdown(false);
+                          }}
+                          className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 capitalize first:rounded-t-lg last:rounded-b-lg"
+                        >
+                          {provider}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <p className="text-center text-sm text-gray-600 dark:text-gray-400">
+                    Already have an account?{' '}
+                    <Link href="/login" className="text-orange-500 hover:text-orange-600 font-medium">
+                      Sign in
+                    </Link>
+                  </p>
+                </div>
+              </form>
+            )}
+
+            {/* Step 2: OTP Verification */}
+            {step === 'otp' && (
+              <form onSubmit={handleOtpSubmit}>
+                <div className="text-center mb-8">
+                  <div className="w-16 h-16 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                    {identityType === 'email' ? (
+                      <Mail className="w-8 h-8 text-blue-500" />
+                    ) : (
+                      <Phone className="w-8 h-8 text-blue-500" />
+                    )}
+                  </div>
+                  <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+                    Verify Your {identityType === 'email' ? 'Email' : 'Phone'}
+                  </h1>
+                  <p className="text-gray-600 dark:text-gray-400">
+                    We sent a 6-digit code to
+                  </p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 font-medium">
+                    {identity}
+                  </p>
+                </div>
+
+                <div className="space-y-6">
+                  <OtpInput
+                    value={otp}
+                    onChange={setOtp}
+                    error={error}
+                  />
+
+                  {error && (
+                    <div className="flex items-center p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                      <AlertCircle className="w-5 h-5 text-red-500 mr-2" />
+                      <span className="text-sm text-red-600 dark:text-red-400">{error}</span>
+                    </div>
+                  )}
+
+                  {success && (
+                    <div className="flex items-center p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                      <CheckCircle className="w-5 h-5 text-green-500 mr-2" />
+                      <span className="text-sm text-green-600 dark:text-green-400">{success}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={loading || otp.length !== 6}
+                    className="w-full flex items-center justify-center px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-lg hover:from-orange-600 hover:to-red-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loading ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      'Verify'
+                    )}
+                  </button>
+
+                  <div className="text-center">
+                    {otpTimer > 0 ? (
+                      <p className="text-sm text-gray-500">
+                        Resend code in {otpTimer}s
+                      </p>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleResendOtp}
+                        className="text-sm text-orange-500 hover:text-orange-600"
+                      >
+                        Resend code
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setStep('identity')}
+                    className="w-full flex items-center justify-center px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                  >
+                    <ArrowLeft className="w-4 h-4 mr-1" />
+                    Back
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Step 3: Password */}
+            {step === 'password' && (
+              <form onSubmit={handlePasswordSubmit}>
+                <div className="text-center mb-8">
+                  <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <CheckCircle className="w-8 h-8 text-green-500" />
+                  </div>
+                  <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+                    Set Your Password
+                  </h1>
+                  <p className="text-gray-600 dark:text-gray-400">
+                    Create a strong password to secure your account
+                  </p>
+                </div>
+
+                <div className="space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Password
+                    </label>
+                    <PasswordInput
+                      value={password}
+                      onChange={setPassword}
+                      placeholder="Create a password"
+                      showStrength
+                      autoFocus
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Confirm Password
+                    </label>
+                    <PasswordInput
+                      value={confirmPassword}
+                      onChange={setConfirmPassword}
+                      placeholder="Confirm your password"
+                    />
+                    {confirmPassword && password !== confirmPassword && (
+                      <p className="mt-1 text-sm text-red-500">Passwords do not match</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Referral Code <span className="text-gray-400">(Optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={referralCode}
+                      onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
+                      placeholder="Enter referral code"
+                      className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    />
+                  </div>
+
+                  <div className="flex items-start">
+                    <input
+                      type="checkbox"
+                      checked={agreeToTerms}
+                      onChange={(e) => setAgreeToTerms(e.target.checked)}
+                      className="w-4 h-4 mt-1 text-orange-500 border-gray-300 rounded focus:ring-orange-500"
+                    />
+                    <span className="ml-2 text-sm text-gray-600 dark:text-gray-400">
+                      I agree to the{' '}
+                      <Link href="/terms" className="text-orange-500 hover:text-orange-600">Terms of Service</Link>
+                      {' '}and{' '}
+                      <Link href="/privacy" className="text-orange-500 hover:text-orange-600">Privacy Policy</Link>
+                    </span>
+                  </div>
+
+                  {error && (
+                    <div className="flex items-center p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                      <AlertCircle className="w-5 h-5 text-red-500 mr-2" />
+                      <span className="text-sm text-red-600 dark:text-red-400">{error}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={loading || !password || !agreeToTerms}
+                    className="w-full flex items-center justify-center px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-lg hover:from-orange-600 hover:to-red-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loading ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <>
+                        Create Account
+                        <CheckCircle className="w-5 h-5 ml-2" />
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setStep('otp')}
+                    className="w-full flex items-center justify-center px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                  >
+                    <ArrowLeft className="w-4 h-4 mr-1" />
+                    Back
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Step 4: Success */}
+            {step === 'success' && (
+              <div className="text-center py-8">
+                <div className="w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <CheckCircle className="w-10 h-10 text-green-500" />
+                </div>
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+                  Account Created!
+                </h1>
+                <p className="text-gray-600 dark:text-gray-400">
+                  Welcome to TigerEx! Redirecting to your dashboard...
+                </p>
+                <div className="mt-6 flex justify-center">
+                  <Loader2 className="w-8 h-8 text-orange-500 animate-spin" />
                 </div>
               </div>
             )}
-            {errors.password && <p className="text-red-400 text-xs mt-1">{errors.password}</p>}
           </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Confirm Password</label>
-            <input
-              type="password"
-              name="confirmPassword"
-              value={formData.confirmPassword}
-              onChange={handleChange}
-              className={`w-full px-4 py-3 bg-gray-900/50 border rounded-lg text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all ${errors.confirmPassword ? 'border-red-500' : 'border-gray-600'}`}
-              placeholder="Confirm your password"
-              autoComplete="new-password"
-              disabled={loading}
-            />
-            {errors.confirmPassword && <p className="text-red-400 text-xs mt-1">{errors.confirmPassword}</p>}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Referral Code (Optional)</label>
-            <input
-              type="text"
-              name="referralCode"
-              value={formData.referralCode}
-              onChange={handleChange}
-              className="w-full px-4 py-3 bg-gray-900/50 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
-              placeholder="Enter referral code"
-              disabled={loading}
-            />
-          </div>
-
-          <div className="space-y-3">
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                name="agreeTerms"
-                checked={formData.agreeTerms}
-                onChange={handleChange}
-                className="mt-1 w-4 h-4 rounded border-gray-600 bg-gray-900 text-purple-500 focus:ring-purple-500"
-                disabled={loading}
-              />
-              <span className="text-sm text-gray-400">
-                I agree to the{' '}
-                <Link href="/terms" className="text-purple-400 hover:text-purple-300">Terms of Service</Link>
-              </span>
-            </label>
-
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                name="agreePrivacy"
-                checked={formData.agreePrivacy}
-                onChange={handleChange}
-                className="mt-1 w-4 h-4 rounded border-gray-600 bg-gray-900 text-purple-500 focus:ring-purple-500"
-                disabled={loading}
-              />
-              <span className="text-sm text-gray-400">
-                I agree to the{' '}
-                <Link href="/privacy" className="text-purple-400 hover:text-purple-300">Privacy Policy</Link>
-              </span>
-            </label>
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-3 px-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold rounded-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Creating account...
-              </>
-            ) : (
-              'Create Account'
-            )}
-          </button>
-
-          <div className="bg-gray-900/50 rounded-lg p-4">
-            <div className="flex items-center gap-2 text-sm text-gray-400 mb-2">
-              <Info className="w-4 h-4" />
-              <span className="font-medium">Password Requirements</span>
-            </div>
-            <ul className="text-xs text-gray-500 space-y-1">
-              <li className={formData.password.length >= 8 ? 'text-green-400' : ''}>• At least 8 characters</li>
-              <li className={/[A-Z]/.test(formData.password) ? 'text-green-400' : ''}>• One uppercase letter (A-Z)</li>
-              <li className={/[a-z]/.test(formData.password) ? 'text-green-400' : ''}>• One lowercase letter (a-z)</li>
-              <li className={/\d/.test(formData.password) ? 'text-green-400' : ''}>• One number (0-9)</li>
-              <li className={/[!@#$%^&*]/.test(formData.password) ? 'text-green-400' : ''}>• One special character (!@#$%^&*)</li>
-            </ul>
-          </div>
-        </form>
-
-        <p className="text-center text-gray-400 mt-6">
-          Already have an account?{' '}
-          <Link href="/login" className="text-purple-400 hover:text-purple-300 font-medium">
-            Sign In
-          </Link>
-        </p>
-      </div>
+        </div>
+      </main>
     </div>
   );
 }
