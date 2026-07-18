@@ -879,3 +879,42 @@ CREATE TRIGGER update_p2p_offers_updated_at BEFORE UPDATE ON p2p_offers
 
 CREATE TRIGGER update_p2p_trades_updated_at BEFORE UPDATE ON p2p_trades
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================================
+// DEPOSITS & WITHDRAWALS
+-- ============================================================================
+
+-- Deposits
+CREATE TABLE deposits (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    currency VARCHAR(20) NOT NULL,
+    network VARCHAR(50),
+    amount DECIMAL(20, 8) NOT NULL,
+    txid VARCHAR(255) UNIQUE,
+    address VARCHAR(255) NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'failed', 'cancelled')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_deposits_user_id ON deposits(user_id);
+CREATE INDEX idx_deposits_txid ON deposits(txid);
+
+-- Withdrawals
+CREATE TABLE withdrawals (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    currency VARCHAR(20) NOT NULL,
+    network VARCHAR(50),
+    amount DECIMAL(20, 8) NOT NULL,
+    fee DECIMAL(20, 8) DEFAULT 0,
+    address VARCHAR(255) NOT NULL,
+    txid VARCHAR(255) UNIQUE,
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_withdrawals_user_id ON withdrawals(user_id);
+CREATE INDEX idx_withdrawals_txid ON withdrawals(txid);

@@ -721,6 +721,94 @@ app.get("/api/v1/kyc/status", authenticateRequest, async (req, res) => {
 // WALLET ROUTES
 // ============================================================================
 
+// Generate new deposit address
+app.post("/api/v1/wallet/address", authenticateRequest, async (req, res) => {
+  try {
+    const { currency, network } = req.body;
+
+    if (!currency || !network) {
+      return res.status(400).json({ success: false, error: "Missing currency or network" });
+    }
+
+    // Placeholder for actual blockchain address generation
+    // In a real application, this would interact with a blockchain node or a third-party wallet service
+    const newAddress = uuidv4(); // Generate a UUID as a placeholder address
+
+    // Save the generated address to the user's wallet or a dedicated address table
+    // For simplicity, we'll just return it for now.
+    // In a real system, you'd associate this address with the user and currency/network
+
+    res.json({ success: true, data: { currency, network, address: newAddress } });
+  } catch (error) {
+    console.error("Generate address error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// Initiate a deposit
+app.post("/api/v1/wallet/deposit", authenticateRequest, async (req, res) => {
+  try {
+    const { currency, network, amount, txid, address } = req.body;
+
+    if (!currency || !network || !amount || !txid || !address) {
+      return res.status(400).json({ success: false, error: "Missing required deposit fields" });
+    }
+
+    // In a real system, you would verify the transaction on the blockchain
+    // and ensure the address belongs to the user.
+
+    const depositId = uuidv4();
+    await pool.query(
+      `INSERT INTO deposits (id, user_id, currency, network, amount, txid, address, status, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', NOW())`,
+      [depositId, req.userId, currency, network, amount, txid, address]
+    );
+
+    res.json({ success: true, message: "Deposit initiated successfully. Awaiting confirmation." });
+  } catch (error) {
+    console.error("Deposit error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// Initiate a withdrawal
+app.post("/api/v1/wallet/withdrawal", authenticateRequest, async (req, res) => {
+  try {
+    const { currency, network, amount, address } = req.body;
+
+    if (!currency || !network || !amount || !address) {
+      return res.status(400).json({ success: false, error: "Missing required withdrawal fields" });
+    }
+
+    // Check user's available balance
+    const wallet = (await pool.query(
+      "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
+      [req.userId, currency]
+    )).rows[0];
+
+    if (!wallet || wallet.balance < amount) {
+      return res.status(400).json({ success: false, error: "Insufficient balance" });
+    }
+
+    // Deduct from balance and create withdrawal record
+    const withdrawalId = uuidv4();
+    await pool.query(
+      `UPDATE wallets SET balance = balance - $1, updated_at = NOW() WHERE id = $2`,
+      [amount, wallet.id]
+    );
+    await pool.query(
+      `INSERT INTO withdrawals (id, user_id, currency, network, amount, address, status, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())`,
+      [withdrawalId, req.userId, currency, network, amount, address]
+    );
+
+    res.json({ success: true, message: "Withdrawal initiated successfully. Awaiting processing." });
+  } catch (error) {
+    console.error("Withdrawal error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
 // Get all wallets
 app.get("/api/v1/wallet/balance", authenticateRequest, async (req, res) => {
   try {
