@@ -18,7 +18,7 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const http = require('http');
 const { Server } = require('socket.io');
-const Database = require('better-sqlite3');
+const { Pool } = require('pg');
 const path = require('path');
 
 // ============================================================================
@@ -35,15 +35,20 @@ const io = new Server(server, {
 });
 
 // Database
-const dbPath = process.env.DB_PATH || path.join(__dirname, 'tigerex-v2.db');
-let db;
-try {
-  db = new Database(dbPath);
-  console.log('✅ Database connected:', dbPath);
-} catch (err) {
-  console.log('⚠️  Using in-memory database');
-  db = new Database(':memory:');
-}
+const pool = new Pool({
+  user: process.env.DB_USER || 'tigerex',
+  host: process.env.DB_HOST || 'localhost',
+  database: process.env.DB_NAME || 'tigerex',
+  password: process.env.DB_PASSWORD || 'tigerex',
+  port: process.env.DB_PORT || 5432,
+});
+
+pool.on('error', (err, client) => {
+  console.error('Unexpected error on idle client', err);
+  process.exit(-1);
+});
+
+console.log('✅ PostgreSQL Database pool initialized');
 
 // ============================================================================
 // CONSTANTS & CONFIG
@@ -145,7 +150,7 @@ const TRADING_PAIRS = [
 ];
 
 // Initialize all tables
-initializeDatabase();
+// initializeDatabase(); // Now handled by migration script
 
 // ============================================================================
 // MIDDLEWARE
@@ -171,162 +176,18 @@ app.use('/api/', limiter);
 // DATABASE INITIALIZATION
 // ============================================================================
 
-function initializeDatabase() {
-  // Users table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      username TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      kyc_level INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'active',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      email_verified INTEGER DEFAULT 0,
-      phone_verified INTEGER DEFAULT 0,
-      two_fa_enabled INTEGER DEFAULT 0,
-      two_fa_secret TEXT,
-      country TEXT,
-      referral_code TEXT,
-      referred_by TEXT
-    )
-  `);
-
-  // Wallets table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS wallets (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      currency TEXT NOT NULL,
-      balance REAL DEFAULT 0,
-      locked REAL DEFAULT 0,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id),
-      UNIQUE(user_id, currency)
-    )
-  `);
-
-  // Markets table - 100+ pairs
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS markets (
-      symbol TEXT PRIMARY KEY,
-      base_asset TEXT NOT NULL,
-      quote_asset TEXT NOT NULL,
-      status TEXT DEFAULT 'trading',
-      min_price REAL DEFAULT 0.00000001,
-      max_price REAL,
-      tick_size REAL DEFAULT 0.00000001,
-      min_quantity REAL DEFAULT 0.00000001,
-      max_quantity REAL,
-      step_size REAL DEFAULT 0.00000001,
-      maker_fee REAL DEFAULT 0.001,
-      taker_fee REAL DEFAULT 0.001
-    )
-  `);
-
-  // Orders table - real order book
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS orders (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      symbol TEXT NOT NULL,
-      side TEXT NOT NULL,
-      type TEXT NOT NULL,
-      price REAL,
-      quantity REAL,
-      filled_quantity REAL DEFAULT 0,
-      status TEXT DEFAULT 'new',
-      time_in_force TEXT DEFAULT 'GTC',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )
-  `);
-
-  // Trades table - real order matches
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS trades (
-      id TEXT PRIMARY KEY,
-      symbol TEXT NOT NULL,
-      maker_id TEXT NOT NULL,
-      taker_id TEXT NOT NULL,
-      maker_order_id TEXT NOT NULL,
-      taker_order_id TEXT NOT NULL,
-      side TEXT NOT NULL,
-      price REAL NOT NULL,
-      quantity REAL NOT NULL,
-      fee REAL DEFAULT 0,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (maker_id) REFERENCES users(id),
-      FOREIGN KEY (taker_id) REFERENCES users(id)
-    )
-  `);
-
-  // Transactions table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS transactions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      type TEXT NOT NULL,
-      currency TEXT NOT NULL,
-      amount REAL NOT NULL,
-      status TEXT DEFAULT 'pending',
-      tx_hash TEXT,
-      address TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )
-  `);
-
-  // API Keys table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS api_keys (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      key TEXT UNIQUE NOT NULL,
-      secret TEXT NOT NULL,
-      permissions TEXT DEFAULT 'read',
-      enabled INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )
-  `);
-
-  // Sessions table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      token TEXT UNIQUE NOT NULL,
-      expires_at TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )
-  `);
-
-  // Insert all 100+ trading pairs
-  const insertMarket = db.prepare(`
-    INSERT OR IGNORE INTO markets (symbol, base_asset, quote_asset, status, maker_fee, taker_fee)
-    VALUES (?, ?, ?, 'trading', 0.001, 0.001)
-  `);
-
-  TRADING_PAIRS.forEach(pair => {
-    insertMarket.run(pair.symbol, pair.base, pair.quote);
-  });
-
-  // Create indexes
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_orders_symbol ON orders(symbol)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_wallets_user ON wallets(user_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_maker ON trades(maker_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_taker ON trades(taker_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)`);
-
-  console.log(`✅ Database initialized with ${TRADING_PAIRS.length} trading pairs`);
+async function initializeDatabase() {
+  try {
+    const client = await pool.connect();
+    // Run migration script
+    const migrate = require("./db/migrate.js");
+    await migrate();
+    client.release();
+    console.log("✅ Database initialized with PostgreSQL");
+  } catch (error) {
+    console.error("❌ Database initialization failed:", error);
+    process.exit(1);
+  }
 }
 
 // ============================================================================
@@ -372,7 +233,7 @@ function getBasePriceForSymbol(symbol) {
 }
 
 // Real order matching engine - Production grade
-function matchOrders(symbol, side, price, quantity, userId, orderId) {
+async function matchOrders(symbol, side, price, quantity, userId, orderId) {
   try {
     const oppositeSide = side === 'buy' ? 'sell' : 'buy';
     const market = TRADING_PAIRS.find(p => p.symbol === symbol);
@@ -383,19 +244,30 @@ function matchOrders(symbol, side, price, quantity, userId, orderId) {
     let totalCost = 0;
 
     // Find best matching orders (price priority, then time)
-    const priceFilter = side === 'buy' ? 'AND price <= ?' : 'AND price >= ?';
     const orderSort = side === 'buy' ? 'price ASC' : 'price DESC';
 
-    const matchingOrders = db.prepare(`
+    let query = `
       SELECT * FROM orders
-      WHERE symbol = ? 
-      AND side = ?
+      WHERE symbol = $1
+      AND side = $2
       AND status IN ('new', 'partially_filled')
-      AND user_id != ?
-      ${priceFilter}
+      AND user_id != $3
+    `;
+    const queryParams = [symbol, oppositeSide, userId];
+
+    if (side === 'buy') {
+      query += ' AND price <= $4';
+    } else {
+      query += ' AND price >= $4';
+    }
+    queryParams.push(price);
+
+    query += `
       ORDER BY ${orderSort}, created_at ASC
       LIMIT 100
-    `).all(symbol, oppositeSide, userId, price);
+    `;
+
+    const matchingOrders = (await pool.query(query, queryParams)).rows;
 
     for (const matchOrder of matchingOrders) {
       if (remainingQuantity <= 0) break;
@@ -411,54 +283,60 @@ function matchOrders(symbol, side, price, quantity, userId, orderId) {
 
       // Record trade
       const tradeId = uuidv4();
-      db.prepare(`
-        INSERT INTO trades (id, symbol, maker_id, taker_id, maker_order_id, taker_order_id, side, price, quantity, fee, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-      `).run(
-        tradeId,
-        symbol,
-        matchOrder.user_id,
-        userId,
-        matchOrder.id,
-        orderId,
-        side,
-        fillPrice,
-        fillQty,
-        takerFee
+      await pool.query(
+        `INSERT INTO trades (id, symbol, maker_id, taker_id, maker_order_id, taker_order_id, side, price, quantity, fee, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
+        [
+          tradeId,
+          symbol,
+          matchOrder.user_id,
+          userId,
+          matchOrder.id,
+          orderId,
+          side,
+          fillPrice,
+          fillQty,
+          takerFee,
+        ]
       );
 
       // Update maker order status
       const makerNewFilledQty = matchOrder.filled_quantity + fillQty;
       const makerStatus = makerNewFilledQty >= matchOrder.quantity ? 'filled' : 'partially_filled';
-      db.prepare(`
-        UPDATE orders SET filled_quantity = ?, status = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `).run(makerNewFilledQty, makerStatus, matchOrder.id);
+      await pool.query(
+        `UPDATE orders SET filled_quantity = $1, status = $2, updated_at = NOW()
+        WHERE id = $3`,
+        [makerNewFilledQty, makerStatus, matchOrder.id]
+      );
 
       // Handle maker wallet: if they were selling, credit them; if buying, credit them base
       if (oppositeSide === 'sell') {
         // Maker was selling, credit with quote
-        const quoteWallet = db.prepare(
-          'SELECT * FROM wallets WHERE user_id = ? AND currency = ? LIMIT 1'
-        ).get(matchOrder.user_id, market.quote);
+          const quoteWallet = (await pool.query(
+            'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+            [matchOrder.user_id, market.quote_asset]
+          )).rows[0];
 
         if (quoteWallet) {
-          db.prepare(`
-            UPDATE wallets SET balance = balance + ?, locked = locked - ?, updated_at = datetime('now')
-            WHERE id = ?
-          `).run(fillCost - makerFee, fillQty, quoteWallet.id);
+          await pool.query(
+            `UPDATE wallets SET balance = balance + $1, locked = locked - $2, updated_at = NOW()
+            WHERE id = $3`,
+            [fillCost - makerFee, fillQty, quoteWallet.id]
+          );
         }
       } else {
         // Maker was buying, credit with base
-        const baseWallet = db.prepare(
-          'SELECT * FROM wallets WHERE user_id = ? AND currency = ? LIMIT 1'
-        ).get(matchOrder.user_id, market.base);
+          const baseWallet = (await pool.query(
+            'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+            [matchOrder.user_id, market.base_asset]
+          )).rows[0];
 
         if (baseWallet) {
-          db.prepare(`
-            UPDATE wallets SET balance = balance + ?, locked = locked - ?, updated_at = datetime('now')
-            WHERE id = ?
-          `).run(fillQty, fillCost, baseWallet.id);
+          await pool.query(
+            `UPDATE wallets SET balance = balance + $1, locked = locked - $2, updated_at = NOW()
+            WHERE id = $3`,
+            [fillQty, fillCost, baseWallet.id]
+          );
         }
       }
 
@@ -469,40 +347,46 @@ function matchOrders(symbol, side, price, quantity, userId, orderId) {
 
     // Update taker order
     const takerStatus = remainingQuantity <= 0 ? 'filled' : (totalFilledQuantity > 0 ? 'partially_filled' : 'new');
-    db.prepare(`
-      UPDATE orders SET filled_quantity = ?, status = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(totalFilledQuantity, takerStatus, orderId);
+    await pool.query(
+      `UPDATE orders SET filled_quantity = $1, status = $2, updated_at = NOW()
+      WHERE id = $3`,
+      [totalFilledQuantity, takerStatus, orderId]
+    );
 
     // Update taker wallet for filled
     if (side === 'buy' && totalFilledQuantity > 0) {
       // Buyer gets base, release locked quote
-      const baseWallet = db.prepare(
-        'SELECT * FROM wallets WHERE user_id = ? AND currency = ? LIMIT 1'
-      ).get(userId, market.base);
+      const baseWallet = (await pool.query(
+        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        [userId, market.base_asset]
+      )).rows[0];
 
       if (baseWallet) {
-        db.prepare(`
-          UPDATE wallets SET balance = balance + ?, updated_at = datetime('now')
-          WHERE id = ?
-        `).run(totalFilledQuantity, baseWallet.id);
+        await pool.query(
+          `UPDATE wallets SET balance = balance + $1, updated_at = NOW()
+          WHERE id = $2`,
+          [totalFilledQuantity, baseWallet.id]
+        );
       } else {
         // Create wallet if needed
-        db.prepare(`
-          INSERT INTO wallets (id, user_id, currency, balance) VALUES (?, ?, ?, ?)
-        `).run(uuidv4(), userId, market.base, totalFilledQuantity);
+        await pool.query(
+          `INSERT INTO wallets (id, user_id, currency, balance) VALUES ($1, $2, $3, $4)`,
+          [uuidv4(), userId, market.base, totalFilledQuantity]
+        );
       }
     } else if (side === 'sell' && totalFilledQuantity > 0) {
       // Seller gets quote, locked base already deducted
-      const quoteWallet = db.prepare(
-        'SELECT * FROM wallets WHERE user_id = ? AND currency = ? LIMIT 1'
-      ).get(userId, market.quote);
+      const quoteWallet = (await pool.query(
+        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        [userId, market.quote_asset]
+      )).rows[0];
 
       if (quoteWallet) {
-        db.prepare(`
-          UPDATE wallets SET balance = balance + ?, updated_at = datetime('now')
-          WHERE id = ?
-        `).run(totalCost - (totalCost * 0.001), quoteWallet.id);
+        await pool.query(
+          `UPDATE wallets SET balance = balance + $1, updated_at = NOW()
+          WHERE id = $2`,
+          [totalCost - (totalCost * 0.001), quoteWallet.id]
+        );
       }
     }
 
@@ -510,26 +394,30 @@ function matchOrders(symbol, side, price, quantity, userId, orderId) {
     const unfilledQty = remainingQuantity;
     if (unfilledQty > 0) {
       if (side === 'buy') {
-        const quoteWallet = db.prepare(
-          'SELECT * FROM wallets WHERE user_id = ? AND currency = ? LIMIT 1'
-        ).get(userId, market.quote);
+        const quoteWallet = (await pool.query(
+          'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+          [userId, market.quote_asset]
+        )).rows[0];
 
         if (quoteWallet) {
-          db.prepare(`
-            UPDATE wallets SET locked = locked - ?, updated_at = datetime('now')
-            WHERE id = ?
-          `).run(unfilledQty * price, quoteWallet.id);
+          await pool.query(
+            `UPDATE wallets SET locked = locked - $1, updated_at = NOW()
+            WHERE id = $2`,
+            [unfilledQty * price, quoteWallet.id]
+          );
         }
       } else {
-        const baseWallet = db.prepare(
-          'SELECT * FROM wallets WHERE user_id = ? AND currency = ? LIMIT 1'
-        ).get(userId, market.base);
+        const baseWallet = (await pool.query(
+          'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+          [userId, market.base_asset]
+        )).rows[0];
 
         if (baseWallet) {
-          db.prepare(`
-            UPDATE wallets SET locked = locked - ?, updated_at = datetime('now')
-            WHERE id = ?
-          `).run(unfilledQty, baseWallet.id);
+          await pool.query(
+            `UPDATE wallets SET locked = locked - $1, updated_at = NOW()
+            WHERE id = $2`,
+            [unfilledQty, baseWallet.id]
+          );
         }
       }
     }
@@ -558,7 +446,7 @@ app.post('/api/v1/auth/register', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
     }
 
-    const existingUser = db.prepare('SELECT id FROM users WHERE email = ? OR username = ?').get(email, username);
+    const existingUser = (await pool.query('SELECT id FROM users WHERE email = $1 OR username = $2', [email, username])).rows[0];
     if (existingUser) {
       return res.status(400).json({ success: false, error: 'User already exists' });
     }
@@ -567,29 +455,30 @@ app.post('/api/v1/auth/register', async (req, res) => {
     const userId = uuidv4();
     const userReferralCode = uuidv4().substring(0, 8).toUpperCase();
 
-    db.prepare(`
-      INSERT INTO users (id, email, username, password_hash, referral_code, referred_by)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(userId, email, username, passwordHash, userReferralCode, referralCode || null);
+        await pool.query(
+      `INSERT INTO users (id, email, username, password_hash, referral_code, referred_by) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [userId, email, username, passwordHash, userReferralCode, referralCode || null]
+    );
 
     // Create default wallets with test USDT
     const currencies = ['USDT', 'BTC', 'ETH', 'BNB', 'SOL', 'TGR'];
-    const insertWallet = db.prepare(`
-      INSERT INTO wallets (id, user_id, currency, balance) VALUES (?, ?, ?, ?)
-    `);
-
-    currencies.forEach(currency => {
+    for (const currency of currencies) {
       const initialBalance = currency === 'USDT' ? 10000 : 0;
-      insertWallet.run(uuidv4(), userId, currency, initialBalance);
-    });
+      await pool.query(
+        `INSERT INTO wallets (id, user_id, currency, balance) VALUES ($1, $2, $3, $4)`,
+        [uuidv4(), userId, currency, initialBalance]
+      );
+    }
 
     const accessToken = generateToken(userId, 'access');
     const refreshToken = generateToken(userId, 'refresh');
 
     const sessionId = uuidv4();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-    db.prepare('INSERT INTO sessions (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)')
-      .run(sessionId, userId, refreshToken, expiresAt);
+        await pool.query(
+      `INSERT INTO sessions (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)`,
+      [sessionId, userId, refreshToken, expiresAt]
+    );
 
     res.status(201).json({
       success: true,
@@ -615,7 +504,7 @@ app.post('/api/v1/auth/login', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Missing email or password' });
     }
 
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    const user = (await pool.query('SELECT * FROM users WHERE email = $1', [email])).rows[0];
     if (!user) {
       return res.status(401).json({ success: false, error: 'Invalid credentials' });
     }
@@ -630,8 +519,10 @@ app.post('/api/v1/auth/login', async (req, res) => {
 
     const sessionId = uuidv4();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-    db.prepare('INSERT INTO sessions (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)')
-      .run(sessionId, user.id, refreshToken, expiresAt);
+    await pool.query(
+      'INSERT INTO sessions (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)',
+      [sessionId, user.id, refreshToken, expiresAt]
+    );
 
     res.json({
       success: true,
@@ -656,9 +547,9 @@ app.post('/api/v1/auth/login', async (req, res) => {
 });
 
 // Get current user
-app.get('/api/v1/auth/me', authenticateRequest, (req, res) => {
+app.get('/api/v1/auth/me', authenticateRequest, async (req, res) => {
   try {
-    const user = db.prepare('SELECT id, email, username, kyc_level, country, created_at FROM users WHERE id = ?').get(req.userId);
+    const user = (await pool.query('SELECT id, email, username, kyc_level, country, created_at FROM users WHERE id = $1', [req.userId])).rows[0];
     if (!user) {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
@@ -685,11 +576,12 @@ app.get('/api/v1/auth/me', authenticateRequest, (req, res) => {
 // ============================================================================
 
 // Get all wallets
-app.get('/api/v1/wallet/balance', authenticateRequest, (req, res) => {
+app.get(\'/api/v1/wallet/balance\', authenticateRequest, async (req, res) => {
   try {
-    const wallets = db.prepare(`
-      SELECT currency, balance, locked FROM wallets WHERE user_id = ?
-    `).all(req.userId);
+    const wallets = (await pool.query(
+      `SELECT currency, balance, locked FROM wallets WHERE user_id = $1`,
+      [req.userId]
+    )).rows;
 
     res.json({
       success: true,
@@ -713,9 +605,9 @@ app.get('/api/v1/wallet/balance', authenticateRequest, (req, res) => {
 // ============================================================================
 
 // Get all markets
-app.get('/api/v1/exchange/info', (req, res) => {
+app.get(\'/api/v1/exchange/info\', async (req, res) => {
   try {
-    const markets = db.prepare('SELECT * FROM markets LIMIT 150').all();
+    const markets = (await pool.query(\'SELECT * FROM markets LIMIT 150\')).rows;
     res.json({ success: true, data: markets });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -723,7 +615,7 @@ app.get('/api/v1/exchange/info', (req, res) => {
 });
 
 // Get ticker with real data
-app.get('/api/v1/ticker/24hr', (req, res) => {
+app.get(\"/api/v1/ticker/24hr\", async (req, res) => {
   try {
     const { symbol } = req.query;
 
@@ -734,9 +626,10 @@ app.get('/api/v1/ticker/24hr', (req, res) => {
       }
 
       // Get recent trades for real price data
-      const recentTrades = db.prepare(`
-        SELECT price, quantity FROM trades WHERE symbol = ? ORDER BY created_at DESC LIMIT 100
-      `).all(symbol.toUpperCase());
+      const recentTrades = (await pool.query(
+        `SELECT price, quantity FROM trades WHERE symbol = $1 ORDER BY created_at DESC LIMIT 100`,
+        [symbol.toUpperCase()]
+      )).rows;
 
       let lastPrice = pair.basePrice;
       let volume = 0;
@@ -789,7 +682,7 @@ app.get('/api/v1/ticker/24hr', (req, res) => {
 });
 
 // Place order with REAL matching
-app.post('/api/v1/order', authenticateRequest, (req, res) => {
+app.post(\"/api/v1/order\", authenticateRequest, async (req, res) => {
   try {
     const { symbol, side, type, quantity, price } = req.body;
 
@@ -802,7 +695,7 @@ app.post('/api/v1/order', authenticateRequest, (req, res) => {
     }
 
     // Find market info
-    const market = db.prepare('SELECT * FROM markets WHERE symbol = ?').get(symbol.toUpperCase());
+    const market = (await pool.query('SELECT * FROM markets WHERE symbol = $1', [symbol.toUpperCase()])).rows[0];
     if (!market) {
       return res.status(400).json({ success: false, error: 'Trading pair not supported' });
     }
@@ -821,9 +714,10 @@ app.post('/api/v1/order', authenticateRequest, (req, res) => {
 
     // Get quote currency wallet
     const quoteCurrency = market.quote_asset;
-    const wallet = db.prepare(`
-      SELECT * FROM wallets WHERE user_id = ? AND currency = ?
-    `).get(req.userId, quoteCurrency);
+    const wallet = (await pool.query(
+      `SELECT * FROM wallets WHERE user_id = $1 AND currency = $2`,
+      [req.userId, quoteCurrency]
+    )).rows[0];
 
     if (!wallet) {
       return res.status(400).json({ success: false, error: `${quoteCurrency} wallet not found` });
@@ -838,47 +732,53 @@ app.post('/api/v1/order', authenticateRequest, (req, res) => {
 
     // For sell orders, verify base currency balance
     if (side === 'sell') {
-      const baseWallet = db.prepare(`
-        SELECT * FROM wallets WHERE user_id = ? AND currency = ?
-      `).get(req.userId, market.base_asset);
+      const baseWallet = (await pool.query(
+        `SELECT * FROM wallets WHERE user_id = $1 AND currency = $2`,
+        [req.userId, market.base_asset]
+      )).rows[0];
 
       if (!baseWallet || baseWallet.balance < parseFloat(quantity)) {
         return res.status(400).json({ success: false, error: `Insufficient ${market.base_asset}` });
       }
 
       // Lock base currency
-      db.prepare(`
-        UPDATE wallets SET locked = locked + ?, updated_at = datetime('now') WHERE id = ?
-      `).run(parseFloat(quantity), baseWallet.id);
+      await pool.query(
+        `UPDATE wallets SET locked = locked + $1, updated_at = NOW() WHERE id = $2`,
+        [parseFloat(quantity), baseWallet.id]
+      );
 
       // Deduct from balance
-      db.prepare(`
-        UPDATE wallets SET balance = balance - ?, updated_at = datetime('now') WHERE id = ?
-      `).run(parseFloat(quantity), baseWallet.id);
+      await pool.query(
+        `UPDATE wallets SET balance = balance - $1, updated_at = NOW() WHERE id = $2`,
+        [parseFloat(quantity), baseWallet.id]
+      );
     } else {
       // Lock quote currency for buy
-      db.prepare(`
-        UPDATE wallets SET locked = locked + ?, updated_at = datetime('now') WHERE id = ?
-      `).run(orderValue, wallet.id);
+      await pool.query(
+        `UPDATE wallets SET locked = locked + $1, updated_at = NOW() WHERE id = $2`,
+        [orderValue, wallet.id]
+      );
 
       // Deduct from balance
-      db.prepare(`
-        UPDATE wallets SET balance = balance - ?, updated_at = datetime('now') WHERE id = ?
-      `).run(orderValue, wallet.id);
+      await pool.query(
+        `UPDATE wallets SET balance = balance - $1, updated_at = NOW() WHERE id = $2`,
+        [orderValue, wallet.id]
+      );
     }
 
     // Create order
     const orderId = uuidv4();
-    db.prepare(`
-      INSERT INTO orders (id, user_id, symbol, side, type, price, quantity, status, time_in_force)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'new', 'GTC')
-    `).run(orderId, req.userId, symbol.toUpperCase(), side, type, orderPrice, parseFloat(quantity));
+    await pool.query(
+      `INSERT INTO orders (id, user_id, symbol, side, type, price, quantity, filled_quantity, status, time_in_force, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new', 'GTC', NOW(), NOW())`,
+      [orderId, req.userId, symbol.toUpperCase(), side, type, orderPrice, parseFloat(quantity), 0]
+    );
 
     // Match orders (real order matching engine)
-    const matchResult = matchOrders(symbol.toUpperCase(), side, orderPrice, parseFloat(quantity), req.userId, orderId);
+    const matchResult = await matchOrders(symbol.toUpperCase(), side, orderPrice, parseFloat(quantity), req.userId, orderId);
 
     // Get updated order
-    const updatedOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
+    const updatedOrder = (await pool.query('SELECT * FROM orders WHERE id = $1', [orderId])).rows[0];
 
     res.json({
       success: true,
@@ -904,16 +804,16 @@ app.post('/api/v1/order', authenticateRequest, (req, res) => {
 app.get('/api/v1/openOrders', authenticateRequest, (req, res) => {
   try {
     const { symbol } = req.query;
-    let query = 'SELECT * FROM orders WHERE user_id = ? AND status IN ("new", "partially_filled")';
+    let query = 'SELECT id, symbol, side, type, price, quantity, filled_quantity, status, created_at FROM orders WHERE user_id = $1 AND status IN (\'new\', \'partially_filled\')';
     const params = [req.userId];
 
     if (symbol) {
-      query += ' AND symbol = ?';
+      query += ' AND symbol = $2';
       params.push(symbol.toUpperCase());
     }
 
     query += ' ORDER BY created_at DESC LIMIT 100';
-    const orders = db.prepare(query).all(...params);
+    const orders = (await pool.query(query, params)).rows;
 
     res.json({
       success: true,
@@ -1008,4 +908,4 @@ server.listen(PORT_FINAL, () => {
   `);
 });
 
-module.exports = { app, server, db };
+module.exports = { app, server, io, pool };
