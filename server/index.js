@@ -654,6 +654,70 @@ app.get("/api/v1/auth/me", authenticateRequest, async (req, res) => {
   }
 });
 
+// KYC ROUTES
+// ============================================================================
+
+// Submit KYC information
+app.post("/api/v1/kyc/submit", authenticateRequest, async (req, res) => {
+  try {
+    const { firstName, lastName, dateOfBirth, nationality, countryOfResidence, addressLine1, addressLine2, city, state, postalCode, country, documentType, documentNumber, documentExpiry, documentFrontUrl, documentBackUrl, selfieUrl } = req.body;
+
+    // Basic validation
+    if (!firstName || !lastName || !dateOfBirth || !nationality || !countryOfResidence || !addressLine1 || !city || !postalCode || !country || !documentType || !documentNumber || !documentFrontUrl || !selfieUrl) {
+      return res.status(400).json({ success: false, error: "Missing required KYC fields" });
+    }
+
+    // Check if a KYC record already exists for the user
+    const existingKyc = (await pool.query("SELECT id FROM kyc_records WHERE user_id = $1", [req.userId])).rows[0];
+
+    if (existingKyc) {
+      // Update existing KYC record
+      await pool.query(
+        `UPDATE kyc_records SET
+          first_name = $1, last_name = $2, date_of_birth = $3, nationality = $4, country_of_residence = $5,
+          address_line1 = $6, address_line2 = $7, city = $8, state = $9, postal_code = $10, country = $11,
+          document_type = $12, document_number = $13, document_expiry = $14, document_front_url = $15, document_back_url = $16, selfie_url = $17,
+          status = 'pending', updated_at = NOW()
+        WHERE user_id = $18`,
+        [firstName, lastName, dateOfBirth, nationality, countryOfResidence, addressLine1, addressLine2, city, state, postalCode, country, documentType, documentNumber, documentExpiry, documentFrontUrl, documentBackUrl, selfieUrl, req.userId]
+      );
+    } else {
+      // Insert new KYC record
+      await pool.query(
+        `INSERT INTO kyc_records (
+          user_id, first_name, last_name, date_of_birth, nationality, country_of_residence,
+          address_line1, address_line2, city, state, postal_code, country,
+          document_type, document_number, document_expiry, document_front_url, document_back_url, selfie_url,
+          status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'pending')`,
+        [req.userId, firstName, lastName, dateOfBirth, nationality, countryOfResidence, addressLine1, addressLine2, city, state, postalCode, country, documentType, documentNumber, documentExpiry, documentFrontUrl, documentBackUrl, selfieUrl]
+      );
+    }
+
+    // Update user's kyc_status to pending
+    await pool.query("UPDATE users SET kyc_status = 'pending', updated_at = NOW() WHERE id = $1", [req.userId]);
+
+    res.json({ success: true, message: "KYC information submitted successfully for review" });
+  } catch (error) {
+    console.error("KYC submission error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// Get KYC status
+app.get("/api/v1/kyc/status", authenticateRequest, async (req, res) => {
+  try {
+    const kycRecord = (await pool.query("SELECT kyc_level, status FROM kyc_records WHERE user_id = $1", [req.userId])).rows[0];
+    if (!kycRecord) {
+      return res.json({ success: true, data: { kycLevel: 0, kycStatus: "none" } });
+    }
+    res.json({ success: true, data: { kycLevel: kycRecord.kyc_level, kycStatus: kycRecord.status } });
+  } catch (error) {
+    console.error("Get KYC status error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
 // WALLET ROUTES
 // ============================================================================
 
