@@ -104,6 +104,12 @@ type EmailVerification struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+type PasswordResetToken struct {
+	UserID    string    `json:"user_id"`
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 func GenerateSecureToken(length int) (string, error) {
 	bytes := make([]byte, length)
 	if _, err := rand.Read(bytes); err != nil {
@@ -232,6 +238,17 @@ func (u *User) DisableTwoFactor() {
 func (u *User) VerifyTwoFactorCode(code string) bool {
 	return ValidateTOTPCode(u.TwoFactorSecret, code)
 }
+
+// GeneratePasswordResetToken generates a secure token for password reset.
+func GeneratePasswordResetToken() (string, error) {
+	return GenerateSecureToken(32)
+}
+
+// GenerateEmailVerificationCode generates a secure code for email verification.
+func GenerateEmailVerificationCode() (string, error) {
+	return GenerateSecureToken(16)
+}
+
 
 func (u *User) CanLogin() error {
 	if u.Status == "locked" {
