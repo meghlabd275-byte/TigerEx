@@ -6,21 +6,21 @@
  * - Production-ready
  */
 
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const compression = require('compression');
-const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
-const http = require('http');
-const { Server } = require('socket.io');
-const { Pool } = require('pg');
-const Redis = require('ioredis');
-const path = require('path');
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const helmet = require("helmet");
+const compression = require("compression");
+const morgan = require("morgan");
+const rateLimit = require("express-rate-limit");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const { v4: uuidv4 } = require("uuid");
+const http = require("http");
+const { Server } = require("socket.io");
+const { Pool } = require("pg");
+const Redis = require("ioredis");
+const path = require("path");
 
 // ============================================================================
 // INITIALIZATION
@@ -30,133 +30,133 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-    methods: ['GET', 'POST']
+    origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+    methods: ["GET", "POST"]
   }
 });
 
 // Database
 const pool = new Pool({
-  user: process.env.DB_USER || 'tigerex',
-  host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'tigerex',
-  password: process.env.DB_PASSWORD || 'tigerex',
+  user: process.env.DB_USER || "tigerex",
+  host: process.env.DB_HOST || "localhost",
+  database: process.env.DB_NAME || "tigerex",
+  password: process.env.DB_PASSWORD || "tigerex",
   port: process.env.DB_PORT || 5432,
 });
 
-pool.on('error', (err, client) => {
-  console.error('Unexpected error on idle client', err);
+pool.on("error", (err, client) => {
+  console.error("Unexpected error on idle client", err);
   process.exit(-1);
 });
 
-console.log('✅ PostgreSQL Database pool initialized');
+console.log("✅ PostgreSQL Database pool initialized");
 
 const redis = new Redis({
   port: process.env.REDIS_PORT || 6379,
-  host: process.env.REDIS_HOST || 'localhost',
+  host: process.env.REDIS_HOST || "localhost",
   password: process.env.REDIS_PASSWORD || undefined,
 });
 
-redis.on('connect', () => console.log('✅ Redis client connected'));
-redis.on('error', (err) => console.error('❌ Redis client error', err));
+redis.on("connect", () => console.log("✅ Redis client connected"));
+redis.on("error", (err) => console.error("❌ Redis client error", err));
 
 // ============================================================================
 // CONSTANTS & CONFIG
 // ============================================================================
 
-const JWT_SECRET = process.env.JWT_SECRET || 'tigerex-secret-key-change-in-production';
-const REFRESH_SECRET = process.env.REFRESH_SECRET || 'tigerex-refresh-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET || "tigerex-secret-key-change-in-production";
+const REFRESH_SECRET = process.env.REFRESH_SECRET || "tigerex-refresh-secret-key";
 const PORT = process.env.PORT || 8080;
 
 // All supported trading pairs (100+) - DEFINED BEFORE DB INIT
 const TRADING_PAIRS = [
   // Top 30 Cryptocurrencies
-  { symbol: 'BTCUSDT', base: 'BTC', quote: 'USDT', basePrice: 65000 },
-  { symbol: 'ETHUSDT', base: 'ETH', quote: 'USDT', basePrice: 3500 },
-  { symbol: 'BNBUSDT', base: 'BNB', quote: 'USDT', basePrice: 600 },
-  { symbol: 'SOLUSDT', base: 'SOL', quote: 'USDT', basePrice: 150 },
-  { symbol: 'XRPUSDT', base: 'XRP', quote: 'USDT', basePrice: 2.5 },
-  { symbol: 'ADAUSDT', base: 'ADA', quote: 'USDT', basePrice: 0.98 },
-  { symbol: 'DOGEUSDT', base: 'DOGE', quote: 'USDT', basePrice: 0.33 },
-  { symbol: 'POLKAUSDT', base: 'POLKA', quote: 'USDT', basePrice: 8.5 },
-  { symbol: 'LINKUSDT', base: 'LINK', quote: 'USDT', basePrice: 28 },
-  { symbol: 'LITUSDT', base: 'LIT', quote: 'USDT', basePrice: 4.2 },
-  { symbol: 'MATICUSDT', base: 'MATIC', quote: 'USDT', basePrice: 1.2 },
-  { symbol: 'AVAXUSDT', base: 'AVAX', quote: 'USDT', basePrice: 45 },
-  { symbol: 'ATOMUSDT', base: 'ATOM', quote: 'USDT', basePrice: 13 },
-  { symbol: 'LTCUSDT', base: 'LTC', quote: 'USDT', basePrice: 120 },
-  { symbol: 'UNIUSDT', base: 'UNI', quote: 'USDT', basePrice: 9.8 },
-  { symbol: 'ARBUSDT', base: 'ARB', quote: 'USDT', basePrice: 1.5 },
-  { symbol: 'OPTIMUSDT', base: 'OPTIM', quote: 'USDT', basePrice: 2.8 },
-  { symbol: 'FTMUSDT', base: 'FTM', quote: 'USDT', basePrice: 0.85 },
-  { symbol: 'OPERAUSDT', base: 'OPERA', quote: 'USDT', basePrice: 0.55 },
-  { symbol: 'SUIUSDT', base: 'SUI', quote: 'USDT', basePrice: 2.2 },
-  { symbol: 'APOUSDT', base: 'APO', quote: 'USDT', basePrice: 12 },
-  { symbol: 'APTUSDT', base: 'APT', quote: 'USDT', basePrice: 9.5 },
-  { symbol: 'IGUSDT', base: 'IG', quote: 'USDT', basePrice: 0.008 },
-  { symbol: 'INJUSDT', base: 'INJ', quote: 'USDT', basePrice: 28 },
-  { symbol: 'SEIAUSDT', base: 'SEIA', quote: 'USDT', basePrice: 0.35 },
-  { symbol: 'GRAUSDT', base: 'GRA', quote: 'USDT', basePrice: 0.025 },
-  { symbol: 'TIAUSDT', base: 'TIA', quote: 'USDT', basePrice: 10 },
-  { symbol: 'RUNUSDT', base: 'RUN', quote: 'USDT', basePrice: 12 },
-  { symbol: 'SCUSDT', base: 'SC', quote: 'USDT', basePrice: 0.015 },
-  { symbol: 'TGRUSDT', base: 'TGR', quote: 'USDT', basePrice: 1.5 },
-  { symbol: 'ZAUSDT', base: 'ZA', quote: 'USDT', basePrice: 0.45 },
-  { symbol: 'DYDXUSDT', base: 'DYDX', quote: 'USDT', basePrice: 3.2 },
-  { symbol: 'ZKUSDT', base: 'ZK', quote: 'USDT', basePrice: 0.85 },
-  { symbol: 'POPULUSDT', base: 'POPUL', quote: 'USDT', basePrice: 0.0012 },
-  { symbol: 'ORCAUSDT', base: 'ORCA', quote: 'USDT', basePrice: 1.8 },
-  { symbol: 'PYTHUSDT', base: 'PYTH', quote: 'USDT', basePrice: 0.35 },
-  { symbol: 'JITOUSDT', base: 'JITO', quote: 'USDT', basePrice: 2.5 },
-  { symbol: 'JUPUSDT', base: 'JUP', quote: 'USDT', basePrice: 1.1 },
-  { symbol: 'MANGOUSDT', base: 'MANGO', quote: 'USDT', basePrice: 0.055 },
-  { symbol: 'WUSDT', base: 'W', quote: 'USDT', basePrice: 0.75 },
-  { symbol: 'USDCUSDT', base: 'USDC', quote: 'USDT', basePrice: 1.0 },
-  { symbol: 'USDUUSDT', base: 'USD', quote: 'USDT', basePrice: 1.0 },
-  { symbol: 'WBTCUSDT', base: 'WBTC', quote: 'USDT', basePrice: 65000 },
-  { symbol: 'WETHUSDT', base: 'WETH', quote: 'USDT', basePrice: 3500 },
-  { symbol: 'STETHUSDT', base: 'STETH', quote: 'USDT', basePrice: 3480 },
-  { symbol: 'RETHUSDT', base: 'RETH', quote: 'USDT', basePrice: 4200 },
-  { symbol: 'CBETHUSDT', base: 'CBETH', quote: 'USDT', basePrice: 3650 },
-  { symbol: 'ETHBTC', base: 'ETH', quote: 'BTC', basePrice: 0.054 },
-  { symbol: 'SOLBTC', base: 'SOL', quote: 'BTC', basePrice: 0.0023 },
-  { symbol: 'BNBBTC', base: 'BNB', quote: 'BTC', basePrice: 0.0092 },
-  { symbol: 'ETHBNB', base: 'ETH', quote: 'BNB', basePrice: 5.8 },
-  { symbol: 'SOLBNB', base: 'SOL', quote: 'BNB', basePrice: 0.25 },
-  { symbol: 'DAIUSDT', base: 'DAI', quote: 'USDT', basePrice: 1.0 },
-  { symbol: 'TUSDUSDT', base: 'TUSD', quote: 'USDT', basePrice: 1.0 },
-  { symbol: 'BUSDUSDT', base: 'BUSD', quote: 'USDT', basePrice: 1.0 },
-  { symbol: 'FEIUSDT', base: 'FEI', quote: 'USDT', basePrice: 0.98 },
-  { symbol: 'USDPUSDT', base: 'USDP', quote: 'USDT', basePrice: 0.99 },
-  { symbol: 'PENUSDT', base: 'PEN', quote: 'USDT', basePrice: 0.0008 },
-  { symbol: 'WIREUSDT', base: 'WIRE', quote: 'USDT', basePrice: 0.18 },
-  { symbol: 'VIRTUSDT', base: 'VIRT', quote: 'USDT', basePrice: 0.55 },
-  { symbol: 'PHANTUSDT', base: 'PHANT', quote: 'USDT', basePrice: 0.65 },
-  { symbol: 'AAVEUSDT', base: 'AAVE', quote: 'USDT', basePrice: 450 },
-  { symbol: 'CRVUSDT', base: 'CRV', quote: 'USDT', basePrice: 1.2 },
-  { symbol: 'CONVUSDT', base: 'CONV', quote: 'USDT', basePrice: 3.5 },
-  { symbol: 'LENDOUSDT', base: 'LENDO', quote: 'USDT', basePrice: 0.85 },
-  { symbol: 'SNXUSDT', base: 'SNX', quote: 'USDT', basePrice: 8.2 },
-  { symbol: 'SANDUUSDT', base: 'SANDU', quote: 'USDT', basePrice: 0.72 },
-  { symbol: 'ENJUSDT', base: 'ENJ', quote: 'USDT', basePrice: 0.65 },
-  { symbol: 'AXSUSDT', base: 'AXS', quote: 'USDT', basePrice: 8.5 },
-  { symbol: 'GMSUSDT', base: 'GMS', quote: 'USDT', basePrice: 22 },
-  { symbol: 'MANAUSDT', base: 'MANA', quote: 'USDT', basePrice: 0.85 },
-  { symbol: 'LOOKSUSDT', base: 'LOOKS', quote: 'USDT', basePrice: 0.085 },
-  { symbol: 'BLURUSUSDT', base: 'BLUR', quote: 'USDT', basePrice: 0.55 },
-  { symbol: 'MAGUSDT', base: 'MAG', quote: 'USDT', basePrice: 0.015 },
-  { symbol: 'MOVEUSDT', base: 'MOVE', quote: 'USDT', basePrice: 0.045 },
-  { symbol: 'MVUSDT', base: 'MV', quote: 'USDT', basePrice: 1.5 },
-  { symbol: 'WARSUSDT', base: 'WARS', quote: 'USDT', basePrice: 0.25 },
-  { symbol: 'FLRUSDT', base: 'FLR', quote: 'USDT', basePrice: 0.038 },
-  { symbol: 'ARKMUSDT', base: 'ARKM', quote: 'USDT', basePrice: 3.8 },
-  { symbol: 'BTCSTUSDT', base: 'BTCST', quote: 'USDT', basePrice: 0.12 },
-  { symbol: 'RENUSDT', base: 'REN', quote: 'USDT', basePrice: 0.28 },
-  { symbol: 'HERUSDT', base: 'HER', quote: 'USDT', basePrice: 0.00025 },
-  { symbol: 'NOSUSDT', base: 'NOS', quote: 'USDT', basePrice: 0.0002 },
-  { symbol: 'AGLDUSDT', base: 'AGLD', quote: 'USDT', basePrice: 0.55 },
-  { symbol: 'USTUSDT', base: 'UST', quote: 'USDT', basePrice: 0.001 },
-  { symbol: 'LUNCUSDT', base: 'LUNC', quote: 'USDT', basePrice: 0.00008 },
+  { symbol: "BTCUSDT", base: "BTC", quote: "USDT", basePrice: 65000 },
+  { symbol: "ETHUSDT", base: "ETH", quote: "USDT", basePrice: 3500 },
+  { symbol: "BNBUSDT", base: "BNB", quote: "USDT", basePrice: 600 },
+  { symbol: "SOLUSDT", base: "SOL", quote: "USDT", basePrice: 150 },
+  { symbol: "XRPUSDT", base: "XRP", quote: "USDT", basePrice: 2.5 },
+  { symbol: "ADAUSDT", base: "ADA", quote: "USDT", basePrice: 0.98 },
+  { symbol: "DOGEUSDT", base: "DOGE", quote: "USDT", basePrice: 0.33 },
+  { symbol: "POLKAUSDT", base: "POLKA", quote: "USDT", basePrice: 8.5 },
+  { symbol: "LINKUSDT", base: "LINK", quote: "USDT", basePrice: 28 },
+  { symbol: "LITUSDT", base: "LIT", quote: "USDT", basePrice: 4.2 },
+  { symbol: "MATICUSDT", base: "MATIC", quote: "USDT", basePrice: 1.2 },
+  { symbol: "AVAXUSDT", base: "AVAX", quote: "USDT", basePrice: 45 },
+  { symbol: "ATOMUSDT", base: "ATOM", quote: "USDT", basePrice: 13 },
+  { symbol: "LTCUSDT", base: "LTC", quote: "USDT", basePrice: 120 },
+  { symbol: "UNIUSDT", base: "UNI", quote: "USDT", basePrice: 9.8 },
+  { symbol: "ARBUSDT", base: "ARB", quote: "USDT", basePrice: 1.5 },
+  { symbol: "OPTIMUSDT", base: "OPTIM", quote: "USDT", basePrice: 2.8 },
+  { symbol: "FTMUSDT", base: "FTM", quote: "USDT", basePrice: 0.85 },
+  { symbol: "OPERAUSDT", base: "OPERA", quote: "USDT", basePrice: 0.55 },
+  { symbol: "SUIUSDT", base: "SUI", quote: "USDT", basePrice: 2.2 },
+  { symbol: "APOUSDT", base: "APO", quote: "USDT", basePrice: 12 },
+  { symbol: "APTUSDT", base: "APT", quote: "USDT", basePrice: 9.5 },
+  { symbol: "IGUSDT", base: "IG", quote: "USDT", basePrice: 0.008 },
+  { symbol: "INJUSDT", base: "INJ", quote: "USDT", basePrice: 28 },
+  { symbol: "SEIAUSDT", base: "SEIA", quote: "USDT", basePrice: 0.35 },
+  { symbol: "GRAUSDT", base: "GRA", quote: "USDT", basePrice: 0.025 },
+  { symbol: "TIAUSDT", base: "TIA", quote: "USDT", basePrice: 10 },
+  { symbol: "RUNUSDT", base: "RUN", quote: "USDT", basePrice: 12 },
+  { symbol: "SCUSDT", base: "SC", quote: "USDT", basePrice: 0.015 },
+  { symbol: "TGRUSDT", base: "TGR", quote: "USDT", basePrice: 1.5 },
+  { symbol: "ZAUSDT", base: "ZA", quote: "USDT", basePrice: 0.45 },
+  { symbol: "DYDXUSDT", base: "DYDX", quote: "USDT", basePrice: 3.2 },
+  { symbol: "ZKUSDT", base: "ZK", quote: "USDT", basePrice: 0.85 },
+  { symbol: "POPULUSDT", base: "POPUL", quote: "USDT", basePrice: 0.0012 },
+  { symbol: "ORCAUSDT", base: "ORCA", quote: "USDT", basePrice: 1.8 },
+  { symbol: "PYTHUSDT", base: "PYTH", quote: "USDT", basePrice: 0.35 },
+  { symbol: "JITOUSDT", base: "JITO", quote: "USDT", basePrice: 2.5 },
+  { symbol: "JUPUSDT", base: "JUP", quote: "USDT", basePrice: 1.1 },
+  { symbol: "MANGOUSDT", base: "MANGO", quote: "USDT", basePrice: 0.055 },
+  { symbol: "WUSDT", base: "W", quote: "USDT", basePrice: 0.75 },
+  { symbol: "USDCUSDT", base: "USDC", quote: "USDT", basePrice: 1.0 },
+  { symbol: "USDUUSDT", base: "USD", quote: "USDT", basePrice: 1.0 },
+  { symbol: "WBTCUSDT", base: "WBTC", quote: "USDT", basePrice: 65000 },
+  { symbol: "WETHUSDT", base: "WETH", quote: "USDT", basePrice: 3500 },
+  { symbol: "STETHUSDT", base: "STETH", quote: "USDT", basePrice: 3480 },
+  { symbol: "RETHUSDT", base: "RETH", quote: "USDT", basePrice: 4200 },
+  { symbol: "CBETHUSDT", base: "CBETH", quote: "USDT", basePrice: 3650 },
+  { symbol: "ETHBTC", base: "ETH", quote: "BTC", basePrice: 0.054 },
+  { symbol: "SOLBTC", base: "SOL", quote: "BTC", basePrice: 0.0023 },
+  { symbol: "BNBBTC", base: "BNB", quote: "BTC", basePrice: 0.0092 },
+  { symbol: "ETHBNB", base: "ETH", quote: "BNB", basePrice: 5.8 },
+  { symbol: "SOLBNB", base: "SOL", quote: "BNB", basePrice: 0.25 },
+  { symbol: "DAIUSDT", base: "DAI", quote: "USDT", basePrice: 1.0 },
+  { symbol: "TUSDUSDT", base: "TUSD", quote: "USDT", basePrice: 1.0 },
+  { symbol: "BUSDUSDT", base: "BUSD", quote: "USDT", basePrice: 1.0 },
+  { symbol: "FEIUSDT", base: "FEI", quote: "USDT", basePrice: 0.98 },
+  { symbol: "USDPUSDT", base: "USDP", quote: "USDT", basePrice: 0.99 },
+  { symbol: "PENUSDT", base: "PEN", quote: "USDT", basePrice: 0.0008 },
+  { symbol: "WIREUSDT", base: "WIRE", quote: "USDT", basePrice: 0.18 },
+  { symbol: "VIRTUSDT", base: "VIRT", quote: "USDT", basePrice: 0.55 },
+  { symbol: "PHANTUSDT", base: "PHANT", quote: "USDT", basePrice: 0.65 },
+  { symbol: "AAVEUSDT", base: "AAVE", quote: "USDT", basePrice: 450 },
+  { symbol: "CRVUSDT", base: "CRV", quote: "USDT", basePrice: 1.2 },
+  { symbol: "CONVUSDT", base: "CONV", quote: "USDT", basePrice: 3.5 },
+  { symbol: "LENDOUSDT", base: "LENDO", quote: "USDT", basePrice: 0.85 },
+  { symbol: "SNXUSDT", base: "SNX", quote: "USDT", basePrice: 8.2 },
+  { symbol: "SANDUUSDT", base: "SANDU", quote: "USDT", basePrice: 0.72 },
+  { symbol: "ENJUSDT", base: "ENJ", quote: "USDT", basePrice: 0.65 },
+  { symbol: "AXSUSDT", base: "AXS", quote: "USDT", basePrice: 8.5 },
+  { symbol: "GMSUSDT", base: "GMS", quote: "USDT", basePrice: 22 },
+  { symbol: "MANAUSDT", base: "MANA", quote: "USDT", basePrice: 0.85 },
+  { symbol: "LOOKSUSDT", base: "LOOKS", quote: "USDT", basePrice: 0.085 },
+  { symbol: "BLURUSUSDT", base: "BLUR", quote: "USDT", basePrice: 0.55 },
+  { symbol: "MAGUSDT", base: "MAG", quote: "USDT", basePrice: 0.015 },
+  { symbol: "MOVEUSDT", base: "MOVE", quote: "USDT", basePrice: 0.045 },
+  { symbol: "MVUSDT", base: "MV", quote: "USDT", basePrice: 1.5 },
+  { symbol: "WARSUSDT", base: "WARS", quote: "USDT", basePrice: 0.25 },
+  { symbol: "FLRUSDT", base: "FLR", quote: "USDT", basePrice: 0.038 },
+  { symbol: "ARKMUSDT", base: "ARKM", quote: "USDT", basePrice: 3.8 },
+  { symbol: "BTCSTUSDT", base: "BTCST", quote: "USDT", basePrice: 0.12 },
+  { symbol: "RENUSDT", base: "REN", quote: "USDT", basePrice: 0.28 },
+  { symbol: "HERUSDT", base: "HER", quote: "USDT", basePrice: 0.00025 },
+  { symbol: "NOSUSDT", base: "NOS", quote: "USDT", basePrice: 0.0002 },
+  { symbol: "AGLDUSDT", base: "AGLD", quote: "USDT", basePrice: 0.55 },
+  { symbol: "USTUSDT", base: "UST", quote: "USDT", basePrice: 0.001 },
+  { symbol: "LUNCUSDT", base: "LUNC", quote: "USDT", basePrice: 0.00008 },
 ];
 
 // Initialize all tables
@@ -168,17 +168,17 @@ const TRADING_PAIRS = [
 
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(compression());
-app.use(morgan('combined'));
-app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:3000', credentials: true }));
-app.use(express.json({ limit: '10mb' }));
+app.use(morgan("combined"));
+app.use(cors({ origin: process.env.CORS_ORIGIN || "http://localhost:3000", credentials: true }));
+app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 1000,
-  message: { success: false, error: 'Rate limit exceeded' }
+  message: { success: false, error: "Rate limit exceeded" }
 });
-app.use('/api/', limiter);
+app.use("/api/", limiter);
 
 
 
@@ -204,15 +204,15 @@ async function initializeDatabase() {
 // HELPER FUNCTIONS
 // ============================================================================
 
-function generateToken(userId, type = 'access') {
-  const secret = type === 'access' ? JWT_SECRET : REFRESH_SECRET;
-  const expiresIn = type === 'access' ? '24h' : '7d';
+function generateToken(userId, type = "access") {
+  const secret = type === "access" ? JWT_SECRET : REFRESH_SECRET;
+  const expiresIn = type === "access" ? "24h" : "7d";
   return jwt.sign({ userId, type }, secret, { expiresIn });
 }
 
-function verifyToken(token, type = 'access') {
+function verifyToken(token, type = "access") {
   try {
-    const secret = type === 'access' ? JWT_SECRET : REFRESH_SECRET;
+    const secret = type === "access" ? JWT_SECRET : REFRESH_SECRET;
     return jwt.verify(token, secret);
   } catch (err) {
     return null;
@@ -221,24 +221,24 @@ function verifyToken(token, type = 'access') {
 
 async function authenticateRequest(req, res, next) {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, error: 'No token provided' });
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ success: false, error: "No token provided" });
   }
 
-  const token = authHeader.split(' ')[1];
-  const decoded = verifyToken(token, 'access');
+  const token = authHeader.split(" ")[1];
+  const decoded = verifyToken(token, "access");
   if (!decoded) {
-    return res.status(401).json({ success: false, error: 'Invalid token' });
+    return res.status(401).json({ success: false, error: "Invalid token" });
   }
 
-  const sessionId = req.headers['x-session-id'];
+  const sessionId = req.headers["x-session-id"];
   if (!sessionId) {
-    return res.status(401).json({ success: false, error: 'Session ID not provided' });
+    return res.status(401).json({ success: false, error: "Session ID not provided" });
   }
 
   const cachedSession = await redis.get(`session:${decoded.userId}:${sessionId}`);
   if (!cachedSession) {
-    return res.status(401).json({ success: false, error: 'Invalid or expired session' });
+    return res.status(401).json({ success: false, error: "Invalid or expired session" });
   }
 
   req.userId = decoded.userId;
@@ -256,7 +256,7 @@ function getBasePriceForSymbol(symbol) {
 // Real order matching engine - Production grade
 async function matchOrders(symbol, side, price, quantity, userId, orderId) {
   try {
-    const oppositeSide = side === 'buy' ? 'sell' : 'buy';
+    const oppositeSide = side === "buy" ? "sell" : "buy";
     const market = TRADING_PAIRS.find(p => p.symbol === symbol);
     if (!market) return { filledQuantity: 0, filledValue: 0 };
 
@@ -265,21 +265,24 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
     let totalCost = 0;
 
     // Find best matching orders (price priority, then time)
-    const orderSort = side === 'buy' ? 'price ASC' : 'price DESC';
+    const orderSort = side === "buy" ? "price ASC" : "price DESC";
 
     let query = `
       SELECT * FROM orders
       WHERE symbol = $1
       AND side = $2
-      AND status IN ('new', 'partially_filled')
+      AND status IN (
+        'new',
+        'partially_filled'
+      )
       AND user_id != $3
     `;
     const queryParams = [symbol, oppositeSide, userId];
 
-    if (side === 'buy') {
-      query += ' AND price <= $4';
+    if (side === "buy") {
+      query += " AND price <= $4";
     } else {
-      query += ' AND price >= $4';
+      query += " AND price >= $4";
     }
     queryParams.push(price);
 
@@ -323,7 +326,7 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
 
       // Update maker order status
       const makerNewFilledQty = matchOrder.filled_quantity + fillQty;
-      const makerStatus = makerNewFilledQty >= matchOrder.quantity ? 'filled' : 'partially_filled';
+      const makerStatus = makerNewFilledQty >= matchOrder.quantity ? "filled" : "partially_filled";
       await pool.query(
         `UPDATE orders SET filled_quantity = $1, status = $2, updated_at = NOW()
         WHERE id = $3`,
@@ -331,10 +334,10 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
       );
 
       // Handle maker wallet: if they were selling, credit them; if buying, credit them base
-      if (oppositeSide === 'sell') {
+      if (oppositeSide === "sell") {
         // Maker was selling, credit with quote
           const quoteWallet = (await pool.query(
-            'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+            "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
             [matchOrder.user_id, market.quote_asset]
           )).rows[0];
 
@@ -348,7 +351,7 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
       } else {
         // Maker was buying, credit with base
           const baseWallet = (await pool.query(
-            'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+            "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
             [matchOrder.user_id, market.base_asset]
           )).rows[0];
 
@@ -367,7 +370,7 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
     }
 
     // Update taker order
-    const takerStatus = remainingQuantity <= 0 ? 'filled' : (totalFilledQuantity > 0 ? 'partially_filled' : 'new');
+    const takerStatus = remainingQuantity <= 0 ? "filled" : (totalFilledQuantity > 0 ? "partially_filled" : "new");
     await pool.query(
       `UPDATE orders SET filled_quantity = $1, status = $2, updated_at = NOW()
       WHERE id = $3`,
@@ -375,10 +378,10 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
     );
 
     // Update taker wallet for filled
-    if (side === 'buy' && totalFilledQuantity > 0) {
+    if (side === "buy" && totalFilledQuantity > 0) {
       // Buyer gets base, release locked quote
       const baseWallet = (await pool.query(
-        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
         [userId, market.base_asset]
       )).rows[0];
 
@@ -389,10 +392,10 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
           [totalFilledQuantity, baseWallet.id]
         );
       }
-    } else if (side === 'sell' && totalFilledQuantity > 0) {
+    } else if (side === "sell" && totalFilledQuantity > 0) {
       // Seller gets quote, locked base already deducted
       const quoteWallet = (await pool.query(
-        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
         [userId, market.quote_asset]
       )).rows[0];
 
@@ -408,9 +411,9 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
     // Release locked for unfilled
     const unfilledQty = remainingQuantity;
     if (unfilledQty > 0) {
-      if (side === 'buy') {
+      if (side === "buy") {
         const quoteWallet = (await pool.query(
-          'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+          "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
           [userId, market.quote_asset]
         )).rows[0];
 
@@ -423,7 +426,7 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
         }
       } else {
         const baseWallet = (await pool.query(
-          'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+          "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
           [userId, market.base_asset]
         )).rows[0];
 
@@ -439,7 +442,7 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
 
     return { filledQuantity: totalFilledQuantity, filledValue: totalCost };
   } catch (error) {
-    console.error('Order matching error:', error);
+    console.error("Order matching error:", error);
     return { filledQuantity: 0, filledValue: 0 };
   }
 }
@@ -449,26 +452,26 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
 // ============================================================================
 
 // Health check
-app.get('/api/v1/health', (req, res) => {
-  res.json({ success: true, message: 'Server is healthy' });
+app.get("/api/v1/health", (req, res) => {
+  res.json({ success: true, message: "Server is healthy" });
 });
 
 // User registration
-app.post('/api/v1/auth/register', async (req, res) => {
+app.post("/api/v1/auth/register", async (req, res) => {
   try {
     const { email, username, password, referralCode } = req.body;
 
     if (!email || !username || !password) {
-      return res.status(400).json({ success: false, error: 'Missing required fields' });
+      return res.status(400).json({ success: false, error: "Missing required fields" });
     }
 
     if (password.length < 8) {
-      return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
+      return res.status(400).json({ success: false, error: "Password must be at least 8 characters" });
     }
 
-    const existingUser = (await pool.query('SELECT id FROM users WHERE email = $1 OR username = $2', [email, username])).rows[0];
+    const existingUser = (await pool.query("SELECT id FROM users WHERE email = $1 OR username = $2", [email, username])).rows[0];
     if (existingUser) {
-      return res.status(400).json({ success: false, error: 'User already exists' });
+      return res.status(400).json({ success: false, error: "User already exists" });
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
@@ -481,17 +484,17 @@ app.post('/api/v1/auth/register', async (req, res) => {
     );
 
     // Create default wallets with test USDT
-    const currencies = ['USDT', 'BTC', 'ETH', 'BNB', 'SOL', 'TGR'];
+    const currencies = ["USDT", "BTC", "ETH", "BNB", "SOL", "TGR"];
     for (const currency of currencies) {
-      const initialBalance = currency === 'USDT' ? 10000 : 0;
+      const initialBalance = currency === "USDT" ? 10000 : 0;
       await pool.query(
         `INSERT INTO wallets (id, user_id, currency, balance) VALUES ($1, $2, $3, $4)`,
         [uuidv4(), userId, currency, initialBalance]
       );
     }
 
-    const accessToken = generateToken(userId, 'access');
-    const refreshToken = generateToken(userId, 'refresh');
+    const accessToken = generateToken(userId, "access");
+    const refreshToken = generateToken(userId, "refresh");
 
     // Create session
     const sessionId = uuidv4();
@@ -503,7 +506,7 @@ app.post('/api/v1/auth/register', async (req, res) => {
     );
 
     // Cache session in Redis
-    await redis.set(`session:${userId}:${sessionId}`, refreshToken, 'EX', 7 * 24 * 60 * 60);
+    await redis.set(`session:${userId}:${sessionId}`, refreshToken, "EX", 7 * 24 * 60 * 60);
 
     res.status(201).json({
       success: true,
@@ -516,32 +519,32 @@ app.post('/api/v1/auth/register', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Register error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    console.error("Register error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
 // Login
-app.post('/api/v1/auth/login', async (req, res) => {
+app.post("/api/v1/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ success: false, error: 'Missing email or password' });
+      return res.status(400).json({ success: false, error: "Missing email or password" });
     }
 
-    const user = (await pool.query('SELECT * FROM users WHERE email = $1', [email])).rows[0];
+    const user = (await pool.query("SELECT * FROM users WHERE email = $1", [email])).rows[0];
     if (!user) {
-      return res.status(401).json({ success: false, error: 'Invalid credentials' });
+      return res.status(401).json({ success: false, error: "Invalid credentials" });
     }
 
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
-      return res.status(401).json({ success: false, error: 'Invalid credentials' });
+      return res.status(401).json({ success: false, error: "Invalid credentials" });
     }
 
-    const accessToken = generateToken(user.id, 'access');
-    const refreshToken = generateToken(user.id, 'refresh');
+    const accessToken = generateToken(user.id, "access");
+    const refreshToken = generateToken(user.id, "refresh");
 
     const sessionId = uuidv4();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -552,7 +555,7 @@ app.post('/api/v1/auth/login', async (req, res) => {
     );
 
     // Cache session in Redis
-    await redis.set(`session:${user.id}:${sessionId}`, refreshToken, 'EX', 7 * 24 * 60 * 60);
+    await redis.set(`session:${user.id}:${sessionId}`, refreshToken, "EX", 7 * 24 * 60 * 60);
 
     res.json({
       success: true,
@@ -572,13 +575,13 @@ app.post('/api/v1/auth/login', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    console.error("Login error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
 // Logout
-app.post('/api/v1/auth/logout', authenticateRequest, async (req, res) => {
+app.post("/api/v1/auth/logout", authenticateRequest, async (req, res) => {
   try {
     const { userId, sessionId } = req;
 
@@ -599,16 +602,16 @@ app.post('/api/v1/auth/logout', authenticateRequest, async (req, res) => {
 });
 
 // Get current user
-app.get('/api/v1/auth/me', authenticateRequest, async (req, res) => {
+app.get("/api/v1/auth/me", authenticateRequest, async (req, res) => {
   try {
-    const user = (await pool.query('SELECT id, email, username, kyc_level, country, created_at FROM users WHERE id = $1', [req.userId])).rows[0];
+    const user = (await pool.query("SELECT id, email, username, kyc_level, country, created_at FROM users WHERE id = $1", [req.userId])).rows[0];
     if (!user) {
-      return res.status(404).json({ success: false, error: 'User not found' });
+      return res.status(404).json({ success: false, error: "User not found" });
     }
     res.json({ success: true, data: user });
   } catch (error) {
-    console.error('Auth me error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    console.error("Auth me error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
@@ -616,7 +619,7 @@ app.get('/api/v1/auth/me', authenticateRequest, async (req, res) => {
 // ============================================================================
 
 // Get all wallets
-app.get('/api/v1/wallet/balance', authenticateRequest, async (req, res) => {
+app.get("/api/v1/wallet/balance", authenticateRequest, async (req, res) => {
   try {
     const wallets = (await pool.query(
       `SELECT currency, balance, locked FROM wallets WHERE user_id = $1`,
@@ -624,8 +627,8 @@ app.get('/api/v1/wallet/balance', authenticateRequest, async (req, res) => {
     )).rows;
     res.json({ success: true, data: wallets });
   } catch (error) {
-    console.error('Wallet balance error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    console.error("Wallet balance error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
@@ -633,13 +636,13 @@ app.get('/api/v1/wallet/balance', authenticateRequest, async (req, res) => {
 // ============================================================================
 
 // Get all markets
-app.get('/api/v1/exchange/info', async (req, res) => {
+app.get("/api/v1/exchange/info", async (req, res) => {
   try {
-    const markets = (await pool.query('SELECT * FROM markets LIMIT 150')).rows;
+    const markets = (await pool.query("SELECT * FROM markets LIMIT 150")).rows;
     res.json({ success: true, data: markets });
   } catch (error) {
-    console.error('Exchange info error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    console.error("Exchange info error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
@@ -666,7 +669,7 @@ app.get("/api/v1/ticker/24hr", async (req, res) => {
       if (ticker) {
         res.json({ success: true, data: ticker });
       } else {
-        res.status(404).json({ success: false, error: 'Ticker not found' });
+        res.status(404).json({ success: false, error: "Ticker not found" });
       }
     } else {
       const tickers = (await pool.query(
@@ -684,8 +687,8 @@ app.get("/api/v1/ticker/24hr", async (req, res) => {
       res.json({ success: true, data: tickers });
     }
   } catch (error) {
-    console.error('Ticker 24hr error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    console.error("Ticker 24hr error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
@@ -695,19 +698,19 @@ app.post("/api/v1/order", authenticateRequest, async (req, res) => {
     const { symbol, side, type, quantity, price } = req.body;
 
     if (!symbol || !side || !type || !quantity) {
-      return res.status(400).json({ success: false, error: 'Missing required fields' });
+      return res.status(400).json({ success: false, error: "Missing required fields" });
     }
 
     const market = TRADING_PAIRS.find(p => p.symbol === symbol.toUpperCase());
     if (!market) {
-      return res.status(400).json({ success: false, error: 'Invalid trading pair' });
+      return res.status(400).json({ success: false, error: "Invalid trading pair" });
     }
 
     const orderPrice = parseFloat(price);
     const orderQuantity = parseFloat(quantity);
 
     if (isNaN(orderPrice) || isNaN(orderQuantity) || orderPrice <= 0 || orderQuantity <= 0) {
-      return res.status(400).json({ success: false, error: 'Invalid price or quantity' });
+      return res.status(400).json({ success: false, error: "Invalid price or quantity" });
     }
 
     // Check wallet balance and lock funds
@@ -715,14 +718,14 @@ app.post("/api/v1/order", authenticateRequest, async (req, res) => {
     let baseWallet;
     let orderValue = orderPrice * orderQuantity;
 
-    if (side === 'buy') {
+    if (side === "buy") {
       wallet = (await pool.query(
-        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
         [req.userId, market.quote_asset]
       )).rows[0];
 
       if (!wallet || wallet.balance < orderValue) {
-        return res.status(400).json({ success: false, error: 'Insufficient quote currency balance' });
+        return res.status(400).json({ success: false, error: "Insufficient quote currency balance" });
       }
 
       // Lock quote currency for buy
@@ -736,12 +739,12 @@ app.post("/api/v1/order", authenticateRequest, async (req, res) => {
       );
     } else {
       wallet = (await pool.query(
-        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
         [req.userId, market.base_asset]
       )).rows[0];
 
       if (!wallet || wallet.balance < orderQuantity) {
-        return res.status(400).json({ success: false, error: 'Insufficient base currency balance' });
+        return res.status(400).json({ success: false, error: "Insufficient base currency balance" });
       }
 
       // Lock base currency for sell
@@ -766,7 +769,7 @@ app.post("/api/v1/order", authenticateRequest, async (req, res) => {
     const matchResult = await matchOrders(symbol.toUpperCase(), side, orderPrice, parseFloat(quantity), req.userId, orderId);
 
     // Get updated order
-    const updatedOrder = (await pool.query('SELECT * FROM orders WHERE id = $1', [orderId])).rows[0];
+    const updatedOrder = (await pool.query("SELECT * FROM orders WHERE id = $1", [orderId])).rows[0];
 
     res.json({
       success: true,
@@ -784,24 +787,24 @@ app.post("/api/v1/order", authenticateRequest, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Order placement error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    console.error("Order placement error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
 // Get open orders
-app.get('/api/v1/openOrders', authenticateRequest, async (req, res) => {
+app.get("/api/v1/openOrders", authenticateRequest, async (req, res) => {
   try {
     const { symbol } = req.query;
-    let query = 'SELECT id, symbol, side, type, price, quantity, filled_quantity, status, created_at FROM orders WHERE user_id = $1 AND status IN (\'new\', \'partially_filled\')';
+    let query = "SELECT id, symbol, side, type, price, quantity, filled_quantity, status, created_at FROM orders WHERE user_id = $1 AND status IN ('new', 'partially_filled')";
     const params = [req.userId];
 
     if (symbol) {
-      query += ' AND symbol = $2';
+      query += " AND symbol = $2";
       params.push(symbol.toUpperCase());
     }
 
-    query += ' ORDER BY created_at DESC LIMIT 100';
+    query += " ORDER BY created_at DESC LIMIT 100";
     const orders = (await pool.query(query, params)).rows;
 
     res.json({
@@ -819,16 +822,16 @@ app.get('/api/v1/openOrders', authenticateRequest, async (req, res) => {
       }))
     });
   } catch (error) {
-    console.error('Get open orders error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    console.error("Get open orders error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
 // Get order history
-app.get('/api/v1/orderHistory', authenticateRequest, async (req, res) => {
+app.get("/api/v1/orderHistory", authenticateRequest, async (req, res) => {
   try {
     const { symbol, limit = 100, offset = 0 } = req.query;
-    let query = 'SELECT id, symbol, side, type, price, quantity, filled_quantity, status, created_at FROM orders WHERE user_id = $1';
+    let query = "SELECT id, symbol, side, type, price, quantity, filled_quantity, status, created_at FROM orders WHERE user_id = $1";
     const params = [req.userId];
     let paramIndex = 2;
 
@@ -857,16 +860,16 @@ app.get('/api/v1/orderHistory', authenticateRequest, async (req, res) => {
       }))
     });
   } catch (error) {
-    console.error('Get order history error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    console.error("Get order history error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
 // Get trade history
-app.get('/api/v1/tradeHistory', authenticateRequest, async (req, res) => {
+app.get("/api/v1/tradeHistory", authenticateRequest, async (req, res) => {
   try {
     const { symbol, limit = 100, offset = 0 } = req.query;
-    let query = 'SELECT id, symbol, side, price, quantity, fee, created_at FROM trades WHERE taker_id = $1 OR maker_id = $1';
+    let query = "SELECT id, symbol, side, price, quantity, fee, created_at FROM trades WHERE taker_id = $1 OR maker_id = $1";
     const params = [req.userId];
     let paramIndex = 2;
 
@@ -893,31 +896,31 @@ app.get('/api/v1/tradeHistory', authenticateRequest, async (req, res) => {
       }))
     });
   } catch (error) {
-    console.error('Get trade history error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    console.error("Get trade history error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
 // Cancel order
-app.delete('/api/v1/order/:orderId', authenticateRequest, async (req, res) => {
+app.delete("/api/v1/order/:orderId", authenticateRequest, async (req, res) => {
   try {
     const { orderId } = req.params;
 
-    const order = (await pool.query('SELECT * FROM orders WHERE id = $1 AND user_id = $2 LIMIT 1', [orderId, req.userId])).rows[0];
+    const order = (await pool.query("SELECT * FROM orders WHERE id = $1 AND user_id = $2 LIMIT 1", [orderId, req.userId])).rows[0];
 
     if (!order) {
-      return res.status(404).json({ success: false, error: 'Order not found or not authorized' });
+      return res.status(404).json({ success: false, error: "Order not found or not authorized" });
     }
 
-    if (order.status === 'filled' || order.status === 'cancelled') {
-      return res.status(400).json({ success: false, error: 'Cannot cancel a filled or already cancelled order' });
+    if (order.status === "filled" || order.status === "cancelled") {
+      return res.status(400).json({ success: false, error: "Cannot cancel a filled or already cancelled order" });
     }
 
     // Release locked funds
     let wallet;
-    if (order.side === 'buy') {
+    if (order.side === "buy") {
       wallet = (await pool.query(
-        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
         [req.userId, TRADING_PAIRS.find(p => p.symbol === order.symbol).quote_asset]
       )).rows[0];
       if (wallet) {
@@ -930,7 +933,7 @@ app.delete('/api/v1/order/:orderId', authenticateRequest, async (req, res) => {
       }
     } else {
       wallet = (await pool.query(
-        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
         [req.userId, TRADING_PAIRS.find(p => p.symbol === order.symbol).base_asset]
       )).rows[0];
       if (wallet) {
@@ -948,10 +951,10 @@ app.delete('/api/v1/order/:orderId', authenticateRequest, async (req, res) => {
       [orderId]
     );
 
-    res.json({ success: true, message: 'Order cancelled successfully' });
+    res.json({ success: true, message: "Order cancelled successfully" });
   } catch (error) {
-    console.error('Cancel order error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    console.error("Cancel order error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
@@ -959,21 +962,21 @@ app.delete('/api/v1/order/:orderId', authenticateRequest, async (req, res) => {
 // WEBSOCKETS
 // ============================================================================
 
-io.on('connection', (socket) => {
-  console.log('⚡️ User connected:', socket.id);
+io.on("connection", (socket) => {
+  console.log("⚡️ User connected:", socket.id);
 
-  socket.on('joinMarket', (symbol) => {
+  socket.on("joinMarket", (symbol) => {
     socket.join(symbol);
     console.log(`User ${socket.id} joined market ${symbol}`);
   });
 
-  socket.on('leaveMarket', (symbol) => {
+  socket.on("leaveMarket", (symbol) => {
     socket.leave(symbol);
     console.log(`User ${socket.id} left market ${symbol}`);
   });
 
-  socket.on('disconnect', () => {
-    console.log('🔌 User disconnected:', socket.id);
+  socket.on("disconnect", () => {
+    console.log("🔌 User disconnected:", socket.id);
   });
 });
 
