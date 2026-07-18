@@ -19,6 +19,7 @@ const { v4: uuidv4 } = require('uuid');
 const http = require('http');
 const { Server } = require('socket.io');
 const { Pool } = require('pg');
+const Redis = require('ioredis');
 const path = require('path');
 
 // ============================================================================
@@ -49,6 +50,15 @@ pool.on('error', (err, client) => {
 });
 
 console.log('✅ PostgreSQL Database pool initialized');
+
+const redis = new Redis({
+  port: process.env.REDIS_PORT || 6379,
+  host: process.env.REDIS_HOST || 'localhost',
+  password: process.env.REDIS_PASSWORD || undefined,
+});
+
+redis.on('connect', () => console.log('✅ Redis client connected'));
+redis.on('error', (err) => console.error('❌ Redis client error', err));
 
 // ============================================================================
 // CONSTANTS & CONFIG
@@ -209,7 +219,7 @@ function verifyToken(token, type = 'access') {
   }
 }
 
-function authenticateRequest(req, res, next) {
+async function authenticateRequest(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ success: false, error: 'No token provided' });
@@ -221,7 +231,18 @@ function authenticateRequest(req, res, next) {
     return res.status(401).json({ success: false, error: 'Invalid token' });
   }
 
+  const sessionId = req.headers['x-session-id'];
+  if (!sessionId) {
+    return res.status(401).json({ success: false, error: 'Session ID not provided' });
+  }
+
+  const cachedSession = await redis.get(`session:${decoded.userId}:${sessionId}`);
+  if (!cachedSession) {
+    return res.status(401).json({ success: false, error: 'Invalid or expired session' });
+  }
+
   req.userId = decoded.userId;
+  req.sessionId = sessionId;
   next();
 }
 
@@ -367,12 +388,6 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
           WHERE id = $2`,
           [totalFilledQuantity, baseWallet.id]
         );
-      } else {
-        // Create wallet if needed
-        await pool.query(
-          `INSERT INTO wallets (id, user_id, currency, balance) VALUES ($1, $2, $3, $4)`,
-          [uuidv4(), userId, market.base, totalFilledQuantity]
-        );
       }
     } else if (side === 'sell' && totalFilledQuantity > 0) {
       // Seller gets quote, locked base already deducted
@@ -385,7 +400,7 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
         await pool.query(
           `UPDATE wallets SET balance = balance + $1, updated_at = NOW()
           WHERE id = $2`,
-          [totalCost - (totalCost * 0.001), quoteWallet.id]
+          [totalCost - takerFee, quoteWallet.id]
         );
       }
     }
@@ -424,16 +439,21 @@ async function matchOrders(symbol, side, price, quantity, userId, orderId) {
 
     return { filledQuantity: totalFilledQuantity, filledValue: totalCost };
   } catch (error) {
-    console.error('❌ Order matching error:', error);
+    console.error('Order matching error:', error);
     return { filledQuantity: 0, filledValue: 0 };
   }
 }
 
 // ============================================================================
-// AUTH ROUTES
+// ROUTES
 // ============================================================================
 
-// Register
+// Health check
+app.get('/api/v1/health', (req, res) => {
+  res.json({ success: true, message: 'Server is healthy' });
+});
+
+// User registration
 app.post('/api/v1/auth/register', async (req, res) => {
   try {
     const { email, username, password, referralCode } = req.body;
@@ -473,12 +493,17 @@ app.post('/api/v1/auth/register', async (req, res) => {
     const accessToken = generateToken(userId, 'access');
     const refreshToken = generateToken(userId, 'refresh');
 
+    // Create session
     const sessionId = uuidv4();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-        await pool.query(
-      `INSERT INTO sessions (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)`,
+    await pool.query(
+      `INSERT INTO user_sessions (id, user_id, refresh_token, expires_at, created_at)
+      VALUES ($1, $2, $3, $4, NOW())`,
       [sessionId, userId, refreshToken, expiresAt]
     );
+
+    // Cache session in Redis
+    await redis.set(`session:${userId}:${sessionId}`, refreshToken, 'EX', 7 * 24 * 60 * 60);
 
     res.status(201).json({
       success: true,
@@ -486,6 +511,7 @@ app.post('/api/v1/auth/register', async (req, res) => {
         user: { id: userId, email, username, kycLevel: 0 },
         accessToken,
         refreshToken,
+        sessionId,
         referralCode: userReferralCode
       }
     });
@@ -520,9 +546,13 @@ app.post('/api/v1/auth/login', async (req, res) => {
     const sessionId = uuidv4();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     await pool.query(
-      'INSERT INTO sessions (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)',
+      `INSERT INTO user_sessions (id, user_id, refresh_token, expires_at, created_at)
+      VALUES ($1, $2, $3, $4, NOW())`,
       [sessionId, user.id, refreshToken, expiresAt]
     );
+
+    // Cache session in Redis
+    await redis.set(`session:${user.id}:${sessionId}`, refreshToken, 'EX', 7 * 24 * 60 * 60);
 
     res.json({
       success: true,
@@ -537,12 +567,34 @@ app.post('/api/v1/auth/login', async (req, res) => {
           twoFactorEnabled: !!user.two_fa_enabled
         },
         accessToken,
-        refreshToken
+        refreshToken,
+        sessionId
       }
     });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Logout
+app.post('/api/v1/auth/logout', authenticateRequest, async (req, res) => {
+  try {
+    const { userId, sessionId } = req;
+
+    // Invalidate session in PostgreSQL
+    await pool.query(
+      `DELETE FROM user_sessions WHERE user_id = $1 AND id = $2`,
+      [userId, sessionId]
+    );
+
+    // Invalidate session in Redis
+    await redis.del(`session:${userId}:${sessionId}`);
+
+    res.json({ success: true, message: "Logged out successfully" });
+  } catch (error) {
+    console.error("Logout error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
@@ -553,136 +605,92 @@ app.get('/api/v1/auth/me', authenticateRequest, async (req, res) => {
     if (!user) {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
-
-    res.json({
-      success: true,
-      data: {
-        id: user.id,
-        email: user.email,
-        username: user.username,
-        kycLevel: user.kyc_level,
-        country: user.country,
-        createdAt: user.created_at
-      }
-    });
+    res.json({ success: true, data: user });
   } catch (error) {
-    console.error('Get user error:', error);
+    console.error('Auth me error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
-// ============================================================================
 // WALLET ROUTES
 // ============================================================================
 
 // Get all wallets
-app.get(\'/api/v1/wallet/balance\', authenticateRequest, async (req, res) => {
+app.get('/api/v1/wallet/balance', authenticateRequest, async (req, res) => {
   try {
     const wallets = (await pool.query(
       `SELECT currency, balance, locked FROM wallets WHERE user_id = $1`,
       [req.userId]
     )).rows;
-
-    res.json({
-      success: true,
-      data: {
-        balances: wallets.map(w => ({
-          asset: w.currency,
-          free: w.balance,
-          locked: w.locked,
-          total: w.balance + w.locked
-        }))
-      }
-    });
+    res.json({ success: true, data: wallets });
   } catch (error) {
-    console.error('Get balance error:', error);
+    console.error('Wallet balance error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
-// ============================================================================
 // TRADING ROUTES - REAL ORDER MATCHING
 // ============================================================================
 
 // Get all markets
-app.get(\'/api/v1/exchange/info\', async (req, res) => {
+app.get('/api/v1/exchange/info', async (req, res) => {
   try {
-    const markets = (await pool.query(\'SELECT * FROM markets LIMIT 150\')).rows;
+    const markets = (await pool.query('SELECT * FROM markets LIMIT 150')).rows;
     res.json({ success: true, data: markets });
   } catch (error) {
+    console.error('Exchange info error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
 // Get ticker with real data
-app.get(\"/api/v1/ticker/24hr\", async (req, res) => {
+app.get("/api/v1/ticker/24hr", async (req, res) => {
   try {
     const { symbol } = req.query;
 
     if (symbol) {
-      const pair = TRADING_PAIRS.find(p => p.symbol === symbol.toUpperCase());
-      if (!pair) {
-        return res.status(404).json({ success: false, error: 'Symbol not found' });
-      }
-
-      // Get recent trades for real price data
-      const recentTrades = (await pool.query(
-        `SELECT price, quantity FROM trades WHERE symbol = $1 ORDER BY created_at DESC LIMIT 100`,
+      const ticker = (await pool.query(
+        `SELECT
+          symbol,
+          MAX(price) AS high,
+          MIN(price) AS low,
+          (SELECT price FROM trades WHERE symbol = $1 ORDER BY created_at DESC LIMIT 1) AS last_price,
+          SUM(quantity) AS volume,
+          (SELECT price * quantity FROM trades WHERE symbol = $1 ORDER BY created_at DESC LIMIT 1) AS quote_volume
+        FROM trades
+        WHERE symbol = $1 AND created_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY symbol`,
         [symbol.toUpperCase()]
-      )).rows;
+      )).rows[0];
 
-      let lastPrice = pair.basePrice;
-      let volume = 0;
-      let high = pair.basePrice;
-      let low = pair.basePrice;
-
-      if (recentTrades.length > 0) {
-        lastPrice = recentTrades[0].price;
-        recentTrades.forEach(t => {
-          volume += t.quantity;
-          if (t.price > high) high = t.price;
-          if (t.price < low) low = t.price;
-        });
+      if (ticker) {
+        res.json({ success: true, data: ticker });
+      } else {
+        res.status(404).json({ success: false, error: 'Ticker not found' });
       }
-
-      const priceChange = lastPrice - pair.basePrice;
-      const priceChangePercent = (priceChange / pair.basePrice) * 100;
-
-      return res.json({
-        success: true,
-        data: {
-          symbol: symbol.toUpperCase(),
-          lastPrice: lastPrice.toString(),
-          priceChange: priceChange.toFixed(8),
-          priceChangePercent: priceChangePercent.toFixed(2),
-          highPrice: high.toString(),
-          lowPrice: low.toString(),
-          volume: volume.toString(),
-          quoteVolume: (volume * lastPrice).toString()
-        }
-      });
+    } else {
+      const tickers = (await pool.query(
+        `SELECT
+          symbol,
+          MAX(price) AS high,
+          MIN(price) AS low,
+          (SELECT price FROM trades WHERE symbol = t.symbol ORDER BY created_at DESC LIMIT 1) AS last_price,
+          SUM(quantity) AS volume,
+          (SELECT price * quantity FROM trades WHERE symbol = t.symbol ORDER BY created_at DESC LIMIT 1) AS quote_volume
+        FROM trades t
+        WHERE created_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY symbol`
+      )).rows;
+      res.json({ success: true, data: tickers });
     }
-
-    // Return all tickers
-    const tickers = TRADING_PAIRS.map(pair => ({
-      symbol: pair.symbol,
-      lastPrice: pair.basePrice.toString(),
-      priceChange: '0',
-      priceChangePercent: '0',
-      highPrice: (pair.basePrice * 1.01).toFixed(2),
-      lowPrice: (pair.basePrice * 0.99).toFixed(2),
-      volume: '0',
-      quoteVolume: '0'
-    }));
-
-    res.json({ success: true, data: tickers });
   } catch (error) {
+    console.error('Ticker 24hr error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
 // Place order with REAL matching
-app.post(\"/api/v1/order\", authenticateRequest, async (req, res) => {
+app.post("/api/v1/order", authenticateRequest, async (req, res) => {
   try {
     const { symbol, side, type, quantity, price } = req.body;
 
@@ -690,83 +698,63 @@ app.post(\"/api/v1/order\", authenticateRequest, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
 
-    if (!['buy', 'sell'].includes(side) || !['limit', 'market'].includes(type)) {
-      return res.status(400).json({ success: false, error: 'Invalid order parameters' });
-    }
-
-    // Find market info
-    const market = (await pool.query('SELECT * FROM markets WHERE symbol = $1', [symbol.toUpperCase()])).rows[0];
+    const market = TRADING_PAIRS.find(p => p.symbol === symbol.toUpperCase());
     if (!market) {
-      return res.status(400).json({ success: false, error: 'Trading pair not supported' });
+      return res.status(400).json({ success: false, error: 'Invalid trading pair' });
     }
 
-    // Determine price
-    let orderPrice;
-    if (type === 'market') {
-      const pair = TRADING_PAIRS.find(p => p.symbol === symbol.toUpperCase());
-      orderPrice = pair ? pair.basePrice : 100;
-    } else {
-      if (!price) {
-        return res.status(400).json({ success: false, error: 'Price required for limit orders' });
-      }
-      orderPrice = parseFloat(price);
+    const orderPrice = parseFloat(price);
+    const orderQuantity = parseFloat(quantity);
+
+    if (isNaN(orderPrice) || isNaN(orderQuantity) || orderPrice <= 0 || orderQuantity <= 0) {
+      return res.status(400).json({ success: false, error: 'Invalid price or quantity' });
     }
 
-    // Get quote currency wallet
-    const quoteCurrency = market.quote_asset;
-    const wallet = (await pool.query(
-      `SELECT * FROM wallets WHERE user_id = $1 AND currency = $2`,
-      [req.userId, quoteCurrency]
-    )).rows[0];
+    // Check wallet balance and lock funds
+    let wallet;
+    let baseWallet;
+    let orderValue = orderPrice * orderQuantity;
 
-    if (!wallet) {
-      return res.status(400).json({ success: false, error: `${quoteCurrency} wallet not found` });
-    }
-
-    const orderValue = orderPrice * parseFloat(quantity);
-
-    // For buy orders, verify balance
-    if (side === 'buy' && wallet.balance < orderValue) {
-      return res.status(400).json({ success: false, error: 'Insufficient balance' });
-    }
-
-    // For sell orders, verify base currency balance
-    if (side === 'sell') {
-      const baseWallet = (await pool.query(
-        `SELECT * FROM wallets WHERE user_id = $1 AND currency = $2`,
-        [req.userId, market.base_asset]
+    if (side === 'buy') {
+      wallet = (await pool.query(
+        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        [req.userId, market.quote_asset]
       )).rows[0];
 
-      if (!baseWallet || baseWallet.balance < parseFloat(quantity)) {
-        return res.status(400).json({ success: false, error: `Insufficient ${market.base_asset}` });
+      if (!wallet || wallet.balance < orderValue) {
+        return res.status(400).json({ success: false, error: 'Insufficient quote currency balance' });
       }
 
-      // Lock base currency
-      await pool.query(
-        `UPDATE wallets SET locked = locked + $1, updated_at = NOW() WHERE id = $2`,
-        [parseFloat(quantity), baseWallet.id]
-      );
-
-      // Deduct from balance
-      await pool.query(
-        `UPDATE wallets SET balance = balance - $1, updated_at = NOW() WHERE id = $2`,
-        [parseFloat(quantity), baseWallet.id]
-      );
-    } else {
       // Lock quote currency for buy
       await pool.query(
         `UPDATE wallets SET locked = locked + $1, updated_at = NOW() WHERE id = $2`,
         [orderValue, wallet.id]
       );
-
-      // Deduct from balance
       await pool.query(
         `UPDATE wallets SET balance = balance - $1, updated_at = NOW() WHERE id = $2`,
         [orderValue, wallet.id]
       );
+    } else {
+      wallet = (await pool.query(
+        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        [req.userId, market.base_asset]
+      )).rows[0];
+
+      if (!wallet || wallet.balance < orderQuantity) {
+        return res.status(400).json({ success: false, error: 'Insufficient base currency balance' });
+      }
+
+      // Lock base currency for sell
+      await pool.query(
+        `UPDATE wallets SET locked = locked + $1, updated_at = NOW() WHERE id = $2`,
+        [orderQuantity, wallet.id]
+      );
+      await pool.query(
+        `UPDATE wallets SET balance = balance - $1, updated_at = NOW() WHERE id = $2`,
+        [orderQuantity, wallet.id]
+      );
     }
 
-    // Create order
     const orderId = uuidv4();
     await pool.query(
       `INSERT INTO orders (id, user_id, symbol, side, type, price, quantity, filled_quantity, status, time_in_force, created_at, updated_at)
@@ -784,24 +772,25 @@ app.post(\"/api/v1/order\", authenticateRequest, async (req, res) => {
       success: true,
       data: {
         orderId,
-        symbol: symbol.toUpperCase(),
-        side,
-        type,
-        price: orderPrice.toString(),
-        quantity: quantity.toString(),
-        filledQuantity: updatedOrder.filled_quantity.toString(),
+        symbol: updatedOrder.symbol,
+        side: updatedOrder.side,
+        type: updatedOrder.type,
+        price: updatedOrder.price,
+        quantity: updatedOrder.quantity,
+        filledQuantity: updatedOrder.filled_quantity,
         status: updatedOrder.status,
-        createdAt: new Date().toISOString()
+        createdAt: updatedOrder.created_at,
+        matchResult
       }
     });
   } catch (error) {
-    console.error('Place order error:', error);
+    console.error('Order placement error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
 // Get open orders
-app.get('/api/v1/openOrders', authenticateRequest, (req, res) => {
+app.get('/api/v1/openOrders', authenticateRequest, async (req, res) => {
   try {
     const { symbol } = req.query;
     let query = 'SELECT id, symbol, side, type, price, quantity, filled_quantity, status, created_at FROM orders WHERE user_id = $1 AND status IN (\'new\', \'partially_filled\')';
@@ -818,94 +807,194 @@ app.get('/api/v1/openOrders', authenticateRequest, (req, res) => {
     res.json({
       success: true,
       data: orders.map(o => ({
-        orderId: o.id,
+        id: o.id,
         symbol: o.symbol,
         side: o.side,
         type: o.type,
-        price: o.price,
-        origQty: o.quantity,
-        executedQty: o.filled_quantity,
-        remainingQty: o.quantity - o.filled_quantity,
+        price: parseFloat(o.price),
+        quantity: parseFloat(o.quantity),
+        filledQuantity: parseFloat(o.filled_quantity),
         status: o.status,
-        createdTime: new Date(o.created_at).getTime()
+        createdAt: o.created_at
       }))
     });
   } catch (error) {
+    console.error('Get open orders error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Get order history
+app.get('/api/v1/orderHistory', authenticateRequest, async (req, res) => {
+  try {
+    const { symbol, limit = 100, offset = 0 } = req.query;
+    let query = 'SELECT id, symbol, side, type, price, quantity, filled_quantity, status, created_at FROM orders WHERE user_id = $1';
+    const params = [req.userId];
+    let paramIndex = 2;
+
+    if (symbol) {
+      query += ` AND symbol = $${paramIndex++}`;
+      params.push(symbol.toUpperCase());
+    }
+
+    query += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+    params.push(limit, offset);
+
+    const orders = (await pool.query(query, params)).rows;
+
+    res.json({
+      success: true,
+      data: orders.map(o => ({
+        id: o.id,
+        symbol: o.symbol,
+        side: o.side,
+        type: o.type,
+        price: parseFloat(o.price),
+        quantity: parseFloat(o.quantity),
+        filledQuantity: parseFloat(o.filled_quantity),
+        status: o.status,
+        createdAt: o.created_at
+      }))
+    });
+  } catch (error) {
+    console.error('Get order history error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Get trade history
+app.get('/api/v1/tradeHistory', authenticateRequest, async (req, res) => {
+  try {
+    const { symbol, limit = 100, offset = 0 } = req.query;
+    let query = 'SELECT id, symbol, side, price, quantity, fee, created_at FROM trades WHERE taker_id = $1 OR maker_id = $1';
+    const params = [req.userId];
+    let paramIndex = 2;
+
+    if (symbol) {
+      query += ` AND symbol = $${paramIndex++}`;
+      params.push(symbol.toUpperCase());
+    }
+
+    query += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+    params.push(limit, offset);
+
+    const trades = (await pool.query(query, params)).rows;
+
+    res.json({
+      success: true,
+      data: trades.map(t => ({
+        id: t.id,
+        symbol: t.symbol,
+        side: t.side,
+        price: parseFloat(t.price),
+        quantity: parseFloat(t.quantity),
+        fee: parseFloat(t.fee),
+        createdAt: t.created_at
+      }))
+    });
+  } catch (error) {
+    console.error('Get trade history error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Cancel order
+app.delete('/api/v1/order/:orderId', authenticateRequest, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    const order = (await pool.query('SELECT * FROM orders WHERE id = $1 AND user_id = $2 LIMIT 1', [orderId, req.userId])).rows[0];
+
+    if (!order) {
+      return res.status(404).json({ success: false, error: 'Order not found or not authorized' });
+    }
+
+    if (order.status === 'filled' || order.status === 'cancelled') {
+      return res.status(400).json({ success: false, error: 'Cannot cancel a filled or already cancelled order' });
+    }
+
+    // Release locked funds
+    let wallet;
+    if (order.side === 'buy') {
+      wallet = (await pool.query(
+        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        [req.userId, TRADING_PAIRS.find(p => p.symbol === order.symbol).quote_asset]
+      )).rows[0];
+      if (wallet) {
+        const amountToUnlock = order.price * (order.quantity - order.filled_quantity);
+        await pool.query(
+          `UPDATE wallets SET balance = balance + $1, locked = locked - $2, updated_at = NOW()
+          WHERE id = $3`,
+          [amountToUnlock, amountToUnlock, wallet.id]
+        );
+      }
+    } else {
+      wallet = (await pool.query(
+        'SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1',
+        [req.userId, TRADING_PAIRS.find(p => p.symbol === order.symbol).base_asset]
+      )).rows[0];
+      if (wallet) {
+        const amountToUnlock = order.quantity - order.filled_quantity;
+        await pool.query(
+          `UPDATE wallets SET balance = balance + $1, locked = locked - $2, updated_at = NOW()
+          WHERE id = $3`,
+          [amountToUnlock, amountToUnlock, wallet.id]
+        );
+      }
+    }
+
+    await pool.query(
+      `UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
+      [orderId]
+    );
+
+    res.json({ success: true, message: 'Order cancelled successfully' });
+  } catch (error) {
+    console.error('Cancel order error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
 // ============================================================================
-// HEALTH & INFO
+// WEBSOCKETS
 // ============================================================================
-
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    version: '2.0.0',
-    tradingPairs: TRADING_PAIRS.length
-  });
-});
-
-app.get('/api/v1/time', (req, res) => {
-  res.json({ success: true, serverTime: Date.now() });
-});
-
-// ============================================================================
-// ERROR HANDLERS
-// ============================================================================
-
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ success: false, error: 'Internal server error' });
-});
-
-app.use((req, res) => {
-  res.status(404).json({ success: false, error: 'Not found' });
-});
-
-// ============================================================================
-// SERVER START
-// ============================================================================
-
-const wsClients = new Map();
 
 io.on('connection', (socket) => {
-  console.log('WebSocket client connected:', socket.id);
+  console.log('⚡️ User connected:', socket.id);
 
-  socket.on('authenticate', (token) => {
-    const decoded = verifyToken(token, 'access');
-    if (decoded) {
-      wsClients.set(socket.id, decoded.userId);
-      socket.emit('authenticated');
-    }
+  socket.on('joinMarket', (symbol) => {
+    socket.join(symbol);
+    console.log(`User ${socket.id} joined market ${symbol}`);
+  });
+
+  socket.on('leaveMarket', (symbol) => {
+    socket.leave(symbol);
+    console.log(`User ${socket.id} left market ${symbol}`);
   });
 
   socket.on('disconnect', () => {
-    wsClients.delete(socket.id);
+    console.log('🔌 User disconnected:', socket.id);
   });
 });
 
-const PORT_FINAL = PORT;
-server.listen(PORT_FINAL, () => {
-  console.log(`
+// ============================================================================
+// START SERVER
+// ============================================================================
+
+async function startServer() {
+  await initializeDatabase();
+  server.listen(PORT, () => {
+    console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║                                                            ║
-║   🐯 TigerEx Backend v2.0 - Production Ready              ║
-║                                                            ║
-║   ✅ Real Order Matching Engine                           ║
-║   ✅ ${TRADING_PAIRS.length} Trading Pairs                        ║
-║   ✅ WebSocket Real-time Updates                          ║
-║   ✅ Security Hardened                                    ║
-║                                                            ║
-║   Server: http://localhost:${PORT_FINAL}/api/v1/*           ║
-║   WebSocket: ws://localhost:${PORT_FINAL}                   ║
-║   Health: http://localhost:${PORT_FINAL}/health            ║
+║             TigerEx Backend Server is running!             ║
+║             http://localhost:${PORT}                     ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
-  `);
-});
+      `);
+  });
+}
+
+startServer();
 
 module.exports = { app, server, io, pool };
