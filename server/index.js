@@ -718,6 +718,140 @@ app.get("/api/v1/kyc/status", authenticateRequest, async (req, res) => {
   }
 });
 
+// FUTURES TRADING ROUTES
+// ============================================================================
+
+// Open a futures position
+app.post("/api/v1/futures/position/open", authenticateRequest, async (req, res) => {
+  try {
+    const { symbol, side, quantity, leverage, marginMode, positionMode } = req.body;
+
+    if (!symbol || !side || !quantity || !leverage || !marginMode || !positionMode) {
+      return res.status(400).json({ success: false, error: "Missing required futures trading fields" });
+    }
+
+    // Placeholder for futures trading logic
+    // In a real system, this would involve complex margin calculations, order placement on a futures exchange, etc.
+
+    const positionId = uuidv4();
+    await pool.query(
+      `INSERT INTO futures_positions (id, user_id, symbol, side, quantity, leverage, margin_mode, position_mode, status, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open', NOW())`,
+      [positionId, req.userId, symbol, side, quantity, leverage, marginMode, positionMode]
+    );
+
+    res.json({ success: true, message: "Futures position opened successfully", data: { positionId } });
+  } catch (error) {
+    console.error("Open futures position error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// Close a futures position
+app.post("/api/v1/futures/position/close", authenticateRequest, async (req, res) => {
+  try {
+    const { positionId, closeQuantity } = req.body;
+
+    if (!positionId || !closeQuantity) {
+      return res.status(400).json({ success: false, error: "Missing required fields for closing position" });
+    }
+
+    // Placeholder for closing futures position logic
+    // This would involve placing an opposing order on the futures exchange and updating margin.
+
+    await pool.query(
+      `UPDATE futures_positions SET quantity = quantity - $1, status = CASE WHEN quantity - $1 <= 0 THEN 'closed' ELSE status END, updated_at = NOW() WHERE id = $2 AND user_id = $3`,
+      [closeQuantity, positionId, req.userId]
+    );
+
+    res.json({ success: true, message: "Futures position closed successfully" });
+  } catch (error) {
+    console.error("Close futures position error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// Get all open futures positions for a user
+app.get("/api/v1/futures/positions", authenticateRequest, async (req, res) => {
+  try {
+    const positions = (await pool.query("SELECT * FROM futures_positions WHERE user_id = $1 AND status = 'open'", [req.userId])).rows;
+    res.json({ success: true, data: positions });
+  } catch (error) {
+    console.error("Get futures positions error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// MARGIN TRADING ROUTES
+// ============================================================================
+
+// Deposit collateral to margin account
+app.post("/api/v1/margin/deposit", authenticateRequest, async (req, res) => {
+  try {
+    const { currency, amount } = req.body;
+
+    if (!currency || !amount) {
+      return res.status(400).json({ success: false, error: "Missing currency or amount" });
+    }
+
+    // Update margin account balance
+    await pool.query(
+      `INSERT INTO margin_accounts (user_id, currency, balance, created_at, updated_at)
+      VALUES ($1, $2, $3, NOW(), NOW())
+      ON CONFLICT (user_id, currency) DO UPDATE SET balance = margin_accounts.balance + $3, updated_at = NOW()`,
+      [req.userId, currency, amount]
+    );
+
+    res.json({ success: true, message: "Margin collateral deposited successfully" });
+  } catch (error) {
+    console.error("Margin deposit error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// Withdraw collateral from margin account
+app.post("/api/v1/margin/withdraw", authenticateRequest, async (req, res) => {
+  try {
+    const { currency, amount } = req.body;
+
+    if (!currency || !amount) {
+      return res.status(400).json({ success: false, error: "Missing currency or amount" });
+    }
+
+    // Check margin account balance
+    const marginAccount = (await pool.query(
+      "SELECT * FROM margin_accounts WHERE user_id = $1 AND currency = $2 LIMIT 1",
+      [req.userId, currency]
+    )).rows[0];
+
+    if (!marginAccount || marginAccount.balance < amount) {
+      return res.status(400).json({ success: false, error: "Insufficient margin balance" });
+    }
+
+    // Deduct from margin account balance
+    await pool.query(
+      `UPDATE margin_accounts SET balance = balance - $1, updated_at = NOW() WHERE user_id = $2 AND currency = $3`,
+      [amount, req.userId, currency]
+    );
+
+    res.json({ success: true, message: "Margin collateral withdrawn successfully" });
+  } catch (error) {
+    console.error("Margin withdrawal error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// Get margin account balance
+app.get("/api/v1/margin/balance", authenticateRequest, async (req, res) => {
+  try {
+    const marginAccounts = (await pool.query("SELECT currency, balance FROM margin_accounts WHERE user_id = $1", [req.userId])).rows;
+    res.json({ success: true, data: marginAccounts });
+  } catch (error) {
+    console.error("Get margin balance error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
 // WALLET ROUTES
 // ============================================================================
 
