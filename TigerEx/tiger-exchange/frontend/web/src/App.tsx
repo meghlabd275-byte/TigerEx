@@ -8,8 +8,11 @@ import Register from './pages/auth/Register'
 import ForgotPassword from './pages/auth/ForgotPassword'
 import ResetPassword from './pages/auth/ResetPassword'
 import Dashboard from './pages/dashboard/Dashboard'
+import EnhancedDashboard from './pages/dashboard/EnhancedDashboard'
 import Profile from './pages/dashboard/Profile'
 import AdminDashboard from './pages/admin/Dashboard'
+import TradingTerminal from './pages/trading/TradingTerminal'
+import WalletUI from './pages/wallet/WalletUI'
 
 export default function App() {
   return (
@@ -25,8 +28,14 @@ export default function App() {
               <Route path="reset-password" element={<ResetPassword />} />
             </Route>
             <Route path="/dashboard/*" element={<Layout />}>
-              <Route index element={<Dashboard />} />
+              <Route index element={<EnhancedDashboard />} />
               <Route path="profile" element={<Profile />} />
+            </Route>
+            <Route path="/trading/*" element={<Layout />}>
+              <Route index element={<TradingTerminal />} />
+            </Route>
+            <Route path="/wallet/*" element={<Layout />}>
+              <Route index element={<WalletUI />} />
             </Route>
             <Route path="/admin/*" element={<Layout />}>
               <Route index element={<AdminDashboard />} />
