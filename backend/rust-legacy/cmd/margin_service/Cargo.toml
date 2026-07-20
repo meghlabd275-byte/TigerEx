@@ -1,0 +1,8 @@
+[package]
+name = "tigerex-margin"
+version = "1.0.0"
+edition = "2021"
+description = "TigerEx Margin Trading Service"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }

@@ -879,3 +879,96 @@ CREATE TRIGGER update_p2p_offers_updated_at BEFORE UPDATE ON p2p_offers
 
 CREATE TRIGGER update_p2p_trades_updated_at BEFORE UPDATE ON p2p_trades
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================================
+// DEPOSITS & WITHDRAWALS
+-- ============================================================================
+
+-- Deposits
+CREATE TABLE deposits (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    currency VARCHAR(20) NOT NULL,
+    network VARCHAR(50),
+    amount DECIMAL(20, 8) NOT NULL,
+    txid VARCHAR(255) UNIQUE,
+    address VARCHAR(255) NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'failed', 'cancelled')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_deposits_user_id ON deposits(user_id);
+CREATE INDEX idx_deposits_txid ON deposits(txid);
+
+-- Withdrawals
+CREATE TABLE withdrawals (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    currency VARCHAR(20) NOT NULL,
+    network VARCHAR(50),
+    amount DECIMAL(20, 8) NOT NULL,
+    fee DECIMAL(20, 8) DEFAULT 0,
+    address VARCHAR(255) NOT NULL,
+    txid VARCHAR(255) UNIQUE,
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_withdrawals_user_id ON withdrawals(user_id);
+CREATE INDEX idx_withdrawals_txid ON withdrawals(txid);
+
+-- ============================================================================
+// FUTURES & MARGIN TRADING
+-- ============================================================================
+
+-- Futures Positions
+CREATE TABLE futures_positions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    symbol VARCHAR(20) NOT NULL,
+    side VARCHAR(10) NOT NULL CHECK (side IN (
+        'long',
+        'short'
+    )),
+    quantity DECIMAL(20, 8) NOT NULL,
+    entry_price DECIMAL(20, 8),
+    liquidation_price DECIMAL(20, 8),
+    leverage DECIMAL(5, 2) NOT NULL,
+    margin_mode VARCHAR(20) NOT NULL CHECK (margin_mode IN (
+        'cross',
+        'isolated'
+    )),
+    position_mode VARCHAR(20) NOT NULL CHECK (position_mode IN (
+        'one_way',
+        'hedge'
+    )),
+    status VARCHAR(20) DEFAULT 'open' CHECK (status IN (
+        'open',
+        'closed',
+        'liquidated'
+    )),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    closed_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX idx_futures_positions_user_id ON futures_positions(user_id);
+CREATE INDEX idx_futures_positions_symbol ON futures_positions(symbol);
+CREATE INDEX idx_futures_positions_status ON futures_positions(status);
+
+-- Margin Accounts
+CREATE TABLE margin_accounts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    currency VARCHAR(20) NOT NULL,
+    balance DECIMAL(20, 8) DEFAULT 0,
+    locked_balance DECIMAL(20, 8) DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, currency)
+);
+
+CREATE INDEX idx_margin_accounts_user_id ON margin_accounts(user_id);
+CREATE INDEX idx_margin_accounts_currency ON margin_accounts(currency);

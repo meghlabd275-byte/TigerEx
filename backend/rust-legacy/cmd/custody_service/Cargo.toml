@@ -1,0 +1,33 @@
+[package]
+name = "tigerex-custody"
+version = "1.0.0"
+edition = "2021"
+description = "TigerEx Custody Service - Fund Security"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aes-gcm = "0.10"
+rand = "0.8"
+sha2 = "0.10"
+sha3 = "0.10"
+ed25519-dalek = "2"
+base64 = "0.21"
+uuid = { version = "1", features = ["v4"] }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "custody_service"
+path = "src/main.rs"
+
+[features]
+default = []
+security-audited = []
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
