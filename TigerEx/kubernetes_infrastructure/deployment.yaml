@@ -1,0 +1,536 @@
+# TigerEx Kubernetes Infrastructure
+# K8s deployment manifests for worldwide distributed system
+# Built with Go configuration for high-load systems
+
+# =============================================================================
+# NAMESPACE
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tigerex
+  labels:
+    name: tigerex
+    environment: production
+
+---
+
+# =============================================================================
+# CONFIGMAPS
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tigerex-config
+  namespace: tigerex
+data:
+  DATABASE_HOST: "postgres.tigerex.svc.cluster.local"
+  DATABASE_PORT: "5432"
+  REDIS_HOST: "redis.tigerex.svc.cluster.local"
+  REDIS_PORT: "6379"
+  KAFKA_BROKERS: "kafka-0.kafka.tigerex.svc.cluster.local:9092,kafka-1.kafka.tigerex.svc.cluster.local:9092"
+  LOG_LEVEL: "info"
+  ENVIRONMENT: "production"
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tigerex-env
+  namespace: tigerex
+data:
+  NODE_ENV: "production"
+  API_VERSION: "v1"
+  RATE_LIMIT_ENABLED: "true"
+  ENABLE_CORS: "true"
+
+---
+
+# =============================================================================
+# SECRETS (Reference - use sealed secrets in production)
+# =============================================================================
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tigerex-secrets
+  namespace: tigerex
+type: Opaque
+stringData:
+  DATABASE_URL: "postgres://user:password@postgres:5432/tigerex"
+  REDIS_PASSWORD: "your-redis-password"
+  JWT_SECRET: "your-jwt-secret-key"
+  ENCRYPTION_KEY: "your-encryption-key"
+  API_KEYS: "your-api-keys"
+
+---
+
+# =============================================================================
+# SERVICES
+# =============================================================================
+
+# API Gateway Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: tigerex-api
+  namespace: tigerex
+  labels:
+    app: tigerex-api
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+    - port: 8443
+      targetPort: 8443
+      protocol: TCP
+      name: https
+  selector:
+    app: tigerex-api
+
+---
+
+# WebSocket Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: tigerex-websocket
+  namespace: tigerex
+  labels:
+    app: tigerex-websocket
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8081
+      targetPort: 8081
+      protocol: TCP
+      name: ws
+    - port: 8082
+      targetPort: 8082
+      protocol: TCP
+      name: wss
+  selector:
+    app: tigerex-websocket
+
+---
+
+# Matching Engine Service (Internal)
+apiVersion: v1
+kind: Service
+metadata:
+  name: tigerex-matching
+  namespace: tigerex
+  labels:
+    app: tigerex-matching
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9000
+      targetPort: 9000
+      protocol: TCP
+      name: grpc
+  selector:
+    app: tigerex-matching
+
+---
+
+# =============================================================================
+# DEPLOYMENTS
+# =============================================================================
+
+# API Gateway Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tigerex-api
+  namespace: tigerex
+  labels:
+    app: tigerex-api
+spec:
+  replicas: 10
+  selector:
+    matchLabels:
+      app: tigerex-api
+  template:
+    metadata:
+      labels:
+        app: tigerex-api
+    spec:
+      containers:
+        - name: api
+          image: tigerex/api:latest
+          ports:
+            - containerPort: 8080
+            - containerPort: 8443
+          envFrom:
+            - configMapRef:
+                name: tigerex-config
+            - secretRef:
+                name: tigerex-secrets
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+
+---
+
+# WebSocket Gateway Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tigerex-websocket
+  namespace: tigerex
+  labels:
+    app: tigerex-websocket
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: tigerex-websocket
+  template:
+    metadata:
+      labels:
+        app: tigerex-websocket
+    spec:
+      containers:
+        - name: websocket
+          image: tigerex/websocket:latest
+          ports:
+            - containerPort: 8081
+            - containerPort: 8082
+          envFrom:
+            - configMapRef:
+                name: tigerex-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+
+---
+
+# Matching Engine Deployment (Ultra-low latency)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tigerex-matching
+  namespace: tigerex
+  labels:
+    app: tigerex-matching
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: tigerex-matching
+  template:
+    metadata:
+      labels:
+        app: tigerex-matching
+    spec:
+      # Use dedicated nodes for matching engine
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "matching"
+          effect: "NoSchedule"
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: "node-type"
+                    operator: "In"
+                    values:
+                      - "high-performance"
+      containers:
+        - name: matching
+          image: tigerex/matching-engine:latest
+          ports:
+            - containerPort: 9000
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "2000m"
+            limits:
+              memory: "8Gi"
+              cpu: "8000m"
+          env:
+            - name: GOMAXPROCS
+              value: "16"
+          securityContext:
+            privileged: true
+
+---
+
+# Worker Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tigerex-worker
+  namespace: tigerex
+  labels:
+    app: tigerex-worker
+spec:
+  replicas: 20
+  selector:
+    matchLabels:
+      app: tigerex-worker
+  template:
+    metadata:
+      labels:
+        app: tigerex-worker
+    spec:
+      containers:
+        - name: worker
+          image: tigerex/worker:latest
+          envFrom:
+            - configMapRef:
+                name: tigerex-config
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+
+---
+
+# =============================================================================
+# STATEFULSETS
+# =============================================================================
+
+# PostgreSQL StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: tigerex
+spec:
+  serviceName: postgres
+  replicas: 3
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "1000m"
+            limits:
+              memory: "16Gi"
+              cpu: "4000m"
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ssd
+        resources:
+          requests:
+            storage: 100Gi
+
+---
+
+# Redis Cluster StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: tigerex
+spec:
+  serviceName: redis
+  replicas: 6
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7
+          ports:
+            - containerPort: 6379
+          command: ["redis-server", "--cluster-enabled", "yes", "--cluster-config-file", "nodes.conf"]
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "8Gi"
+              cpu: "2000m"
+
+---
+
+# Kafka StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: tigerex
+spec:
+  serviceName: kafka
+  replicas: 9
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: confluentinc/cp-kafka:7.5
+          ports:
+            - containerPort: 9092
+          env:
+            - name: KAFKA_BROKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              value: "zookeeper:2181"
+            - name: KAFKA_NUM_PARTITIONS
+              value: "12"
+            - name: KAFKA_DEFAULT_REPLICATION_FACTOR
+              value: "3"
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "8Gi"
+              cpu: "4000m"
+
+---
+
+# =============================================================================
+# INGRESS
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tigerex-ingress
+  namespace: tigerex
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/websocket-services: "tigerex-websocket"
+spec:
+  tls:
+    - hosts:
+        - api.tigerex.com
+        - ws.tigerex.com
+      secretName: tigerex-tls
+  rules:
+    - host: api.tigerex.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tigerex-api
+                port:
+                  number: 8080
+    - host: ws.tigerex.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tigerex-websocket
+                port:
+                  number: 8081
+
+---
+
+# =============================================================================
+# HPA (Horizontal Pod Autoscaler)
+# =============================================================================
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: tigerex-api-hpa
+  namespace: tigerex
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: tigerex-api
+  minReplicas: 10
+  maxReplicas: 100
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+
+# =============================================================================
+# PDB (Pod Disruption Budget)
+# =============================================================================
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: tigerex-api-pdb
+  namespace: tigerex
+spec:
+  minAvailable: 8
+  selector:
+    matchLabels:
+      app: tigerex-api
