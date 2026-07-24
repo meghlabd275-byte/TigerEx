@@ -1,9 +1,9 @@
 [package]
-name = "tigerex-trading-service"
+name = "tigerex-wallet-service"
 version = "1.0.0"
 edition = "2021"
 authors = ["TigerEx Team"]
-description = "TigerEx Trading Service - Order Management & Execution"
+description = "TigerEx Wallet Service - Multi-chain HD Wallet Management"
 
 [dependencies]
 # Web server
@@ -15,6 +15,17 @@ tokio = { version = "1.36", features = ["full"] }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid", "json"] }
+
+# Cryptography
+bip39 = "2.0"
+bip32 = "0.5"
+slip10 = "0.4"
+secp256k1 = { version = "0.28", features = ["recovery", "rand_core"] }
+hex = "0.4"
+base58 = "0.2"
+sha2 = "0.10"
+keccak-hash = "0.10"
+rlp = "0.5"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -31,8 +42,8 @@ async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Ordered map for order book
-dashmap = "5.5"
+# Blockchain RPC
+reqwest = { version = "0.11", features = ["json"] }
 
 # Cache
 redis = { version = "0.25", features = ["tokio-comp"] }
@@ -41,5 +52,5 @@ redis = { version = "0.25", features = ["tokio-comp"] }
 tokio-test = "0.4"
 
 [[bin]]
-name = "trading-service"
+name = "wallet-service"
 path = "src/main.rs"
