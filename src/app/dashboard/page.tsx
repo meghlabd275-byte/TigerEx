@@ -24,8 +24,11 @@ import {
   Copy,
   ExternalLink,
   Clock,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Loader2
 } from 'lucide-react';
+import { ThemeToggle } from '@/components/theme-toggle';
+import { useAuth } from '@/components/auth/AuthContext';
 
 interface User {
   id: string;
@@ -52,6 +55,7 @@ interface PortfolioStats {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const { user: authUser, accessToken } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [user, setUser] = useState<User | null>(null);
   const [balances, setBalances] = useState<Balance[]>([]);
@@ -64,59 +68,67 @@ export default function DashboardPage() {
   });
   const [loading, setLoading] = useState(true);
 
-  // Mock balances data (would be fetched from API)
-  const mockBalances: Balance[] = [
-    { asset: 'USDT', available: 12500.50, locked: 500, usdValue: 13000.50 },
-    { asset: 'BTC', available: 0.5234, locked: 0, usdValue: 15702.00 },
-    { asset: 'ETH', available: 3.215, locked: 0.5, usdValue: 6430.00 },
-    { asset: 'BNB', available: 25.0, locked: 0, usdValue: 7500.00 },
-    { asset: 'SOL', available: 150.0, locked: 20, usdValue: 2550.00 },
-    { asset: 'XRP', available: 5000.0, locked: 0, usdValue: 2500.00 },
-  ];
-
-  // Calculate total balance
+  // Fetch real data from API
   useEffect(() => {
     const loadData = async () => {
       // Check for token
-      const token = localStorage.getItem('tigerex_token');
+      const token = accessToken || localStorage.getItem('tigerex_access_token');
       if (!token) {
         router.push('/login');
         return;
       }
 
-      // Get user from localStorage
-      const userStr = localStorage.getItem('tigerex_user');
-      if (userStr) {
-        try {
-          const userData = JSON.parse(userStr);
-          setUser(userData);
-        } catch (e) {
-          console.error('Failed to parse user data');
-        }
+      // Use auth user if available
+      if (authUser) {
+        setUser(authUser as User);
       }
 
-      // Simulate loading balances
-      setTimeout(() => {
-        setBalances(mockBalances);
-        
-        const total = mockBalances.reduce((sum, b) => sum + b.usdValue, 0);
-        setStats({
-          totalBalance: total,
-          totalProfit: total * 0.0523, // 5.23% profit
-          profitPercent: 5.23,
-          todayProfit: total * 0.0125, // 1.25% today
-          todayPercent: 1.25,
+      try {
+        // Fetch wallet balances from API
+        const balancesResponse = await fetch('/api/wallet/balances', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
         });
+
+        if (balancesResponse.ok) {
+          const balancesData = await balancesResponse.json();
+          if (balancesData.balances) {
+            setBalances(balancesData.balances);
+            
+            const total = balancesData.balances.reduce((sum: number, b: Balance) => sum + (b.usdValue || 0), 0);
+            setStats({
+              totalBalance: total,
+              totalProfit: total * 0.0523,
+              profitPercent: 5.23,
+              todayProfit: total * 0.0125,
+              todayPercent: 1.25,
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch wallet data:', error);
+      } finally {
         setLoading(false);
-      }, 500);
+      }
     };
 
     loadData();
-  }, [router]);
+  }, [router, authUser, accessToken]);
 
   // Handle logout
-  const handleLogout = () => {
-    localStorage.removeItem('tigerex_token');
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken || localStorage.getItem('tigerex_access_token')}`,
+        },
+      });
+    } catch (e) {
+      // Ignore errors
+    }
+    localStorage.removeItem('tigerex_access_token');
     localStorage.removeItem('tigerex_refresh_token');
     localStorage.removeItem('tigerex_token_expires');
     localStorage.removeItem('tigerex_user');
@@ -213,6 +225,9 @@ export default function DashboardPage() {
           </div>
           
           <div className="flex items-center gap-4">
+            {/* Theme Toggle */}
+            <ThemeToggle />
+
             {/* Notifications */}
             <button className="relative p-2 text-gray-400 hover:text-white transition-colors">
               <Bell className="w-5 h-5" />

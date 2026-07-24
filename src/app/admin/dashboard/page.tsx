@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { ThemeToggle } from '@/components/theme-toggle';
 
 // Types
 interface User {
@@ -451,8 +452,9 @@ export default function Dashboard() {
       {/* Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="h-14 border-b border-gray-700 flex items-center px-4">
+        <div className="h-14 border-b border-gray-700 flex items-center justify-between px-4">
           <h1 className="text-lg font-medium">{tabs.find(t => t.id === activeTab)?.label}</h1>
+          <ThemeToggle />
         </div>
 
         {/* Stats Row (for overview) */}

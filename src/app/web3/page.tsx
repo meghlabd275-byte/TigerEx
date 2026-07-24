@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   Wallet, 
@@ -29,9 +29,11 @@ import {
   Receipt,
   Gift,
   Star,
-  AlertTriangle
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { useAuth } from '@/components/auth/AuthContext';
 
 // Supported networks
 interface Network {
@@ -40,18 +42,22 @@ interface Network {
   symbol: string;
   icon: string;
   type: 'EVM' | 'non-EVM';
+  chainId: number;
+  rpcUrl: string;
+  explorerUrl: string;
 }
 
 const networks: Network[] = [
-  { id: 'eth', name: 'Ethereum', symbol: 'ETH', icon: 'Ξ', type: 'EVM' },
-  { id: 'bsc', name: 'BNB Smart Chain', symbol: 'BNB', icon: '⬡', type: 'EVM' },
-  { id: 'polygon', name: 'Polygon', symbol: 'MATIC', icon: '⬟', type: 'EVM' },
-  { id: 'arbitrum', name: 'Arbitrum', symbol: 'ETH', icon: '🔴', type: 'EVM' },
-  { id: 'optimism', name: 'Optimism', symbol: 'ETH', icon: '🔵', type: 'EVM' },
-  { id: 'avax', name: 'Avalanche', symbol: 'AVAX', icon: '🔺', type: 'EVM' },
-  { id: 'sol', name: 'Solana', symbol: 'SOL', icon: '◎', type: 'non-EVM' },
-  { id: 'ton', name: 'Toncoin', symbol: 'TON', icon: '🟢', type: 'non-EVM' },
-  { id: 'tron', name: 'TRON', symbol: 'TRX', icon: '⭕', type: 'non-EVM' },
+  { id: 'eth', name: 'Ethereum', symbol: 'ETH', icon: 'Ξ', type: 'EVM', chainId: 1, rpcUrl: 'https://eth.llamarpc.com', explorerUrl: 'https://etherscan.io' },
+  { id: 'bsc', name: 'BNB Smart Chain', symbol: 'BNB', icon: '⬡', type: 'EVM', chainId: 56, rpcUrl: 'https://bsc-dataseed.binance.org', explorerUrl: 'https://bscscan.com' },
+  { id: 'polygon', name: 'Polygon', symbol: 'MATIC', icon: '⬟', type: 'EVM', chainId: 137, rpcUrl: 'https://polygon-rpc.com', explorerUrl: 'https://polygonscan.com' },
+  { id: 'arbitrum', name: 'Arbitrum', symbol: 'ETH', icon: '🔴', type: 'EVM', chainId: 42161, rpcUrl: 'https://arb1.arbitrum.io/rpc', explorerUrl: 'https://arbiscan.io' },
+  { id: 'optimism', name: 'Optimism', symbol: 'ETH', icon: '🔵', type: 'EVM', chainId: 10, rpcUrl: 'https://mainnet.optimism.io', explorerUrl: 'https://optimistic.etherscan.io' },
+  { id: 'avax', name: 'Avalanche', symbol: 'AVAX', icon: '🔺', type: 'EVM', chainId: 43114, rpcUrl: 'https://api.avax.network/ext/bc/C/rpc', explorerUrl: 'https://snowtrace.io' },
+  { id: 'base', name: 'Base', symbol: 'ETH', icon: '🔵', type: 'EVM', chainId: 8453, rpcUrl: 'https://mainnet.base.org', explorerUrl: 'https://basescan.org' },
+  { id: 'sol', name: 'Solana', symbol: 'SOL', icon: '◎', type: 'non-EVM', chainId: 0, rpcUrl: 'https://api.mainnet-beta.solana.com', explorerUrl: 'https://solscan.io' },
+  { id: 'ton', name: 'Toncoin', symbol: 'TON', icon: '🟢', type: 'non-EVM', chainId: 0, rpcUrl: 'https://toncenter.com/api/v2', explorerUrl: 'https://tonscan.org' },
+  { id: 'tron', name: 'TRON', symbol: 'TRX', icon: '⭕', type: 'non-EVM', chainId: 0, rpcUrl: 'https://api.trongrid.io', explorerUrl: 'https://tronscan.org' },
 ];
 
 // Token
@@ -59,42 +65,34 @@ interface Token {
   id: string;
   name: string;
   symbol: string;
-  balance: number;
+  balance: string;
   usdValue: number;
   network: string;
+  networkId: string;
   icon: string;
   isNative: boolean;
+  contractAddress?: string;
+  decimals: number;
 }
-
-// Demo tokens
-const demoTokens: Token[] = [
-  { id: '1', name: 'Ethereum', symbol: 'ETH', balance: 2.5432, usdValue: 8792.45, network: 'Ethereum', icon: 'Ξ', isNative: true },
-  { id: '2', name: 'Tether', symbol: 'USDT', balance: 5432.10, usdValue: 5432.10, network: 'Ethereum', icon: '$', isNative: false },
-  { id: '3', name: 'BNB', symbol: 'BNB', balance: 12.5, usdValue: 7250.00, network: 'BNB Smart Chain', icon: '⬡', isNative: true },
-  { id: '4', name: 'Solana', symbol: 'SOL', balance: 85.3, usdValue: 8398.54, network: 'Solana', icon: '◎', isNative: true },
-  { id: '5', name: 'Wrapped Bitcoin', symbol: 'WBTC', balance: 0.15, usdValue: 10087.50, network: 'Ethereum', icon: '₿', isNative: false },
-];
 
 // Transaction
 interface Transaction {
   id: string;
   type: 'send' | 'receive' | 'swap' | 'approve';
   token: string;
-  amount: number;
+  tokenSymbol: string;
+  amount: string;
   usdValue: number;
   status: 'pending' | 'completed' | 'failed';
   date: string;
   hash: string;
+  from?: string;
+  to?: string;
 }
 
-const demoTransactions: Transaction[] = [
-  { id: '1', type: 'receive', token: 'ETH', amount: 1.5, usdValue: 5182.50, status: 'completed', date: '2026-07-15 14:30', hash: '0x1234...5678' },
-  { id: '2', type: 'send', token: 'USDT', amount: 1000, usdValue: 1000, status: 'completed', date: '2026-07-14 09:15', hash: '0xabcd...efgh' },
-  { id: '3', type: 'swap', token: 'ETH→USDT', amount: 0.5, usdValue: 1727.50, status: 'completed', date: '2026-07-13 18:45', hash: '0x9876...5432' },
-  { id: '4', type: 'receive', token: 'SOL', amount: 25, usdValue: 2462.50, status: 'pending', date: '2026-07-17 10:00', hash: '0xdef0...1234' },
-];
-
 export default function Web3WalletPage() {
+  const { user, accessToken } = useAuth();
+  
   // State
   const [showBalance, setShowBalance] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -104,18 +102,87 @@ export default function Web3WalletPage() {
   const [showReceive, setShowReceive] = useState(false);
   const [showSend, setShowSend] = useState(false);
   
-  // Demo wallet address
-  const walletAddress = '0x742d35Cc6634C0532925a3b844Bc9e7595f4B2E1';
+  // Data state
+  const [tokens, setTokens] = useState<Token[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [walletAddress, setWalletAddress] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Fetch wallet data
+  const fetchWalletData = useCallback(async () => {
+    if (!accessToken) {
+      // Use demo address if not authenticated
+      setWalletAddress('0x742d35Cc6634C0532925a3b844Bc9e7595f4B2E1');
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Fetch wallet address
+      const walletResponse = await fetch('/api/wallet/address', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      
+      if (walletResponse.ok) {
+        const walletData = await walletResponse.json();
+        setWalletAddress(walletData.address || '0x742d35Cc6634C0532925a3b844Bc9e7595f4B2E1');
+      }
+
+      // Fetch token balances
+      const balancesResponse = await fetch(`/api/wallet/balances?network=${selectedNetwork.id}`, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+
+      if (balancesResponse.ok) {
+        const balancesData = await balancesResponse.json();
+        setTokens(balancesData.tokens || []);
+      }
+
+      // Fetch transactions
+      const txResponse = await fetch(`/api/wallet/transfers?network=${selectedNetwork.id}&limit=20`, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+
+      if (txResponse.ok) {
+        const txData = await txResponse.json();
+        setTransactions(txData.transactions || []);
+      }
+    } catch (err) {
+      console.error('Error fetching wallet data:', err);
+      setError('Failed to load wallet data');
+      // Fallback to demo address
+      setWalletAddress('0x742d35Cc6634C0532925a3b844Bc9e7595f4B2E1');
+    } finally {
+      setLoading(false);
+    }
+  }, [accessToken, selectedNetwork.id]);
+
+  // Fetch data on mount and network change
+  useEffect(() => {
+    fetchWalletData();
+  }, [fetchWalletData]);
+
+  // Total balance
+  const totalBalance = tokens.reduce((sum, t) => sum + (t.usdValue || 0), 0);
 
   // Copy address
   const copyAddress = useCallback(() => {
-    navigator.clipboard.writeText(walletAddress);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (walletAddress) {
+      navigator.clipboard.writeText(walletAddress);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   }, [walletAddress]);
-
-  // Total balance
-  const totalBalance = demoTokens.reduce((sum, t) => sum + t.usdValue, 0);
 
   // Format number
   const formatNumber = (num: number): string => {
@@ -295,73 +362,106 @@ export default function Web3WalletPage() {
         {/* Assets Tab */}
         {activeTab === 'assets' && (
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
-            {demoTokens.map(token => (
-              <div key={token.id} className="flex items-center justify-between p-4">
-                <div className="flex items-center space-x-3">
-                  <span className="text-2xl w-10 h-10 flex items-center justify-center bg-gray-100 dark:bg-gray-700 rounded-full">
-                    {token.icon}
-                  </span>
-                  <div>
-                    <p className="font-medium text-gray-900 dark:text-white">{token.name}</p>
-                    <p className="text-sm text-gray-500">{token.symbol} • {token.network}</p>
+            {loading ? (
+              <div className="flex items-center justify-center p-8">
+                <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
+                <span className="ml-2 text-gray-500">Loading assets...</span>
+              </div>
+            ) : error ? (
+              <div className="p-4 text-center text-red-500">{error}</div>
+            ) : tokens.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">
+                <Coins className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                <p>No assets found on {selectedNetwork.name}</p>
+              </div>
+            ) : (
+              tokens.map(token => (
+                <div key={token.id} className="flex items-center justify-between p-4">
+                  <div className="flex items-center space-x-3">
+                    <span className="text-2xl w-10 h-10 flex items-center justify-center bg-gray-100 dark:bg-gray-700 rounded-full">
+                      {token.icon || token.symbol.charAt(0)}
+                    </span>
+                    <div>
+                      <p className="font-medium text-gray-900 dark:text-white">{token.name}</p>
+                      <p className="text-sm text-gray-500">{token.symbol} • {token.network}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-medium text-gray-900 dark:text-white">{formatNumber(parseFloat(token.balance))} {token.symbol}</p>
+                    <p className="text-sm text-gray-500">${formatNumber(token.usdValue)}</p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="font-medium text-gray-900 dark:text-white">{formatNumber(token.balance)} {token.symbol}</p>
-                  <p className="text-sm text-gray-500">${formatNumber(token.usdValue)}</p>
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         )}
 
         {/* Activity Tab */}
         {activeTab === 'activity' && (
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
-            {demoTransactions.map(tx => (
-              <div key={tx.id} className="flex items-center justify-between p-4">
-                <div className="flex items-center space-x-3">
-                  <div className={`w-10 h-10 flex items-center justify-center rounded-full ${
-                    tx.type === 'send' ? 'bg-red-100 text-red-600' :
-                    tx.type === 'receive' ? 'bg-green-100 text-green-600' :
-                    tx.type === 'swap' ? 'bg-purple-100 text-purple-600' :
-                    'bg-blue-100 text-blue-600'
-                  }`}>
-                    {tx.type === 'send' ? <ArrowUpRight className="w-5 h-5" /> :
-                     tx.type === 'receive' ? <ArrowDownLeft className="w-5 h-5" /> :
-                     tx.type === 'swap' ? <Swap className="w-5 h-5" /> :
-                     <Check className="w-5 h-5" />}
-                  </div>
-                  <div>
-                    <p className="font-medium text-gray-900 dark:text-white">
-                      {tx.type === 'send' ? 'Sent' : 
-                       tx.type === 'receive' ? 'Received' : 
-                       tx.type === 'swap' ? 'Swapped' : 'Approved'}
-                    </p>
-                    <p className="text-sm text-gray-500">{tx.date}</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className={`font-medium ${
-                    tx.type === 'send' ? 'text-red-500' : 'text-green-500'
-                  }`}>
-                    {tx.type === 'send' ? '-' : '+'}{tx.amount} {tx.token}
-                  </p>
-                  <div className="flex items-center justify-end space-x-1">
-                    <span className={`text-xs px-2 py-0.5 rounded ${
-                      tx.status === 'completed' ? 'bg-green-100 text-green-600' :
-                      tx.status === 'pending' ? 'bg-yellow-100 text-yellow-600' :
-                      'bg-red-100 text-red-600'
-                    }`}>
-                      {tx.status}
-                    </span>
-                    <a href="#" className="text-gray-400 hover:text-orange-500">
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
-                </div>
+            {loading ? (
+              <div className="flex items-center justify-center p-8">
+                <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
+                <span className="ml-2 text-gray-500">Loading transactions...</span>
               </div>
-            ))}
+            ) : transactions.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">
+                <Receipt className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                <p>No transactions found</p>
+              </div>
+            ) : (
+              transactions.map(tx => (
+                <div key={tx.id} className="flex items-center justify-between p-4">
+                  <div className="flex items-center space-x-3">
+                    <div className={`w-10 h-10 flex items-center justify-center rounded-full ${
+                      tx.type === 'send' ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400' :
+                      tx.type === 'receive' ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' :
+                      tx.type === 'swap' ? 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400' :
+                      'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
+                    }`}>
+                      {tx.type === 'send' ? <ArrowUpRight className="w-5 h-5" /> :
+                       tx.type === 'receive' ? <ArrowDownLeft className="w-5 h-5" /> :
+                       tx.type === 'swap' ? <Swap className="w-5 h-5" /> :
+                       <Check className="w-5 h-5" />}
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900 dark:text-white">
+                        {tx.type === 'send' ? 'Sent' : 
+                         tx.type === 'receive' ? 'Received' : 
+                         tx.type === 'swap' ? 'Swapped' : 'Approved'}
+                      </p>
+                      <p className="text-sm text-gray-500">{tx.date}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className={`font-medium ${
+                      tx.type === 'send' ? 'text-red-500' : 'text-green-500'
+                    }`}>
+                      {tx.type === 'send' ? '-' : '+'}{tx.amount} {tx.tokenSymbol || tx.token}
+                    </p>
+                    <div className="flex items-center justify-end space-x-1">
+                      <span className={`text-xs px-2 py-0.5 rounded ${
+                        tx.status === 'completed' ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' :
+                        tx.status === 'pending' ? 'bg-yellow-100 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400' :
+                        'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+                      }`}>
+                        {tx.status}
+                      </span>
+                      {tx.hash && (
+                        <a 
+                          href={`${selectedNetwork.explorerUrl}/tx/${tx.hash}`} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-gray-400 hover:text-orange-500"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         )}
 
