@@ -1,0 +1,45 @@
+[package]
+name = "tigerex-oracle-service"
+version = "1.0.0"
+edition = "2021"
+authors = ["TigerEx Team"]
+description = "TigerEx Oracle Service - Price Feeds & Data Aggregation"
+
+[dependencies]
+# Web server
+axum = "0.7.4"
+tower-http = { version = "0.5.1", features = ["cors", "trace"] }
+
+# Async runtime
+tokio = { version = "1.36", features = ["full"] }
+
+# HTTP client for external APIs
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.7", features = ["v4", "serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Cache
+redis = { version = "0.25", features = ["tokio-comp"] }
+
+# Time series
+rusty-ts = "0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+wiremock = "0.6"
+
+[[bin]]
+name = "oracle-service"
+path = "src/main.rs"
