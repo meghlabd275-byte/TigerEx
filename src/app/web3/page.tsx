@@ -6,7 +6,7 @@ import {
   Wallet, 
   ArrowUpRight, 
   ArrowDownLeft, 
-  Swap, 
+  ArrowRightLeft, 
   Copy, 
   Check, 
   Eye, 
@@ -22,7 +22,7 @@ import {
   Zap,
   Shield,
   Key,
-  Browser,
+  Globe,
   Link as LinkIcon,
   Coins,
   Send,
@@ -273,11 +273,11 @@ export default function Web3WalletPage() {
               Send
             </button>
             <button className="flex flex-col items-center justify-center py-3 bg-white/20 text-white rounded-xl font-medium hover:bg-white/30">
-              <Swap className="w-5 h-5 mb-1" />
+              <ArrowRightLeft className="w-5 h-5 mb-1" />
               Swap
             </button>
             <button className="flex flex-col items-center justify-center py-3 bg-white/20 text-white rounded-xl font-medium hover:bg-white/30">
-              <Browser className="w-5 h-5 mb-1" />
+              <Globe className="w-5 h-5 mb-1" />
               DApps
             </button>
           </div>
@@ -342,7 +342,7 @@ export default function Web3WalletPage() {
           {[
             { key: 'assets', label: 'Assets', icon: Coins },
             { key: 'activity', label: 'Activity', icon: Receipt },
-            { key: 'dapps', label: 'DApps', icon: Browser },
+            { key: 'dapps', label: 'DApps', icon: Globe },
           ].map(tab => (
             <button
               key={tab.key}
@@ -421,7 +421,7 @@ export default function Web3WalletPage() {
                     }`}>
                       {tx.type === 'send' ? <ArrowUpRight className="w-5 h-5" /> :
                        tx.type === 'receive' ? <ArrowDownLeft className="w-5 h-5" /> :
-                       tx.type === 'swap' ? <Swap className="w-5 h-5" /> :
+                       tx.type === 'swap' ? <ArrowRightLeft className="w-5 h-5" /> :
                        <Check className="w-5 h-5" />}
                     </div>
                     <div>
@@ -585,13 +585,5 @@ export default function Web3WalletPage() {
         </div>
       )}
     </div>
-  );
-}
-
-function Check({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-    </svg>
   );
 }

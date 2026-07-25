@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
+import { getDb } from '@/lib/db';
 
 /**
  * Check Account API - Production Implementation
- * Proxies to backend auth service to check if user exists
+ * Checks if user exists in the database
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { emailOrPhone, type } = body;
+    const { emailOrPhone } = body;
     
     if (!emailOrPhone) {
       return NextResponse.json(
@@ -18,57 +17,61 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Proxy to backend auth service
-    const response = await fetch(`${API_BASE_URL}/auth/check-account`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ 
-        emailOrPhone,
-        type: type === 'phone' ? 'phone' : 'email'
-      }),
-    });
-
-    const data = await response.json();
+    const db = getDb();
     
-    if (!response.ok) {
-      if (response.status === 404) {
-        return NextResponse.json(
-          { success: false, error: { code: 'ACCOUNT_NOT_FOUND', message: 'Account not found' } },
-          { status: 404 }
-        );
-      }
-      return NextResponse.json(
-        { success: false, error: data.error || { code: 'CHECK_FAILED', message: 'Failed to check account' } },
-        { status: response.status }
-      );
+    // Determine if input is email or phone
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const isEmail = emailRegex.test(emailOrPhone);
+    
+    let user = null;
+    
+    if (isEmail) {
+      user = db.prepare('SELECT * FROM users WHERE email = ?').get(emailOrPhone.toLowerCase());
+    } else {
+      // Phone number - normalize
+      const normalizedPhone = emailOrPhone.replace(/[^0-9+]/g, '');
+      user = db.prepare('SELECT * FROM users WHERE phone = ?').get(normalizedPhone);
+    }
+    
+    if (!user) {
+      return NextResponse.json({
+        success: true,
+        exists: false,
+        email: isEmail ? emailOrPhone : null,
+        phone: isEmail ? null : emailOrPhone,
+        emailVerified: false,
+        phoneVerified: false,
+        twoFactorEnabled: false,
+        lockedUntil: null,
+        failedAttempts: 0,
+      });
     }
 
-    // Return account status from backend
+    // Check if account is locked
+    let lockedUntil = null;
+    if (user.locked_until) {
+      const lockTime = new Date(user.locked_until as string);
+      if (lockTime > new Date()) {
+        lockedUntil = user.locked_until;
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      exists: data.exists,
-      email: data.email,
-      phone: data.phone,
-      emailVerified: data.emailVerified || false,
-      phoneVerified: data.phoneVerified || false,
-      twoFactorEnabled: data.twoFactorEnabled || false,
-      lockedUntil: data.lockedUntil || null,
-      failedAttempts: data.failedAttempts || 0,
+      exists: true,
+      email: user.email,
+      phone: user.phone,
+      emailVerified: !!user.email_verified,
+      phoneVerified: !!user.phone_verified,
+      twoFactorEnabled: !!user.two_factor_enabled,
+      lockedUntil,
+      failedAttempts: user.failed_attempts || 0,
     });
   } catch (error: any) {
     console.error('Check account error:', error);
-    
-    // Fallback: try to determine if it's an email or phone
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const isEmail = emailRegex.test(body.emailOrPhone);
-    
-    // If backend is unavailable, we can't verify - return not found to redirect to signup
-    // This is safe because the actual login/register will validate against the backend
     return NextResponse.json(
-      { success: false, error: { code: 'SERVICE_UNAVAILABLE', message: 'Authentication service temporarily unavailable' } },
-      { status: 503 }
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to check account' } },
+      { status: 500 }
     );
   }
 }

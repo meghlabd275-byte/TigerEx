@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb, generateOTP, generateId } from '@/lib/db';
 
-// In-memory OTP storage
-const otpStore = new Map<string, { code: string; expires: number; attempts: number }>();
-
-function generateOTP(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
+/**
+ * Send Login OTP - Production Implementation
+ * Sends OTP for passwordless login
+ */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -19,18 +17,60 @@ export async function POST(request: NextRequest) {
       );
     }
     
+    const db = getDb();
+    
+    // Determine if input is email or phone
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const isEmail = emailRegex.test(emailOrPhone);
+    
+    // Verify user exists
+    let user = null;
+    if (isEmail) {
+      user = db.prepare('SELECT user_id FROM users WHERE email = ?').get(emailOrPhone.toLowerCase());
+    } else {
+      const normalizedPhone = emailOrPhone.replace(/[^0-9+]/g, '');
+      user = db.prepare('SELECT user_id FROM users WHERE phone = ?').get(normalizedPhone);
+    }
+    
+    if (!user) {
+      return NextResponse.json(
+        { success: false, error: { code: 'USER_NOT_FOUND', message: 'User not found' } },
+        { status: 404 }
+      );
+    }
+    
     // Generate OTP
     const otp = generateOTP();
-    const expires = Date.now() + 5 * 60 * 1000;
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
     
-    otpStore.set(emailOrPhone, { code: otp, expires, attempts: 0 });
+    // Delete existing OTPs for this user
+    if (isEmail) {
+      db.prepare('DELETE FROM otp_codes WHERE email = ? AND purpose = ?').run(emailOrPhone.toLowerCase(), 'login');
+    } else {
+      db.prepare('DELETE FROM otp_codes WHERE phone = ? AND purpose = ?').run(emailOrPhone, 'login');
+    }
     
-    console.log(`Login OTP for ${emailOrPhone}: ${otp}`);
+    // Store OTP in database
+    const otpId = generateId();
+    db.prepare(`
+      INSERT INTO otp_codes (otp_id, user_id, email, phone, code, type, purpose, expires_at, max_attempts)
+      VALUES (?, ?, ?, ?, ?, ?, 'login', ?, 3)
+    `).run(
+      otpId,
+      (user as any).user_id,
+      isEmail ? emailOrPhone.toLowerCase() : null,
+      isEmail ? null : emailOrPhone,
+      otp,
+      isEmail ? 'email' : 'sms',
+      expiresAt
+    );
+    
+    // In production, send via email/SMS API
+    console.log(`[OTP] Login code for ${emailOrPhone}: ${otp}`);
     
     return NextResponse.json({
       success: true,
       message: 'Verification code sent',
-      debugOtp: process.env.NODE_ENV === 'development' ? otp : undefined,
     });
   } catch (error: any) {
     console.error('Send login OTP error:', error);

@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
 // Confirm P2P trade
 export async function PUT(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', ');
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
     const { searchParams } = new URL(request.url);
     const tradeId = searchParams.get('id');
     

@@ -52,7 +52,7 @@ export async function GET(request: NextRequest) {
 // Mark notification as read
 export async function PUT(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', ');
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
     const body = await request.json();
     
     if (!token) {

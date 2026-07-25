@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
 
-// Demo user storage
-const users = new Map<string, any>();
-
+/**
+ * Get Current User - Production Implementation
+ * Returns user info based on session token
+ */
 export async function GET(request: NextRequest) {
   try {
     const authHeader = request.headers.get('authorization');
@@ -15,34 +17,44 @@ export async function GET(request: NextRequest) {
     }
     
     const token = authHeader.substring(7);
+    const db = getDb();
     
-    // For demo, decode the token to get user info
-    try {
-      const parts = token.split('.');
-      if (parts.length === 3) {
-        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
-        
-        // Return demo user
-        return NextResponse.json({
-          id: 'user_' + Date.now(),
-          email: payload.emailOrPhone?.includes('@') ? payload.emailOrPhone : 'user@tigerex.com',
-          phone: payload.emailOrPhone?.includes('@') ? null : payload.emailOrPhone,
-          username: 'DemoUser',
-          kycLevel: 1,
-          status: 'active',
-          twoFactorEnabled: false,
-          createdAt: new Date().toISOString(),
-          verifiedAt: new Date().toISOString(),
-        });
-      }
-    } catch (e) {
-      // Invalid token
+    // Find session by token
+    const session = db.prepare(`
+      SELECT s.*, u.email, u.phone, u.username, u.kyc_level, u.kyc_status, 
+             u.two_factor_enabled, u.status as user_status, u.created_at, u.last_login_at
+      FROM sessions s
+      JOIN users u ON s.user_id = u.user_id
+      WHERE s.access_token = ? AND s.expires_at > datetime('now')
+    `).get(token);
+    
+    if (!session) {
+      return NextResponse.json(
+        { success: false, error: { code: 'INVALID_TOKEN', message: 'Invalid or expired token' } },
+        { status: 401 }
+      );
     }
     
-    return NextResponse.json(
-      { success: false, error: { code: 'INVALID_TOKEN', message: 'Invalid token' } },
-      { status: 401 }
-    );
+    // Update last active
+    db.prepare(`
+      UPDATE sessions SET last_active_at = datetime('now') WHERE session_id = ?
+    `).run((session as any).session_id);
+    
+    return NextResponse.json({
+      success: true,
+      user: {
+        userId: (session as any).user_id,
+        email: (session as any).email,
+        phone: (session as any).phone,
+        username: (session as any).username,
+        kycLevel: (session as any).kyc_level,
+        kycStatus: (session as any).kyc_status,
+        twoFactorEnabled: !!(session as any).two_factor_enabled,
+        status: (session as any).user_status,
+        createdAt: (session as any).created_at,
+        lastLoginAt: (session as any).last_login_at,
+      },
+    });
   } catch (error: any) {
     console.error('Get user error:', error);
     return NextResponse.json(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { 
@@ -20,13 +20,16 @@ import {
 } from 'lucide-react';
 import SmartInput, { InputMode, Country, countries } from '@/components/auth/SmartInput';
 import OtpInput from '@/components/auth/OtpInput';
-import PasswordInput from '@/components/auth/PasswordInput, { PasswordStrength } from '@/components/auth/PasswordInput';
+import PasswordInput, { PasswordStrength } from '@/components/auth/PasswordInput';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 // Register steps
 type RegisterStep = 'identity' | 'otp' | 'password' | 'success';
 
-export default function RegisterPage() {
+// Force dynamic rendering
+export const dynamic = 'force-dynamic';
+
+function RegisterForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   
@@ -705,5 +708,24 @@ export default function RegisterPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+function LoadingFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+      <div className="animate-pulse flex flex-col items-center">
+        <div className="h-12 w-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p className="text-gray-600 dark:text-gray-400">Loading...</p>
+      </div>
+    </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<LoadingFallback />}>
+      <RegisterForm />
+    </Suspense>
   );
 }

@@ -1,27 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
-
-// Logout user
+/**
+ * Logout - Production Implementation
+ * Invalidates session token
+ */
 export async function POST(request: NextRequest) {
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     
-    if (token) {
-      await fetch(`${API_BASE_URL}/auth/logout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-      });
+    if (!token) {
+      return NextResponse.json(
+        { success: false, message: 'No token provided' },
+        { status: 400 }
+      );
     }
-
-    // Clear local storage on client side is handled by the frontend
-    return NextResponse.json({ success: true });
+    
+    const db = getDb();
+    
+    // Delete session
+    const result = db.prepare(`
+      DELETE FROM sessions WHERE access_token = ?
+    `).run(token);
+    
+    if (result.changes === 0) {
+      return NextResponse.json(
+        { success: false, message: 'Session not found' },
+        { status: 404 }
+      );
+    }
+    
+    return NextResponse.json({
+      success: true,
+      message: 'Logged out successfully',
+    });
   } catch (error: any) {
     console.error('Logout API error:', error);
-    // Always return success for logout
-    return NextResponse.json({ success: true });
+    return NextResponse.json(
+      { success: false, message: 'Internal server error' },
+      { status: 500 }
+    );
   }
 }

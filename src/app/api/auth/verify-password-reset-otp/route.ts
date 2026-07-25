@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
 
-const otpStore = new Map<string, { code: string; expires: number }>();
-
+/**
+ * Verify Password Reset OTP - Production Implementation
+ * Verifies OTP for password reset
+ */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -14,32 +17,48 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    const otpRecord = otpStore.get(emailOrPhone);
+    const db = getDb();
+    
+    // Determine if input is email or phone
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const isEmail = emailRegex.test(emailOrPhone);
+    
+    // Find OTP record
+    let otpRecord = null;
+    if (isEmail) {
+      otpRecord = db.prepare(`
+        SELECT * FROM otp_codes 
+        WHERE email = ? AND code = ? AND purpose = 'password_reset' AND verified_at IS NULL
+      `).get(emailOrPhone.toLowerCase(), code);
+    } else {
+      otpRecord = db.prepare(`
+        SELECT * FROM otp_codes 
+        WHERE phone = ? AND code = ? AND purpose = 'password_reset' AND verified_at IS NULL
+      `).get(emailOrPhone, code);
+    }
     
     if (!otpRecord) {
       return NextResponse.json(
-        { success: false, error: { code: 'INVALID_OTP', message: 'No verification code found' } },
+        { success: false, error: { code: 'INVALID_OTP', message: 'Invalid verification code' } },
         { status: 400 }
       );
     }
     
-    if (Date.now() > otpRecord.expires) {
-      otpStore.delete(emailOrPhone);
+    // Check if expired
+    const expiresAt = new Date((otpRecord as any).expires_at);
+    if (expiresAt < new Date()) {
       return NextResponse.json(
-        { success: false, error: { code: 'OTP_EXPIRED', message: 'Code has expired' } },
+        { success: false, error: { code: 'OTP_EXPIRED', message: 'Verification code has expired' } },
         { status: 400 }
       );
     }
     
-    if (otpRecord.code !== code) {
-      return NextResponse.json(
-        { success: false, error: { code: 'INVALID_OTP', message: 'Invalid code' } },
-        { status: 400 }
-      );
-    }
-    
-    // Mark as verified (keep for password reset)
-    otpStore.set(emailOrPhone, { ...otpRecord, code: 'VERIFIED' });
+    // Mark OTP as verified
+    db.prepare(`
+      UPDATE otp_codes 
+      SET verified_at = datetime('now'), attempts = attempts + 1
+      WHERE otp_id = ?
+    `).run((otpRecord as any).otp_id);
     
     return NextResponse.json({
       success: true,

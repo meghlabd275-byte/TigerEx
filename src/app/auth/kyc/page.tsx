@@ -142,7 +142,7 @@ const LivenessCheck: React.FC<{ onComplete: (success: boolean) => void }> = ({ o
       const timer = setTimeout(() => {
         setProgress(((step + 1) / instructions.length) * 100);
         setStep(step + 1);
-      }: 2000);
+      }, 2000);
       return () => clearTimeout(timer);
     } else {
       setIsChecking(true);
@@ -309,7 +309,7 @@ export default function KYCPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block mb-2 font-medium" style={{ color: theme?.colors.text }}>Title *</label>
-                  <Input selectOptions={[{code:'','Select Title'}, {code:'mr','Mr.'}, {code:'mrs','Mrs.'}, {code:'ms','Ms.'}, {code:'dr','Dr.'}]} value={formData.title} onChange={(e: any) => updateField('title', e.target.value)} placeholder="Select Title" />
+                  <Input selectOptions={[{code:'', label:'Select Title'}, {code:'mr',label:'Mr.'}, {code:'mrs',label:'Mrs.'}, {code:'ms',label:'Ms.'}, {code:'dr',label:'Dr.'}]} value={formData.title} onChange={(e: any) => updateField('title', e.target.value)} placeholder="Select Title" />
                 </div>
                 <div></div>
                 <div>
