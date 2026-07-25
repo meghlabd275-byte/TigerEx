@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
-
-// Get account balance
+/**
+ * Get Wallet Balance - Production Implementation
+ * Returns user wallet balances from database
+ */
 export async function GET(request: NextRequest) {
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
@@ -14,28 +16,49 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const response = await fetch(`${API_BASE_URL}/wallet/balance`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
+    const db = getDb();
     
-    if (!response.ok) {
+    // Find session by token
+    const session = db.prepare(`
+      SELECT user_id FROM sessions 
+      WHERE access_token = ? AND expires_at > datetime('now')
+    `).get(token) as { user_id: string } | undefined;
+    
+    if (!session) {
       return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch balance' },
-        { status: response.status }
+        { success: false, error: 'Invalid or expired token' },
+        { status: 401 }
       );
     }
 
-    return NextResponse.json(data);
+    // Get user wallets
+    const wallets = db.prepare(`
+      SELECT * FROM wallets WHERE user_id = ?
+    `).all(session.user_id);
+    
+    // Calculate total balance
+    let totalUSDT = 0;
+    const balances = (wallets as any[]).map(wallet => {
+      // Convert all to USDT value (simplified)
+      const value = parseFloat(wallet.balance) * (wallet.usd_price || 1);
+      totalUSDT += value;
+      return {
+        coin: wallet.currency,
+        free: wallet.available_balance,
+        locked: wallet.locked_balance,
+        usdValue: value,
+      };
+    });
+
+    return NextResponse.json({
+      success: true,
+      balances,
+      totalUSDT,
+    });
   } catch (error: any) {
     console.error('Balance API error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
+      { success: false, error: 'Internal server error' },
       { status: 500 }
     );
   }

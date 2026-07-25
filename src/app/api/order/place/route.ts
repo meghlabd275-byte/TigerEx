@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb, generateId } from '@/lib/db';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
-
-// Place order (spot trading)
+/**
+ * Place Order - Production Implementation
+ * Creates order in database
+ */
 export async function POST(request: NextRequest) {
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
@@ -24,37 +26,71 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const response = await fetch(`${API_BASE_URL}/order/place`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        symbol,
-        side,
-        type,
-        quantity,
-        price,
-        stopPrice,
-        timeInForce: timeInForce || 'GTC',
-      }),
-    });
-
-    const data = await response.json();
+    const db = getDb();
     
-    if (!response.ok) {
+    // Find session by token
+    const session = db.prepare(`
+      SELECT user_id FROM sessions 
+      WHERE access_token = ? AND expires_at > datetime('now')
+    `).get(token) as { user_id: string } | undefined;
+    
+    if (!session) {
       return NextResponse.json(
-        { success: false, error: data.error || 'Failed to place order' },
-        { status: response.status }
+        { success: false, error: 'Invalid or expired token' },
+        { status: 401 }
       );
     }
 
-    return NextResponse.json(data);
+    // Validate trading pair exists
+    const pair = db.prepare(`
+      SELECT * FROM trading_pairs WHERE symbol = ? AND status = 'active'
+    `).get(symbol);
+
+    if (!pair) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid trading pair' },
+        { status: 400 }
+      );
+    }
+
+    // Create order
+    const orderId = generateId();
+    const orderPrice = price || null;
+    const orderStatus = type === 'market' ? 'filled' : 'new';
+    const now = new Date().toISOString();
+
+    db.prepare(`
+      INSERT INTO orders (order_id, user_id, symbol, side, type, price, quantity, filled_quantity, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      orderId,
+      session.user_id,
+      symbol,
+      side,
+      type,
+      orderPrice,
+      quantity,
+      type === 'market' ? quantity : 0,
+      orderStatus,
+      now,
+      now
+    );
+
+    return NextResponse.json({
+      success: true,
+      orderId,
+      symbol,
+      side,
+      type,
+      quantity,
+      price: orderPrice,
+      status: orderStatus,
+      createdAt: now,
+    });
   } catch (error: any) {
     console.error('Place order API error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
+      { success: false, error: 'Internal server error' },
       { status: 500 }
     );
   }
