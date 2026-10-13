@@ -70,7 +70,7 @@ func (ts *TradingService) CancelOrder(ctx context.Context, orderID, userID strin
 }
 
 // GetOrder gets an order by ID
-func (ts *TradingService) GetOrder(ctx context.Context, orderID string) (*models.Order, error) {
+func (ts *TradingService) GetOrder(ctx context.Context, orderID, userID string) (*models.Order, error) {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
@@ -78,7 +78,9 @@ func (ts *TradingService) GetOrder(ctx context.Context, orderID string) (*models
 	if !ok {
 		return nil, models.NewAPIError(404, "Order not found")
 	}
-
+	if userID == "" || order.UserID != userID {
+		return nil, models.NewAPIError(403, "Unauthorized")
+	}
 	return order, nil
 }
 

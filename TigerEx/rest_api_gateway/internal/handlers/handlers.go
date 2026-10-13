@@ -56,7 +56,16 @@ func (h *Handler) respondWithJSON(w http.ResponseWriter, r *http.Request, status
 func (h *Handler) respondWithError(w http.ResponseWriter, r *http.Request, statusCode int, err *models.APIError) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(models.NewErrorResponse(err.Code, err.Message))
+	_ = json.NewEncoder(w).Encode(models.NewErrorResponse(err.Code, err.Message))
+}
+
+// respondWithAPIError preserves the status code carried by a service error.
+func (h *Handler) respondWithAPIError(w http.ResponseWriter, r *http.Request, err error) {
+	apiErr, ok := err.(*models.APIError)
+	if !ok { apiErr = &models.APIError{Code: http.StatusInternalServerError, Message: "Internal service error"} }
+	status := apiErr.Code
+	if status < 400 || status > 599 { status = http.StatusInternalServerError }
+	h.respondWithError(w, r, status, apiErr)
 }
 
 // parseQueryInt parses integer query parameter
@@ -106,7 +115,7 @@ func parseQueryFloat(r *http.Request, key string, defaultValue float64) float64 
 func (h *Handler) HandleExchangeInfo(w http.ResponseWriter, r *http.Request) {
 	symbols, err := h.marketData.GetExchangeInfo(r.Context())
 	if err != nil {
-		h.respondWithError(w, r, 400, err.(*models.APIError))
+		h.respondWithAPIError(w, r, err)
 		return
 	}
 
@@ -287,25 +296,11 @@ func (h *Handler) HandleAvgPrice(w http.ResponseWriter, r *http.Request) {
 
 // HandleAccount handles GET /api/v3/account
 func (h *Handler) HandleAccount(w http.ResponseWriter, r *http.Request) {
-	userID := h.getUserID(r)
-
-	account := &models.Account{
-		MakerCommission:  0.001,
-		TakerCommission: 0.001,
-		BuyerCommission: 0.0,
-		SellerCommission: 0.0,
-		CanTrade:        true,
-		CanWithdraw:    true,
-		CanDeposit:     true,
-		Balances: []models.Balance{
-			{Asset: "BTC", Free: 1.5, Locked: 0.5},
-			{Asset: "USDT", Free: 10000.0, Locked: 5000.0},
-			{Asset: "ETH", Free: 10.0, Locked: 2.0},
-		},
-		AccountType: "SPOT",
-	}
-
-	h.respondWithJSON(w, r, 200, account)
+	// Account balances must come from the durable ledger; never fabricate assets or permissions.
+	h.respondWithError(w, r, http.StatusServiceUnavailable, &models.APIError{
+		Code: http.StatusServiceUnavailable,
+		Message: "ACCOUNT_SERVICE_NOT_CONFIGURED: durable account ledger is not connected",
+	})
 }
 
 // HandleMyTrades handles GET /api/v3/myTrades
@@ -362,7 +357,7 @@ func (h *Handler) handleGetOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.trading.GetOrder(r.Context(), orderID)
+	order, err := h.trading.GetOrder(r.Context(), orderID, h.getUserID(r))
 	if err != nil {
 		h.respondWithError(w, r, 400, err.(*models.APIError))
 		return
@@ -473,12 +468,8 @@ func (h *Handler) HandleAllOrders(w http.ResponseWriter, r *http.Request) {
 // ============================================================================
 
 func (h *Handler) getUserID(r *http.Request) string {
-	// Try to get from context (set by auth middleware)
-	if userID := r.Context().Value(middleware.ContextKeyUserID); userID != nil {
-		return userID.(string)
-	}
-	// Default user for testing
-	return "default_user"
+	userID, _ := r.Context().Value(middleware.ContextKeyUserID).(string)
+	return userID
 }
 
 // ============================================================================
@@ -514,6 +505,27 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 // ROUTER
 // ============================================================================
 
+// requireAuthentication validates credentials and binds the verified identity to the request.
+func (h *Handler) requireAuthentication(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, err := h.auth.Authenticate(r.Context(), r.Header.Get("Authorization"))
+		if err != nil {
+			apiErr, ok := err.(*models.APIError)
+			if !ok { apiErr = &models.APIError{Code: http.StatusUnauthorized, Message: "Authentication failed"} }
+			status := apiErr.Code
+			if status < 400 || status > 599 { status = http.StatusUnauthorized }
+			h.respondWithError(w, r, status, apiErr)
+			return
+		}
+		userID, ok := ctx.Value(middleware.ContextKeyUserID).(string)
+		if !ok || userID == "" {
+			h.respondWithError(w, r, http.StatusUnauthorized, &models.APIError{Code: http.StatusUnauthorized, Message: "Authenticated user identity is required"})
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // Router creates HTTP handler
 func (h *Handler) Router() http.Handler {
 	mux := http.NewServeMux()
@@ -534,13 +546,13 @@ func (h *Handler) Router() http.Handler {
 	mux.HandleFunc("/api/v3/avgPrice", h.HandleAvgPrice)
 
 	// Account
-	mux.HandleFunc("/api/v3/account", h.HandleAccount)
-	mux.HandleFunc("/api/v3/myTrades", h.HandleMyTrades)
+	mux.Handle("/api/v3/account", h.requireAuthentication(http.HandlerFunc(h.HandleAccount)))
+	mux.Handle("/api/v3/myTrades", h.requireAuthentication(http.HandlerFunc(h.HandleMyTrades)))
 
 	// Orders
-	mux.HandleFunc("/api/v3/order", h.HandleOrder)
-	mux.HandleFunc("/api/v3/openOrders", h.HandleOpenOrders)
-	mux.HandleFunc("/api/v3/allOrders", h.HandleAllOrders)
+	mux.Handle("/api/v3/order", h.requireAuthentication(http.HandlerFunc(h.HandleOrder)))
+	mux.Handle("/api/v3/openOrders", h.requireAuthentication(http.HandlerFunc(h.HandleOpenOrders)))
+	mux.Handle("/api/v3/allOrders", h.requireAuthentication(http.HandlerFunc(h.HandleAllOrders)))
 
 	// Rate limiting middleware
 	if h.config.RateLimit.Enabled {
