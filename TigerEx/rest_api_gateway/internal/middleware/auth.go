@@ -5,6 +5,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/hex"
 	"strings"
 	"time"
@@ -46,6 +48,9 @@ func NewAuthMiddleware(cfg *config.Config) *AuthMiddleware {
 // Authenticate authenticates a request
 func (am *AuthMiddleware) Authenticate(ctx context.Context, authHeader string) (context.Context, error) {
 	if !am.config.Auth.Required {
+		if am.config.Server.Mode == "production" {
+			return ctx, models.NewErrorResponse(503, "Authentication cannot be disabled in production")
+		}
 		return ctx, nil
 	}
 
@@ -85,71 +90,76 @@ func (am *AuthMiddleware) authenticateJWT(ctx context.Context, token string) (co
 	return ctx, nil
 }
 
-// authenticateAPIKey authenticates using API key
+// authenticateAPIKey fails closed until a persistent, hashed API-key verifier is configured.
 func (am *AuthMiddleware) authenticateAPIKey(ctx context.Context, apiKey string) (context.Context, error) {
-	// Validate API key format
-	if len(apiKey) < 32 {
-		return ctx, models.NewErrorResponse(401, "Invalid API key")
-	}
-
-	// Look up API key in database/cache
-	// In production, this would validate against the database
-	tier := "free" // default tier
-
-	ctx = context.WithValue(ctx, ContextKeyAPIKey, apiKey)
-	ctx = context.WithValue(ctx, ContextKeyAPIKeyTier, tier)
-	ctx = context.WithValue(ctx, ContextKeyUserID, "default_user")
-
-	return ctx, nil
+	_ = apiKey
+	return ctx, models.NewErrorResponse(503, "API key authentication is not configured")
 }
 
-// parseJWT parses a JWT token (simplified - production would use proper JWT library)
+// parseJWT verifies an HS256 JWT signature and its registered claims.
 func (am *AuthMiddleware) parseJWT(token string) (map[string]interface{}, error) {
-	// JWT format: header.payload.signature
+	if !am.jwtSecretUsable() {
+		return nil, models.NewErrorResponse(503, "JWT signing secret is not safely configured")
+	}
 	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return nil, models.NewErrorResponse(401, "Invalid token format")
 	}
-
-	// In production, verify signature and expiry
-	// For now, return mock claims
-	return map[string]interface{}{
-		"user_id": "user_123",
-		"exp":     time.Now().Add(am.config.JWT.Expiry).Unix(),
-	}, nil
-}
-
-// GenerateJWT generates a JWT token for a user
-func (am *AuthMiddleware) GenerateJWT(userID string) (string, error) {
-	// In production, use proper JWT library
-	header := base64URLEncode([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := base64URLEncode([]byte(`{"user_id":"` + userID + `","exp":` + string(time.Now().Add(am.config.JWT.Expiry).Unix()) + `}`))
-	signature := am.sign([]byte(header + "." + payload))
-	return header + "." + payload + "." + signature, nil
-}
-
-// sign generates HMAC signature
-func (am *AuthMiddleware) sign(data []byte) string {
-	h := hmac.New(sha256.New, []byte(am.config.JWT.Secret))
-	h.Write(data)
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-// base64URLEncode encodes data to base64 URL format
-func base64URLEncode(data []byte) string {
-	encoded := make([]byte, len(data)*2)
-	n := 0
-	for _, b := range data {
-		switch {
-		case b >= 'A' && b <= 'Z', b >= 'a' && b <= 'z', b >= '0' && b <= '9', b == '-', b == '_':
-			encoded[n] = b
-			n++
-		default:
-			encoded[n] = '='
-			n++
-		}
+	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil { return nil, models.NewErrorResponse(401, "Invalid token header") }
+	var header struct { Algorithm string `json:"alg"`; Type string `json:"typ"` }
+	if err := json.Unmarshal(headerBytes, &header); err != nil || header.Algorithm != "HS256" {
+		return nil, models.NewErrorResponse(401, "Unsupported token algorithm")
 	}
-	return string(encoded[:n])
+	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil { return nil, models.NewErrorResponse(401, "Invalid token signature") }
+	mac := hmac.New(sha256.New, []byte(am.config.JWT.Secret))
+	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
+	if !hmac.Equal(signature, mac.Sum(nil)) { return nil, models.NewErrorResponse(401, "Invalid token signature") }
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil { return nil, models.NewErrorResponse(401, "Invalid token payload") }
+	var claims struct {
+		UserID string `json:"user_id"`
+		Expiry int64 `json:"exp"`
+		Issuer string `json:"iss"`
+		Audience string `json:"aud"`
+	}
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil || claims.UserID == "" || claims.Expiry <= time.Now().Unix() {
+		return nil, models.NewErrorResponse(401, "Invalid or expired token claims")
+	}
+	if am.config.JWT.Issuer != "" && claims.Issuer != am.config.JWT.Issuer {
+		return nil, models.NewErrorResponse(401, "Invalid token issuer")
+	}
+	if am.config.JWT.Audience != "" && claims.Audience != am.config.JWT.Audience {
+		return nil, models.NewErrorResponse(401, "Invalid token audience")
+	}
+	return map[string]interface{}{"user_id": claims.UserID, "exp": claims.Expiry}, nil
+}
+
+func (am *AuthMiddleware) jwtSecretUsable() bool {
+	secret := am.config.JWT.Secret
+	return len(secret) >= 32 && secret != "tigerex-secret-key-change-in-production"
+}
+
+// GenerateJWT creates a signed HS256 JWT for an authenticated user.
+func (am *AuthMiddleware) GenerateJWT(userID string) (string, error) {
+	if userID == "" { return "", models.NewErrorResponse(400, "User ID is required") }
+	if !am.jwtSecretUsable() { return "", models.NewErrorResponse(503, "JWT signing secret is not safely configured") }
+	headerJSON, err := json.Marshal(map[string]string{"alg":"HS256","typ":"JWT"})
+	if err != nil { return "", err }
+	payloadJSON, err := json.Marshal(struct {
+		UserID string `json:"user_id"`
+		Expiry int64 `json:"exp"`
+		Issuer string `json:"iss"`
+		Audience string `json:"aud"`
+	}{userID, time.Now().Add(am.config.JWT.Expiry).Unix(), am.config.JWT.Issuer, am.config.JWT.Audience})
+	if err != nil { return "", err }
+	header := base64.RawURLEncoding.EncodeToString(headerJSON)
+	payload := base64.RawURLEncoding.EncodeToString(payloadJSON)
+	input := header + "." + payload
+	mac := hmac.New(sha256.New, []byte(am.config.JWT.Secret))
+	_, _ = mac.Write([]byte(input))
+	return input + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
 // ============================================================================

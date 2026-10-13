@@ -38,59 +38,9 @@ func NewTradingService() *TradingService {
 
 // CreateOrder creates a new order
 func (ts *TradingService) CreateOrder(ctx context.Context, req *CreateOrderRequest) (*models.Order, error) {
-	// Validate request
-	if err := ts.validateOrderRequest(req); err != nil {
-		return nil, err
-	}
-
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-
-	ts.orderCounter++
-	orderID := fmt.Sprintf("ORD_%d", ts.orderCounter)
-	orderUUID := generateUUID()
-
-	order := &models.Order{
-		ID:              orderID,
-		UserID:          req.UserID,
-		OrderUUID:       orderUUID,
-		Symbol:          req.Symbol,
-		Side:            models.OrderSide(req.Side),
-		Type:            models.OrderType(req.Type),
-		Price:           req.Price,
-		StopPrice:       req.StopPrice,
-		Quantity:        req.Quantity,
-		Status:          models.OrderStatusNew,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
-		TimeInForce:     models.TimeInForce(req.TimeInForce),
-		IcebergQty:      req.IcebergQty,
-	}
-
-	// Calculate quote quantity
-	if req.Price > 0 {
-		order.QuoteQuantity = req.Quantity * req.Price
-	}
-
-	// Index by user
-	if ts.orderIndex[req.UserID] == nil {
-		ts.orderIndex[req.UserID] = make(map[string]*models.Order)
-	}
-	ts.orderIndex[req.UserID][orderID] = order
-	ts.orders[orderID] = order
-
-	// If market order, fill immediately
-	if order.Type == models.OrderTypeMarket {
-		order.Status = models.OrderStatusFilled
-		order.AvgPrice = getMarketPrice(order.Symbol) // In production, get from matching engine
-		order.FilledQty = order.Quantity
-		order.Amount = order.Quantity * order.AvgPrice
-
-		// Create trade
-		ts.createTrade(order)
-	}
-
-	return order, nil
+	_ = ctx
+	_ = req
+	return nil, models.NewErrorResponse(503, "ORDER_EXECUTION_NOT_CONFIGURED: durable matching, risk checks, balance reservations, and settlement are not connected")
 }
 
 // CancelOrder cancels an order
@@ -325,8 +275,3 @@ func generateUUID() string {
 	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), ts.orderCounter)
 }
 
-func getMarketPrice(symbol string) float64 {
-	// In production, get from matching engine
-	// For now, return mock price
-	return 50000.0
-}

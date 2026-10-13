@@ -402,14 +402,14 @@ func (s *APIServer) rateLimitMiddleware() gin.HandlerFunc {
 }
 
 func (s *APIServer) authMiddleware() gin.HandlerFunc {
-    return func(c *gin.Context) {
-        // Simplified - check API key header
-        apiKey := c.GetHeader("X-API-Key")
-        if apiKey != "" {
-            c.Set("user_id", "demo_user")
-        }
-        c.Next()
-    }
+	return func(c *gin.Context) {
+		if c.GetHeader("X-API-Key") != "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error":"API_KEY_AUTHENTICATION_NOT_CONFIGURED"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
 }
 
 func (s *APIServer) requireAuth() gin.HandlerFunc {
@@ -433,110 +433,64 @@ func (s *APIServer) healthCheck(c *gin.Context) {
 }
 
 func (s *APIServer) getTicker(c *gin.Context) {
-    symbol := c.Param("symbol")
-    
-    ticker := Ticker{
-        Symbol:    symbol,
-        Price:    50000.0,
-        Change24h: 2.5,
-        Volume24h: 1_000_000_000.0,
-        High24h:   51000.0,
-        Low24h:    49000.0,
-        Timestamp: time.Now().UnixMilli(),
-    }
-    
-    c.JSON(http.StatusOK, ticker)
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"LIVE_MARKET_DATA_NOT_CONFIGURED"})
 }
+
 
 func (s *APIServer) getDepth(c *gin.Context) {
-    symbol := c.Param("symbol")
-    
-    book := OrderBook{
-        Symbol: symbol,
-        Bids:   [][]float64{{50000.0, 1.5}, {49999.0, 2.0}, {49998.0, 3.0}},
-        Asks:   [][]float64{{50001.0, 1.0}, {50002.0, 2.5}, {50003.0, 1.5}},
-    }
-    
-    c.JSON(http.StatusOK, book)
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"LIVE_MARKET_DATA_NOT_CONFIGURED"})
 }
+
 
 func (s *APIServer) placeOrder(c *gin.Context) {
-    var req struct {
-        Symbol   string  `json:"symbol" binding:"required"`
-        Side     string  `json:"side" binding:"required"`
-        Type    string  `json:"type" binding:"required"`
-        Price   float64 `json:"price"`
-        Quantity float64 `json:"quantity" binding:"required"`
-    }
-    
-    if err := c.ShouldBindJSON(&req); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-        return
-    }
-    
-    order := Order{
-        OrderID:   fmt.Sprintf("ord_%d", time.Now().UnixNano()),
-        UserID:    c.GetString("user_id"),
-        Symbol:    req.Symbol,
-        Side:      req.Side,
-        Type:      req.Type,
-        Price:     req.Price,
-        Quantity:  req.Quantity,
-        Filled:    0,
-        Status:    "NEW",
-        Timestamp: time.Now().UnixMilli(),
-    }
-    
-    c.JSON(http.StatusOK, order)
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"ORDER_EXECUTION_NOT_CONFIGURED"})
 }
+
 
 func (s *APIServer) cancelOrder(c *gin.Context) {
-    orderID := c.Param("id")
-    c.JSON(http.StatusOK, gin.H{
-        "order_id": orderID,
-        "status":   "CANCELLED",
-    })
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"ORDER_EXECUTION_NOT_CONFIGURED"})
 }
+
 
 func (s *APIServer) getOpenOrders(c *gin.Context) {
-    c.JSON(http.StatusOK, []Order{})
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"ORDER_EXECUTION_NOT_CONFIGURED"})
 }
+
 
 func (s *APIServer) getOrderHistory(c *gin.Context) {
-    c.JSON(http.StatusOK, []Order{})
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"ORDER_EXECUTION_NOT_CONFIGURED"})
 }
+
 
 func (s *APIServer) getBalance(c *gin.Context) {
-    userID := c.GetString("user_id")
-    c.JSON(http.StatusOK, gin.H{
-        "user_id": userID,
-        "balances": map[string]float64{
-            "BTC":  1.5,
-            "ETH":  15.0,
-            "USDT": 50000.0,
-        },
-    })
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"ACCOUNT_LEDGER_NOT_CONFIGURED"})
 }
+
 
 func (s *APIServer) getPositions(c *gin.Context) {
-    c.JSON(http.StatusOK, []interface{}{})
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"ACCOUNT_LEDGER_NOT_CONFIGURED"})
 }
+
 
 func (s *APIServer) getDepositHistory(c *gin.Context) {
-    c.JSON(http.StatusOK, []interface{}{})
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"ACCOUNT_LEDGER_NOT_CONFIGURED"})
 }
+
 
 func (s *APIServer) getWithdrawalHistory(c *gin.Context) {
-    c.JSON(http.StatusOK, []interface{}{})
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"ACCOUNT_LEDGER_NOT_CONFIGURED"})
 }
+
 
 func (s *APIServer) getTrades(c *gin.Context) {
-    c.JSON(http.StatusOK, []Trade{})
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"LIVE_MARKET_DATA_NOT_CONFIGURED"})
 }
 
+
 func (s *APIServer) getKlines(c *gin.Context) {
-    c.JSON(http.StatusOK, [][]interface{}{})
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error":"LIVE_MARKET_DATA_NOT_CONFIGURED"})
 }
+
 
 func (s *APIServer) handleWS(c *gin.Context) {
     conn, err := GlobalWSHub.upgrader.Upgrade(c.Writer, c.Request, nil)

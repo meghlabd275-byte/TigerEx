@@ -34,87 +34,8 @@ func NewMarketDataService() *MarketDataService {
 		aggTrades: make(map[string][]*models.WSAggTrade),
 	}
 
-	// Initialize with default symbols
-	mds.initializeSymbols()
-
+	// No market symbols or prices are seeded. A live market-data adapter must populate them.
 	return mds
-}
-
-// initializeSymbols initializes default trading symbols
-func (mds *MarketDataService) initializeSymbols() {
-	defaultSymbols := []struct {
-		Symbol           string
-		BaseAsset       string
-		QuoteAsset      string
-		MakerFee       float64
-		TakerFee       float64
-	}{
-		{"BTC/USDT", "BTC", "USDT", 0.001, 0.001},
-		{"ETH/USDT", "ETH", "USDT", 0.001, 0.001},
-		{"BNB/USDT", "BNB", "USDT", 0.001, 0.001},
-		{"SOL/USDT", "SOL", "USDT", 0.001, 0.001},
-		{"XRP/USDT", "XRP", "USDT", 0.001, 0.001},
-		{"ADA/USDT", "ADA", "USDT", 0.001, 0.001},
-		{"DOGE/USDT", "DOGE", "USDT", 0.001, 0.001},
-		{"DOT/USDT", "DOT", "USDT", 0.001, 0.001},
-		{"MATIC/USDT", "MATIC", "USDT", 0.001, 0.001},
-		{"LTC/USDT", "LTC", "USDT", 0.001, 0.001},
-		{"AVAX/USDT", "AVAX", "USDT", 0.001, 0.001},
-		{"LINK/USDT", "LINK", "USDT", 0.001, 0.001},
-		{"ATOM/USDT", "ATOM", "USDT", 0.001, 0.001},
-		{"UNI/USDT", "UNI", "USDT", 0.001, 0.001},
-		{"XLM/USDT", "XLM", "USDT", 0.001, 0.001},
-	}
-
-	for _, s := range defaultSymbols {
-		mds.symbols[s.Symbol] = &models.Symbol{
-			Symbol:        s.Symbol,
-			BaseAsset:     s.BaseAsset,
-			QuoteAsset:    s.QuoteAsset,
-			Status:       "TRADING",
-			BasePrecision: 8,
-			QuotePrecision: 8,
-			MinQuantity:  0.00001,
-			MaxQuantity:  1000000,
-			MinPrice:     0.01,
-			MaxPrice:     1000000,
-			MinNotional:  10,
-			MakerFee:     s.MakerFee,
-			TakerFee:     s.TakerFee,
-			IsMargin:     true,
-			AllowSpot:   true,
-			AllowMargin: true,
-			AllowFutures: false,
-		}
-
-		// Initialize mock price
-		mds.prices[s.Symbol] = mds.getInitialPrice(s.BaseAsset)
-	}
-}
-
-// getInitialPrice returns initial price for an asset
-func (mds *MarketDataService) getInitialPrice(baseAsset string) float64 {
-	prices := map[string]float64{
-		"BTC":  50000.0,
-		"ETH":  3000.0,
-		"BNB":  600.0,
-		"SOL":  100.0,
-		"XRP":  0.5,
-		"ADA":  0.35,
-		"DOGE": 0.08,
-		"DOT":  7.0,
-		"MATIC": 0.8,
-		"LTC":  70.0,
-		"AVAX": 35.0,
-		"LINK": 15.0,
-		"ATOM": 9.0,
-		"UNI":  7.0,
-		"XLM":  0.12,
-	}
-	if price, ok := prices[baseAsset]; ok {
-		return price
-	}
-	return 1.0
 }
 
 // ============================================================================
