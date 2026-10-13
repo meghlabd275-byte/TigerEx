@@ -76,28 +76,23 @@ const NETWORKS = [
   { id: 'ton', name: 'Toncoin', symbol: 'TON', color: '#0098EA', type: 'TON' },
 ];
 
-// Token balances (mock data)
-const MOCK_BALANCES = [
-  { network: 'ethereum', symbol: 'ETH', name: 'Ethereum', balance: '1.245', value: 2450.00, decimals: 18 },
-  { network: 'bitcoin', symbol: 'BTC', name: 'Bitcoin', balance: '0.025', value: 1125.00, decimals: 8 },
-  { network: 'ethereum', symbol: 'USDT', name: 'Tether USD', balance: '5000.00', value: 5000.00, decimals: 6 },
-  { network: 'ethereum', symbol: 'USDC', name: 'USD Coin', balance: '2500.00', value: 2500.00, decimals: 6 },
-  { network: 'bsc', symbol: 'BNB', name: 'BNB', balance: '5.5', value: 1650.00, decimals: 18 },
-  { network: 'polygon', symbol: 'MATIC', name: 'Polygon', balance: '2500', value: 1875.00, decimals: 18 },
-  { network: 'solana', symbol: 'SOL', name: 'Solana', balance: '25', value: 3000.00, decimals: 9 },
-  { network: 'tron', symbol: 'TRX', name: 'Tron', balance: '10000', value: 900.00, decimals: 6 },
-  { network: 'dogecoin', symbol: 'DOGE', name: 'Dogecoin', balance: '50000', value: 4500.00, decimals: 8 },
-  { network: 'cardano', symbol: 'ADA', name: 'Cardano', balance: '5000', value: 2250.00, decimals: 6 },
-];
+interface WalletTokenBalance {
+  network: string;
+  symbol: string;
+  name: string;
+  balance: string;
+  value: number;
+  decimals: number;
+}
 
 interface WalletComponentProps {
   // Props interface
 }
 
-export function WalletHeader() {
+export function WalletHeader({ balances }: { balances?: WalletTokenBalance[] | null }) {
   const [showBalance, setShowBalance] = useState(true);
-  
-  const totalBalance = MOCK_BALANCES.reduce((sum, t) => sum + t.value, 0);
+  const hasBalanceData = balances !== undefined && balances !== null;
+  const totalBalance = (balances ?? []).reduce((sum, token) => sum + token.value, 0);
 
   return (
     <div className="bg-gradient-to-r from-[#1a1a2e] to-[#16213e] p-6 rounded-2xl mb-6">
@@ -106,7 +101,7 @@ export function WalletHeader() {
           <p className="text-gray-400 text-sm mb-1">Total Balance</p>
           <div className="flex items-center gap-2">
             <h2 className="text-3xl font-bold text-white">
-              {showBalance ? `$${totalBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '******'}
+              {showBalance ? (hasBalanceData ? `${totalBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : 'Unavailable') : '******'}
             </h2>
             <button 
               onClick={() => setShowBalance(!showBalance)}
@@ -186,11 +181,11 @@ export function NetworkSelector() {
   );
 }
 
-export function TokenList() {
+export function TokenList({ balances }: { balances?: WalletTokenBalance[] | null }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'value' | 'name'>('value');
 
-  const filteredTokens = MOCK_BALANCES
+  const filteredTokens = (balances ?? [])
     .filter(token => 
       searchQuery === '' || 
       token.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -219,7 +214,11 @@ export function TokenList() {
 
       {/* Token List */}
       <div className="space-y-2">
-        {filteredTokens.map((token) => (
+        {balances == null ? (
+          <div className="rounded-xl bg-[#1a1a2e] p-6 text-center text-sm text-gray-400">Wallet balance service is not connected</div>
+        ) : filteredTokens.length === 0 ? (
+          <div className="rounded-xl bg-[#1a1a2e] p-6 text-center text-sm text-gray-400">No assets match this account or search</div>
+        ) : filteredTokens.map((token) => (
           <div 
             key={`${token.network}-${token.symbol}`}
             className="bg-[#1a1a2e] rounded-xl p-4 flex items-center justify-between hover:bg-[#2a2a3e] transition cursor-pointer group"
