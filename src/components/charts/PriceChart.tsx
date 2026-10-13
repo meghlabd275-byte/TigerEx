@@ -1,14 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { 
-  TrendingUp, 
-  Clock, 
-  Settings, 
-  Maximize2,
-  RefreshCw,
-  Indicator
-} from 'lucide-react';
+import { Maximize2, Settings } from 'lucide-react';
 
 interface ChartProps {
   symbol?: string;
@@ -119,6 +112,7 @@ export function PriceChart({
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-white/10">
         <div className="flex items-center gap-4">
+          <span className="text-xs text-gray-400">{symbol}</span>
           {/* Interval Buttons */}
           {intervals.map((int) => (
             <button
@@ -151,7 +145,7 @@ export function PriceChart({
           
           {/* Indicators */}
           <button className="p-1.5 text-gray-400 hover:text-white" title="Indicators">
-            <Indicator className="h-4 w-4" />
+            <Settings className="h-4 w-4" />
           </button>
           
           {/* Fullscreen */}
@@ -187,7 +181,7 @@ export function PriceChart({
           ))}
           
           {/* Candles */}
-          {renderCandles()}
+          {chartType === 'candles' ? renderCandles() : <div className="flex items-center justify-center text-sm text-gray-500" style={{ height }}>This chart type is not connected to a live data provider</div>}
         </div>
       </div>
 
@@ -215,6 +209,7 @@ export function PriceChart({
                 className={isGreen ? "flex-1 bg-green-500/50" : "flex-1 bg-red-500/50"}
                 style={{ height: volumeHeight + "%" }}
               />
+            );
           })}
         </div>
       </div>
