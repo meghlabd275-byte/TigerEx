@@ -572,7 +572,6 @@ func rateLimitMiddleware(rl *middleware.RateLimiter, next http.Handler) http.Han
 
 		allowed, resp := rl.Allow(key)
 		if !allowed {
-			h := w.(http.Hijacker)
 			w.WriteHeader(http.StatusTooManyRequests)
 			json.NewEncoder(w).Encode(resp)
 			return
