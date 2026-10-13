@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { ArrowUp, ArrowDown, RefreshCw, Settings } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { ArrowUp } from 'lucide-react';
 
 // Order Book Level Interface
 interface OrderBookLevel {
@@ -29,46 +29,8 @@ interface OrderBookProps {
   quoteAsset?: string;
   onSelectPrice?: (price: number, side: 'buy' | 'sell') => void;
   showTrades?: boolean;
+  trades?: Trade[];
 }
-
-// Generate mock data if none provided
-const generateMockBids = (): OrderBookLevel[] => {
-  const basePrice = 67432.50;
-  return Array.from({ length: 15 }, (_, i) => ({
-    price: basePrice - (i * 0.50) - (Math.random() * 0.25),
-    quantity: Math.random() * 10 + 1,
-    total: 0,
-    orders: Math.floor(Math.random() * 10) + 1,
-    timestamp: Date.now() - Math.random() * 10000,
-  }));
-};
-
-const generateMockAsks = (): OrderBookLevel[] => {
-  const basePrice = 67432.50;
-  return Array.from({ length: 15 }, (_, i) => ({
-    price: basePrice + (i * 0.50) + (Math.random() * 0.25),
-    quantity: Math.random() * 10 + 1,
-    total: 0,
-    orders: Math.floor(Math.random() * 10) + 1,
-    timestamp: Date.now() - Math.random() * 10000,
-  }));
-};
-
-const generateMockTrades = (): Trade[] => {
-  const basePrice = 67432.50;
-  return Array.from({ length: 20 }, (_, i) => ({
-    id: `trade_${Date.now()}_${i}`,
-    price: basePrice + (Math.random() - 0.5) * 20,
-    quantity: Math.random() * 2 + 0.1,
-    side: Math.random() > 0.5 ? 'buy' : 'sell',
-    time: new Date(Date.now() - i * 5000).toLocaleTimeString('en-US', { 
-      hour12: false, 
-      hour: '2-digit', 
-      minute: '2-digit', 
-      second: '2-digit' 
-    }),
-  }));
-};
 
 export function OrderBook({ 
   bids: propBids,
@@ -77,89 +39,35 @@ export function OrderBook({
   baseAsset = 'BTC', 
   quoteAsset = 'USDT',
   onSelectPrice,
-  showTrades = false 
+  showTrades = false,
+  trades: propTrades,
 }: OrderBookProps) {
-  const [bids, setBids] = useState<OrderBookLevel[]>(propBids || generateMockBids());
-  const [asks, setAsks] = useState<OrderBookLevel[]>(propAsks || generateMockAsks());
-  const [trades, setTrades] = useState<Trade[]>(generateMockTrades());
+  const [bids, setBids] = useState<OrderBookLevel[]>(propBids || []);
+  const [asks, setAsks] = useState<OrderBookLevel[]>(propAsks || []);
+  const [trades, setTrades] = useState<Trade[]>(propTrades || []);
   const [precision, setPrecision] = useState(2);
   const [depth, setDepth] = useState(10);
   const [grouping, setGrouping] = useState(0.01);
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [lastUpdate, setLastUpdate] = useState(Date.now());
+  const [lastUpdate, setLastUpdate] = useState<number | null>(null);
 
-  // Calculate cumulative totals
+  // Only update the view from data supplied by the connected market-data client.
   useEffect(() => {
-    if (!propBids) {
-      let cumBid = 0;
-      const newBids = bids.map(b => {
-        cumBid += b.quantity;
-        return { ...b, total: cumBid };
+    const totals = (levels: OrderBookLevel[]) => {
+      let cumulative = 0;
+      return levels.map(level => {
+        cumulative += level.quantity;
+        return { ...level, total: cumulative };
       });
-      setBids(newBids);
-    }
-
-    if (!propAsks) {
-      let cumAsk = 0;
-      const newAsks = asks.map(a => {
-        cumAsk += a.quantity;
-        return { ...a, total: cumAsk };
-      });
-      setAsks(newAsks);
-    }
-  }, [bids, asks, propBids, propAsks]);
-
-  // Auto-refresh simulation
-  useEffect(() => {
-    if (!autoRefresh) return;
-    
-    const interval = setInterval(() => {
+    };
+    if (propBids !== undefined) setBids(totals(propBids));
+    if (propAsks !== undefined) setAsks(totals(propAsks));
+    if (propTrades !== undefined) setTrades(propTrades);
+    if (propBids !== undefined || propAsks !== undefined || propTrades !== undefined) {
       setLastUpdate(Date.now());
-      
-      // Simulate order book updates
-      setBids(prev => prev.map(level => ({
-        ...level,
-        quantity: Math.max(0.1, level.quantity + (Math.random() - 0.5) * 0.5),
-        timestamp: Date.now(),
-      })));
-      
-      setAsks(prev => prev.map(level => ({
-        ...level,
-        quantity: Math.max(0.1, level.quantity + (Math.random() - 0.5) * 0.5),
-        timestamp: Date.now(),
-      })));
+    }
+  }, [propBids, propAsks, propTrades]);
 
-      // Add new trades occasionally
-      if (Math.random() > 0.7) {
-        const basePrice = 67432.50;
-        const newTrade: Trade = {
-          id: `trade_${Date.now()}`,
-          price: basePrice + (Math.random() - 0.5) * 10,
-          quantity: Math.random() * 1 + 0.1,
-          side: Math.random() > 0.5 ? 'buy' : 'sell',
-          time: new Date().toLocaleTimeString('en-US', { 
-            hour12: false, 
-            hour: '2-digit', 
-            minute: '2-digit', 
-            second: '2-digit' 
-          }),
-        };
-        setTrades(prev => [newTrade, ...prev.slice(0, 19)]);
-      }
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [autoRefresh]);
-
-  // Calculate totals
-  const calculateTotals = useCallback((levels: OrderBookLevel[]) => {
-    let cumulative = 0;
-    return levels.map(level => {
-      cumulative += level.quantity;
-      return { ...level, total: cumulative };
-    });
-  }, []);
-
+  // Totals are calculated when live data arrives.
   // Get max total for width calculation
   const allTotals = [...bids.map(b => b.total), ...asks.map(a => a.total)];
   const maxTotal = Math.max(...allTotals, 1);
@@ -229,13 +137,6 @@ export function OrderBook({
           <span className="text-xs text-gray-500">{symbol}</span>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setAutoRefresh(!autoRefresh)}
-            className={`p-1.5 rounded ${autoRefresh ? 'bg-green-500/20 text-green-400' : 'bg-white/5 text-gray-400'}`}
-            title="Auto Refresh"
-          >
-            <RefreshCw className={`w-4 h-4 ${autoRefresh ? 'animate-spin' : ''}`} style={{ animationDuration: '3s' }} />
-          </button>
           <select 
             value={grouping}
             onChange={(e) => setGrouping(Number(e.target.value))}
@@ -268,7 +169,7 @@ export function OrderBook({
 
       {/* Asks (Sells) - Red */}
       <div className="flex-1 overflow-hidden flex flex-col-reverse max-h-[200px]">
-        {groupedAsks.slice(0, depth).map((ask, i) => (
+        {groupedAsks.length === 0 ? <div className="px-4 py-6 text-center text-xs text-gray-500">Waiting for live ask data</div> : groupedAsks.slice(0, depth).map((ask, i) => (
           <div 
             key={`ask-${i}`}
             className="relative grid grid-cols-4 gap-2 px-4 py-1 text-xs cursor-pointer hover:bg-red-500/10 transition-colors"
@@ -291,32 +192,32 @@ export function OrderBook({
       <div className="flex items-center justify-between px-4 py-3 border-y border-white/10 bg-white/5">
         <div className="flex items-center gap-2">
           <span className="text-green-400 text-sm font-bold">
-            {formatPrice(bids[0]?.price || 0)}
+            {bids.length ? formatPrice(bids[0].price) : "—"}
           </span>
           <ArrowUp className="h-3 w-3 text-gray-500" />
           <span className="text-red-400 text-sm font-bold">
-            {formatPrice(asks[0]?.price || 0)}
+            {asks.length ? formatPrice(asks[0].price) : "—"}
           </span>
         </div>
         <div className="flex items-center gap-4 text-xs">
           <div>
             <span className="text-gray-500">Mid:</span>
-            <span className="text-white ml-1">{formatPrice(midPrice)}</span>
+            <span className="text-white ml-1">{midPrice > 0 ? formatPrice(midPrice) : "—"}</span>
           </div>
           <div>
             <span className="text-gray-500">VWAP:</span>
-            <span className="text-white ml-1">{formatPrice(vwap)}</span>
+            <span className="text-white ml-1">{bids.length + asks.length > 0 ? formatPrice(vwap) : "—"}</span>
           </div>
           <div>
             <span className="text-gray-500">Spread:</span>
-            <span className="text-gray-400 ml-1">{spread.toFixed(2)} ({spreadPercent.toFixed(3)}%)</span>
+            <span className="text-gray-400 ml-1">{bids.length > 0 && asks.length > 0 ? spread.toFixed(2) + " (" + spreadPercent.toFixed(3) + "%)" : "—"}</span>
           </div>
         </div>
       </div>
 
       {/* Bids (Buys) - Green */}
       <div className="flex-1 overflow-hidden max-h-[200px]">
-        {groupedBids.slice(0, depth).map((bid, i) => (
+        {groupedBids.length === 0 ? <div className="px-4 py-6 text-center text-xs text-gray-500">Waiting for live bid data</div> : groupedBids.slice(0, depth).map((bid, i) => (
           <div 
             key={`bid-${i}`}
             className="relative grid grid-cols-4 gap-2 px-4 py-1 text-xs cursor-pointer hover:bg-green-500/10 transition-colors"
@@ -342,7 +243,7 @@ export function OrderBook({
             <h4 className="text-xs text-gray-500 font-medium">Recent Trades</h4>
           </div>
           <div className="max-h-[150px] overflow-y-auto">
-            {trades.slice(0, 10).map((trade, i) => (
+            {trades.length === 0 ? <div className="px-4 py-4 text-center text-xs text-gray-500">Waiting for live trades</div> : trades.slice(0, 10).map((trade, i) => (
               <div key={trade.id} className="grid grid-cols-3 gap-2 px-4 py-1 text-xs">
                 <span className={trade.side === 'buy' ? 'text-green-400' : 'text-red-400'}>
                   {formatPrice(trade.price)}
@@ -357,7 +258,7 @@ export function OrderBook({
 
       {/* Footer Stats */}
       <div className="px-4 py-2 border-t border-white/10 text-xs text-gray-500 flex items-center justify-between">
-        <span>Last update: {new Date(lastUpdate).toLocaleTimeString()}</span>
+        <span>Last update: {lastUpdate === null ? "—" : new Date(lastUpdate).toLocaleTimeString()}</span>
         <span>Total bids: {bids.length} | Total asks: {asks.length}</span>
       </div>
     </div>
