@@ -2,8 +2,9 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"sync"
-	"time"
 
 	"tigerEx/rest_api_gateway/internal/models"
 )
@@ -102,9 +103,59 @@ func (mds *MarketDataService) GetPrices(ctx context.Context, symbols []string) (
 
 // UpdatePrice updates price for a symbol (called by matching engine)
 func (mds *MarketDataService) UpdatePrice(symbol string, price float64) {
+	if symbol == "" || price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) { return }
 	mds.mu.Lock()
 	mds.prices[symbol] = price
 	mds.mu.Unlock()
+}
+
+// PublishTicker ingests a ticker supplied by an authenticated market-data adapter.
+func (mds *MarketDataService) PublishTicker(ticker *models.Ticker24h) error {
+	if ticker == nil || ticker.Symbol == "" || ticker.LastPrice <= 0 || math.IsNaN(ticker.LastPrice) || math.IsInf(ticker.LastPrice, 0) {
+		return models.NewErrorResponse(400, "Invalid live ticker")
+	}
+	mds.mu.Lock()
+	mds.tickers[ticker.Symbol] = ticker
+	mds.prices[ticker.Symbol] = ticker.LastPrice
+	mds.mu.Unlock()
+	return nil
+}
+
+// PublishDepth ingests an actual order book snapshot from a trusted adapter.
+func (mds *MarketDataService) PublishDepth(symbol string, depth *models.Depth) error {
+	if symbol == "" || depth == nil { return models.NewErrorResponse(400, "Symbol and live depth are required") }
+	mds.mu.Lock()
+	mds.depth[symbol] = depth
+	mds.mu.Unlock()
+	return nil
+}
+
+// PublishKlines ingests actual candles for a symbol and interval.
+func (mds *MarketDataService) PublishKlines(symbol, interval string, candles []*models.Kline) error {
+	if symbol == "" || getIntervalMinutes(interval) == 0 || candles == nil { return models.NewErrorResponse(400, "Symbol, valid interval, and candle data are required") }
+	for _, candle := range candles {
+		if candle == nil || candle.Open <= 0 || candle.High < candle.Low || candle.Low <= 0 || candle.Close <= 0 || candle.Volume < 0 {
+			return models.NewErrorResponse(400, "Invalid candle data")
+		}
+	}
+	mds.mu.Lock()
+	mds.klines[symbol+":"+interval] = [][]*models.Kline{append([]*models.Kline(nil), candles...)}
+	mds.mu.Unlock()
+	return nil
+}
+
+// PublishTrades ingests actual trades from a trusted adapter.
+func (mds *MarketDataService) PublishTrades(symbol string, trades []*models.WSAggTrade) error {
+	if symbol == "" || trades == nil { return models.NewErrorResponse(400, "Symbol and trade data are required") }
+	for _, trade := range trades {
+		if trade == nil || trade.Symbol != symbol || trade.Price <= 0 || trade.Quantity <= 0 {
+			return models.NewErrorResponse(400, "Invalid trade data")
+		}
+	}
+	mds.mu.Lock()
+	mds.aggTrades[symbol] = append([]*models.WSAggTrade(nil), trades...)
+	mds.mu.Unlock()
+	return nil
 }
 
 // ============================================================================
@@ -112,242 +163,81 @@ func (mds *MarketDataService) UpdatePrice(symbol string, price float64) {
 // ============================================================================
 
 // Get24hTicker gets 24h ticker for a symbol
+// Get24hTicker returns only a ticker published by a configured live market-data adapter.
 func (mds *MarketDataService) Get24hTicker(ctx context.Context, symbol string) (*models.Ticker24h, error) {
+	_ = ctx
 	mds.mu.RLock()
-	defer mds.mu.RUnlock()
-
 	ticker, ok := mds.tickers[symbol]
-	if !ok {
-		// Generate mock ticker
-		price := mds.prices[symbol]
-		ticker = &models.Ticker24h{
-			Symbol:             symbol,
-			PriceChange:        price * 0.02,
-			PriceChangePercent: 2.0,
-			LastPrice:          price,
-			HighPrice:          price * 1.05,
-			LowPrice:           price * 0.95,
-			Volume:             1000000,
-			QuoteVolume:        50000000,
-			OpenPrice:          price * 0.98,
-			OpenTime:           time.Now().Add(-24*time.Hour).UnixMilli(),
-			CloseTime:          time.Now().UnixMilli(),
-			Count:             100000,
-		}
-	}
-
+	mds.mu.RUnlock()
+	if !ok || ticker == nil { return nil, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: no live 24-hour ticker is available") }
 	return ticker, nil
 }
 
-// GetAllTickers gets all 24h tickers
+// GetAllTickers returns only tickers published by a configured live market-data adapter.
 func (mds *MarketDataService) GetAllTickers(ctx context.Context) ([]*models.Ticker24h, error) {
+	_ = ctx
 	mds.mu.RLock()
 	defer mds.mu.RUnlock()
-
-	var result []*models.Ticker24h
-	for symbol := range mds.symbols {
-		ticker, _ := mds.tickers[symbol]
-		if ticker == nil {
-			price := mds.prices[symbol]
-			ticker = &models.Ticker24h{
-				Symbol:             symbol,
-				PriceChange:        price * 0.02,
-				PriceChangePercent: 2.0,
-				LastPrice:          price,
-				HighPrice:          price * 1.05,
-				LowPrice:           price * 0.95,
-				Volume:             1000000,
-				QuoteVolume:        50000000,
-				OpenPrice:          price * 0.98,
-				OpenTime:           time.Now().Add(-24*time.Hour).UnixMilli(),
-				CloseTime:          time.Now().UnixMilli(),
-				Count:             100000,
-			}
-		}
-		result = append(result, ticker)
-	}
-
+	result := make([]*models.Ticker24h, 0, len(mds.tickers))
+	for _, ticker := range mds.tickers { if ticker != nil { result = append(result, ticker) } }
 	return result, nil
 }
 
-// ============================================================================
-// BOOK TICKER OPERATIONS
-// ============================================================================
-
-// GetBookTicker gets book ticker (best bid/ask) for a symbol
+// GetBookTicker returns live best bid/ask data only; it never derives a synthetic spread from last price.
 func (mds *MarketDataService) GetBookTicker(ctx context.Context, symbol string) (*models.BookTicker, error) {
-	mds.mu.RLock()
-	price := mds.prices[symbol]
-	mds.mu.RUnlock()
-
-	spread := price * 0.001 // 0.1% spread
-	return &models.BookTicker{
-		Symbol:   symbol,
-		BidPrice: price - spread/2,
-		BidQty:   10.0,
-		AskPrice: price + spread/2,
-		AskQty:   10.0,
-	}, nil
+	_ = ctx
+	_ = symbol
+	return nil, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: live order-book ticker adapter is not connected")
 }
 
-// ============================================================================
-// DEPTH/ORDER BOOK OPERATIONS
-// ============================================================================
-
-// GetDepth gets order book depth for a symbol
+// GetDepth returns only an order book published by a live market-data adapter.
 func (mds *MarketDataService) GetDepth(ctx context.Context, symbol string, limit int) (*models.Depth, error) {
+	_ = ctx
+	if limit < 0 || limit > 5000 { return nil, models.NewErrorResponse(400, "Invalid depth limit") }
 	mds.mu.RLock()
-	price := mds.prices[symbol]
+	depth, ok := mds.depth[symbol]
 	mds.mu.RUnlock()
-
-	if limit <= 0 {
-		limit = 100
-	}
-	if limit > 5000 {
-		limit = 5000
-	}
-
-	// Generate mock order book
-	depth := &models.Depth{
-		LastUpdateID: time.Now().UnixMilli(),
-		Bids:         [][]string{},
-		Asks:         [][]string{},
-	}
-
-	spread := price * 0.001
-	for i := 0; i < limit; i++ {
-		bidPrice := price - spread - float64(i)*price*0.0001
-		bidQty := float64(10-i) * 0.5
-		depth.Bids = append(depth.Bids, []string{
-		 formatFloat(bidPrice),
-		 formatFloat(bidQty),
-		})
-
-		askPrice := price + spread + float64(i)*price*0.0001
-		askQty := float64(10-i) * 0.5
-		depth.Asks = append(depth.Asks, []string{
-		 formatFloat(askPrice),
-		 formatFloat(askQty),
-		})
-	}
-
+	if !ok || depth == nil { return nil, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: live order book is unavailable") }
 	return depth, nil
 }
 
-// ============================================================================
-// KLINE/CANDLESTICK OPERATIONS
-// ============================================================================
-
-// GetKlines gets klines for a symbol
+// GetKlines returns persisted/published candles only; no candles are fabricated.
 func (mds *MarketDataService) GetKlines(ctx context.Context, symbol, interval string, startTime, endTime int64, limit int) ([]*models.Kline, error) {
+	_ = ctx
+	if getIntervalMinutes(interval) == 0 { return nil, models.NewErrorResponse(400, "Invalid interval") }
+	if limit < 0 || limit > 1500 { return nil, models.NewErrorResponse(400, "Invalid kline limit") }
 	mds.mu.RLock()
-	price := mds.prices[symbol]
+	series, ok := mds.klines[symbol+":"+interval]
 	mds.mu.RUnlock()
-
-	if limit <= 0 {
-		limit = 500
+	if !ok || len(series) == 0 { return nil, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: live or historical candle adapter is not connected") }
+	var result []*models.Kline
+	for _, candle := range series[0] {
+		if candle == nil || (startTime > 0 && candle.OpenTime < startTime) || (endTime > 0 && candle.OpenTime > endTime) { continue }
+		result = append(result, candle)
 	}
-	if limit > 1500 {
-		limit = 1500
-	}
-
-	// Get interval in minutes
-	intervalMinutes := getIntervalMinutes(interval)
-	if intervalMinutes == 0 {
-		return nil, models.NewErrorResponse(400, "Invalid interval")
-	}
-
-	// Generate mock klines
-	var klines []*models.Kline
-	now := time.Now()
-	for i := limit - 1; i >= 0; i-- {
-		openTime := now.Add(-time.Duration(i*intervalMinutes) * time.Minute)
-		volatility := price * 0.02
-		open := price + (float64(i%10)-5)*volatility/10
-		close := price + (float64((i+1)%10)-5)*volatility/10
-		high := max(open, close) + volatility/20
-		low := min(open, close) - volatility/20
-		volume := 1000.0 + float64(i)*10
-
-		klines = append(klines, &models.Kline{
-			OpenTime:     openTime.UnixMilli(),
-			Open:        open,
-			High:        high,
-			Low:         low,
-			Close:       close,
-			Volume:      volume,
-			CloseTime:   openTime.Add(time.Duration(intervalMinutes) * time.Minute).UnixMilli(),
-			QuoteVolume: volume * price,
-			NumTrades:   int64(100 + i),
-			TakerBaseVol: volume * 0.8,
-		})
-	}
-
-	return klines, nil
+	if limit > 0 && len(result) > limit { result = result[len(result)-limit:] }
+	return result, nil
 }
 
-// ============================================================================
-// RECENT TRADES
-// ============================================================================
-
-// GetRecentTrades gets recent trades for a symbol
+// GetRecentTrades returns only actual trades published by the market-data adapter.
 func (mds *MarketDataService) GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*models.WSAggTrade, error) {
+	_ = ctx
+	if limit < 0 || limit > 1000 { return nil, models.NewErrorResponse(400, "Invalid recent-trades limit") }
 	mds.mu.RLock()
-	price := mds.prices[symbol]
+	trades, ok := mds.aggTrades[symbol]
 	mds.mu.RUnlock()
-
-	if limit <= 0 {
-		limit = 500
-	}
-	if limit > 1000 {
-		limit = 1000
-	}
-
-	// Generate mock trades
-	var trades []*models.WSAggTrade
-	now := time.Now()
-	for i := 0; i < limit; i++ {
-		tradeTime := now.Add(-time.Duration(i*10) * time.Second)
-		volatility := price * 0.001
-		tradePrice := price + (float64(i%5)-2)*volatility
-		tradeQty := float64(1+i%10) * 0.1
-
-		trades = append(trades, &models.WSAggTrade{
-			Event:        "aggTrade",
-			EventTime:   tradeTime.UnixMilli(),
-			Symbol:      symbol,
-			TradeID:     int64(1000000 + i),
-			Price:       tradePrice,
-			Quantity:    tradeQty,
-			BuyerOrderID: int64(2000000 + i),
-			SellerOrderID: int64(3000000 + i),
-			TradeTime:   tradeTime.UnixMilli(),
-			IsMaker:     i%2 == 0,
-			IsBestMatch: true,
-		})
-	}
-
+	if !ok { return nil, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: live trade feed is not connected") }
+	if limit > 0 && len(trades) > limit { trades = trades[len(trades)-limit:] }
 	return trades, nil
 }
 
-// ============================================================================
-// AVERAGE PRICE
-// ============================================================================
-
-// GetAvgPrice gets average price for a symbol over a period
+// GetAvgPrice fails closed until a real weighted-average price provider is connected.
 func (mds *MarketDataService) GetAvgPrice(ctx context.Context, symbol string, minutes int) (float64, error) {
-	mds.mu.RLock()
-	price := mds.prices[symbol]
-	mds.mu.RUnlock()
-
-	// Add some variance
-	variance := price * 0.001
-	return price + (float64(minutes%10)-5)*variance, nil
+	_ = ctx
+	_ = symbol
+	if minutes <= 0 { return 0, models.NewErrorResponse(400, "Average-price window must be positive") }
+	return 0, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: weighted-average price provider is not connected")
 }
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
 
 func getIntervalMinutes(interval string) int {
 	switch interval {
@@ -385,7 +275,7 @@ func getIntervalMinutes(interval string) int {
 }
 
 func formatFloat(f float64) string {
-	return.Sprintf("%.8f", f)
+	return fmt.Sprintf("%.8f", f)
 }
 
 func min(a, b float64) float64 {
