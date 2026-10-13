@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { Trash2, Edit2, Copy, Clock, ChevronDown, Search, X, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Copy, Clock, Search, X } from 'lucide-react';
 
 // Order type definitions
 type OrderType = 'limit' | 'market' | 'stop_loss' | 'stop_limit' | 'take_profit' | 'trailing_stop' | 'oco';
@@ -55,98 +55,6 @@ export interface OpenOrder {
   reduceOnly?: boolean;
 }
 
-// Demo data with comprehensive orders
-const mockOrders: OpenOrder[] = [
-  {
-    orderId: 'ORD_20240615001',
-    symbol: 'BTC/USDT',
-    side: 'buy',
-    type: 'limit',
-    price: 65000,
-    quantity: 0.5,
-    filledQuantity: 0,
-    remaining: 0.5,
-    status: 'new',
-    timeInForce: 'GTC',
-    createdAt: Date.now() - 3600000,
-    postOnly: true,
-  },
-  {
-    orderId: 'ORD_20240615002',
-    symbol: 'ETH/USDT',
-    side: 'sell',
-    type: 'limit',
-    price: 3500,
-    quantity: 2.0,
-    filledQuantity: 1.2,
-    remaining: 0.8,
-    status: 'partially_filled',
-    timeInForce: 'GTC',
-    createdAt: Date.now() - 7200000,
-    avgFillPrice: 3498.50,
-  },
-  {
-    orderId: 'ORD_20240615003',
-    symbol: 'SOL/USDT',
-    side: 'buy',
-    type: 'stop_limit',
-    price: 145,
-    stopPrice: 140,
-    quantity: 10,
-    filledQuantity: 0,
-    remaining: 10,
-    status: 'new',
-    timeInForce: 'GTT',
-    createdAt: Date.now() - 1800000,
-    triggerCondition: 'Last Price <= 140.00',
-  },
-  {
-    orderId: 'ORD_20240615004',
-    symbol: 'BTC/USDT',
-    side: 'sell',
-    type: 'take_profit',
-    price: 70000,
-    stopPrice: 69500,
-    quantity: 0.3,
-    filledQuantity: 0,
-    remaining: 0.3,
-    status: 'new',
-    timeInForce: 'GTC',
-    createdAt: Date.now() - 900000,
-    triggerCondition: 'Last Price >= 69500.00',
-  },
-  {
-    orderId: 'ORD_20240615005',
-    symbol: 'BNB/USDT',
-    side: 'buy',
-    type: 'trailing_stop',
-    price: 0,
-    stopPrice: 550,
-    quantity: 5,
-    filledQuantity: 0,
-    remaining: 5,
-    status: 'new',
-    timeInForce: 'GTC',
-    createdAt: Date.now() - 600000,
-    triggerCondition: 'Trail: 3%',
-  },
-  {
-    orderId: 'ORD_20240615006',
-    symbol: 'AVAX/USDT',
-    side: 'sell',
-    type: 'limit',
-    price: 38.50,
-    quantity: 50,
-    filledQuantity: 25,
-    remaining: 25,
-    status: 'partially_filled',
-    timeInForce: 'IOC',
-    createdAt: Date.now() - 1200000,
-    avgFillPrice: 38.45,
-    reduceOnly: true,
-  },
-];
-
 interface OpenOrdersProps {
   orders?: OpenOrder[];
   onCancel?: (orderId: string) => void;
@@ -162,12 +70,12 @@ export function OpenOrders({
   symbol,
   onModifyOrder 
 }: OpenOrdersProps) {
-  const [orders, setOrders] = useState<OpenOrder[]>(propOrders || mockOrders);
+  const [orders, setOrders] = useState<OpenOrder[]>(propOrders || []);
   const [filterSymbol, setFilterSymbol] = useState(symbol || '');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<string>('all');
   const [filterSide, setFilterSide] = useState<string>('all');
-  const [loading, setLoading] = useState(false);
+  useEffect(() => { setOrders(propOrders || []); }, [propOrders]);
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
 
   // Filter orders
@@ -181,23 +89,11 @@ export function OpenOrders({
   });
 
   const handleCancel = (orderId: string) => {
-    setLoading(true);
-    setTimeout(() => {
-      setOrders(prev => prev.map(o => 
-        o.orderId === orderId ? { ...o, status: 'canceled' as OrderStatus } : o
-      ));
-      onCancel?.(orderId);
-      setLoading(false);
-    }, 500);
+    onCancel?.(orderId);
   };
 
   const handleCancelAll = () => {
-    setLoading(true);
-    setTimeout(() => {
-      setOrders(prev => prev.map(o => ({ ...o, status: 'canceled' as OrderStatus })));
-      onCancelAll?.();
-      setLoading(false);
-    }, 1000);
+    onCancelAll?.();
   };
 
   const formatTime = (timestamp: number) => {
@@ -327,16 +223,14 @@ export function OpenOrders({
                   )}
                 </div>
                 <div className="flex items-center justify-end gap-1">
-                  {loading ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
-                  ) : (
-                    <>
+                  <>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleCancel(order.orderId);
                         }}
-                        className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                        disabled={!onCancel}
+                        className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         title="Cancel Order"
                       >
                         <X className="h-4 w-4" />
@@ -351,8 +245,7 @@ export function OpenOrders({
                       >
                         <Copy className="h-4 w-4" />
                       </button>
-                    </>
-                  )}
+                  </>
                 </div>
               </div>
 
@@ -390,10 +283,18 @@ export function OpenOrders({
                     )}
                   </div>
                   <div className="flex gap-2 mt-3">
-                    <button className="flex-1 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded text-white transition-colors">
+                    <button
+                      onClick={() => onModifyOrder?.(order)}
+                      disabled={!onModifyOrder}
+                      className="flex-1 py-1.5 text-xs bg-white/10 hover:bg-white/20 rounded text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
                       Modify Order
                     </button>
-                    <button className="flex-1 py-1.5 text-xs bg-red-500/20 hover:bg-red-500/30 rounded text-red-400 transition-colors">
+                    <button
+                      onClick={() => handleCancel(order.orderId)}
+                      disabled={!onCancel}
+                      className="flex-1 py-1.5 text-xs bg-red-500/20 hover:bg-red-500/30 rounded text-red-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
                       Cancel
                     </button>
                   </div>
@@ -411,7 +312,7 @@ export function OpenOrders({
         </span>
         <button
           onClick={handleCancelAll}
-          disabled={loading || filteredOrders.length === 0}
+          disabled={!onCancelAll || filteredOrders.length === 0}
           className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Cancel All
