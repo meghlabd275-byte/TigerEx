@@ -397,7 +397,7 @@ export function calculateBridgeFee(
   feePercent: number = 0.001,
   minFee: bigint = BigInt(1e17) // 0.0001 TGR
 ): bigint {
-  const percentFee = (amount * BigInt(Math.floor(feePercent * 10000)) / BigInt(10000);
+  const percentFee = amount * BigInt(Math.floor(feePercent * 10000)) / BigInt(10000);
   return percentFee > minFee ? percentFee : minFee;
 }
 
