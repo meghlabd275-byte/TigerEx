@@ -375,10 +375,21 @@ type APIResponse struct {
 	Error   *APIError   `json:"error,omitempty"`
 }
 
-// APIError represents an API error
+// APIError represents a structured API error and implements the Go error interface.
 type APIError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+// Error returns the safe, client-facing error message.
+func (e *APIError) Error() string {
+	if e == nil { return "" }
+	return e.Message
+}
+
+// NewAPIError creates a structured error for service and middleware return values.
+func NewAPIError(code int, message string) *APIError {
+	return &APIError{Code: code, Message: message}
 }
 
 // ============================================================================

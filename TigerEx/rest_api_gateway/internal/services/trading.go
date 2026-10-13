@@ -42,7 +42,7 @@ func NewTradingService() *TradingService {
 func (ts *TradingService) CreateOrder(ctx context.Context, req *CreateOrderRequest) (*models.Order, error) {
 	_ = ctx
 	_ = req
-	return nil, models.NewErrorResponse(503, "ORDER_EXECUTION_NOT_CONFIGURED: durable matching, risk checks, balance reservations, and settlement are not connected")
+	return nil, models.NewAPIError(503, "ORDER_EXECUTION_NOT_CONFIGURED: durable matching, risk checks, balance reservations, and settlement are not connected")
 }
 
 // CancelOrder cancels an order
@@ -52,15 +52,15 @@ func (ts *TradingService) CancelOrder(ctx context.Context, orderID, userID strin
 
 	order, ok := ts.orders[orderID]
 	if !ok {
-		return nil, models.NewErrorResponse(404, "Order not found")
+		return nil, models.NewAPIError(404, "Order not found")
 	}
 
 	if order.UserID != userID {
-		return nil, models.NewErrorResponse(403, "Unauthorized")
+		return nil, models.NewAPIError(403, "Unauthorized")
 	}
 
 	if order.Status == models.OrderStatusFilled || order.Status == models.OrderStatusCanceled {
-		return nil, models.NewErrorResponse(400, "Order already completed")
+		return nil, models.NewAPIError(400, "Order already completed")
 	}
 
 	order.Status = models.OrderStatusCanceled
@@ -76,7 +76,7 @@ func (ts *TradingService) GetOrder(ctx context.Context, orderID string) (*models
 
 	order, ok := ts.orders[orderID]
 	if !ok {
-		return nil, models.NewErrorResponse(404, "Order not found")
+		return nil, models.NewAPIError(404, "Order not found")
 	}
 
 	return order, nil
@@ -160,22 +160,22 @@ type OrderFilters struct {
 // validateOrderRequest validates an order request
 func (ts *TradingService) validateOrderRequest(req *CreateOrderRequest) error {
 	if req.Symbol == "" {
-		return models.NewErrorResponse(400, "Symbol is required")
+		return models.NewAPIError(400, "Symbol is required")
 	}
 	if req.Side != "BUY" && req.Side != "SELL" {
-		return models.NewErrorResponse(400, "Invalid side")
+		return models.NewAPIError(400, "Invalid side")
 	}
 	if req.Type == "" {
 		req.Type = "LIMIT"
 	}
 	if req.Type == "LIMIT" && req.Price <= 0 {
-		return models.NewErrorResponse(400, "Price is required for limit orders")
+		return models.NewAPIError(400, "Price is required for limit orders")
 	}
 	if req.Quantity <= 0 {
-		return models.NewErrorResponse(400, "Quantity must be greater than 0")
+		return models.NewAPIError(400, "Quantity must be greater than 0")
 	}
 	if req.Type == "ICEBERG" && req.IcebergQty <= 0 {
-		return models.NewErrorResponse(400, "Iceberg quantity is required for iceberg orders")
+		return models.NewAPIError(400, "Iceberg quantity is required for iceberg orders")
 	}
 	return nil
 }

@@ -63,7 +63,7 @@ func (mds *MarketDataService) GetSymbol(ctx context.Context, symbol string) (*mo
 
 	s, ok := mds.symbols[symbol]
 	if !ok {
-		return nil, models.NewErrorResponse(404, "Symbol not found")
+		return nil, models.NewAPIError(404, "Symbol not found")
 	}
 
 	return s, nil
@@ -80,7 +80,7 @@ func (mds *MarketDataService) GetPrice(ctx context.Context, symbol string) (floa
 
 	price, ok := mds.prices[symbol]
 	if !ok {
-		return 0, models.NewErrorResponse(404, "Symbol not found")
+		return 0, models.NewAPIError(404, "Symbol not found")
 	}
 
 	return price, nil
@@ -112,7 +112,7 @@ func (mds *MarketDataService) UpdatePrice(symbol string, price float64) {
 // PublishTicker ingests a ticker supplied by an authenticated market-data adapter.
 func (mds *MarketDataService) PublishTicker(ticker *models.Ticker24h) error {
 	if ticker == nil || ticker.Symbol == "" || ticker.LastPrice <= 0 || math.IsNaN(ticker.LastPrice) || math.IsInf(ticker.LastPrice, 0) {
-		return models.NewErrorResponse(400, "Invalid live ticker")
+		return models.NewAPIError(400, "Invalid live ticker")
 	}
 	mds.mu.Lock()
 	mds.tickers[ticker.Symbol] = ticker
@@ -123,7 +123,7 @@ func (mds *MarketDataService) PublishTicker(ticker *models.Ticker24h) error {
 
 // PublishDepth ingests an actual order book snapshot from a trusted adapter.
 func (mds *MarketDataService) PublishDepth(symbol string, depth *models.Depth) error {
-	if symbol == "" || depth == nil { return models.NewErrorResponse(400, "Symbol and live depth are required") }
+	if symbol == "" || depth == nil { return models.NewAPIError(400, "Symbol and live depth are required") }
 	mds.mu.Lock()
 	mds.depth[symbol] = depth
 	mds.mu.Unlock()
@@ -132,10 +132,10 @@ func (mds *MarketDataService) PublishDepth(symbol string, depth *models.Depth) e
 
 // PublishKlines ingests actual candles for a symbol and interval.
 func (mds *MarketDataService) PublishKlines(symbol, interval string, candles []*models.Kline) error {
-	if symbol == "" || getIntervalMinutes(interval) == 0 || candles == nil { return models.NewErrorResponse(400, "Symbol, valid interval, and candle data are required") }
+	if symbol == "" || getIntervalMinutes(interval) == 0 || candles == nil { return models.NewAPIError(400, "Symbol, valid interval, and candle data are required") }
 	for _, candle := range candles {
 		if candle == nil || candle.Open <= 0 || candle.High < candle.Low || candle.Low <= 0 || candle.Close <= 0 || candle.Volume < 0 {
-			return models.NewErrorResponse(400, "Invalid candle data")
+			return models.NewAPIError(400, "Invalid candle data")
 		}
 	}
 	mds.mu.Lock()
@@ -146,10 +146,10 @@ func (mds *MarketDataService) PublishKlines(symbol, interval string, candles []*
 
 // PublishTrades ingests actual trades from a trusted adapter.
 func (mds *MarketDataService) PublishTrades(symbol string, trades []*models.WSAggTrade) error {
-	if symbol == "" || trades == nil { return models.NewErrorResponse(400, "Symbol and trade data are required") }
+	if symbol == "" || trades == nil { return models.NewAPIError(400, "Symbol and trade data are required") }
 	for _, trade := range trades {
 		if trade == nil || trade.Symbol != symbol || trade.Price <= 0 || trade.Quantity <= 0 {
-			return models.NewErrorResponse(400, "Invalid trade data")
+			return models.NewAPIError(400, "Invalid trade data")
 		}
 	}
 	mds.mu.Lock()
@@ -169,7 +169,7 @@ func (mds *MarketDataService) Get24hTicker(ctx context.Context, symbol string) (
 	mds.mu.RLock()
 	ticker, ok := mds.tickers[symbol]
 	mds.mu.RUnlock()
-	if !ok || ticker == nil { return nil, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: no live 24-hour ticker is available") }
+	if !ok || ticker == nil { return nil, models.NewAPIError(503, "MARKET_DATA_NOT_CONFIGURED: no live 24-hour ticker is available") }
 	return ticker, nil
 }
 
@@ -187,29 +187,29 @@ func (mds *MarketDataService) GetAllTickers(ctx context.Context) ([]*models.Tick
 func (mds *MarketDataService) GetBookTicker(ctx context.Context, symbol string) (*models.BookTicker, error) {
 	_ = ctx
 	_ = symbol
-	return nil, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: live order-book ticker adapter is not connected")
+	return nil, models.NewAPIError(503, "MARKET_DATA_NOT_CONFIGURED: live order-book ticker adapter is not connected")
 }
 
 // GetDepth returns only an order book published by a live market-data adapter.
 func (mds *MarketDataService) GetDepth(ctx context.Context, symbol string, limit int) (*models.Depth, error) {
 	_ = ctx
-	if limit < 0 || limit > 5000 { return nil, models.NewErrorResponse(400, "Invalid depth limit") }
+	if limit < 0 || limit > 5000 { return nil, models.NewAPIError(400, "Invalid depth limit") }
 	mds.mu.RLock()
 	depth, ok := mds.depth[symbol]
 	mds.mu.RUnlock()
-	if !ok || depth == nil { return nil, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: live order book is unavailable") }
+	if !ok || depth == nil { return nil, models.NewAPIError(503, "MARKET_DATA_NOT_CONFIGURED: live order book is unavailable") }
 	return depth, nil
 }
 
 // GetKlines returns persisted/published candles only; no candles are fabricated.
 func (mds *MarketDataService) GetKlines(ctx context.Context, symbol, interval string, startTime, endTime int64, limit int) ([]*models.Kline, error) {
 	_ = ctx
-	if getIntervalMinutes(interval) == 0 { return nil, models.NewErrorResponse(400, "Invalid interval") }
-	if limit < 0 || limit > 1500 { return nil, models.NewErrorResponse(400, "Invalid kline limit") }
+	if getIntervalMinutes(interval) == 0 { return nil, models.NewAPIError(400, "Invalid interval") }
+	if limit < 0 || limit > 1500 { return nil, models.NewAPIError(400, "Invalid kline limit") }
 	mds.mu.RLock()
 	series, ok := mds.klines[symbol+":"+interval]
 	mds.mu.RUnlock()
-	if !ok || len(series) == 0 { return nil, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: live or historical candle adapter is not connected") }
+	if !ok || len(series) == 0 { return nil, models.NewAPIError(503, "MARKET_DATA_NOT_CONFIGURED: live or historical candle adapter is not connected") }
 	var result []*models.Kline
 	for _, candle := range series[0] {
 		if candle == nil || (startTime > 0 && candle.OpenTime < startTime) || (endTime > 0 && candle.OpenTime > endTime) { continue }
@@ -222,11 +222,11 @@ func (mds *MarketDataService) GetKlines(ctx context.Context, symbol, interval st
 // GetRecentTrades returns only actual trades published by the market-data adapter.
 func (mds *MarketDataService) GetRecentTrades(ctx context.Context, symbol string, limit int) ([]*models.WSAggTrade, error) {
 	_ = ctx
-	if limit < 0 || limit > 1000 { return nil, models.NewErrorResponse(400, "Invalid recent-trades limit") }
+	if limit < 0 || limit > 1000 { return nil, models.NewAPIError(400, "Invalid recent-trades limit") }
 	mds.mu.RLock()
 	trades, ok := mds.aggTrades[symbol]
 	mds.mu.RUnlock()
-	if !ok { return nil, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: live trade feed is not connected") }
+	if !ok { return nil, models.NewAPIError(503, "MARKET_DATA_NOT_CONFIGURED: live trade feed is not connected") }
 	if limit > 0 && len(trades) > limit { trades = trades[len(trades)-limit:] }
 	return trades, nil
 }
@@ -235,8 +235,8 @@ func (mds *MarketDataService) GetRecentTrades(ctx context.Context, symbol string
 func (mds *MarketDataService) GetAvgPrice(ctx context.Context, symbol string, minutes int) (float64, error) {
 	_ = ctx
 	_ = symbol
-	if minutes <= 0 { return 0, models.NewErrorResponse(400, "Average-price window must be positive") }
-	return 0, models.NewErrorResponse(503, "MARKET_DATA_NOT_CONFIGURED: weighted-average price provider is not connected")
+	if minutes <= 0 { return 0, models.NewAPIError(400, "Average-price window must be positive") }
+	return 0, models.NewAPIError(503, "MARKET_DATA_NOT_CONFIGURED: weighted-average price provider is not connected")
 }
 
 func getIntervalMinutes(interval string) int {
