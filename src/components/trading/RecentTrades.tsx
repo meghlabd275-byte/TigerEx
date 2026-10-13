@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { ArrowUp, ArrowDown, Clock, Activity } from 'lucide-react';
 
 // Trade interface
@@ -20,30 +20,7 @@ interface RecentTradesProps {
   quoteAsset?: string;
   limit?: number;
   onSelectTrade?: (price: number, side: 'buy' | 'sell') => void;
-}
-
-// Generate mock trades
-function generateMockTrades(count: number): Trade[] {
-  const trades: Trade[] = [];
-  const now = Date.now();
-  let currentPrice = 67245.50;
-  
-  for (let i = 0; i < count; i++) {
-    // Random walk
-    currentPrice += (Math.random() - 0.5) * 20;
-    const side = Math.random() > 0.5 ? 'buy' : 'sell';
-    
-    trades.push({
-      id: `trade-${i}`,
-      price: currentPrice,
-      quantity: Math.random() * 2,
-      time: now - (i * 1000 * Math.random() * 60),
-      side,
-      isbuyerMaker: side === 'sell',
-    });
-  }
-  
-  return trades.sort((a, b) => b.time - a.time);
+  trades?: Trade[];
 }
 
 export function RecentTrades({
@@ -52,25 +29,15 @@ export function RecentTrades({
   quoteAsset = 'USDT',
   limit = 50,
   onSelectTrade,
+  trades: propTrades,
 }: RecentTradesProps) {
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [showOnlyBuyerTrades, setShowOnlyBuyerTrades] = useState(false);
+  const [trades, setTrades] = useState<Trade[]>(propTrades || []);
   const [pricePrecision, setPricePrecision] = useState(2);
 
-  // Initial load
+  // Render only actual trades supplied by the connected market-data client.
   useEffect(() => {
-    setTrades(generateMockTrades(limit));
-  }, [limit]);
-
-  // Simulate real-time updates
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const newTrades = generateMockTrades(Math.min(limit, 5));
-      setTrades(prev => [...newTrades, ...prev].slice(0, limit));
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [limit]);
+    setTrades(propTrades || []);
+  }, [propTrades]);
 
   const formatPrice = (price: number) => {
     return price.toFixed(pricePrecision);
@@ -99,15 +66,6 @@ export function RecentTrades({
           <h3 className="font-semibold text-white">Recent Trades</h3>
         </div>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1 text-xs text-gray-400">
-            <input 
-              type="checkbox"
-              checked={showOnlyBuyerTrades}
-              onChange={(e) => setShowOnlyBuyerTrades(e.target.checked)}
-              className="rounded bg-white/5 border-white/10"
-            />
-            My Trades
-          </label>
           <select 
             value={pricePrecision}
             onChange={(e) => setPricePrecision(Number(e.target.value))}
@@ -129,7 +87,9 @@ export function RecentTrades({
 
       {/* Trades */}
       <div className="flex-1 overflow-y-auto">
-        {trades.map((trade, i) => (
+        {trades.length === 0 ? (
+          <div className="px-4 py-6 text-center text-xs text-gray-500">Waiting for live trade data</div>
+        ) : trades.slice(0, limit).map((trade, i) => (
           <div 
             key={trade.id}
             className="grid grid-cols-3 gap-2 px-4 py-1 text-sm cursor-pointer hover:bg-white/5"

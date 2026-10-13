@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { 
   TrendingUp, 
   Clock, 
@@ -14,6 +14,16 @@ interface ChartProps {
   symbol?: string;
   interval?: string;
   height?: number;
+  candles?: Candle[];
+}
+
+interface Candle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
 }
 
 // Chart intervals
@@ -39,45 +49,17 @@ export function PriceChart({
   symbol = 'BTCUSDT',
   interval = '1h',
   height = 400,
+  candles = [],
 }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [selectedInterval, setSelectedInterval] = useState(interval);
   const [chartType, setChartType] = useState('candles');
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Simulated OHLCV data generator
-  const generateOHLCV = (count: number) => {
-    const data = [];
-    let price = 67000;
-    const now = Date.now();
-    
-    for (let i = count; i > 0; i--) {
-      const volatility = price * 0.002;
-      const open = price;
-      const change = (Math.random() - 0.48) * volatility * 2;
-      const close = open + change;
-      const high = Math.max(open, close) + Math.random() * volatility;
-      const low = Math.min(open, close) - Math.random() * volatility;
-      const volume = Math.random() * 100 + 10;
-      
-      data.push({
-        time: Math.floor((now - i * 3600000) / 1000),
-        open: Math.round(open * 100) / 100,
-        high: Math.round(high * 100) / 100,
-        low: Math.round(low * 100) / 100,
-        close: Math.round(close * 100) / 100,
-        volume: Math.round(volume * 100) / 100,
-      });
-      
-      price = close;
-    }
-    
-    return data;
-  };
-
   // Simple candle rendering
   const renderCandles = () => {
-    const data = generateOHLCV(50);
+    const data = candles;
+    if (data.length === 0) return <div className="flex items-center justify-center text-sm text-gray-500" style={{ height }}>Waiting for live candle data</div>;
     const containerWidth = containerRef.current?.clientWidth || 800;
     const candleWidth = Math.max(4, (containerWidth - 100) / data.length - 2);
     const maxPrice = Math.max(...data.map(d => d.high));
@@ -188,7 +170,7 @@ export function PriceChart({
         <div className="w-16 border-r border-white/10">
           {[...Array(6)].map((_, i) => (
             <div key={i} className="h-16 px-1 text-xs text-gray-500 border-b border-white/5 text-right">
-              {(67000 - i * 1000).toLocaleString()}
+              {candles.length ? (Math.max(...candles.map(c => c.high)) - ((Math.max(...candles.map(c => c.high)) - Math.min(...candles.map(c => c.low))) * i / 5)).toLocaleString() : "—"}
             </div>
           ))}
         </div>
@@ -221,16 +203,18 @@ export function PriceChart({
         
         {/* Volume Bars */}
         <div className="flex-1 h-20 flex items-end gap-px px-1">
-          {[...Array(50)].map((_, i) => {
-            const height = Math.random() * 80 + 10;
-            const isGreen = Math.random() > 0.4;
+          {candles.length === 0 ? (
+            <div className="w-full flex items-center justify-center text-xs text-gray-500">Waiting for live volume data</div>
+          ) : candles.slice(-50).map((candle) => {
+            const maxVolume = Math.max(...candles.map(item => item.volume), 1);
+            const volumeHeight = Math.max(1, (candle.volume / maxVolume) * 100);
+            const isGreen = candle.close >= candle.open;
             return (
               <div
-                key={i}
-                className={`flex-1 ${isGreen ? 'bg-green-500/50' : 'bg-red-500/50'}`}
-                style={{ height: `${height}%` }}
+                key={candle.time}
+                className={isGreen ? "flex-1 bg-green-500/50" : "flex-1 bg-red-500/50"}
+                style={{ height: volumeHeight + "%" }}
               />
-            );
           })}
         </div>
       </div>
