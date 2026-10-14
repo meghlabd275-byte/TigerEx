@@ -78,3 +78,20 @@ func TestAssetAuditLogsAreIndexed(t *testing.T) {
 	logs := s.GetAuditLogs("ASSET", "BTC", 10)
 	if len(logs) != 1 || logs[0].Action != "TOGGLE_ASSET" { t.Fatalf("expected indexed asset audit record, got %#v", logs) }
 }
+
+func TestAdminPasswordsAreSaltedHashedAndNotReturned(t *testing.T) {
+	s := NewService()
+	admin := &AdminUser{ID: "admin-hash", Email: "hash@example.com", Password: "correct horse battery staple"}
+	if err := s.CreateAdmin(admin); err != nil { t.Fatal(err) }
+	stored := s.admins["admin-hash"].Password
+	if stored == admin.Password || len(stored) < 32 || stored[:15] != "pbkdf2-sha256$6" {
+		t.Fatalf("password was not stored as a PBKDF2 verifier: %q", stored)
+	}
+	verified, err := s.VerifyAdmin("hash@example.com", "correct horse battery staple")
+	if err != nil { t.Fatalf("valid password rejected: %v", err) }
+	if verified.Password != "" { t.Fatal("VerifyAdmin returned stored password material") }
+	if _, err := s.VerifyAdmin("hash@example.com", "wrong password"); err == nil { t.Fatal("invalid password accepted") }
+	second := &AdminUser{ID: "admin-hash-2", Email: "hash2@example.com", Password: "correct horse battery staple"}
+	if err := s.CreateAdmin(second); err != nil { t.Fatal(err) }
+	if s.admins["admin-hash-2"].Password == stored { t.Fatal("same password produced identical stored verifiers; salt may be missing") }
+}
