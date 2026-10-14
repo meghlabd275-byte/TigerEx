@@ -169,8 +169,7 @@ func NewAdminService() *AdminService {
 	// Bootstrap an administrator only from explicit deployment-provided credentials.
 	svc.initBootstrapAdmin()
 	svc.initDefaultSettings()
-	svc.initTradingPairs()
-	svc.initFeeConfigs()
+	// Market pairs and fees are not pre-populated with illustrative values; load them from the authoritative configuration service.
 
 	return svc
 }
@@ -199,11 +198,11 @@ func (s *AdminService) initDefaultSettings() {
 	defaults := []*SystemSetting{
 		{Key: "platform_name", Value: "TigerEx", Category: "platform", UpdatedAt: time.Now()},
 		{Key: "platform_version", Value: "1.0.0", Category: "platform", UpdatedAt: time.Now()},
-		{Key: "maintenance_mode", Value: "false", Category: "system", UpdatedAt: time.Now()},
-		{Key: "registration_enabled", Value: "true", Category: "users", UpdatedAt: time.Now()},
-		{Key: "withdrawal_enabled", Value: "true", Category: "trading", UpdatedAt: time.Now()},
-		{Key: "trading_enabled", Value: "true", Category: "trading", UpdatedAt: time.Now()},
-		{Key: "p2p_enabled", Value: "true", Category: "trading", UpdatedAt: time.Now()},
+		{Key: "maintenance_mode", Value: "true", Category: "system", UpdatedAt: time.Now()},
+		{Key: "registration_enabled", Value: "false", Category: "users", UpdatedAt: time.Now()},
+		{Key: "withdrawal_enabled", Value: "false", Category: "trading", UpdatedAt: time.Now()},
+		{Key: "trading_enabled", Value: "false", Category: "trading", UpdatedAt: time.Now()},
+		{Key: "p2p_enabled", Value: "false", Category: "trading", UpdatedAt: time.Now()},
 		{Key: "kyc_required_for_withdrawal", Value: "true", Category: "kyc", UpdatedAt: time.Now()},
 		{Key: "default_kyc_level", Value: "1", Category: "kyc", UpdatedAt: time.Now()},
 		{Key: "min_withdrawal_amount", Value: "10", Category: "trading", UpdatedAt: time.Now()},
@@ -279,6 +278,7 @@ func (s *AdminService) Login(email, password, ipAddress string) (*Admin, string,
 
 	// Generate session
 	token := generateToken()
+	if token == "" { return nil, "", APIError{Code: 500, Message: "Could not create secure session token"} }
 	session := &AdminSession{
 		ID:        uuid.New().String(),
 		AdminID:   admin.ID,
