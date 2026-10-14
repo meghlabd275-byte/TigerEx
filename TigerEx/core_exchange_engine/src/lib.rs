@@ -56,7 +56,7 @@ pub struct SubmitResult {
 #[derive(Default)]
 pub struct MatchingEngine {
     books: HashMap<String, Vec<LimitOrder>>,
-    live_order_ids: std::collections::HashSet<String>,
+    used_order_ids: std::collections::HashSet<String>,
     next_sequence: u64,
 }
 
@@ -66,7 +66,7 @@ impl MatchingEngine {
     /// Submit a limit order. Matching uses best price, then FIFO sequence.
     /// A non-crossing remainder rests in the book; a fully filled order does not.
     pub fn submit_limit(&mut self, mut incoming: LimitOrder) -> Result<SubmitResult, EngineError> {
-        if self.live_order_ids.contains(&incoming.id) {
+        if self.used_order_ids.contains(&incoming.id) {
             return Err(EngineError::DuplicateOrderId);
         }
         let symbol = incoming.symbol.clone();

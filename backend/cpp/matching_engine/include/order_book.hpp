@@ -98,6 +98,7 @@ public:
      * @return Pointer to order or nullptr
      */
     Order* get_order(const OrderId& order_id);
+    std::vector<Order> get_user_orders(uint64_t user_id) const;
     
     /**
      * Check if order exists

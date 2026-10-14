@@ -186,7 +186,7 @@ struct Order {
           oco_link(other.oco_link), oco_linked_order(other.oco_linked_order),
           trailing_distance(other.trailing_distance), trailing_callback_rate(other.trailing_callback_rate),
           match_attempts(other.match_attempts.load()), last_match_ns(other.last_match_ns.load()) {}
-    Order(Order&& other) noexcept : Order(static_cast<const Order&>(other)) {}
+    Order(Order&& other) : Order(static_cast<const Order&>(other)) {}
     Order& operator=(const Order& other) {
         if (this == &other) return *this;
         id=other.id; symbol=other.symbol; side=other.side; type=other.type; status=other.status;
@@ -202,7 +202,7 @@ struct Order {
         match_attempts.store(other.match_attempts.load()); last_match_ns.store(other.last_match_ns.load());
         return *this;
     }
-    Order& operator=(Order&& other) noexcept { return *this = static_cast<const Order&>(other); }
+    Order& operator=(Order&& other) { return *this = static_cast<const Order&>(other); }
 
     // Constructor
     Order() : 
