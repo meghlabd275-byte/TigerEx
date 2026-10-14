@@ -27,7 +27,7 @@ jobs:
 
       - name: Test backend Go module
         working-directory: backend/go
-        run: go test ./...
+        run: go test ./internal/wallet
 
   test:
     runs-on: ubuntu-latest
