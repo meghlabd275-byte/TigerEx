@@ -135,6 +135,7 @@ type Order struct {
 	// Status
 	Status OrderStatus `json:"status"`
 	IsMaker bool `json:"isMaker"`
+	IsPostOnly bool `json:"isPostOnly,omitempty"`
 	IsReduceOnly bool `json:"isReduceOnly,omitempty"`
 	IsCloseOnly bool `json:"isCloseOnly,omitempty"`
 	
@@ -298,7 +299,8 @@ type OrderBook struct {
 type PriceLevel struct {
 	Price float64 `json:"price"`
 	Quantity float64 `json:"quantity"`
-	Orders int `json:"orders"`
+	Orders []*Order `json:"-"` // Internal FIFO queue; never expose individual orders in public depth.
+	OrderCount int `json:"orders"`
 	
 	// For iceberg orders
 	VisibleQuantity float64 `json:"visibleQty,omitempty"`
@@ -1176,7 +1178,7 @@ func (me *MatchingEngine) insertPriceLevel(levels PriceLevels, order *Order) Pri
 		if level.Price == order.Price {
 			level.Orders = append(level.Orders, order)
 			level.Quantity += order.RemainingQuantity
-			level.Orders++
+			level.OrderCount++
 			return levels
 		}
 	}
@@ -1185,7 +1187,8 @@ func (me *MatchingEngine) insertPriceLevel(levels PriceLevels, order *Order) Pri
 	newLevel := &PriceLevel{
 		Price: order.Price,
 		Quantity: order.RemainingQuantity,
-		Orders: 1,
+		Orders: []*Order{order},
+		OrderCount: 1,
 	}
 	
 	return append(levels, newLevel)
@@ -1380,7 +1383,7 @@ func (me *MatchingEngine) removeOrderFromLevel(levels PriceLevels, order *Order)
 			if o.OrderID == order.OrderID {
 				level.Orders = append(level.Orders[:i], level.Orders[i+1:]...)
 				level.Quantity -= order.RemainingQuantity
-				level.Orders--
+				level.OrderCount--
 				return
 			}
 		}
