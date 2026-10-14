@@ -15,7 +15,7 @@ interface APIKey {
   lastUsedAt: string | null;
 }
 
-const ADMIN_API_BASE = (process.env.NEXT_PUBLIC_ADMIN_API_URL || '').replace(/\\/$/, '');
+const ADMIN_API_BASE = (process.env.NEXT_PUBLIC_ADMIN_API_URL || '').replace(/\/$/, '');
 
 function formatDate(value: string | null): string {
   if (!value) return 'Never';
