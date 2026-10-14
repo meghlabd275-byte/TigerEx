@@ -37,8 +37,8 @@ func main() {
 	}
 	defer models.CloseDB()
 
-	// Seed default data
-	models.SeedMarkets()
+	// Market, derivatives, and earn products must be explicitly configured from
+	// reviewed production data; startup never inserts hard-coded trading products.
 
 	// Setup router
 	r := gin.Default()
