@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -88,7 +89,7 @@ func init() {
 	config.Server.ReadTimeout = 30
 	config.Server.WriteTimeout = 30
 	config.Server.MaxHeaderBytes = 1 << 20
-	config.Server.TLSEnabled = getEnvBool("TIGEREX_TLS_ENABLED", false)
+	config.Server.TLSEnabled = getEnvBool("TIGEREX_TLS_ENABLED", os.Getenv("NODE_ENV") == "production")
 	config.Server.CertFile = getEnv("TIGEREX_CERT_FILE", "cert.pem")
 	config.Server.KeyFile = getEnv("TIGEREX_KEY_FILE", "key.pem")
 
@@ -97,7 +98,7 @@ func init() {
 	config.Database.User = getEnv("TIGEREX_DB_USER", "tigerex")
 	config.Database.Password = getEnv("TIGEREX_DB_PASSWORD", "")
 	config.Database.DBName = getEnv("TIGEREX_DB_NAME", "tigerex")
-	config.Database.SSLMode = getEnv("TIGEREX_DB_SSL_MODE", "disable")
+	config.Database.SSLMode = getEnv("TIGEREX_DB_SSL_MODE", "require")
 
 	config.JWT.Secret = getEnv("TIGEREX_JWT_SECRET", "")
 	config.JWT.AccessExpiry = 15
@@ -112,12 +113,29 @@ func init() {
 
 	config.Crypto.MasterKey = getEnv("TIGEREX_MASTER_KEY", "")
 
-	// Validate required config
+	// Fail closed: production services must never start with missing or ephemeral
+	// signing/encryption keys, wildcard credentialed CORS, or plaintext transport.
 	if config.JWT.Secret == "" {
 		log.Fatal("TIGEREX_JWT_SECRET is required")
 	}
 	if len(config.JWT.Secret) < 32 {
 		log.Fatal("TIGEREX_JWT_SECRET must be at least 32 characters")
+	}
+	if os.Getenv("NODE_ENV") == "production" && !config.Server.TLSEnabled {
+		log.Fatal("TIGEREX_TLS_ENABLED must be true in production")
+	}
+	origins := strings.Split(os.Getenv("TIGEREX_CORS_ORIGINS"), ",")
+	if len(origins) == 0 || strings.TrimSpace(origins[0]) == "" {
+		log.Fatal("TIGEREX_CORS_ORIGINS must contain explicit trusted origins")
+	}
+	for i := range origins {
+		origins[i] = strings.TrimSpace(origins[i])
+		if origins[i] == "" || origins[i] == "*" {
+			log.Fatal("TIGEREX_CORS_ORIGINS must not contain empty or wildcard origins")
+		}
+	}
+	if config.Crypto.MasterKey == "" {
+		log.Fatal("TIGEREX_MASTER_KEY is required; ephemeral encryption keys are unsafe")
 	}
 
 	jwtSecret = []byte(config.JWT.Secret)
@@ -129,9 +147,6 @@ func init() {
 			log.Fatal("TIGEREX_MASTER_KEY must be 64 hex characters (32 bytes)")
 		}
 		copy(masterKey[:], keyBytes)
-	} else {
-		// Generate random master key if not provided
-		log.Println("Warning: Using generated master key (will not persist across restarts)")
 	}
 
 	// Initialize services
@@ -185,9 +200,13 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 
-	// CORS configuration
+	// Credentialed CORS must use explicit allowlisted origins, never "*".
+	trustedOrigins := strings.Split(os.Getenv("TIGEREX_CORS_ORIGINS"), ",")
+	for i := range trustedOrigins {
+		trustedOrigins[i] = strings.TrimSpace(trustedOrigins[i])
+	}
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
+		AllowOrigins:     trustedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
 		ExposeHeaders:    []string{"Content-Length", "X-Request-ID"},
