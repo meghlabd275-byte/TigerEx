@@ -419,15 +419,43 @@ public:
         std::atomic<uint64_t> total_trades{0};
         std::atomic<uint64_t> total_volume{0};
         std::atomic<uint64_t> total_fees{0};
-        
+
         // Latency (nanoseconds)
         std::atomic<uint64_t> min_latency{UINT64_MAX};
         std::atomic<uint64_t> max_latency{0};
         std::atomic<uint64_t> total_latency{0};
-        
+
         // Market count
         uint32_t market_count{0};
         uint64_t order_count{0};
+
+        EngineStats() = default;
+        // Atomics are not copyable by default; snapshots copy their values.
+        EngineStats(const EngineStats& other)
+            : total_orders(other.total_orders.load()),
+              total_trades(other.total_trades.load()),
+              total_volume(other.total_volume.load()),
+              total_fees(other.total_fees.load()),
+              min_latency(other.min_latency.load()),
+              max_latency(other.max_latency.load()),
+              total_latency(other.total_latency.load()),
+              market_count(other.market_count),
+              order_count(other.order_count) {}
+
+        EngineStats& operator=(const EngineStats& other) {
+            if (this != &other) {
+                total_orders.store(other.total_orders.load());
+                total_trades.store(other.total_trades.load());
+                total_volume.store(other.total_volume.load());
+                total_fees.store(other.total_fees.load());
+                min_latency.store(other.min_latency.load());
+                max_latency.store(other.max_latency.load());
+                total_latency.store(other.total_latency.load());
+                market_count = other.market_count;
+                order_count = other.order_count;
+            }
+            return *this;
+        }
     };
     
     EngineStats get_stats() const;
