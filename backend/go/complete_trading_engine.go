@@ -592,16 +592,30 @@ func (me *MatchingEngine) InitializeMarket(symbol, base, quote string, pricePrec
 // SubmitOrder submits a new order to the engine
 func (me *MatchingEngine) SubmitOrder(order *Order) (*OrderResult, error) {
 	startTime := time.Now()
-	
-	// Validate order
+	if order == nil {
+		return nil, errors.New("order is required")
+	}
+
+	// Resolve the market before recording the order. Unknown markets must not
+	// leave phantom orders in the in-memory order indexes.
+	state := me.getMarketState(order.Symbol)
+	if state == nil {
+		err := errors.New("market not found")
+		order.Status = StatusRejected
+		order.UpdatedAt = time.Now()
+		atomic.AddInt64(&me.stats.OrdersRejected, 1)
+		if me.onOrderUpdate != nil {
+			me.onOrderUpdate(order)
+		}
+		return &OrderResult{Order: order, Error: err.Error()}, err
+	}
+
+	// Validate before assigning an ID or mutating engine state.
 	if err := me.validateOrder(order); err != nil {
 		order.Status = StatusRejected
 		order.UpdatedAt = time.Now()
 		atomic.AddInt64(&me.stats.OrdersRejected, 1)
-		return &OrderResult{
-			Order: order,
-			Error: err.Error(),
-		}, err
+		return &OrderResult{Order: order, Error: err.Error()}, err
 	}
 	
 	// Generate order ID
@@ -628,14 +642,7 @@ func (me *MatchingEngine) SubmitOrder(order *Order) (*OrderResult, error) {
 	
 	me.mu.Unlock()
 	
-	// Get market state
-	state := me.getMarketState(order.Symbol)
-	if state == nil {
-		order.Status = StatusRejected
-		me.onOrderUpdate(order)
-		return &OrderResult{Order: order, Error: "market not found"}, errors.New("market not found")
-	}
-	
+	// The market was resolved and validated before order registration.
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	
@@ -699,24 +706,56 @@ func (me *MatchingEngine) SubmitOrder(order *Order) (*OrderResult, error) {
 
 // validateOrder validates an order
 func (me *MatchingEngine) validateOrder(order *Order) error {
-	if order.UserID == "" {
+	if order == nil {
+		return errors.New("order is required")
+	}
+	if strings.TrimSpace(order.UserID) == "" {
 		return errors.New("user ID required")
 	}
-	if order.Symbol == "" {
+	if strings.TrimSpace(order.Symbol) == "" {
 		return errors.New("symbol required")
 	}
-	if order.Quantity <= 0 {
-		return errors.New("quantity must be positive")
+	if math.IsNaN(order.Quantity) || math.IsInf(order.Quantity, 0) || order.Quantity <= 0 {
+		return errors.New("quantity must be finite and positive")
 	}
-	if order.Price < 0 && order.Type != OrderTypeMarket {
-		return errors.New("price must be non-negative")
+	if math.IsNaN(order.Price) || math.IsInf(order.Price, 0) {
+		return errors.New("price must be finite")
 	}
-	
-	// Check risk limits
+	if order.Type != OrderTypeMarket && order.Price <= 0 {
+		return errors.New("price must be positive for non-market orders")
+	}
+	if order.Side != OrderSideBuy && order.Side != OrderSideSell {
+		return errors.New("side must be buy or sell")
+	}
+	switch order.Type {
+	case OrderTypeMarket, OrderTypeLimit, OrderTypeStopLoss, OrderTypeStopLimit,
+		OrderTypeTakeProfit, OrderTypeStopMarket, OrderTypeTrailingStop, OrderTypeOCO,
+		OrderTypeOTO, OrderTypeIceberg, OrderTypeTWAP, OrderTypePO, OrderTypeFOK, OrderTypeIOC:
+	default:
+		return errors.New("unsupported order type")
+	}
+	for name, value := range map[string]float64{
+		"stop price": order.StopPrice,
+		"trigger price": order.TriggerPrice,
+		"trailing delta": order.TrailingDelta,
+		"trailing percent": order.TrailingPercent,
+		"display quantity": order.DisplayQuantity,
+	} {
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+			return fmt.Errorf("%s must be finite and non-negative", name)
+		}
+	}
+	if order.Type == OrderTypeTrailingStop && order.TrailingDelta <= 0 && order.TrailingPercent <= 0 {
+		return errors.New("trailing stop requires a positive trailing delta or percent")
+	}
+
+	// Check risk limits only after basic numeric and enum validation.
+	if me.riskManager == nil {
+		return errors.New("risk manager unavailable")
+	}
 	if err := me.riskManager.checkOrderRisk(order); err != nil {
 		return err
 	}
-	
 	return nil
 }
 
