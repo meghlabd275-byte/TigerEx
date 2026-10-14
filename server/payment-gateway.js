@@ -184,106 +184,31 @@ function calculateFee(amount, provider, methodType) {
  * Process fiat deposit
  */
 function processFiatDeposit(userId, currency, amount, provider, methodId) {
-  try {
-    if (currency !== 'USD' && currency !== 'EUR' && currency !== 'GBP') {
-      return { success: false, error: 'Unsupported fiat currency' };
-    }
-
-    const providerConfig = PAYMENT_PROVIDERS[provider];
-    if (!providerConfig) {
-      return { success: false, error: 'Invalid payment provider' };
-    }
-
-    if (amount < providerConfig.limits.min || amount > providerConfig.limits.max) {
-      return { 
-        success: false, 
-        error: `Amount must be between ${providerConfig.limits.min} and ${providerConfig.limits.max}` 
-      };
-    }
-
-    // Calculate fee
-    const fee = calculateFee(amount, provider, 'bank_transfer');
-    const netAmount = amount - fee;
-
-    // Create deposit record
-    const depositId = uuidv4();
-    const referenceCode = `DEP-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-
-    db.prepare(`
-      INSERT INTO deposits (id, user_id, currency, amount, method_type, provider, payment_method_id, reference_code, status, fee)
-      VALUES (?, ?, ?, ?, 'bank_transfer', ?, ?, ?, 'pending', ?)
-    `).run(depositId, userId, currency, amount, provider, methodId, referenceCode, fee);
-
-    return {
-      success: true,
-      data: {
-        depositId,
-        referenceCode,
-        status: 'pending',
-        amount: amount.toString(),
-        fee: fee.toString(),
-        netCredit: netAmount.toString(),
-        provider,
-        estimatedCompletion: '1-2 business days'
-      }
-    };
-  } catch (error) {
-    console.error('Fiat deposit error:', error);
-    return { success: false, error: 'Internal server error' };
-  }
+  // Do not create a successful-looking deposit until a real provider session,
+  // webhook signature verification, idempotency, and ledger settlement exist.
+  // The previous implementation only inserted a pending row and returned a
+  // reference code; it never initiated a payment with the named provider.
+  return {
+    success: false,
+    code: 'FIAT_PROVIDER_UNAVAILABLE',
+    error: 'Fiat deposits are disabled until a verified payment-provider adapter and ledger settlement are configured.'
+  };
 }
 
 /**
  * Process crypto withdrawal
  */
 function processCryptoWithdrawal(userId, currency, amount, toAddress, toTag = null) {
-  try {
-    // Get user wallet
-    const wallet = db.prepare('SELECT * FROM wallets WHERE user_id = ? AND currency = ?')
-      .get(userId, currency);
-    
-    if (!wallet || wallet.balance < amount) {
-      return { success: false, error: 'Insufficient balance' };
-    }
-
-    // Calculate network fee (simulated)
-    const networkFee = amount * 0.001; // 0.1%
-    const netAmount = amount - networkFee;
-
-    // Deduct from wallet
-    db.prepare('UPDATE wallets SET balance = balance - ? WHERE id = ?')
-      .run(amount, wallet.id);
-
-    // Create withdrawal record
-    const withdrawalId = uuidv4();
-    const referenceCode = `WD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-
-    db.prepare(`
-      INSERT INTO withdrawals (
-        id, user_id, currency, amount, method_type, provider, 
-        destination_address, destination_tag, fee, net_amount, 
-        reference_code, status
-      ) VALUES (?, ?, ?, ?, 'blockchain', 'crypto', ?, ?, ?, ?, ?, 'pending')
-    `).run(withdrawalId, userId, currency, amount, toAddress, toTag, networkFee, netAmount, referenceCode);
-
-    return {
-      success: true,
-      data: {
-        withdrawalId,
-        referenceCode,
-        status: 'pending',
-        amount: amount.toString(),
-        networkFee: networkFee.toString(),
-        netAmount: netAmount.toString(),
-        destination: toAddress,
-        estimatedConfirmation: '10-30 minutes',
-        network: currency === 'BTC' ? 'Bitcoin' : currency === 'ETH' ? 'Ethereum' : 'Other'
-      }
-    };
-  } catch (error) {
-    console.error('Crypto withdrawal error:', error);
-    return { success: false, error: 'Internal server error' };
-  }
+  // Never debit customer funds without durable reservation, withdrawal
+  // approval/risk checks, network-specific address validation, a signed chain
+  // transaction, broadcast acknowledgement, and reconciliation.
+  // The former code deducted a wallet balance and left a pending row without
+  // broadcasting any blockchain transaction.
+  return {
+    success: false,
+    code: 'CRYPTO_WITHDRAWAL_UNAVAILABLE',
+    error: 'Crypto withdrawals are disabled until custody signing, policy checks, and chain broadcast/reconciliation are configured.'
+  };
 }
 
 // ============================================================================
