@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"tigerex-api/internal/wallet"
+	"tigerex/backend/internal/wallet"
 )
 
 // WalletHandler handles wallet API requests
