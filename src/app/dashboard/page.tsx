@@ -379,7 +379,7 @@ export default function DashboardPage() {
 }
 
 // Nav Item Component
-function NavItem({ icon, label, href, active, open }: { icon: React.ReactNode; label: string; href: string; active?: boolean; open: boolean }) {
+function NavItem({ icon, label, href, active, open }: { icon: React.ReactNode; label: string; href: Route; active?: boolean; open: boolean }) {
   return (
     <Link 
       href={href} 
