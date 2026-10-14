@@ -22,6 +22,9 @@ var (
 	ErrInvalidAddress  = errors.New("invalid address")
 	ErrAddressNotWhitelisted = errors.New("address not whitelisted")
 	ErrInvalidAmount = errors.New("invalid amount")
+	// ErrCustodyUnavailable indicates that durable ledger/custody dependencies are not configured.
+	// Wallet operations must fail closed rather than fabricate balances, addresses, or transfers.
+	ErrCustodyUnavailable = errors.New("wallet custody is not configured")
 )
 
 // Config holds wallet configuration
@@ -76,30 +79,12 @@ func NewService(config Config) *Service {
 	}
 }
 
-// CreateDefaultWallets creates default wallets for a user
+// CreateDefaultWallets refuses to report success until durable wallet persistence exists.
 func (s *Service) CreateDefaultWallets(ctx context.Context, userID string) error {
 	if userID == "" {
 		return ErrInvalidAddress
 	}
-	
-	// Create default wallets for supported assets
-	assets := []string{"BTC", "ETH", "USDT", "BNB", "SOL", "XRP", "ADA", "DOGE", "AVAX", "MATIC", "DOT"}
-	
-	for _, asset := range assets {
-		wallet := api.Wallet{
-			UserID:     userID,
-			Asset:      asset,
-			Network:    s.getDefaultNetwork(asset),
-			Available:  0,
-			Locked:    0,
-			Total:     0,
-		}
-		
-		// This is a placeholder - real implementation would store in database
-		_ = wallet
-	}
-	
-	return nil
+	return ErrCustodyUnavailable
 }
 
 // GetDefaultNetwork returns the default network for an asset
@@ -124,64 +109,29 @@ func (s *Service) getDefaultNetwork(asset string) string {
 	return "Ethereum"
 }
 
-// GetWallets retrieves wallets for a user
+// GetWallets retrieves wallets only from a configured durable wallet store.
 func (s *Service) GetWallets(ctx context.Context, userID string) ([]api.Wallet, error) {
 	if userID == "" {
 		return nil, ErrInvalidAddress
 	}
-	
-	// This is a placeholder - real implementation would query database
-	return []api.Wallet{}, nil
+	return nil, ErrCustodyUnavailable
 }
 
-// GetBalance retrieves balance for an asset
+// GetBalance retrieves a balance only from the authoritative ledger.
 func (s *Service) GetBalance(ctx context.Context, userID, asset string) (*api.Wallet, error) {
 	if userID == "" || asset == "" {
 		return nil, ErrInvalidAddress
 	}
-	
-	wallet := &api.Wallet{
-		UserID:     userID,
-		Asset:     asset,
-		Network:   s.getDefaultNetwork(asset),
-		Available: 0,
-		Locked:    0,
-		Total:     0,
-	}
-	
-	// This is a placeholder - real implementation would query database
-	return wallet, nil
+	return nil, ErrCustodyUnavailable
 }
 
-// GetDepositAddress retrieves a deposit address
+// GetDepositAddress returns an error until chain-specific HD derivation and durable
+// address assignment are configured. Random address-shaped strings are unsafe.
 func (s *Service) GetDepositAddress(ctx context.Context, userID, asset, network string) (*DepositAddress, error) {
 	if userID == "" || asset == "" {
 		return nil, ErrInvalidAddress
 	}
-	
-	if network == "" {
-		network = s.getDefaultNetwork(asset)
-	}
-	
-	// Generate deposit address
-	// This is a placeholder - real implementation would:
-	// 1. Check if address exists
-	// 2. Generate new address using HD wallet
-	// 3. Return address with memo if required
-	
-	address := DepositAddress{
-		Asset:   asset,
-		Address: s.generateAddress(asset, network),
-		Network: network,
-	}
-	
-	// Set memo/tag for assets that require it
-	if asset == "XRP" || asset == "ATOM" || asset == "EOS" {
-		address.TagType = "tag"
-		address.Memo = uuid.New().String()[:8]
-	}
-	
-	return &address, nil
+	return nil, ErrCustodyUnavailable
 }
 
 // generateAddress generates a new deposit address
@@ -219,50 +169,17 @@ func base58Encode(data []byte) string {
 	return string(result)
 }
 
-// RequestWithdrawal requests a withdrawal
+// RequestWithdrawal must be implemented atomically against the ledger, policy engine,
+// approval workflow, and chain signer. Do not return a pending withdrawal without those
+// durable side effects.
 func (s *Service) RequestWithdrawal(ctx context.Context, req *WithdrawalRequest) (*api.Withdrawal, error) {
 	if req == nil || req.UserID == "" || req.Asset == "" || req.Address == "" {
 		return nil, ErrInvalidAddress
 	}
-	
 	if req.Amount <= 0 {
 		return nil, ErrInvalidAmount
 	}
-	
-	// Check balance
-	balance, err := s.GetBalance(ctx, req.UserID, req.Asset)
-	if err != nil {
-		return nil, err
-	}
-	
-	// Calculate fee
-	fee := s.getWithdrawalFee(req.Asset, req.Network, req.FeeLevel)
-	netAmount := req.Amount - fee
-	
-	if balance.Available < req.Amount {
-		return nil, ErrInsufficientBalance
-	}
-	
-	// Create withdrawal
-	withdrawal := &api.Withdrawal{
-		ID:          uuid.New().String(),
-		UserID:      req.UserID,
-		Asset:       req.Asset,
-		Amount:      req.Amount,
-		Fee:         fee,
-		NetAmount:   netAmount,
-		Address:     req.Address,
-		Status:      "pending",
-		Timestamp:  api.Now(),
-	}
-	
-	// This is a placeholder - real implementation would:
-	// 1. Lock funds
-	// 2. Create withdrawal record
-	// 3. Send to approval queue
-	// 4. Return withdrawal
-	
-	return withdrawal, nil
+	return nil, ErrCustodyUnavailable
 }
 
 // getWithdrawalFee calculates withdrawal fee
@@ -292,55 +209,27 @@ func (s *Service) getWithdrawalFee(asset, network, feeLevel string) float64 {
 	return 0.01
 }
 
-// CheckWithdrawalWhitelist checks if address is whitelisted
+// CheckWithdrawalWhitelist fails closed until the persistent policy store is configured.
 func (s *Service) CheckWithdrawalWhitelist(ctx context.Context, userID, address string) error {
 	if userID == "" || address == "" {
-		return nil // Skip if user has no whitelist enabled
+		return ErrInvalidAddress
 	}
-	
-	// This is a placeholder - real implementation would check database
-	return nil
+	return ErrCustodyUnavailable
 }
 
-// InternalTransfer performs an internal transfer
+// InternalTransfer must be an atomic double-entry ledger transaction. Until that
+// durable ledger is connected, returning "completed" would misrepresent fund movement.
 func (s *Service) InternalTransfer(ctx context.Context, req *TransferRequest) (*api.Transfer, error) {
 	if req == nil || req.FromUserID == "" || req.ToUserID == "" || req.Asset == "" {
 		return nil, ErrInvalidAddress
 	}
-	
+	if req.FromUserID == req.ToUserID {
+		return nil, ErrInvalidAddress
+	}
 	if req.Amount <= 0 {
 		return nil, ErrInvalidAmount
 	}
-	
-	// Check sender balance
-	balance, err := s.GetBalance(ctx, req.FromUserID, req.Asset)
-	if err != nil {
-		return nil, err
-	}
-	
-	if balance.Available < req.Amount {
-		return nil, ErrInsufficientBalance
-	}
-	
-	// Create transfer
-	transfer := &api.Transfer{
-		ID:        uuid.New().String(),
-		FromUserID: req.FromUserID,
-		ToUserID:  req.ToUserID,
-		Asset:    req.Asset,
-		Amount:   req.Amount,
-		Memo:     req.Memo,
-		Status:   "completed",
-		Timestamp: api.Now(),
-	}
-	
-	// This is a placeholder - real implementation would:
-	// 1. Lock sender funds
-	// 2. Create transfer record
-	// 3. Credit recipient
-	// 4. Complete transfer
-	
-	return transfer, nil
+	return nil, ErrCustodyUnavailable
 }
 
 // Encrypt encrypts sensitive data
