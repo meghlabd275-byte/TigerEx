@@ -11,6 +11,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"math"
 	"math/big"
 	"sort"
@@ -1962,20 +1966,22 @@ func (me *MatchingEngine) Stop() {
 // PLACEHOLDER TYPES
 // =============================================================================
 
-type RedisClient struct {
-	// Placeholder for Redis connection
-}
+var ErrRedisUnavailable = errors.New("redis client is not configured; cache operation unavailable")
+
+// RedisClient is an intentionally unconfigured adapter. It must not report
+// successful cache operations until a real Redis client is injected.
+type RedisClient struct{}
 
 func (r *RedisClient) Get(key string) ([]byte, error) {
-	return nil, nil
+	return nil, ErrRedisUnavailable
 }
 
 func (r *RedisClient) Set(key string, value []byte, ttl time.Duration) error {
-	return nil
+	return ErrRedisUnavailable
 }
 
 func (r *RedisClient) Del(key string) error {
-	return nil
+	return ErrRedisUnavailable
 }
 
 // Placeholder for sql.NullString compilation
