@@ -17,6 +17,7 @@
 #include <variant>
 #include <optional>
 #include <array>
+#include <functional>
 
 namespace tigerex {
 
@@ -169,6 +170,40 @@ struct Order {
     std::atomic<uint64_t> match_attempts{0};
     std::atomic<uint64_t> last_match_ns{0};
     
+    // Orders contain atomics for instrumentation; define value semantics so
+    // snapshots and result vectors can safely copy the non-atomic fields.
+    Order(const Order& other)
+        : id(other.id), symbol(other.symbol), side(other.side), type(other.type),
+          status(other.status), market_type(other.market_type), price(other.price),
+          stop_price(other.stop_price), trigger_price(other.trigger_price),
+          quantity(other.quantity), filled_quantity(other.filled_quantity),
+          remaining_quantity(other.remaining_quantity), iceberg_visible(other.iceberg_visible),
+          tif(other.tif), created_at(other.created_at), updated_at(other.updated_at),
+          expire_time(other.expire_time), fee_currency(other.fee_currency),
+          fee_rate(other.fee_rate), filled_fee(other.filled_fee), user_id(other.user_id),
+          account_id(other.account_id), subaccount_id(other.subaccount_id),
+          risk_group_id(other.risk_group_id), margin_required(other.margin_required),
+          oco_link(other.oco_link), oco_linked_order(other.oco_linked_order),
+          trailing_distance(other.trailing_distance), trailing_callback_rate(other.trailing_callback_rate),
+          match_attempts(other.match_attempts.load()), last_match_ns(other.last_match_ns.load()) {}
+    Order(Order&& other) noexcept : Order(static_cast<const Order&>(other)) {}
+    Order& operator=(const Order& other) {
+        if (this == &other) return *this;
+        id=other.id; symbol=other.symbol; side=other.side; type=other.type; status=other.status;
+        market_type=other.market_type; price=other.price; stop_price=other.stop_price;
+        trigger_price=other.trigger_price; quantity=other.quantity; filled_quantity=other.filled_quantity;
+        remaining_quantity=other.remaining_quantity; iceberg_visible=other.iceberg_visible; tif=other.tif;
+        created_at=other.created_at; updated_at=other.updated_at; expire_time=other.expire_time;
+        fee_currency=other.fee_currency; fee_rate=other.fee_rate; filled_fee=other.filled_fee;
+        user_id=other.user_id; account_id=other.account_id; subaccount_id=other.subaccount_id;
+        risk_group_id=other.risk_group_id; margin_required=other.margin_required;
+        oco_link=other.oco_link; oco_linked_order=other.oco_linked_order;
+        trailing_distance=other.trailing_distance; trailing_callback_rate=other.trailing_callback_rate;
+        match_attempts.store(other.match_attempts.load()); last_match_ns.store(other.last_match_ns.load());
+        return *this;
+    }
+    Order& operator=(Order&& other) noexcept { return *this = static_cast<const Order&>(other); }
+
     // Constructor
     Order() : 
         side(OrderSide::Buy),
@@ -265,6 +300,10 @@ struct OrderStatistics {
         return count > 0 ? static_cast<double>(total) / count : 0.0;
     }
 };
+
+int64_t calculate_maker_fee(int64_t price, int64_t quantity);
+int64_t calculate_taker_fee(int64_t price, int64_t quantity);
+bool is_iceberg_order(const Order& order);
 
 // ============================================================================
 // UTILITY FUNCTIONS

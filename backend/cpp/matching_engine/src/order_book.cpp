@@ -101,6 +101,19 @@ bool OrderBook::add_order(Order& order) {
 // REMOVE ORDER
 // ============================================================================
 
+std::vector<Order> OrderBook::get_user_orders(uint64_t user_id) const {
+    std::shared_lock lock(book_mutex_);
+    std::vector<Order> result;
+    for (const auto& entry : orders_) {
+        const Order& order = *entry.second;
+        if (order.user_id == user_id && order.status != OrderStatus::Cancelled &&
+            order.status != OrderStatus::Filled && order.status != OrderStatus::Rejected) {
+            result.push_back(order);
+        }
+    }
+    return result;
+}
+
 bool OrderBook::remove_order(const OrderId& order_id) {
     std::unique_lock lock(book_mutex_);
     
@@ -185,13 +198,9 @@ uint32_t OrderBook::process_match(Order& incoming, std::vector<Trade>& trades) {
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
     
-    // Determine which book to match against
-    auto& book = (incoming.side == OrderSide::Buy) ? asks_ : bids_;
-    
-    // Get the best price from opposite side
-    if (book.empty()) return 0;
-    
-    // Process matches
+    // Bid and ask maps use different comparator types. Match through a generic
+    // lambda instead of selecting between incompatible map types.
+    auto match_against = [&](auto& book) {
     while (!book.empty() && incoming.remaining_quantity[0] > 0) {
         auto level_it = book.begin();
         Price& book_price = level_it->first;
@@ -200,10 +209,10 @@ uint32_t OrderBook::process_match(Order& incoming, std::vector<Trade>& trades) {
         // Check price condition
         if (incoming.side == OrderSide::Buy) {
             // Buy order can only match at or below ask
-            if (price_greater(incoming.price, book_price)) break;
+            if (price_less(incoming.price, book_price)) break;
         } else {
             // Sell order can only match at or above bid
-            if (price_less(incoming.price, book_price)) break;
+            if (price_greater(incoming.price, book_price)) break;
         }
         
         // Get first order at this price level
@@ -221,6 +230,9 @@ uint32_t OrderBook::process_match(Order& incoming, std::vector<Trade>& trades) {
         // Update trade ID for next trade
         trade_id = sequence_atom_.fetch_add(1);
     }
+    };
+    if (incoming.side == OrderSide::Buy) match_against(asks_);
+    else match_against(bids_);
     
     // Add remaining to book if not fully filled
     if (incoming.remaining_quantity[0] > 0) {
