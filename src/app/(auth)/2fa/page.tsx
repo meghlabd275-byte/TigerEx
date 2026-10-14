@@ -2,91 +2,62 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Shield, Key, Smartphone, Mail, Copy, CheckCircle, AlertTriangle } from "lucide-react";
+import { AlertTriangle, ShieldCheck } from "lucide-react";
 
 export default function TwoFactorPage() {
-  const [step, setStep] = useState(1);
-  const [code, setCode] = useState("");
-  const [enabled, setEnabled] = useState(false);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function requestEnrollment() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const token = localStorage.getItem("tigerex_access_token");
+      if (!token) {
+        setMessage("Sign in before configuring account security.");
+        return;
+      }
+      const response = await fetch("/api/auth/2fa/enable", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        cache: "no-store",
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok || body?.success === false) {
+        setMessage(body?.error?.message ?? body?.error ?? "Secure authenticator enrollment is not available.");
+        return;
+      }
+      setMessage("The security service returned an enrollment response. Follow only the secret and QR data returned by the server.");
+    } catch {
+      setMessage("The security service could not be reached. No authenticator was enabled.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-tiger-black to-[#0d0d1a]">
-      <header className="sticky top-0 z-50 border-b border-white/10 bg-tiger-black/80 backdrop-blur-md">
-        <div className="container mx-auto flex h-16 items-center justify-between px-4">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-tiger-orange">
-              <span className="text-xl font-bold text-white">T</span>
-            </div>
-            <span className="text-xl font-bold text-white">TigerEx</span>
-          </Link>
+    <main className="min-h-screen bg-gray-950 px-4 py-12 text-white">
+      <section className="mx-auto max-w-xl rounded-2xl border border-white/10 bg-white/5 p-6">
+        <Link href="/" className="text-sm text-gray-400 hover:text-white">← TigerEx home</Link>
+        <div className="mt-6 flex items-center gap-3">
+          <ShieldCheck className="h-8 w-8 text-orange-400" />
+          <div>
+            <h1 className="text-2xl font-bold">Two-factor authentication</h1>
+            <p className="text-sm text-gray-400">Protect account access with a verified authenticator.</p>
+          </div>
         </div>
-      </header>
-
-      <div className="container mx-auto px-4 py-6">
-        <h1 className="text-3xl font-bold text-white mb-2">Two-Factor Authentication</h1>
-        <p className="text-gray-400 mb-6">Secure your account with 2FA</p>
-
-        {enabled ? (
-          <div className="rounded-xl border border-green-500/50 bg-green-500/10 p-6">
-            <div className="flex items-center gap-2 text-green-400">
-              <CheckCircle className="h-6 w-6" />
-              <span className="text-xl font-bold">2FA Enabled</span>
-            </div>
-            <p className="mt-2 text-gray-400">Your account is protected with two-factor authentication.</p>
-            <button className="mt-4 rounded-lg border border-red-500/50 px-4 py-2 text-red-400 hover:bg-red-500/10">
-              Disable 2FA
-            </button>
+        <div className="mt-6 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
+          <div className="flex gap-2 text-amber-200">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+            <p className="text-sm">TigerEx will not display a sample secret, fake QR code, or claim 2FA is enabled without server-side secret storage and code verification.</p>
           </div>
-        ) : step === 1 ? (
-          <div className="rounded-xl border border-white/10 bg-white/5 p-6">
-            <h3 className="text-lg font-bold text-white mb-4">Choose 2FA Method</h3>
-            <div className="space-y-3">
-              <button onClick={() => setStep(2)} className="w-full rounded-lg border border-white/10 bg-white/5 p-4 text-left hover:bg-white/10">
-                <div className="flex items-center gap-3">
-                  <Smartphone className="h-8 w-8 text-tiger-orange" />
-                  <div>
-                    <div className="font-bold text-white">Authenticator App</div>
-                    <div className="text-sm text-gray-400">Google Authenticator or similar</div>
-                  </div>
-                </div>
-              </button>
-              <button className="w-full rounded-lg border border-white/10 bg-white/5 p-4 text-left opacity-50">
-                <div className="flex items-center gap-3">
-                  <Mail className="h-8 w-8 text-gray-400" />
-                  <div>
-                    <div className="font-bold text-white">SMS Authentication</div>
-                    <div className="text-sm text-gray-400">Coming soon</div>
-                  </div>
-                </div>
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-xl border border-white/10 bg-white/5 p-6">
-            <h3 className="text-lg font-bold text-white mb-4">Setup Authenticator</h3>
-            <div className="mb-4 rounded-lg bg-white/5 p-4">
-              <div className="text-sm text-gray-400 mb-2">Scan this QR code with your authenticator app</div>
-              <div className="flex justify-center">
-                <div className="h-32 w-32 rounded bg-white p-2">
-                  <div className="h-full w-full bg-gray-200" />
-                </div>
-              </div>
-            </div>
-            <div className="mb-4 rounded-lg border border-white/10 bg-white/5 p-3">
-              <div className="text-sm text-gray-400 mb-1">Or enter this key manually</div>
-              <div className="font-mono text-white">JBSWY3KPCG7D4EJ2PDZIZZ</div>
-            </div>
-            <div className="mb-4">
-              <label className="mb-2 block text-sm text-gray-400">Enter 6-digit code</label>
-              <input type="text" value={code} onChange={(e) => setCode(e.target.value)} placeholder="000000" maxLength={6}
-                className="w-full rounded-lg border border-white/10 bg-white/5 py-3 px-4 font-mono text-white text-center text-2xl tracking-widest" />
-            </div>
-            <button onClick={() => setEnabled(true)} className="w-full rounded-lg bg-tiger-orange py-3 font-bold text-white">
-              Enable 2FA
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
+        </div>
+        <button onClick={() => void requestEnrollment()} disabled={busy} className="mt-6 w-full rounded-lg bg-orange-500 px-4 py-3 font-semibold text-white disabled:opacity-50">
+          {busy ? "Checking security service…" : "Request secure authenticator setup"}
+        </button>
+        {message && <p role="status" className="mt-4 break-words rounded-lg border border-white/10 p-3 text-sm text-gray-200">{message}</p>}
+        <p className="mt-4 text-xs text-gray-500">Enrollment and disable operations remain unavailable until the server implements encrypted secret storage, authenticated session checks, and real TOTP verification.</p>
+      </section>
+    </main>
   );
 }
