@@ -7,12 +7,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,7 +19,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"golang.org/x/time/rate"
 )
