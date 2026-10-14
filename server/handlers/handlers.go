@@ -47,168 +47,60 @@ var mockPrices = map[string]Ticker{
 
 // Get all markets
 func GetMarkets(c *gin.Context) {
-	markets := []gin.H{}
-	for _, t := range mockPrices {
-		markets = append(markets, gin.H{
-			"symbol":        t.Symbol,
-			"baseCurrency":  strings.Split(t.Symbol, "-")[0],
-			"quoteCurrency": strings.Split(t.Symbol, "-")[1],
-			"price":         t.Price,
-			"priceChange":   t.PriceChange,
-			"highPrice":     t.HighPrice,
-			"lowPrice":      t.LowPrice,
-			"volume":        t.Volume,
-			"status":        "active",
-		})
-	}
-	c.JSON(200, gin.H{"success": true, "data": markets})
-}
-
-// Get ticker
-func GetTicker(c *gin.Context) {
-	symbol := c.Param("symbol")
-	ticker, ok := mockPrices[symbol]
-	if !ok {
-		c.JSON(404, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Market not found"}})
+	rows, err := models.Pool.Query(c.Request.Context(), \`
+		SELECT symbol, base_currency, quote_currency, status
+		FROM markets
+		WHERE status IN ('active', 'trading')
+		ORDER BY symbol
+	\`)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Configured market metadata is unavailable"}})
 		return
 	}
-	c.JSON(200, gin.H{"success": true, "data": ticker})
-}
+	defer rows.Close()
 
-// Get order book
-func GetOrderBook(c *gin.Context) {
-	symbol := c.Param("symbol")
-	limit := 20
-	if l := c.Query("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
+	markets := []gin.H{}
+	for rows.Next() {
+		var symbol, baseCurrency, quoteCurrency, status string
+		if err := rows.Scan(&symbol, &baseCurrency, &quoteCurrency, &status); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Market metadata could not be read"}})
+			return
 		}
-	}
-
-	ticker, ok := mockPrices[symbol]
-	if !ok {
-		ticker = mockPrices["BTC-USDT"]
-	}
-
-	bids := [][]interface{}{}
-	asks := [][]interface{}{}
-	for i := 0; i < limit; i++ {
-		bidPrice := ticker.Price - float64(i)*ticker.Price*0.0001
-		askPrice := ticker.Price + float64(i+1)*ticker.Price*0.0001
-		bids = append(bids, []interface{}{
-			strconv.FormatFloat(bidPrice, 'f', 2, 64),
-			strconv.FormatFloat(rand.Float64()*10+0.1, 'f', 4, 64),
-		})
-		asks = append(asks, []interface{}{
-			strconv.FormatFloat(askPrice, 'f', 2, 64),
-			strconv.FormatFloat(rand.Float64()*10+0.1, 'f', 4, 64),
+		markets = append(markets, gin.H{
+			"symbol": symbol, "baseCurrency": baseCurrency,
+			"quoteCurrency": quoteCurrency, "status": status,
 		})
 	}
-
-	c.JSON(200, gin.H{
-		"success": true,
-		"data": gin.H{
-			"lastUpdateId": time.Now().UnixMilli(),
-			"bids":         bids,
-			"asks":         asks,
-		},
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Market metadata query failed"}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": markets})
+}
+func GetTicker(c *gin.Context) {
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error": gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
 	})
 }
-
-// Get klines (candlesticks)
+func GetOrderBook(c *gin.Context) {
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error": gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
+	})
+}
 func GetKlines(c *gin.Context) {
-	symbol := c.Param("symbol")
-	limit := 100
-	if l := c.Query("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil {
-			limit = parsed
-		}
-	}
-	interval := c.Query("interval")
-	if interval == "" {
-		interval = "1h"
-	}
-
-	intervalMs := map[string]int64{"1m": 60000, "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000, "1d": 86400000}[interval]
-
-	ticker, ok := mockPrices[symbol]
-	if !ok {
-		ticker = mockPrices["BTC-USDT"]
-	}
-
-	now := time.Now().UnixMilli()
-	klines := [][]interface{}{}
-	price := ticker.Price * 0.95
-
-	for i := limit - 1; i >= 0; i-- {
-		open := price
-		change := (rand.Float64() - 0.5) * ticker.Price * 0.02
-		close := open + change
-		high := max(open, close) + rand.Float64()*ticker.Price*0.005
-		low := min(open, close) - rand.Float64()*ticker.Price*0.005
-		volume := rand.Float64() * 10000
-
-		timestamp := (now - int64(i)*intervalMs) / 1000
-		klines = append(klines, []interface{}{
-			timestamp,
-			strconv.FormatFloat(open, 'f', 2, 64),
-			strconv.FormatFloat(high, 'f', 2, 64),
-			strconv.FormatFloat(low, 'f', 2, 64),
-			strconv.FormatFloat(close, 'f', 2, 64),
-			strconv.FormatFloat(volume, 'f', 2, 64),
-		})
-
-		price = close
-	}
-
-	c.JSON(200, gin.H{"success": true, "data": klines})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error": gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
+	})
 }
-
-// Get recent trades
 func GetRecentTrades(c *gin.Context) {
-	symbol := c.Param("symbol")
-	limit := 50
-	if l := c.Query("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil {
-			limit = parsed
-		}
-	}
-
-	ticker, ok := mockPrices[symbol]
-	if !ok {
-		ticker = mockPrices["BTC-USDT"]
-	}
-
-	trades := []gin.H{}
-	for i := 0; i < limit; i++ {
-		price := ticker.Price + (rand.Float64()-0.5)*ticker.Price*0.001
-		side := "buy"
-		if rand.Float64() > 0.5 {
-			side = "sell"
-		}
-		trades = append(trades, gin.H{
-			"id":           uuid.New().String(),
-			"price":        strconv.FormatFloat(price, 'f', 2, 64),
-			"quantity":     strconv.FormatFloat(rand.Float64()*2, 'f', 4, 64),
-			"time":         (time.Now().Unix() - int64(i)*60),
-			"isBuyerMaker": side == "sell",
-		})
-	}
-
-	c.JSON(200, gin.H{"success": true, "data": trades})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error": gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
+	})
 }
-
-// ============ AUTH ============
-
-type RegisterRequest struct {
-	Email        string `json:"email" binding:"required,email"`
-	Username     string `json:"username" binding:"required"`
-	Password     string `json:"password" binding:"required,min=8"`
-	ReferralCode string `json:"referralCode"`
-	CountryCode  string `json:"countryCode"`
-	TermsAccept  bool   `json:"termsAccepted" binding:"required"`
-}
-
 func Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -963,124 +855,14 @@ type OrderRequest struct {
 }
 
 func PlaceSpotOrder(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-	if userID == "" {
-		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
-		return
-	}
-
-	var req OrderRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
-		return
-	}
-
-	parts := strings.Split(req.Symbol, "-")
-	baseCurrency := parts[0]
-	quoteCurrency := parts[1]
-
-	// Get price
-	price := req.Price
-	if req.OrderType == "market" {
-		ticker := mockPrices[req.Symbol]
-		price = ticker.Price
-	}
-
-	// Check balance
-	currencyNeeded := req.Side
-	var requiredAmount float64
-	if req.Side == "buy" {
-		currencyNeeded = quoteCurrency
-		requiredAmount = req.Quantity * price
-	} else {
-		currencyNeeded = baseCurrency
-		requiredAmount = req.Quantity
-	}
-
-	var available float64
-	err := models.Pool.QueryRow(c.Request.Context(), `
-		SELECT available FROM wallets WHERE user_id = $1 AND currency = $2 AND wallet_type = 'spot'
-	`, userID, currencyNeeded).Scan(&available)
-
-	if err != nil || available < requiredAmount {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Insufficient balance"}})
-		return
-	}
-
-	orderID := uuid.New()
-	ctx := c.Request.Context()
-	tx, _ := models.Pool.Begin(ctx)
-	defer tx.Rollback(ctx)
-
-	status := "new"
-	if req.OrderType == "market" {
-		status = "filled"
-	}
-
-	timeInForce := req.TimeInForce
-	if timeInForce == "" {
-		timeInForce = "GTC"
-	}
-
-	_, _ = tx.Exec(ctx, `
-		INSERT INTO spot_orders 
-		(id, user_id, market_symbol, side, order_type, quantity, price, stop_price, status, time_in_force)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, orderID, userID, req.Symbol, req.Side, req.OrderType, req.Quantity, req.Price, req.StopPrice, status, timeInForce)
-
-	if req.OrderType != "market" {
-		// Lock funds
-		_, _ = tx.Exec(ctx, `
-			UPDATE wallets SET available = available - $1, locked = locked + $1, updated_at = NOW()
-			WHERE user_id = $2 AND currency = $3 AND wallet_type = 'spot'
-		`, requiredAmount, userID, currencyNeeded)
-	} else {
-		// Execute market order
-		if req.Side == "buy" {
-			_, _ = tx.Exec(ctx, `
-				UPDATE wallets SET balance = balance - $1, available = available - $1, updated_at = NOW()
-				WHERE user_id = $2 AND currency = $3 AND wallet_type = 'spot'
-			`, requiredAmount, userID, quoteCurrency)
-
-			_, _ = tx.Exec(ctx, `
-				INSERT INTO wallets (id, user_id, currency, network, wallet_type, balance, locked, available)
-				VALUES ($1, $2, $3, 'MAINNET', 'spot', $4, 0, $4)
-				ON CONFLICT (user_id, currency, network, wallet_type) 
-				DO UPDATE SET balance = balance + $4, available = available + $4
-			`, uuid.New(), userID, baseCurrency, req.Quantity)
-		} else {
-			_, _ = tx.Exec(ctx, `
-				UPDATE wallets SET balance = balance - $1, available = available - $1, updated_at = NOW()
-				WHERE user_id = $2 AND currency = $3 AND wallet_type = 'spot'
-			`, req.Quantity, userID, baseCurrency)
-
-			received := req.Quantity * price
-			_, _ = tx.Exec(ctx, `
-				UPDATE wallets SET balance = balance + $1, available = available + $1, updated_at = NOW()
-				WHERE user_id = $2 AND currency = $3 AND wallet_type = 'spot'
-			`, received, userID, quoteCurrency)
-		}
-
-		// Update order as filled
-		_, _ = tx.Exec(ctx, `
-			UPDATE spot_orders SET status = 'filled', filled_quantity = $1, average_price = $2, updated_at = NOW()
-			WHERE id = $3
-		`, req.Quantity, price, orderID)
-	}
-
-	tx.Commit(ctx)
-
-	c.JSON(200, gin.H{"success": true, "data": gin.H{
-		"orderId":  orderID,
-		"symbol":   req.Symbol,
-		"side":     req.Side,
-		"type":     req.OrderType,
-		"quantity": req.Quantity,
-		"price":    price,
-		"status":   status,
-	}})
+	// The legacy implementation debited/credited user balances using hard-coded
+	// prices and marked market orders filled without a matching-engine execution.
+	// Reject all orders until the durable matching engine and ledger are connected.
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error": gin.H{"code": 503, "message": "Spot order execution is unavailable until the durable matching engine and ledger are configured"},
+	})
 }
-
 func CancelOrder(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	if userID == "" {
