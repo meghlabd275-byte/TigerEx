@@ -18,14 +18,13 @@ function authHeader(request: NextRequest): string | null {
 async function backendRequest(path: string, token: string, init: RequestInit = {}) {
   if (!ADMIN_API_URL) return unavailable();
   try {
+    const headers = new Headers(init.headers);
+    headers.set('Accept', 'application/json');
+    headers.set('Authorization', token);
+    if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
     const response = await fetch(\`\${ADMIN_API_URL}\${path}\`, {
       ...init,
-      headers: {
-        Accept: 'application/json',
-        Authorization: token,
-        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-        ...init.headers,
-      },
+      headers,
       cache: 'no-store',
     });
     const body = await response.json().catch(() => ({ success: false, error: 'Invalid backend response' }));
