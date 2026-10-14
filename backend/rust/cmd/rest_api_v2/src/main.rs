@@ -694,43 +694,8 @@ async fn handle_server_time() -> impl IntoResponse {
 }
 
 async fn handle_exchange_info() -> impl IntoResponse {
-    let info = serde_json::json!({
-        "timezone": "UTC",
-        "serverTime": current_timestamp(),
-        "symbols": [
-            {"symbol": "BTCUSDT", "status": "TRADING", "baseAsset": "BTC", "quoteAsset": "USDT", "precision": 8, "scale": 2},
-            {"symbol": "ETHUSDT", "status": "TRADING", "baseAsset": "ETH", "quoteAsset": "USDT", "precision": 8, "scale": 6},
-            {"symbol": "BNBUSDT", "status": "TRADING", "baseAsset": "BNB", "quoteAsset": "USDT", "precision": 8, "scale": 4},
-            {"symbol": "SOLUSDT", "status": "TRADING", "baseAsset": "SOL", "quoteAsset": "USDT", "precision": 8, "scale": 4},
-            {"symbol": "XRPUSDT", "status": "TRADING", "baseAsset": "XRP", "quoteAsset": "USDT", "precision": 8, "scale": 1},
-            {"symbol": "ADAUSDT", "status": "TRADING", "baseAsset": "ADA", "quoteAsset": "USDT", "precision": 8, "scale": 0},
-            {"symbol": "DOGEUSDT", "status": "TRADING", "baseAsset": "DOGE", "quoteAsset": "USDT", "precision": 8, "scale": 0},
-            {"symbol": "AVAXUSDT", "status": "TRADING", "baseAsset": "AVAX", "quoteAsset": "USDT", "precision": 8, "scale": 4},
-            {"symbol": "DOTUSDT", "status": "TRADING", "baseAsset": "DOT", "quoteAsset": "USDT", "precision": 8, "scale": 4},
-            {"symbol": "MATICUSDT", "status": "TRADING", "baseAsset": "MATIC", "quoteAsset": "USDT", "precision": 8, "scale": 2},
-            {"symbol": "LINKUSDT", "status": "TRADING", "baseAsset": "LINK", "quoteAsset": "USDT", "precision": 8, "scale": 4},
-            {"symbol": "ATOMUSDT", "status": "TRADING", "baseAsset": "ATOM", "quoteAsset": "USDT", "precision": 8, "scale": 4},
-            {"symbol": "LTCUSDT", "status": "TRADING", "baseAsset": "LTC", "quoteAsset": "USDT", "precision": 8, "scale": 4},
-            {"symbol": "BCHUSDT", "status": "TRADING", "baseAsset": "BCH", "quoteAsset": "USDT", "precision": 8, "scale": 4},
-            {"symbol": "NEARUSDT", "status": "TRADING", "baseAsset": "NEAR", "quoteAsset": "USDT", "precision": 8, "scale": 4},
-            {"symbol": "ETHBTC", "status": "TRADING", "baseAsset": "ETH", "quoteAsset": "BTC", "precision": 8, "scale": 6},
-            {"symbol": "BNBETH", "status": "TRADING", "baseAsset": "BNB", "quoteAsset": "ETH", "precision": 8, "scale": 4},
-            {"symbol": "BTCUSDC", "status": "TRADING", "baseAsset": "BTC", "quoteAsset": "USDC", "precision": 8, "scale": 2},
-            {"symbol": "ETHUSDC", "status": "TRADING", "baseAsset": "ETH", "quoteAsset": "USDC", "precision": 8, "scale": 6},
-        ],
-        "exchangeFilters": [],
-        "rateLimits": [
-            {"rateLimitType": "REQUEST_WEIGHT", "interval": "MINUTE", "limit": 1200},
-            {"rateLimitType": "ORDERS", "interval": "SECOND", "limit": 50},
-            {"rateLimitType": "ORDERS", "interval": "DAY", "limit": 200000},
-        ],
-    });
-    Json(ApiResponse::success(info))
+    unavailable_business_api()
 }
-
-// ============================================================================
-// API HANDLERS - Market Data
-// ============================================================================
 
 fn unavailable_market_data() -> Response {
     (
