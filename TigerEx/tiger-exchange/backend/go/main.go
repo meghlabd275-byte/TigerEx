@@ -35,21 +35,38 @@ func NewApp() *App {
 		Port:        getEnv("PORT", "8080"),
 		MongoDBURI:  getEnv("MONGODB_URI", "mongodb://localhost:27017"),
 		RateLimitMax: getEnvInt("RATE_LIMIT_MAX", 100),
-		CORSOrigin: getEnv("CORS_ORIGIN", "*"),
+		CORSOrigin: getEnv("CORS_ORIGIN", ""),
 		AppName:   getEnv("APP_NAME", "TigerEx"),
 	}
 
 	router := gin.New()
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
-	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{cfg.CORSOrigin},
-		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
-		MaxAge:           12 * time.Hour,
-	}))
+	// Browser origins must be explicitly configured. Never combine a wildcard
+	// origin with credentialed requests.
+	if cfg.CORSOrigin != "" {
+		router.Use(cors.New(cors.Config{
+			AllowOrigins:     []string{cfg.CORSOrigin},
+			AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+			ExposeHeaders:    []string{"Content-Length"},
+			AllowCredentials: true,
+			MaxAge:           12 * time.Hour,
+		}))
+	}
+
+	// This legacy service currently has placeholder authentication, wallets,
+	// orders, and settlement handlers. Keep only health checks reachable until
+	// real persistent identity, ledger, matching, and custody integrations exist.
+	router.Use(func(c *gin.Context) {
+		if c.Request.URL.Path == "/health" && c.Request.Method == http.MethodGet {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+			"error": "service unavailable: production identity, ledger, matching, and custody integrations are not configured",
+		})
+	})
 
 	app := &App{
 		Router: router,
