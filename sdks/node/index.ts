@@ -65,7 +65,7 @@ export class TigerExClient extends EventEmitter {
             throw new TypeError('baseUrl must not contain credentials, a query string, or a fragment');
         }
         this.config = { ...config };
-        this.baseURL = configuredBase.replace(/\\/+$/, '');
+        this.baseURL = configuredBase.replace(/\/+$/, '');
         this.timeout = config.timeout ?? 30000;
         if (!Number.isSafeInteger(this.timeout) || this.timeout < 1 || this.timeout > 120000) {
             throw new RangeError('timeout must be an integer between 1 and 120000 milliseconds');
