@@ -15,7 +15,7 @@ export class ApiClient {
 
   // Generic request methods
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const response = await fetch(`${this.baseUrl.replace(/\\/$/, '')}${endpoint}`, {
+    const response = await fetch(`${this.baseUrl.replace(/\/$/, '')}${endpoint}`, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
