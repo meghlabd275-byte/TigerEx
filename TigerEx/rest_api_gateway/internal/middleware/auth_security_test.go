@@ -42,3 +42,29 @@ func TestAPIKeyAuthFailsClosedWithoutVerifier(t *testing.T) {
 		t.Fatal("expected API key auth to fail closed until a persistent verifier is configured")
 	}
 }
+
+
+func TestAntiPhishingFailsClosedWhenCodeIsNotConfigured(t *testing.T) {
+	ap := NewAntiPhishingMiddleware()
+	if ap.VerifyAntiPhishingCode("user-1", "attacker-supplied") {
+		t.Fatal("verification must fail when no anti-phishing code is configured")
+	}
+	if ap.VerifyAntiPhishingCode("", "code") || ap.VerifyAntiPhishingCode("user-1", "") {
+		t.Fatal("empty user IDs and codes must be rejected")
+	}
+}
+
+func TestAntiPhishingCodeCanBeSetAndVerified(t *testing.T) {
+	ap := NewAntiPhishingMiddleware()
+	ap.SetAntiPhishingCode("user-1", "known-code")
+	if !ap.VerifyAntiPhishingCode("user-1", "known-code") {
+		t.Fatal("expected configured code to verify")
+	}
+	if ap.VerifyAntiPhishingCode("user-1", "wrong-code") {
+		t.Fatal("wrong code must be rejected")
+	}
+	ap.SetAntiPhishingCode("user-1", "")
+	if ap.VerifyAntiPhishingCode("user-1", "known-code") {
+		t.Fatal("cleared code must not continue to verify")
+	}
+}
