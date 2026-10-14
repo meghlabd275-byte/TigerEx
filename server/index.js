@@ -569,30 +569,14 @@ app.post("/api/v1/wallet/address", authenticateRequest, async (_req, res) => {
   });
 });
 
-// Initiate a deposit
-app.post("/api/v1/wallet/deposit", authenticateRequest, async (req, res) => {
-  try {
-    const { currency, network, amount, txid, address } = req.body;
-
-    if (!currency || !network || !amount || !txid || !address) {
-      return res.status(400).json({ success: false, error: "Missing required deposit fields" });
-    }
-
-    // In a real system, you would verify the transaction on the blockchain
-    // and ensure the address belongs to the user.
-
-    const depositId = uuidv4();
-    await pool.query(
-      `INSERT INTO deposits (id, user_id, currency, network, amount, txid, address, status, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', NOW())`,
-      [depositId, req.userId, currency, network, amount, txid, address]
-    );
-
-    res.json({ success: true, message: "Deposit initiated successfully. Awaiting confirmation." });
-  } catch (error) {
-    console.error("Deposit error:", error);
-    res.status(500).json({ success: false, error: "Internal server error" });
-  }
+// User-submitted deposit metadata is not proof of an on-chain transfer.
+// Enable deposits only after chain-specific transaction verification, finality,
+// replay protection, and idempotent ledger crediting are integrated.
+app.post("/api/v1/wallet/deposit", authenticateRequest, async (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    error: "Deposits are unavailable until blockchain verification and ledger crediting are configured",
+  });
 });
 
 // Initiate a withdrawal
