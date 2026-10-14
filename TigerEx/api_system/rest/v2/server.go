@@ -52,10 +52,10 @@ func DefaultConfig() *Config {
 		RateLimit:      100,
 		RateLimitBurst: 200,
 		EnableTLS:      false,
-		JWTSecret:      generateSecureSecret(),
+		JWTSecret:      os.Getenv("TIGEREX_JWT_SECRET"),
 		JWTExpiry:     15 * time.Minute,
-		EnableCORS:    true,
-		AllowedOrigins: []string{"*"},
+		EnableCORS:    false,
+		AllowedOrigins: nil,
 	}
 }
 
@@ -333,12 +333,27 @@ func (s *Server) rateLimitMiddleware() gin.HandlerFunc {
 func (s *Server) corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
-		if origin != "" {
-			c.Header("Access-Control-Allow-Origin", "*")
-			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+		allowed := false
+		for _, candidate := range s.config.AllowedOrigins {
+			if candidate != "" && candidate != "*" && origin == candidate {
+				allowed = true
+				break
+			}
 		}
-		if c.Request.Method == "OPTIONS" {
+		if origin != "" && allowed {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Vary", "Origin")
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-API-Key")
+		} else if origin != "" {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		if c.Request.Method == http.MethodOptions {
+			if !allowed {
+				c.AbortWithStatus(http.StatusForbidden)
+				return
+			}
 			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
@@ -348,47 +363,61 @@ func (s *Server) corsMiddleware() gin.HandlerFunc {
 
 func (s *Server) authRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token := c.GetHeader("Authorization")
-		if token == "" {
-			token = c.Query("api_key")
+		if len(s.config.JWTSecret) < 32 {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Authentication is unavailable: a stable JWT secret of at least 32 characters is not configured"}})
+			c.Abort()
+			return
 		}
-		if token == "" {
+		token := strings.TrimSpace(c.GetHeader("Authorization"))
+		if !strings.HasPrefix(token, "Bearer ") || len(strings.TrimSpace(strings.TrimPrefix(token, "Bearer "))) == 0 {
 			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
 			c.Abort()
 			return
 		}
-		token = strings.TrimPrefix(token, "Bearer ")
-		parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		parsedToken, err := jwt.Parse(strings.TrimSpace(strings.TrimPrefix(token, "Bearer ")), func(token *jwt.Token) (interface{}, error) {
+			if token.Method != jwt.SigningMethodHS256 {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
 			return []byte(s.config.JWTSecret), nil
-		})
-		if err != nil || !parsedToken.Valid {
+		}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired())
+		if err != nil || parsedToken == nil || !parsedToken.Valid {
 			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Invalid token"}})
 			c.Abort()
 			return
 		}
-		if claims, ok := parsedToken.Claims.(jwt.MapClaims); ok {
-			userID, _ := claims["user_id"].(string)
-			c.Set("user_id", userID)
+		claims, ok := parsedToken.Claims.(jwt.MapClaims)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Invalid token claims"}})
+			c.Abort()
+			return
 		}
+		userID, ok := claims["user_id"].(string)
+		if !ok || strings.TrimSpace(userID) == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Missing user identity"}})
+			c.Abort()
+			return
+		}
+		c.Set("user_id", userID)
 		c.Next()
 	}
 }
 
 func (s *Server) authOptional() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token := c.GetHeader("Authorization")
-		if token != "" {
-			token = strings.TrimPrefix(token, "Bearer ")
-			parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+		// Optional authentication never upgrades an unverified token into an identity.
+		token := strings.TrimSpace(c.GetHeader("Authorization"))
+		if token != "" && len(s.config.JWTSecret) >= 32 && strings.HasPrefix(token, "Bearer ") {
+			parsed, err := jwt.Parse(strings.TrimSpace(strings.TrimPrefix(token, "Bearer ")), func(t *jwt.Token) (interface{}, error) {
+				if t.Method != jwt.SigningMethodHS256 {
+					return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+				}
 				return []byte(s.config.JWTSecret), nil
-			})
-			if err == nil && parsedToken.Valid {
-				if claims, ok := parsedToken.Claims.(jwt.MapClaims); ok {
-					userID, _ := claims["user_id"].(string)
-					c.Set("user_id", userID)
+			}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired())
+			if err == nil && parsed != nil && parsed.Valid {
+				if claims, ok := parsed.Claims.(jwt.MapClaims); ok {
+					if userID, ok := claims["user_id"].(string); ok && strings.TrimSpace(userID) != "" {
+						c.Set("user_id", userID)
+					}
 				}
 			}
 		}
@@ -398,20 +427,26 @@ func (s *Server) authOptional() gin.HandlerFunc {
 
 func (s *Server) adminAuthRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		apiKey := c.GetHeader("X-API-Key")
-		if apiKey == "" {
-			apiKey = c.Query("api_key")
-		}
-		if apiKey == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Invalid API key"}})
-			c.Abort()
-			return
-		}
-		c.Next()
+		// Presence of an API key is not authentication. This legacy service has no
+		// persistent verifier, scope model, or rotation/revocation store configured.
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Admin authentication unavailable: API-key verification is not configured"}})
+		c.Abort()
 	}
 }
 
 // Market Data
+func unavailableMarketData() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"success": false,
+			"error": gin.H{
+				"code": 503,
+				"message": "Market data unavailable: no verified market-data provider is configured",
+			},
+		})
+	}
+}
+
 var mockMarkets = map[string]struct {
 	BaseAsset  string
 	QuoteAsset string
@@ -427,201 +462,80 @@ var mockMarkets = map[string]struct {
 }
 
 func (s *Server) GetExchangeInfo() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		markets := []gin.H{}
-		for symbol, m := range mockMarkets {
-			markets = append(markets, gin.H{
-				"symbol":       symbol,
-				"baseAsset":   m.BaseAsset,
-				"quoteAsset": m.QuoteAsset,
-				"status":     m.Status,
-			})
-		}
-		c.JSON(200, gin.H{
-			"success": true,
-			"data": gin.H{
-				"timezone":     "UTC",
-				"serverTime": time.Now().UnixMilli(),
-				"symbols":  markets,
-			},
-		})
-	}
+	return unavailableMarketData()
 }
 
-func (s *Server) GetExchangeInfoV3() gin.HandlerFunc { return s.GetExchangeInfo() }
+func (s *Server) GetExchangeInfoV3() gin.HandlerFunc {
+	return unavailableMarketData()
+}
 
 func (s *Server) GetDepth() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		symbol := c.Param("symbol")
-		if symbol == "" {
-			symbol = c.Query("symbol")
-		}
-		limit := 100
-		if l := c.Query("limit"); l != "" {
-			if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 5000 {
-				limit = parsed
-			}
-		}
-		basePrice := 50000.0
-		if strings.HasPrefix(symbol, "ETH") {
-			basePrice = 3000.0
-		}
-		bids := make([][]string, limit)
-		asks := make([][]string, limit)
-		for i := 0; i < limit; i++ {
-			bidPrice := basePrice - float64(i)*basePrice*0.0001
-			askPrice := basePrice + float64(i+1)*basePrice*0.0001
-			bids[i] = []string{strconv.FormatFloat(bidPrice, 'f', 2, 64), fmt.Sprintf("%.8f", rand.Float64()*10+0.1)}
-			asks[i] = []string{strconv.FormatFloat(askPrice, 'f', 2, 64), fmt.Sprintf("%.8f", rand.Float64()*10+0.1)}
-		}
-		c.JSON(200, gin.H{"success": true, "lastUpdate": time.Now().UnixMilli(), "bids": bids, "asks": asks})
-	}
+	return unavailableMarketData()
 }
 
-func (s *Server) GetDepthV3() gin.HandlerFunc { return s.GetDepth() }
+func (s *Server) GetDepthV3() gin.HandlerFunc {
+	return unavailableMarketData()
+}
 
 func (s *Server) GetMarkets() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		markets := []gin.H{}
-		for symbol, m := range mockMarkets {
-			markets = append(markets, gin.H{"symbol": symbol, "baseAsset": m.BaseAsset, "quoteAsset": m.QuoteAsset, "status": m.Status})
-		}
-		c.JSON(200, gin.H{"success": true, "data": markets})
-	}
+	return unavailableMarketData()
 }
 
 func (s *Server) GetTicker() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		symbol := c.Param("symbol")
-		basePrice := 50000.0
-		if strings.HasPrefix(symbol, "ETH") {
-			basePrice = 3000.0
-		}
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"symbol": symbol, "price": basePrice, "priceChange": 0.0, "highPrice": basePrice * 1.02, "lowPrice": basePrice * 0.98}})
-	}
+	return unavailableMarketData()
 }
 
-func (s *Server) GetOrderBook() gin.HandlerFunc { return s.GetDepth() }
+func (s *Server) GetOrderBook() gin.HandlerFunc {
+	return unavailableMarketData()
+}
 
 func (s *Server) GetKlines() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		symbol := c.Param("symbol")
-		limit := 500
-		if l := c.Query("limit"); l != "" {
-			if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 1500 {
-				limit = parsed
-			}
-		}
-		interval := c.Query("interval")
-		intervals := map[string]int64{"1m": 60000, "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000, "1d": 86400000}
-		intervalMs := intervals[interval]
-		if intervalMs == 0 {
-			intervalMs = 60000
-		}
-		basePrice := 50000.0
-		if strings.HasPrefix(symbol, "ETH") {
-			basePrice = 3000.0
-		}
-		now := time.Now().UnixMilli()
-		klines := make([][]interface{}, limit)
-		price := basePrice * 0.95
-		for i := limit - 1; i >= 0; i-- {
-			open := price
-			change := (rand.Float64() - 0.5) * basePrice * 0.02
-			close := open + change
-			high := open
-			low := open
-			if close > high {
-				high = close
-			} else {
-				low = close
-			}
-			high += rand.Float64() * basePrice * 0.005
-			low -= rand.Float64() * basePrice * 0.005
-			volume := rand.Float64() * 10000
-			timestamp := (now - int64(i)*intervalMs) / 1000
-			klines[i] = []interface{}{timestamp, fmt.Sprintf("%.2f", open), fmt.Sprintf("%.2f", high), fmt.Sprintf("%.2f", low), fmt.Sprintf("%.2f", close), fmt.Sprintf("%.2f", volume)}
-			price = close
-		}
-		c.JSON(200, gin.H{"success": true, "data": klines})
-	}
+	return unavailableMarketData()
 }
 
-func (s *Server) GetKlinesV3() gin.HandlerFunc { return s.GetKlines() }
+func (s *Server) GetKlinesV3() gin.HandlerFunc {
+	return unavailableMarketData()
+}
 
 func (s *Server) GetRecentTrades() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		symbol := c.Param("symbol")
-		limit := 100
-		if l := c.Query("limit"); l != "" {
-			if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 1000 {
-				limit = parsed
-			}
-		}
-		basePrice := 50000.0
-		trades := make([]gin.H, limit)
-		for i := 0; i < limit; i++ {
-			price := basePrice + (rand.Float64()-0.5)*basePrice*0.001
-			side := "buy"
-			if rand.Float64() > 0.5 {
-				side = "sell"
-			}
-			trades[i] = gin.H{"id": uuid.New().String(), "price": fmt.Sprintf("%.2f", price), "qty": fmt.Sprintf("%.4f", rand.Float64()*2), "time": time.Now().Unix() - int64(i)*60, "isBuyerMaker": side == "sell"}
-		}
-		c.JSON(200, gin.H{"success": true, "data": trades})
-	}
+	return unavailableMarketData()
 }
 
-func (s *Server) GetTradesV3() gin.HandlerFunc { return s.GetRecentTrades() }
+func (s *Server) GetTradesV3() gin.HandlerFunc {
+	return unavailableMarketData()
+}
 
-func (s *Server) GetHistoricalTrades() gin.HandlerFunc { return s.GetRecentTrades() }
+func (s *Server) GetHistoricalTrades() gin.HandlerFunc {
+	return unavailableMarketData()
+}
 
 func (s *Server) GetAggTrades() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		limit := 100
-		if l := c.Query("limit"); l != "" {
-			if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 1000 {
-				limit = parsed
-			}
-		}
-		trades := make([]gin.H, limit)
-		basePrice := 50000.0
-		for i := 0; i < limit; i++ {
-			price := basePrice + (rand.Float64()-0.5)*basePrice*0.001
-			side := "buy"
-			if rand.Float64() > 0.5 {
-				side = "sell"
-			}
-			trades[i] = gin.H{"a": 123456, "p": fmt.Sprintf("%.2f", price), "q": fmt.Sprintf("%.4f", rand.Float64()*2), "T": time.Now().UnixMilli() - int64(i)*1000, "m": side == "sell", "s": "BTCUSDT"}
-		}
-		c.JSON(200, gin.H{"success": true, "data": trades})
-	}
+	return unavailableMarketData()
 }
 
 func (s *Server) GetTickerPrice() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		result := map[string]string{"BTCUSDT": "50000.00", "ETHUSDT": "3000.00"}
-		c.JSON(200, gin.H{"success": true, "data": result})
-	}
+	return unavailableMarketData()
 }
 
-func (s *Server) GetTickerPriceV3() gin.HandlerFunc { return s.GetTickerPrice() }
+func (s *Server) GetTickerPriceV3() gin.HandlerFunc {
+	return unavailableMarketData()
+}
 
 func (s *Server) GetBookTicker() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"symbol": "BTCUSDT", "bidPrice": "49999.00", "bidQty": "1.5", "askPrice": "50001.00", "askQty": "1.5"}})
-	}
+	return unavailableMarketData()
 }
 
-func (s *Server) GetBookTickerV3() gin.HandlerFunc { return s.GetBookTicker() }
+func (s *Server) GetBookTickerV3() gin.HandlerFunc {
+	return unavailableMarketData()
+}
 
 func (s *Server) Get24hrTicker() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"symbol": "BTCUSDT", "price": "50000.00", "priceChange": "0.00", "highPrice": "51000.00", "lowPrice": "49000.00", "volume": "1000000000.00"}})
-	}
+	return unavailableMarketData()
 }
 
-func (s *Server) Get24hrTickerV3() gin.HandlerFunc { return s.Get24hrTicker() }
+func (s *Server) Get24hrTickerV3() gin.HandlerFunc {
+	return unavailableMarketData()
+}
 
 // Health
 func (s *Server) handleHealth() gin.HandlerFunc {
