@@ -379,7 +379,6 @@ impl WsAppState {
     pub fn initialize(&self) {
         // Market data remains empty until a verified feed is configured.
     }
-    }
 }
 
 // ============================================================================
