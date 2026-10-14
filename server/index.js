@@ -858,104 +858,14 @@ app.get("/api/v1/ticker/24hr", async (req, res) => {
   }
 });
 
-// Place order with REAL matching
-app.post("/api/v1/order", authenticateRequest, async (req, res) => {
-  try {
-    const { symbol, side, type, quantity, price } = req.body;
-
-    if (!symbol || !side || !type || !quantity) {
-      return res.status(400).json({ success: false, error: "Missing required fields" });
-    }
-
-    const market = TRADING_PAIRS.find(p => p.symbol === symbol.toUpperCase());
-    if (!market) {
-      return res.status(400).json({ success: false, error: "Invalid trading pair" });
-    }
-
-    const orderPrice = parseFloat(price);
-    const orderQuantity = parseFloat(quantity);
-
-    if (isNaN(orderPrice) || isNaN(orderQuantity) || orderPrice <= 0 || orderQuantity <= 0) {
-      return res.status(400).json({ success: false, error: "Invalid price or quantity" });
-    }
-
-    // Check wallet balance and lock funds
-    let wallet;
-    let baseWallet;
-    let orderValue = orderPrice * orderQuantity;
-
-    if (side === "buy") {
-      wallet = (await pool.query(
-        "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
-        [req.userId, market.quote_asset]
-      )).rows[0];
-
-      if (!wallet || wallet.balance < orderValue) {
-        return res.status(400).json({ success: false, error: "Insufficient quote currency balance" });
-      }
-
-      // Lock quote currency for buy
-      await pool.query(
-        `UPDATE wallets SET locked = locked + $1, updated_at = NOW() WHERE id = $2`,
-        [orderValue, wallet.id]
-      );
-      await pool.query(
-        `UPDATE wallets SET balance = balance - $1, updated_at = NOW() WHERE id = $2`,
-        [orderValue, wallet.id]
-      );
-    } else {
-      wallet = (await pool.query(
-        "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
-        [req.userId, market.base_asset]
-      )).rows[0];
-
-      if (!wallet || wallet.balance < orderQuantity) {
-        return res.status(400).json({ success: false, error: "Insufficient base currency balance" });
-      }
-
-      // Lock base currency for sell
-      await pool.query(
-        `UPDATE wallets SET locked = locked + $1, updated_at = NOW() WHERE id = $2`,
-        [orderQuantity, wallet.id]
-      );
-      await pool.query(
-        `UPDATE wallets SET balance = balance - $1, updated_at = NOW() WHERE id = $2`,
-        [orderQuantity, wallet.id]
-      );
-    }
-
-    const orderId = uuidv4();
-    await pool.query(
-      `INSERT INTO orders (id, user_id, symbol, side, type, price, quantity, filled_quantity, status, time_in_force, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new', 'GTC', NOW(), NOW())`,
-      [orderId, req.userId, symbol.toUpperCase(), side, type, orderPrice, parseFloat(quantity), 0]
-    );
-
-    // Match orders (real order matching engine)
-    const matchResult = await matchOrders(symbol.toUpperCase(), side, orderPrice, parseFloat(quantity), req.userId, orderId);
-
-    // Get updated order
-    const updatedOrder = (await pool.query("SELECT * FROM orders WHERE id = $1", [orderId])).rows[0];
-
-    res.json({
-      success: true,
-      data: {
-        orderId,
-        symbol: updatedOrder.symbol,
-        side: updatedOrder.side,
-        type: updatedOrder.type,
-        price: updatedOrder.price,
-        quantity: updatedOrder.quantity,
-        filledQuantity: updatedOrder.filled_quantity,
-        status: updatedOrder.status,
-        createdAt: updatedOrder.created_at,
-        matchResult
-      }
-    });
-  } catch (error) {
-    console.error("Order placement error:", error);
-    res.status(500).json({ success: false, error: "Internal server error" });
-  }
+// Spot order placement is disabled until the canonical matching engine,
+// atomic ledger reservations, idempotency, and settlement are integrated.
+// The legacy route performs multi-step balance changes without one transaction.
+app.post("/api/v1/order", authenticateRequest, async (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    error: "Spot trading is temporarily unavailable while atomic matching and settlement are being secured",
+  });
 });
 
 // Get open orders
@@ -1067,61 +977,13 @@ app.get("/api/v1/tradeHistory", authenticateRequest, async (req, res) => {
   }
 });
 
-// Cancel order
-app.delete("/api/v1/order/:orderId", authenticateRequest, async (req, res) => {
-  try {
-    const { orderId } = req.params;
-
-    const order = (await pool.query("SELECT * FROM orders WHERE id = $1 AND user_id = $2 LIMIT 1", [orderId, req.userId])).rows[0];
-
-    if (!order) {
-      return res.status(404).json({ success: false, error: "Order not found or not authorized" });
-    }
-
-    if (order.status === "filled" || order.status === "cancelled") {
-      return res.status(400).json({ success: false, error: "Cannot cancel a filled or already cancelled order" });
-    }
-
-    // Release locked funds
-    let wallet;
-    if (order.side === "buy") {
-      wallet = (await pool.query(
-        "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
-        [req.userId, TRADING_PAIRS.find(p => p.symbol === order.symbol).quote_asset]
-      )).rows[0];
-      if (wallet) {
-        const amountToUnlock = order.price * (order.quantity - order.filled_quantity);
-        await pool.query(
-          `UPDATE wallets SET balance = balance + $1, locked = locked - $2, updated_at = NOW()
-          WHERE id = $3`,
-          [amountToUnlock, amountToUnlock, wallet.id]
-        );
-      }
-    } else {
-      wallet = (await pool.query(
-        "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
-        [req.userId, TRADING_PAIRS.find(p => p.symbol === order.symbol).base_asset]
-      )).rows[0];
-      if (wallet) {
-        const amountToUnlock = order.quantity - order.filled_quantity;
-        await pool.query(
-          `UPDATE wallets SET balance = balance + $1, locked = locked - $2, updated_at = NOW()
-          WHERE id = $3`,
-          [amountToUnlock, amountToUnlock, wallet.id]
-        );
-      }
-    }
-
-    await pool.query(
-      `UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
-      [orderId]
-    );
-
-    res.json({ success: true, message: "Order cancelled successfully" });
-  } catch (error) {
-    console.error("Cancel order error:", error);
-    res.status(500).json({ success: false, error: "Internal server error" });
-  }
+// Order cancellation is disabled until it can atomically cancel in the matching
+// engine and release the exact reserved amount in the ledger.
+app.delete("/api/v1/order/:orderId", authenticateRequest, async (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    error: "Order cancellation is temporarily unavailable while atomic ledger settlement is being secured",
+  });
 });
 
 // ============================================================================
