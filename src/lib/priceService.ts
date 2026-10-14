@@ -199,26 +199,13 @@ class PriceService {
     return '#878787'; // gray
   }
 
-  // Get supported trading pairs
-  getSupportedPairs(): string[] {
-    return [
-      'BTC/USDT',
-      'ETH/USDT',
-      'BNB/USDT',
-      'SOL/USDT',
-      'XRP/USDT',
-      'ADA/USDT',
-      'DOGE/USDT',
-      'DOT/USDT',
-      'MATIC/USDT',
-      'LTC/USDT',
-      'AVAX/USDT',
-      'LINK/USDT',
-      'ATOM/USDT',
-      'UNI/USDT',
-      'TGR/USDT',
-      'RUSD/USDT',
-    ];
+  // Return only markets supplied by the configured exchange service.
+  async getSupportedPairs(): Promise<string[]> {
+    const info = await this.getExchangeInfo();
+    if (!Array.isArray(info?.symbols)) return [];
+    return info.symbols
+      .map((market) => market?.symbol)
+      .filter((symbol): symbol is string => typeof symbol === 'string' && symbol.length > 0);
   }
 
   // Clear cache

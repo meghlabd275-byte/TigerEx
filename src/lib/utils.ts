@@ -44,9 +44,12 @@ export function getPriceClass(change: number): string {
 
 // Generate random ID
 export function generateId(prefix = ""): string {
-  const timestamp = Date.now().toString(36);
-  const random = Math.random().toString(36).substring(2, 9);
-  return prefix ? `${prefix}_${timestamp}${random}` : `${timestamp}${random}`;
+  // Use the platform cryptographic RNG; identifiers must not depend on Math.random().
+  if (!globalThis.crypto || typeof globalThis.crypto.randomUUID !== "function") {
+    throw new Error("A cryptographically secure random UUID provider is required");
+  }
+  const id = globalThis.crypto.randomUUID();
+  return prefix ? `${prefix}_${id}` : id;
 }
 
 // Debounce function
