@@ -7,6 +7,7 @@
 #include "order_book.hpp"
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 namespace tigerex {
 
@@ -50,6 +51,8 @@ OrderBook::~OrderBook() = default;
 // ============================================================================
 
 bool OrderBook::add_order(Order& order) {
+    std::unique_lock lock(book_mutex_);
+
     // Validate order
     if (order.symbol != symbol_) return false;
     if (!is_quantity_valid(order.quantity)) return false;
@@ -103,20 +106,20 @@ bool OrderBook::remove_order(const OrderId& order_id) {
     auto it = orders_.find(order_id);
     if (it == orders_.end()) return false;
     
-    Order& order = *it;
-    
-    // Remove from price level
-    if (order.side == OrderSide::Buy) {
-        remove_order_from_level(bids_, order.price, order_id);
-    } else {
-        remove_order_from_level(asks_, order.price, order_id);
-    }
-    
-    // Remove from order map
-    orders_.erase(it);
-    
-    // Update status
+    Order& order = *it->second;
+    const auto side = order.side;
+    const auto price = order.price;
     order.status = OrderStatus::Cancelled;
+
+    // Remove from price level
+    if (side == OrderSide::Buy) {
+        remove_order_from_level(bids_, price, order_id);
+    } else {
+        remove_order_from_level(asks_, price, order_id);
+    }
+
+    // Removing from the price-level list invalidates the referenced Order.
+    orders_.erase(it);
     
     return true;
 }
@@ -131,7 +134,7 @@ bool OrderBook::update_order(const OrderId& order_id, const Quantity& new_quanti
     auto it = orders_.find(order_id);
     if (it == orders_.end()) return false;
     
-    Order& order = *it;
+    Order& order = *it->second;
     Quantity old_quantity = order.quantity;
     order.quantity = new_quantity;
     order.remaining_quantity = new_quantity;
@@ -597,8 +600,8 @@ void OrderBook::insert_order_to_level(BookMap& book, const Price& price, Order& 
 // REMOVE ORDER FROM LEVEL
 // ============================================================================
 
-void OrderBook::remove_order_from_level(PriceMap& book, const Price& price, 
-                                      const OrderId& order_id) {
+template <typename BookMap>
+void OrderBook::remove_order_from_level(BookMap& book, const Price& price, const OrderId& order_id) {
     auto it = book.find(price);
     if (it == book.end()) return;
     
