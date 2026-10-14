@@ -588,29 +588,16 @@ type ForgotPasswordRequest struct {
 func handleForgotPassword(c *gin.Context) {
 	var req ForgotPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
 
-	// Get user by email
-	user, err := authService.GetUserByEmail(c.Request.Context(), req.Email)
-	if err != nil {
-		// Don't reveal if email exists
-		c.JSON(http.StatusOK, gin.H{"message": "If the email exists, a reset link has been sent"})
-		return
-	}
+	// Do not generate or log reset tokens until a real, verified email delivery
+	// provider and single-use reset completion flow are configured.
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error": "Password reset is temporarily unavailable because email delivery is not configured",
+	})
 
-	// Generate password reset token
-	resetToken, err := authService.GeneratePasswordResetToken(c.Request.Context(), user.ID)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "If the email exists, a reset link has been sent"})
-		return
-	}
-
-	// TODO: Send reset email with resetToken
-	log.Printf("Password reset token for %s: %s", user.Email, resetToken)
-
-	c.JSON(http.StatusOK, gin.H{"message": "If the email exists, a reset link has been sent"})
 }
 
 // ============================================================================

@@ -2,6 +2,7 @@ package oracle
 
 import (
 	"context"
+	crand "crypto/rand"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"sync"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -72,6 +74,15 @@ func NewOracleService() *OracleService {
 
 // RegisterOracle registers an oracle
 func (s *OracleService) RegisterOracle(name string, config *OracleConfig) error {
+	if name == "" || config == nil {
+		return fmt.Errorf("oracle name and configuration are required")
+	}
+	if config.APIURL != "" {
+		// Only HTTPS endpoints are accepted for configured remote providers.
+		if !strings.HasPrefix(config.APIURL, "https://") {
+			return fmt.Errorf("oracle API URL must use HTTPS")
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
@@ -89,7 +100,8 @@ func (s *OracleService) GetPrice(ctx context.Context, pair string) (*PriceFeed, 
 	// Try to get from cached feeds first
 	if feed, exists := s.priceFeeds[pair]; exists {
 		// Check if stale (older than 5 minutes)
-		if time.Now().UnixMilli()-feed.Timestamp < 5*60*1000 {
+		age := time.Now().UnixMilli() - feed.Timestamp
+		if age >= 0 && age < 5*60*1000 {
 			return feed, nil
 		}
 	}
@@ -123,83 +135,25 @@ func (s *OracleService) FetchPrice(ctx context.Context, oracleName, pair string)
 
 // fetchChainlinkPrice fetches from Chainlink
 func (s *OracleService) fetchChainlinkPrice(ctx context.Context, config *OracleConfig, pair string) (*PriceFeed, error) {
-	// In production would call Chainlink API
-	// Mock implementation
-	price := s.getMockPrice(pair)
-	
-	feed := &PriceFeed{
-		Pair:       pair,
-		Price:      price,
-		Confidence: price.Mul(decimal.NewFromFloat(0.001)), // 0.1% confidence
-		Timestamp:  time.Now().UnixMilli(),
-		Source:     "chainlink",
-	}
-	
-	s.mu.Lock()
-	s.priceFeeds[pair] = feed
-	s.mu.Unlock()
-	
-	return feed, nil
+	// No signed/live provider adapter is implemented here. Never manufacture a
+	// timestamped price from a constant or pretend a provider responded.
+	return nil, fmt.Errorf("chainlink price adapter is not configured")
 }
-
-// fetchBandPrice fetches from Band Protocol
 func (s *OracleService) fetchBandPrice(ctx context.Context, config *OracleConfig, pair string) (*PriceFeed, error) {
-	price := s.getMockPrice(pair)
-	
-	feed := &PriceFeed{
-		Pair:       pair,
-		Price:      price,
-		Confidence: price.Mul(decimal.NewFromFloat(0.002)),
-		Timestamp:  time.Now().UnixMilli(),
-		Source:     "band",
-	}
-	
-	s.mu.Lock()
-	s.priceFeeds[pair] = feed
-	s.mu.Unlock()
-	
-	return feed, nil
+	// No signed/live provider adapter is implemented here. Never manufacture a
+	// timestamped price from a constant or pretend a provider responded.
+	return nil, fmt.Errorf("band price adapter is not configured")
 }
-
-// fetchUniswapPrice fetches from Uniswap
 func (s *OracleService) fetchUniswapPrice(ctx context.Context, config *OracleConfig, pair string) (*PriceFeed, error) {
-	price := s.getMockPrice(pair)
-	
-	feed := &PriceFeed{
-		Pair:       pair,
-		Price:      price,
-		Confidence: price.Mul(decimal.NewFromFloat(0.005)),
-		Timestamp:  time.Now().UnixMilli(),
-		Source:     "uniswap",
-	}
-	
-	s.mu.Lock()
-	s.priceFeeds[pair] = feed
-	s.mu.Unlock()
-	
-	return feed, nil
+	// No signed/live provider adapter is implemented here. Never manufacture a
+	// timestamped price from a constant or pretend a provider responded.
+	return nil, fmt.Errorf("uniswap price adapter is not configured")
 }
-
-// fetchPythPrice fetches from Pyth
 func (s *OracleService) fetchPythPrice(ctx context.Context, config *OracleConfig, pair string) (*PriceFeed, error) {
-	price := s.getMockPrice(pair)
-	
-	feed := &PriceFeed{
-		Pair:       pair,
-		Price:      price,
-		Confidence: price.Mul(decimal.NewFromFloat(0.0005)),
-		Timestamp:  time.Now().UnixMilli(),
-		Source:     "pyth",
-	}
-	
-	s.mu.Lock()
-	s.priceFeeds[pair] = feed
-	s.mu.Unlock()
-	
-	return feed, nil
+	// No signed/live provider adapter is implemented here. Never manufacture a
+	// timestamped price from a constant or pretend a provider responded.
+	return nil, fmt.Errorf("pyth price adapter is not configured")
 }
-
-// fetchGenericPrice fetches from generic API
 func (s *OracleService) fetchGenericPrice(ctx context.Context, config *OracleConfig, pair string) (*PriceFeed, error) {
 	if config.APIURL == "" {
 		return nil, fmt.Errorf("no API URL configured")
@@ -262,6 +216,10 @@ func (s *OracleService) GetMultiplePrices(pairs []string) map[string]*PriceFeed 
 
 // SetupDefaultOracles sets up default oracle configurations
 func (s *OracleService) SetupDefaultOracles() {
+	// No provider endpoints are assumed. Operators must configure and verify
+	// provider adapters explicitly; URL placeholders are not live integrations.
+	return
+	/*
 	oracles := []*OracleConfig{
 		{
 			Name:    "chainlink",
@@ -298,6 +256,7 @@ func (s *OracleService) SetupDefaultOracles() {
 		s.configs[o.Name] = o
 	}
 	s.mu.Unlock()
+	*/
 }
 
 // VerifyPriceVerification verifies price against multiple oracles
@@ -354,45 +313,30 @@ func NewRandomOracle(config *OracleConfig) *RandomOracle {
 
 // GenerateRandom generates random number
 func (o *RandomOracle) GenerateRandom(min, max int64) (int64, error) {
-	// In production would call random oracle API
-	// Simplified mock
-	seed := time.Now().UnixNano()
-	random := seed % (max - min + 1)
-	return min + random, nil
+	if min > max {
+		return 0, fmt.Errorf("minimum must be less than or equal to maximum")
+	}
+	lower := big.NewInt(min)
+	upper := big.NewInt(max)
+	rangeSize := new(big.Int).Sub(upper, lower)
+	rangeSize.Add(rangeSize, big.NewInt(1))
+	n, err := crand.Int(crand.Reader, rangeSize)
+	if err != nil {
+		return 0, fmt.Errorf("secure random generation failed: %w", err)
+	}
+	return new(big.Int).Add(lower, n).Int64(), nil
 }
 
-// GenerateRandomBytes generates random bytes
+// GenerateRandomBytes returns cryptographically secure random bytes.
 func (o *RandomOracle) GenerateRandomBytes(length int) ([]byte, error) {
+	if length < 0 || length > 1<<20 {
+		return nil, fmt.Errorf("random byte length must be between 0 and 1048576")
+	}
 	result := make([]byte, length)
-	for i := 0; i < length; i++ {
-		result[i] = byte(time.Now().UnixNano() % 256)
+	if _, err := crand.Read(result); err != nil {
+		return nil, fmt.Errorf("secure random generation failed: %w", err)
 	}
 	return result, nil
-}
-
-// Helper function
-func (s *OracleService) getMockPrice(pair string) decimal.Decimal {
-	prices := map[string]float64{
-		"BTC/USD":  50000,
-		"ETH/USD":  3000,
-		"BNB/USD":  600,
-		"SOL/USD":  150,
-		"XRP/USD":  0.5,
-		"ADA/USD":  0.35,
-		"DOGE/USD": 0.08,
-		"MATIC/USD": 0.8,
-		"LINK/USD": 15,
-		"UNI/USD": 7,
-		"ATOM/USD": 9,
-		"LTC/USD": 70,
-		"AVAX/USD": 35,
-	}
-	
-	if price, ok := prices[pair]; ok {
-		return decimal.NewFromFloat(price)
-	}
-	
-	return decimal.NewFromFloat(100)
 }
 
 // HMACVerify verifies HMAC signature
