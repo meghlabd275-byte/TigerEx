@@ -1,617 +1,282 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
-import Link from 'next/link';
-import { 
-  ArrowLeft, 
-  ArrowRight, 
-  RefreshCw, 
-  Settings, 
-  Star, 
-  TrendingUp, 
-  TrendingDown,
-  ChevronDown,
-  Wallet,
-  Clock,
-  Activity,
-  BarChart3,
-  List,
-  AlertTriangle
-} from 'lucide-react';
-import { ThemeToggle } from '@/components/theme-toggle';
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { AlertTriangle, RefreshCw, Wallet } from "lucide-react";
+import { ThemeToggle } from "@/components/theme-toggle";
 
-// Types
-interface Order {
-  price: number;
-  quantity: number;
-  total: number;
+type Market = { symbol: string; baseCurrency?: string; quoteCurrency?: string; status?: string };
+type Ticker = { lastPrice?: number; price?: number; priceChangePercent?: number; priceChange?: number; highPrice?: number; lowPrice?: number; volume?: number; quoteVolume?: number };
+type Level = { price: number; quantity: number };
+type Trade = { id?: string; tradeId?: string; price: number; quantity?: number; qty?: number; time?: number | string; timestamp?: number | string; isBuyerMaker?: boolean; side?: string };
+type Candle = { time: number | string; open: number; high: number; low: number; close: number; volume?: number };
+
+function payload(value: any): any {
+  return value && typeof value === "object" && "data" in value ? value.data : value;
 }
-
-interface Trade {
-  id: string;
-  price: number;
-  quantity: number;
-  time: string;
-  isBuyerMaker: boolean;
+function numberValue(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
-
-interface Position {
-  symbol: string;
-  side: 'BUY' | 'SELL';
-  quantity: number;
-  entryPrice: number;
-  currentPrice: number;
-  pnl: number;
-  pnlPercent: number;
+function symbolName(market: any): string {
+  return String(market?.symbol ?? market?.marketSymbol ?? market?.market ?? "");
 }
-
-interface Candle {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
+function parseLevels(value: any): Level[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry: any) => {
+    const price = numberValue(Array.isArray(entry) ? entry[0] : entry?.price);
+    const quantity = numberValue(Array.isArray(entry) ? entry[1] : entry?.quantity ?? entry?.qty ?? entry?.amount);
+    return price !== null && quantity !== null ? { price, quantity } : null;
+  }).filter((entry: Level | null): entry is Level => entry !== null);
 }
-
-// Demo data
-const generateCandles = (): Candle[] => {
-  const candles: Candle[] = [];
-  let price = 45000;
-  const now = Date.now();
-  
-  for (let i = 100; i >= 0; i--) {
-    const open = price;
-    const change = (Math.random() - 0.5) * 500;
-    const close = open + change;
-    const high = Math.max(open, close) + Math.random() * 100;
-    const low = Math.min(open, close) - Math.random() * 100;
-    
-    candles.push({
-      time: now - i * 60000,
-      open,
-      high,
-      low,
-      close,
-      volume: Math.random() * 1000,
-    });
-    
-    price = close;
-  }
-  
-  return candles;
-};
-
-const generateOrderBook = (): { bids: Order[]; asks: Order[] } => {
-  const basePrice = 45000;
-  const bids: Order[] = [];
-  const asks: Order[] = [];
-  
-  for (let i = 0; i < 15; i++) {
-    const bidPrice = basePrice - i * 5 - Math.random() * 2;
-    const askPrice = basePrice + (i + 1) * 5 + Math.random() * 2;
-    const quantity = Math.random() * 10 + 0.1;
-    
-    bids.push({
-      price: bidPrice,
-      quantity: parseFloat(quantity.toFixed(4)),
-      total: parseFloat((bidPrice * quantity).toFixed(2)),
-    });
-    
-    asks.push({
-      price: askPrice,
-      quantity: parseFloat(quantity.toFixed(4)),
-      total: parseFloat((askPrice * quantity).toFixed(2)),
-    });
-  }
-  
-  return { bids, asks };
-};
-
-const generateRecentTrades = (): Trade[] => {
-  const trades: Trade[] = [];
-  const now = Date.now();
-  let price = 45000;
-  
-  for (let i = 0; i < 20; i++) {
-    price += (Math.random() - 0.5) * 10;
-    trades.push({
-      id: `trade-${i}`,
-      price: parseFloat(price.toFixed(2)),
-      quantity: parseFloat((Math.random() * 2).toFixed(4)),
-      time: new Date(now - i * 5000).toLocaleTimeString(),
-      isBuyerMaker: Math.random() > 0.5,
-    });
-  }
-  
-  return trades;
-};
-
-const tradingPairs = [
-  { symbol: 'BTC/USDT', price: 45123.50, change: 2.34 },
-  { symbol: 'ETH/USDT', price: 2456.80, change: -1.23 },
-  { symbol: 'BNB/USDT', price: 312.45, change: 0.87 },
-  { symbol: 'SOL/USDT', price: 98.76, change: 5.67 },
-  { symbol: 'XRP/USDT', price: 0.5234, change: -0.45 },
-];
+function parseTrades(value: any): Trade[] {
+  const rows = Array.isArray(value) ? value : Array.isArray(value?.trades) ? value.trades : [];
+  return rows.filter((row: any) => numberValue(row?.price) !== null);
+}
+function parseCandles(value: any): Candle[] {
+  const rows = Array.isArray(value) ? value : Array.isArray(value?.candles) ? value.candles : Array.isArray(value?.klines) ? value.klines : [];
+  return rows.map((row: any) => {
+    if (Array.isArray(row)) return { time: row[0], open: Number(row[1]), high: Number(row[2]), low: Number(row[3]), close: Number(row[4]), volume: Number(row[5]) };
+    return { time: row.time ?? row.timestamp ?? row.openTime, open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close), volume: numberValue(row.volume) ?? undefined };
+  }).filter((row: Candle) => [row.open, row.high, row.low, row.close].every(Number.isFinite));
+}
 
 export default function SpotTradingPage() {
-  // State
-  const [selectedPair, setSelectedPair] = useState('BTC/USDT');
-  const [orderSide, setOrderSide] = useState<'BUY' | 'SELL'>('BUY');
-  const [orderType, setOrderType] = useState<'LIMIT' | 'MARKET' | 'STOP_LIMIT'>('LIMIT');
-  const [price, setPrice] = useState('');
-  const [quantity, setQuantity] = useState('');
-  const [stopPrice, setStopPrice] = useState('');
-  const [showOrderBook, setShowOrderBook] = useState(true);
+  const [markets, setMarkets] = useState<Market[]>([]);
+  const [symbol, setSymbol] = useState("");
+  const [ticker, setTicker] = useState<Ticker | null>(null);
+  const [bids, setBids] = useState<Level[]>([]);
+  const [asks, setAsks] = useState<Level[]>([]);
+  const [trades, setTrades] = useState<Trade[]>([]);
   const [candles, setCandles] = useState<Candle[]>([]);
-  const [orderBook, setOrderBook] = useState(generateOrderBook());
-  const [recentTrades, setRecentTrades] = useState<Trade[]>([]);
-  const [lastPrice, setLastPrice] = useState(45123.50);
-  const [priceChange, setPriceChange] = useState(2.34);
-  const [high24h, setHigh24h] = useState(46200);
-  const [low24h, setLow24h] = useState(43800);
-  const [volume24h, setVolume24h] = useState('2.45B');
-  const [showTradingPairs, setShowTradingPairs] = useState(false);
-  const [activeTab, setActiveTab] = useState<'orders' | 'positions' | 'history'>('orders');
+  const [balances, setBalances] = useState<any[] | null>(null);
+  const [orderType, setOrderType] = useState<"LIMIT" | "MARKET" | "STOP_LIMIT">("LIMIT");
+  const [side, setSide] = useState<"BUY" | "SELL">("BUY");
+  const [price, setPrice] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [stopPrice, setStopPrice] = useState("");
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  // Initialize data
-  useEffect(() => {
-    setCandles(generateCandles());
-    setRecentTrades(generateRecentTrades());
-    
-    // Simulate real-time updates
-    const interval = setInterval(() => {
-      setOrderBook(generateOrderBook());
-      setLastPrice(prev => {
-        const change = (Math.random() - 0.5) * 20;
-        return parseFloat((prev + change).toFixed(2));
-      });
-    }, 2000);
-    
-    return () => clearInterval(interval);
+  const requestJson = useCallback(async (url: string, init?: RequestInit) => {
+    const response = await fetch(url, { cache: "no-store", ...init });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(body?.error?.message ?? body?.error ?? "Exchange service unavailable (" + response.status + ")");
+    if (body?.success === false) throw new Error(body?.error?.message ?? body?.error ?? "Exchange service unavailable");
+    return payload(body);
   }, []);
 
-  // Calculate totals
-  const total = useCallback(() => {
-    const p = orderType === 'MARKET' ? lastPrice : parseFloat(price || '0');
-    const q = parseFloat(quantity || '0');
-    return parseFloat((p * q).toFixed(2));
-  }, [price, quantity, orderType, lastPrice]);
+  const loadMarkets = useCallback(async () => {
+    const data = await requestJson("/api/markets");
+    const rows = Array.isArray(data) ? data : Array.isArray(data?.markets) ? data.markets : Array.isArray(data?.symbols) ? data.symbols : [];
+    const valid = rows.map((row: any) => ({ symbol: symbolName(row), baseCurrency: row.baseCurrency, quoteCurrency: row.quoteCurrency, status: row.status }))
+      .filter((row: Market) => row.symbol && (!row.status || ["TRADING", "ACTIVE", "ONLINE"].includes(String(row.status).toUpperCase())));
+    setMarkets(valid);
+    setSymbol((current) => current && valid.some((market: Market) => market.symbol === current) ? current : valid[0]?.symbol ?? "");
+  }, [requestJson]);
 
-  // Max quantity calculation (for 100% balance)
-  const maxQuantity = useCallback((percentage: number) => {
-    // Demo: assume user has 10000 USDT
-    const balance = 10000;
-    const effectivePrice = orderType === 'MARKET' ? lastPrice : parseFloat(price || '0');
-    if (effectivePrice === 0) return '0';
-    return parseFloat(((balance * percentage / 100) / effectivePrice).toFixed(6));
-  }, [price, orderType, lastPrice]);
+  const loadMarketData = useCallback(async (marketSymbol: string) => {
+    if (!marketSymbol) return;
+    const encoded = encodeURIComponent(marketSymbol);
+    const results = await Promise.allSettled([
+      requestJson("/api/ticker/24hr?symbol=" + encoded),
+      requestJson("/api/depth?symbol=" + encoded + "&limit=20"),
+      requestJson("/api/trades?symbol=" + encoded + "&limit=20"),
+      requestJson("/api/candles?symbol=" + encoded + "&interval=1m&limit=100"),
+    ]);
+    const [tickerResult, depthResult, tradesResult, candlesResult] = results;
+    if (tickerResult.status === "fulfilled") {
+      const value = payload(tickerResult.value);
+      const candidate = Array.isArray(value) ? value.find((row: any) => symbolName(row) === marketSymbol) : value?.ticker ?? value;
+      setTicker(candidate && typeof candidate === "object" ? candidate : null);
+    } else setTicker(null);
+    if (depthResult.status === "fulfilled") {
+      const value = payload(depthResult.value);
+      setBids(parseLevels(value?.bids));
+      setAsks(parseLevels(value?.asks));
+    } else { setBids([]); setAsks([]); }
+    setTrades(tradesResult.status === "fulfilled" ? parseTrades(payload(tradesResult.value)) : []);
+    setCandles(candlesResult.status === "fulfilled" ? parseCandles(payload(candlesResult.value)) : []);
+  }, [requestJson]);
 
-  // Format numbers
-  const formatNumber = (num: number, decimals = 2): string => {
-    return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  };
+  const loadBalances = useCallback(async () => {
+    const token = localStorage.getItem("tigerex_access_token");
+    if (!token) { setBalances(null); return; }
+    try {
+      const data = await requestJson("/api/wallet/balance", { headers: { Authorization: "Bearer " + token } });
+      setBalances(Array.isArray(data?.balances) ? data.balances : Array.isArray(data) ? data : null);
+    } catch { setBalances(null); }
+  }, [requestJson]);
 
-  // Get max bid/ask
-  const maxBidTotal = Math.max(...orderBook.bids.map(b => b.total));
-  const maxAskTotal = Math.max(...orderBook.asks.map(a => a.total));
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      if (!markets.length) await loadMarkets();
+      if (symbol) await loadMarketData(symbol);
+      await loadBalances();
+      setStatus("");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Exchange data is unavailable.");
+    } finally {
+      setRefreshing(false);
+      setLoading(false);
+    }
+  }, [loadBalances, loadMarketData, loadMarkets, markets.length, symbol]);
+
+  useEffect(() => {
+    let active = true;
+    const initial = async () => {
+      setLoading(true);
+      try { await loadMarkets(); } catch (error) { if (active) setStatus(error instanceof Error ? error.message : "Market service is unavailable."); }
+      if (active) setLoading(false);
+    };
+    void initial();
+    return () => { active = false; };
+  }, [loadMarkets]);
+
+  useEffect(() => {
+    if (!symbol) return;
+    let active = true;
+    const run = async () => {
+      try {
+        await loadMarketData(symbol);
+        if (active) setStatus("");
+      } catch (error) {
+        if (active) setStatus(error instanceof Error ? error.message : "Market data is unavailable.");
+      }
+    };
+    void run();
+    const interval = window.setInterval(() => { if (active) void run(); }, 5000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [loadMarketData, symbol]);
+
+  useEffect(() => { void loadBalances(); }, [loadBalances]);
+
+  const lastPrice = numberValue(ticker?.lastPrice ?? ticker?.price);
+  const priceChange = numberValue(ticker?.priceChangePercent ?? ticker?.priceChange);
+  const high24h = numberValue(ticker?.highPrice);
+  const low24h = numberValue(ticker?.lowPrice);
+  const volume24h = numberValue(ticker?.quoteVolume ?? ticker?.volume);
+  const baseCurrency = useMemo(() => {
+    const market = markets.find((entry) => entry.symbol === symbol);
+    if (market?.baseCurrency) return market.baseCurrency;
+    return symbol.includes("/") ? symbol.split("/")[0] : symbol.replace(/USDT$|USDC$|USD$|BTC$|ETH$/, "");
+  }, [markets, symbol]);
+  const quoteCurrency = useMemo(() => {
+    const market = markets.find((entry) => entry.symbol === symbol);
+    if (market?.quoteCurrency) return market.quoteCurrency;
+    return symbol.includes("/") ? symbol.split("/")[1] ?? "" : "";
+  }, [markets, symbol]);
+  const total = useMemo(() => {
+    const p = orderType === "MARKET" ? lastPrice : numberValue(price);
+    const q = numberValue(quantity);
+    return p !== null && q !== null && p > 0 && q > 0 ? p * q : null;
+  }, [lastPrice, orderType, price, quantity]);
+  const balanceFor = (currency: string) => balances?.find((entry: any) => String(entry.coin ?? entry.currency ?? "").toUpperCase() === currency.toUpperCase());
+  const availableQuote = numberValue(balanceFor(quoteCurrency)?.free ?? balanceFor(quoteCurrency)?.available);
+  const availableBase = numberValue(balanceFor(baseCurrency)?.free ?? balanceFor(baseCurrency)?.available);
+
+  async function submitOrder() {
+    setStatus("");
+    const token = localStorage.getItem("tigerex_access_token");
+    if (!token) { setStatus("Sign in before submitting an order."); return; }
+    const qty = numberValue(quantity);
+    const limitPrice = orderType === "MARKET" ? undefined : numberValue(price);
+    const stop = orderType === "STOP_LIMIT" ? numberValue(stopPrice) : undefined;
+    if (!symbol || qty === null || qty <= 0 || (orderType !== "MARKET" && (limitPrice === null || limitPrice === undefined || limitPrice <= 0)) || (orderType === "STOP_LIMIT" && (stop === null || stop === undefined || stop <= 0))) {
+      setStatus("Enter a valid market, quantity, and required price fields.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await requestJson("/api/spot/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+        body: JSON.stringify({ symbol, marketSymbol: symbol, side: side.toLowerCase(), orderType: orderType.toLowerCase(), quantity: qty, ...(limitPrice !== undefined ? { price: limitPrice } : {}), ...(stop !== undefined ? { stopPrice: stop } : {}) }),
+      });
+      setStatus("Order request accepted by the exchange service.");
+      setQuantity("");
+      await loadBalances();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Order was not accepted.");
+    } finally { setSubmitting(false); }
+  }
+
+  const fmt = (value: number | null | undefined, digits = 2) => value === null || value === undefined || !Number.isFinite(value) ? "—" : value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const maxBid = Math.max(0, ...bids.map((row) => row.price * row.quantity));
+  const maxAsk = Math.max(0, ...asks.map((row) => row.price * row.quantity));
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* Header */}
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-[1800px] mx-auto px-4">
-          <div className="flex items-center justify-between h-14">
-            <div className="flex items-center space-x-4">
-              <Link href="/" className="flex items-center space-x-2">
-                <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-red-500 rounded-lg flex items-center justify-center">
-                  <span className="text-white font-bold">T</span>
-                </div>
-                <span className="text-xl font-bold text-gray-900 dark:text-white">TigerEx</span>
-              </Link>
-              
-              {/* Trading Pair Selector */}
-              <div className="relative">
-                <button 
-                  onClick={() => setShowTradingPairs(!showTradingPairs)}
-                  className="flex items-center space-x-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
-                >
-                  <span className="font-bold text-gray-900 dark:text-white">{selectedPair}</span>
-                  <ChevronDown className="w-4 h-4 text-gray-500" />
-                </button>
-                
-                {showTradingPairs && (
-                  <div className="absolute top-full left-0 mt-1 w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50">
-                    {tradingPairs.map(pair => (
-                      <button
-                        key={pair.symbol}
-                        onClick={() => {
-                          setSelectedPair(pair.symbol);
-                          setShowTradingPairs(false);
-                        }}
-                        className="w-full flex items-center justify-between px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700"
-                      >
-                        <span className="font-medium text-gray-900 dark:text-white">{pair.symbol}</span>
-                        <span className={`${pair.change >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                          {pair.change >= 0 ? '+' : ''}{pair.change}%
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Price Info */}
-            <div className="flex items-center space-x-6">
-              <div>
-                <div className="flex items-center space-x-2">
-                  <span className={`text-2xl font-bold ${priceChange >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                    ${formatNumber(lastPrice)}
-                  </span>
-                  {priceChange >= 0 ? (
-                    <TrendingUp className="w-5 h-5 text-green-500" />
-                  ) : (
-                    <TrendingDown className="w-5 h-5 text-red-500" />
-                  )}
-                </div>
-                <div className="flex items-center space-x-4 text-sm text-gray-500">
-                  <span>24h Change: <span className={priceChange >= 0 ? 'text-green-500' : 'text-red-500'}>{priceChange >= 0 ? '+' : ''}{priceChange}%</span></span>
-                  <span>24h High: ${formatNumber(high24h)}</span>
-                  <span>24h Low: ${formatNumber(low24h)}</span>
-                  <span>24h Vol: {volume24h}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <ThemeToggle />
-              <Link href="/wallet" className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
-                <Wallet className="w-5 h-5 text-gray-600 dark:text-gray-300" />
-              </Link>
-            </div>
-          </div>
+    <main className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 bg-white px-5 py-4 dark:border-gray-800 dark:bg-gray-900">
+        <div className="flex items-center gap-4">
+          <Link href="/" className="text-xl font-bold">TigerEx</Link>
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-gray-500">Market</span>
+            <select aria-label="Trading market" value={symbol} onChange={(event) => setSymbol(event.target.value)} className="rounded border border-gray-300 bg-transparent px-3 py-2 dark:border-gray-700" disabled={!markets.length}>
+              {!markets.length && <option value="">No markets available</option>}
+              {markets.map((market) => <option key={market.symbol} value={market.symbol}>{market.symbol}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="flex items-center gap-3">
+          <button onClick={() => void refresh()} disabled={refreshing} className="flex items-center gap-2 rounded border border-gray-300 px-3 py-2 text-sm disabled:opacity-50 dark:border-gray-700"><RefreshCw size={16} className={refreshing ? "animate-spin" : ""} /> Refresh</button>
+          <ThemeToggle />
+          <Link href="/wallet" aria-label="Wallet" className="rounded p-2 hover:bg-gray-100 dark:hover:bg-gray-800"><Wallet size={20} /></Link>
         </div>
       </header>
 
-      {/* Main Content */}
-      <div className="max-w-[1800px] mx-auto px-4 py-4">
-        <div className="grid grid-cols-12 gap-4">
-          {/* Left Panel - Order Book */}
-          <div className="col-span-2 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-            <div className="p-3 border-b border-gray-200 dark:border-gray-700">
-              <h3 className="font-semibold text-gray-900 dark:text-white">Order Book</h3>
-            </div>
-            
-            {/* Asks (Sell) */}
-            <div className="p-2">
-              <div className="grid grid-cols-3 text-xs text-gray-500 mb-1">
-                <span>Price(USDT)</span>
-                <span className="text-right">Amount(BTC)</span>
-                <span className="text-right">Total</span>
-              </div>
-              <div className="space-y-px">
-                {orderBook.asks.slice(0, 10).reverse().map((ask, i) => (
-                  <div key={i} className="grid grid-cols-3 text-xs py-0.5 relative">
-                    <div 
-                      className="absolute right-0 top-0 bottom-0 bg-red-500/20" 
-                      style={{ width: `${(ask.total / maxAskTotal) * 100}%` }}
-                    />
-                    <span className="text-red-500 relative z-10">{formatNumber(ask.price)}</span>
-                    <span className="text-right text-gray-900 dark:text-gray-100 relative z-10">{formatNumber(ask.quantity, 4)}</span>
-                    <span className="text-right text-gray-500 relative z-10">{formatNumber(ask.total)}</span>
-                  </div>
-                ))}
-              </div>
-              
-              {/* Current Price */}
-              <div className="py-2 border-y border-gray-200 dark:border-gray-700 my-2">
-                <span className={`text-lg font-bold ${priceChange >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                  ${formatNumber(lastPrice)}
-                </span>
-              </div>
-              
-              {/* Bids (Buy) */}
-              <div className="space-y-px">
-                {orderBook.bids.slice(0, 10).map((bid, i) => (
-                  <div key={i} className="grid grid-cols-3 text-xs py-0.5 relative">
-                    <div 
-                      className="absolute right-0 top-0 bottom-0 bg-green-500/20" 
-                      style={{ width: `${(bid.total / maxBidTotal) * 100}%` }}
-                    />
-                    <span className="text-green-500 relative z-10">{formatNumber(bid.price)}</span>
-                    <span className="text-right text-gray-900 dark:text-gray-100 relative z-10">{formatNumber(bid.quantity, 4)}</span>
-                    <span className="text-right text-gray-500 relative z-10">{formatNumber(bid.total)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+      <section className="mx-auto max-w-[1800px] space-y-4 p-4">
+        {status && <div role="status" className="flex items-start gap-2 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100"><AlertTriangle size={18} className="mt-0.5 shrink-0" /><span>{status}</span></div>}
+        <div className="grid gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900 sm:grid-cols-2 lg:grid-cols-5">
+          <div><div className="text-xs text-gray-500">Last price ({quoteCurrency || "quote"})</div><div className="text-2xl font-semibold">{fmt(lastPrice)}</div></div>
+          <div><div className="text-xs text-gray-500">24h change</div><div className={(priceChange ?? 0) >= 0 ? "text-lg text-emerald-600" : "text-lg text-red-600"}>{priceChange === null ? "—" : fmt(priceChange) + "%"}</div></div>
+          <div><div className="text-xs text-gray-500">24h high</div><div className="text-lg">{fmt(high24h)}</div></div>
+          <div><div className="text-xs text-gray-500">24h low</div><div className="text-lg">{fmt(low24h)}</div></div>
+          <div><div className="text-xs text-gray-500">24h volume</div><div className="text-lg">{fmt(volume24h)}</div></div>
+        </div>
+
+        {loading && <p className="text-sm text-gray-500">Loading exchange markets…</p>}
+        {!loading && !markets.length && <div className="rounded-lg border border-dashed border-gray-300 p-8 text-center dark:border-gray-700"><p className="font-medium">No live markets are available</p><p className="mt-2 text-sm text-gray-500">Trading remains unavailable until the configured market-data service returns verified market metadata.</p></div>}
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
+          <div className="space-y-4">
+            <section className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+              <h2 className="mb-3 font-semibold">Candles · 1 minute</h2>
+              {candles.length ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{candles.slice(-8).map((candle, index) => <div key={String(candle.time) + index} className="rounded bg-gray-50 p-2 text-xs dark:bg-gray-800"><div className="text-gray-500">{String(candle.time)}</div><div>O {fmt(candle.open)}</div><div>H {fmt(candle.high)}</div><div>L {fmt(candle.low)}</div><div className={candle.close >= candle.open ? "text-emerald-600" : "text-red-600"}>C {fmt(candle.close)}</div></div>)}</div> : <p className="py-8 text-center text-sm text-gray-500">Candle data unavailable from the live market-data service.</p>}
+            </section>
+            <section className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+              <h2 className="mb-3 font-semibold">Recent trades</h2>
+              {trades.length ? <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="text-left text-gray-500"><th className="pb-2">Price</th><th className="pb-2">Quantity</th><th className="pb-2">Time</th></tr></thead><tbody>{trades.slice(0, 20).map((trade, index) => <tr key={String(trade.id ?? trade.tradeId ?? trade.timestamp ?? index)}><td className="py-1">{fmt(numberValue(trade.price))}</td><td className="py-1">{fmt(numberValue(trade.quantity ?? trade.qty), 6)}</td><td className="py-1">{String(trade.time ?? trade.timestamp ?? "—")}</td></tr>)}</tbody></table></div> : <p className="py-6 text-center text-sm text-gray-500">No live trades returned for this market.</p>}
+            </section>
           </div>
 
-          {/* Center Panel - Chart */}
-          <div className="col-span-7 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-            {/* Chart Header */}
-            <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <button className="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-900 dark:text-white">
-                  Time
-                </button>
-              </div>
-              <div className="flex items-center space-x-2">
-                <button className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
-                  <RefreshCw className="w-4 h-4 text-gray-500" />
-                </button>
-                <button className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
-                  <Settings className="w-4 h-4 text-gray-500" />
-                </button>
-              </div>
-            </div>
-            
-            {/* Chart Area */}
-            <div className="h-[500px] p-4 flex items-center justify-center">
-              <div className="w-full h-full relative">
-                {/* Simple candle chart visualization */}
-                <div className="absolute inset-0 flex items-end justify-between px-2">
-                  {candles.slice(-50).map((candle, i) => {
-                    const height = ((candle.high - candle.low) / candle.high) * 100;
-                    const bodyTop = ((candle.high - Math.max(candle.open, candle.close)) / candle.high) * 100;
-                    const bodyBottom = ((candle.high - Math.min(candle.open, candle.close)) / candle.high) * 100;
-                    const isGreen = candle.close >= candle.open;
-                    
-                    return (
-                      <div 
-                        key={i} 
-                        className="flex-1 mx-px relative"
-                        style={{ height: '100%' }}
-                      >
-                        {/* Wick */}
-                        <div 
-                          className={`absolute w-0.5 left-1/2 transform -translate-x-1/2 ${isGreen ? 'bg-green-500' : 'bg-red-500'}`}
-                          style={{ 
-                            top: `${bodyTop}%`, 
-                            height: `${bodyBottom - bodyTop + 2}%` 
-                          }}
-                        />
-                        {/* Body */}
-                        <div 
-                          className={`absolute w-1.5 left-1/2 transform -translate-x-1/2 ${isGreen ? 'bg-green-500' : 'bg-red-500'}`}
-                          style={{ 
-                            top: `${bodyTop}%`, 
-                            height: `${Math.max(bodyBottom - bodyTop, 1)}%` 
-                          }}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-                
-                {/* Y-axis labels */}
-                <div className="absolute left-0 top-0 bottom-0 w-12 bg-gradient-to-r from-white/90 dark:from-gray-800/90 to-transparent flex flex-col justify-between py-2 text-xs text-gray-500">
-                  <span>${formatNumber(high24h)}</span>
-                  <span>${formatNumber((high24h + low24h) / 2)}</span>
-                  <span>${formatNumber(low24h)}</span>
-                </div>
-              </div>
-            </div>
-            
-            {/* Recent Trades */}
-            <div className="border-t border-gray-200 dark:border-gray-700">
-              <div className="p-3 border-b border-gray-200 dark:border-gray-700">
-                <h3 className="font-semibold text-gray-900 dark:text-white text-sm">Recent Trades</h3>
-              </div>
-              <div className="max-h-48 overflow-y-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-gray-500">
-                      <th className="px-3 py-1 text-left">Price(USDT)</th>
-                      <th className="px-3 py-1 text-right">Amount(BTC)</th>
-                      <th className="px-3 py-1 text-right">Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentTrades.slice(0, 15).map(trade => (
-                      <tr key={trade.id}>
-                        <td className={`px-3 py-0.5 ${trade.isBuyerMaker ? 'text-green-500' : 'text-red-500'}`}>
-                          {formatNumber(trade.price)}
-                        </td>
-                        <td className="px-3 py-0.5 text-right text-gray-900 dark:text-gray-100">
-                          {formatNumber(trade.quantity, 4)}
-                        </td>
-                        <td className="px-3 py-0.5 text-right text-gray-500">
-                          {trade.time}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
+          <div className="space-y-4">
+            <section className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+              <h2 className="mb-3 font-semibold">Order book</h2>
+              <div className="grid grid-cols-3 pb-2 text-xs text-gray-500"><span>Price</span><span className="text-right">Quantity</span><span className="text-right">Total</span></div>
+              <div className="space-y-1">{asks.slice(0, 10).reverse().map((level, index) => <div key={"a" + index} className="relative grid grid-cols-3 text-xs"><span className="absolute inset-y-0 right-0 bg-red-500/10" style={{ width: (maxAsk ? (level.price * level.quantity / maxAsk) * 100 : 0) + "%" }} /><span className="relative text-red-600">{fmt(level.price)}</span><span className="relative text-right">{fmt(level.quantity, 6)}</span><span className="relative text-right">{fmt(level.price * level.quantity)}</span></div>)}</div>
+              <div className="my-3 border-y border-gray-200 py-3 text-center text-xl font-semibold dark:border-gray-800">{fmt(lastPrice)}</div>
+              <div className="space-y-1">{bids.slice(0, 10).map((level, index) => <div key={"b" + index} className="relative grid grid-cols-3 text-xs"><span className="absolute inset-y-0 right-0 bg-emerald-500/10" style={{ width: (maxBid ? (level.price * level.quantity / maxBid) * 100 : 0) + "%" }} /><span className="relative text-emerald-600">{fmt(level.price)}</span><span className="relative text-right">{fmt(level.quantity, 6)}</span><span className="relative text-right">{fmt(level.price * level.quantity)}</span></div>)}</div>
+              {!bids.length && !asks.length && <p className="py-4 text-center text-sm text-gray-500">Order book unavailable from the live market-data service.</p>}
+            </section>
 
-          {/* Right Panel - Order Form */}
-          <div className="col-span-3 space-y-4">
-            {/* Buy/Sell Tabs */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-              <div className="grid grid-cols-2">
-                <button
-                  onClick={() => setOrderSide('BUY')}
-                  className={`py-3 font-semibold ${orderSide === 'BUY' ? 'bg-green-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'} rounded-l-lg`}
-                >
-                  Buy
-                </button>
-                <button
-                  onClick={() => setOrderSide('SELL')}
-                  className={`py-3 font-semibold ${orderSide === 'SELL' ? 'bg-red-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'} rounded-r-lg`}
-                >
-                  Sell
-                </button>
-              </div>
-
-              {/* Order Type */}
-              <div className="p-3 border-b border-gray-200 dark:border-gray-700">
-                <div className="flex items-center space-x-1">
-                  {(['LIMIT', 'MARKET', 'STOP_LIMIT'] as const).map(type => (
-                    <button
-                      key={type}
-                      onClick={() => setOrderType(type)}
-                      className={`flex-1 py-1.5 text-sm rounded ${orderType === type ? 'bg-orange-500 text-white' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
-                    >
-                      {type === 'LIMIT' ? 'Limit' : type === 'MARKET' ? 'Market' : 'Stop-Limit'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Order Form */}
-              <div className="p-3 space-y-3">
-                {/* Price */}
-                {orderType !== 'MARKET' && (
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">Price (USDT)</label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={price}
-                        onChange={(e) => setPrice(e.target.value)}
-                        placeholder="0.00"
-                        className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded text-gray-900 dark:text-white"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">USDT</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Stop Price */}
-                {orderType === 'STOP_LIMIT' && (
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">Stop Price (USDT)</label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={stopPrice}
-                        onChange={(e) => setStopPrice(e.target.value)}
-                        placeholder="0.00"
-                        className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded text-gray-900 dark:text-white"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">USDT</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Amount */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-500">Amount (BTC)</label>
-                  </div>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={quantity}
-                      onChange={(e) => setQuantity(e.target.value)}
-                      placeholder="0.00"
-                      className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded text-gray-900 dark:text-white"
-                    />
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">BTC</span>
-                  </div>
-                  
-                  {/* Quick buttons */}
-                  <div className="flex items-center space-x-1 mt-2">
-                    {[25, 50, 75, 100].map(pct => (
-                      <button
-                        key={pct}
-                        onClick={() => setQuantity(String(maxQuantity(pct)))}
-                        className="flex-1 py-1 text-xs bg-gray-100 dark:bg-gray-700 rounded text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600"
-                      >
-                        {pct}%
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Total */}
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Total (USDT)</label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={total() > 0 ? formatNumber(total()) : ''}
-                      readOnly
-                      placeholder="0.00"
-                      className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border-0 rounded text-gray-900 dark:text-white"
-                    />
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">USDT</span>
-                  </div>
-                </div>
-
-                {/* Submit Button */}
-                <button
-                  className={`w-full py-3 rounded-lg font-semibold text-white ${orderSide === 'BUY' ? 'bg-green-500 hover:bg-green-600' : 'bg-red-500 hover:bg-red-600'}`}
-                >
-                  {orderSide === 'BUY' ? 'Buy BTC' : 'Sell BTC'}
-                </button>
-              </div>
-            </div>
-
-            {/* Available Balance */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-500">Available</span>
-                <span className="text-gray-900 dark:text-white font-medium">10,000.00 USDT</span>
-              </div>
-              <div className="flex items-center justify-between text-sm mt-1">
-                <span className="text-gray-500">Available</span>
-                <span className="text-gray-900 dark:text-white font-medium">0.00 BTC</span>
-              </div>
-            </div>
-
-            {/* Open Orders Tab */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-              <div className="flex border-b border-gray-200 dark:border-gray-700">
-                <button
-                  onClick={() => setActiveTab('orders')}
-                  className={`flex-1 py-2 text-sm font-medium ${activeTab === 'orders' ? 'text-orange-500 border-b-2 border-orange-500' : 'text-gray-500'}`}
-                >
-                  Open Orders
-                </button>
-                <button
-                  onClick={() => setActiveTab('positions')}
-                  className={`flex-1 py-2 text-sm font-medium ${activeTab === 'positions' ? 'text-orange-500 border-b-2 border-orange-500' : 'text-gray-500'}`}
-                >
-                  Positions
-                </button>
-                <button
-                  onClick={() => setActiveTab('history')}
-                  className={`flex-1 py-2 text-sm font-medium ${activeTab === 'history' ? 'text-orange-500 border-b-2 border-orange-500' : 'text-gray-500'}`}
-                >
-                  History
-                </button>
-              </div>
-              
-              <div className="p-4">
-                {activeTab === 'orders' && (
-                  <div className="text-center text-gray-500 py-8">
-                    <List className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                    <p>No open orders</p>
-                  </div>
-                )}
-                {activeTab === 'positions' && (
-                  <div className="text-center text-gray-500 py-8">
-                    <BarChart3 className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                    <p>No positions</p>
-                  </div>
-                )}
-                {activeTab === 'history' && (
-                  <div className="text-center text-gray-500 py-8">
-                    <Clock className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                    <p>No order history</p>
-                  </div>
-                )}
-              </div>
-            </div>
+            <section className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+              <div className="mb-3 grid grid-cols-2 gap-2"><button onClick={() => setSide("BUY")} className={"rounded py-2 font-semibold " + (side === "BUY" ? "bg-emerald-600 text-white" : "bg-gray-100 dark:bg-gray-800")}>Buy</button><button onClick={() => setSide("SELL")} className={"rounded py-2 font-semibold " + (side === "SELL" ? "bg-red-600 text-white" : "bg-gray-100 dark:bg-gray-800")}>Sell</button></div>
+              <div className="mb-3 grid grid-cols-3 gap-1">{(["LIMIT", "MARKET", "STOP_LIMIT"] as const).map((type) => <button key={type} onClick={() => setOrderType(type)} className={"rounded px-1 py-2 text-xs " + (orderType === type ? "bg-orange-500 text-white" : "bg-gray-100 dark:bg-gray-800")}>{type === "STOP_LIMIT" ? "Stop-limit" : type}</button>)}</div>
+              {orderType !== "MARKET" && <label className="mb-3 block text-sm">Limit price ({quoteCurrency})<input inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} className="mt-1 w-full rounded border border-gray-300 bg-transparent p-2 dark:border-gray-700" placeholder="Enter limit price" /></label>}
+              {orderType === "STOP_LIMIT" && <label className="mb-3 block text-sm">Stop price ({quoteCurrency})<input inputMode="decimal" value={stopPrice} onChange={(event) => setStopPrice(event.target.value)} className="mt-1 w-full rounded border border-gray-300 bg-transparent p-2 dark:border-gray-700" placeholder="Enter stop price" /></label>}
+              <label className="mb-3 block text-sm">Quantity ({baseCurrency || "base asset"})<input inputMode="decimal" value={quantity} onChange={(event) => setQuantity(event.target.value)} className="mt-1 w-full rounded border border-gray-300 bg-transparent p-2 dark:border-gray-700" placeholder="Enter quantity" /></label>
+              <div className="mb-3 flex justify-between text-sm"><span className="text-gray-500">Estimated total</span><span>{fmt(total)} {quoteCurrency}</span></div>
+              <div className="mb-4 space-y-1 text-xs text-gray-500"><div className="flex justify-between"><span>Available {quoteCurrency || "quote"}</span><span>{availableQuote === null ? "Unavailable" : fmt(availableQuote)}</span></div><div className="flex justify-between"><span>Available {baseCurrency || "base"}</span><span>{availableBase === null ? "Unavailable" : fmt(availableBase)}</span></div></div>
+              <button disabled={submitting || !symbol || !markets.length} onClick={() => void submitOrder()} className={"w-full rounded py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 " + (side === "BUY" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700")}>{submitting ? "Submitting…" : side === "BUY" ? "Place buy order" : "Place sell order"}</button>
+              <p className="mt-2 text-xs text-gray-500">Orders are submitted only to the configured exchange API. An unavailable or unconfigured backend is shown as an error; no simulated fill is displayed.</p>
+            </section>
           </div>
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }
