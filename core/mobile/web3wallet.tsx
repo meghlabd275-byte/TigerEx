@@ -238,22 +238,13 @@ export const WalletProvider = ({ children }) => {
     }
   };
   
-  // Swap (simplified - would integrate with DEX)
-  const swap = async (fromAddress, fromToken, toToken, amount, network = activeNetwork) => {
-    try {
-      // In production, integrate with Uniswap/Sushiswap
-      // This is a placeholder for the swap logic
-      return { 
-        success: true, 
-        hash: '0x' + Math.random().toString(16).substr(2, 64),
-        message: 'Swap initiated - will complete in ~30 seconds'
-      };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  };
-  
-  // Sign message
+  // Swaps are disabled until a real router, signer, chain simulation, and broadcast path is configured.
+  const swap = async (_fromAddress, _fromToken, _toToken, _amount, _network = activeNetwork) => ({
+    success: false,
+    error: 'Swap unavailable: no verified on-chain router and transaction broadcast service is configured.',
+  });
+
+    // Sign message
   const signMessage = async (address, message, network = activeNetwork) => {
     try {
       const walletData = wallets[address];
