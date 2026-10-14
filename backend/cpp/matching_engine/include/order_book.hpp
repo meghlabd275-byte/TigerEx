@@ -490,17 +490,20 @@ private:
     /**
      * Insert order into price level
      */
-    void insert_order_to_level(PriceMap& book, const Price& price, Order& order);
+    template <typename BookMap>
+    void insert_order_to_level(BookMap& book, const Price& price, Order& order);
     
     /**
      * Remove order from price level
      */
-    void remove_order_from_level(PriceMap& book, const Price& price, const OrderId& order_id);
+    template <typename BookMap>
+    void remove_order_from_level(BookMap& book, const Price& price, const OrderId& order_id);
     
     /**
      * Update level aggregates
      */
-    void update_level_aggregate(PriceMap& book, const Price& price);
+    template <typename BookMap>
+    void update_level_aggregate(BookMap& book, const Price& price);
     
     /**
      * Process single match

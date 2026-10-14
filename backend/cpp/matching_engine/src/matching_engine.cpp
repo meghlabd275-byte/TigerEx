@@ -165,9 +165,13 @@ OrderResult MatchingEngine::submit_order(Order& order) {
         end_time - start_time
     ).count();
     
-    result.trades[0].timestamp = std::chrono::nanoseconds(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(end_time.time_since_epoch()).count()
-    );
+    // A valid order can produce no immediate trade (e.g. a resting limit order).
+    // Never index an empty vector on the hot path.
+    if (!result.trades.empty()) {
+        result.trades.front().timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            end_time.time_since_epoch()
+        );
+    }
     
     // Update stats
     if (result.success) {

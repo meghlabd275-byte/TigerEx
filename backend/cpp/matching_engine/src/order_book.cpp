@@ -73,15 +73,19 @@ bool OrderBook::add_order(Order& order) {
     order.status = OrderStatus::Open;
     order.updated_at = order.id.timestamp_ns;
     
-    // Add to appropriate book based on side
+    // Store the order in its price level and index the actual list iterator.
+    // The index must never contain a default-constructed iterator.
     if (order.side == OrderSide::Buy) {
         insert_order_to_level(bids_, order.price, order);
+        auto level = bids_.find(order.price);
+        if (level == bids_.end() || level->second.orders.empty()) return false;
+        orders_.insert_or_assign(order.id, std::prev(level->second.orders.end()));
     } else {
         insert_order_to_level(asks_, order.price, order);
+        auto level = asks_.find(order.price);
+        if (level == asks_.end() || level->second.orders.empty()) return false;
+        orders_.insert_or_assign(order.id, std::prev(level->second.orders.end()));
     }
-    
-    // Store order reference
-    orders_[order.id] = orders_[order.id];  // Will be updated after insert
     
     // Update sequence
     sequence_.fetch_add(1);
@@ -565,8 +569,8 @@ uint32_t OrderBook::execute_auction(const Price& clearing_price,
 // INSERT ORDER TO LEVEL
 // ============================================================================
 
-void OrderBook::insert_order_to_level(PriceMap& book, const Price& price, 
-                                      Order& order) {
+template <typename BookMap>
+void OrderBook::insert_order_to_level(BookMap& book, const Price& price, Order& order) {
     auto it = book.find(price);
     if (it == book.end()) {
         // Create new price level
@@ -620,7 +624,8 @@ void OrderBook::remove_order_from_level(PriceMap& book, const Price& price,
 // UPDATE LEVEL AGGREGATE
 // ============================================================================
 
-void OrderBook::update_level_aggregate(PriceMap& book, const Price& price) {
+template <typename BookMap>
+void OrderBook::update_level_aggregate(BookMap& book, const Price& price) {
     auto it = book.find(price);
     if (it == book.end()) return;
     
