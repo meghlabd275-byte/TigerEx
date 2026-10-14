@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import type { Route } from 'next';
 import { usePathname, useRouter } from 'next/navigation';
 
 // Theme
@@ -149,7 +150,7 @@ const Sidebar: React.FC<{ collapsed: boolean }> = ({ collapsed }) => {
       <nav className="flex flex-col h-[calc(100%-4rem)]">
         <div className="flex-1 py-4 overflow-y-auto">
           {navItems.map((item) => (
-            <Link key={item.name} href={item.href}
+            <Link key={item.name} href={item.href as Route}
               className={`flex items-center gap-3 px-4 py-3 mx-2 rounded-lg transition-all ${pathname === item.href ? 'font-semibold' : ''}`}
               style={{
                 backgroundColor: pathname === item.href ? `${theme.colors.primary}15` : 'transparent',
@@ -224,11 +225,11 @@ const Header: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) => {
         {/* User Menu */}
         <div className="flex items-center gap-3 ml-2 pl-4 border-l" style={{ borderColor: theme.colors.border }}>
           <div className="text-right hidden sm:block">
-            <p className="text-sm font-medium" style={{ color: theme.colors.text }}>John Doe</p>
-            <p className="text-xs" style={{ color: theme.colors.textSecondary }}>$12,345.67</p>
+            <p className="text-sm font-medium" style={{ color: theme.colors.text }}>Account</p>
+            <p className="text-xs" style={{ color: theme.colors.textSecondary }}>Balance unavailable</p>
           </div>
           <button className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold" style={{ backgroundColor: theme.colors.primary }}>
-            JD
+            <Icon name="user" className="w-5 h-5" />
           </button>
           <button onClick={handleLogout} className="p-2 rounded-lg hover:opacity-80" style={{ color: theme.colors.error }} title="Logout">
             <Icon name="logout" className="w-5 h-5" />
