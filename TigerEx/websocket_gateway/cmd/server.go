@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net"
 	"net/url"
 	"time"
 	"os"
@@ -114,15 +113,34 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 	if atCapacity { http.Error(w, "connection capacity reached", http.StatusServiceUnavailable); return }
 	upgrader := websocket.Upgrader{ReadBufferSize: 4096, WriteBufferSize: 4096, CheckOrigin: func(req *http.Request) bool {
-		origin := req.Header.Get("Origin"); if origin == "" { return true }
-		u, err := url.Parse(origin); if err != nil || u.Hostname() == "" { return false }
-		host, _, err := net.SplitHostPort(req.Host); if err != nil { host = req.Host }
-		return strings.EqualFold(u.Hostname(), host)
+		return isAllowedOrigin(req, req.Header.Get("Origin"))
 	}}
 	conn, err := upgrader.Upgrade(w, r, nil); if err != nil { return }
 	client := s.registerClient(r, conn)
 	go client.writePump()
 	client.readPump()
+}
+
+// isAllowedOrigin enforces exact same-origin checks, or an explicit comma-separated
+// WS_ALLOWED_ORIGINS allowlist when TLS terminates at a trusted reverse proxy.
+func isAllowedOrigin(req *http.Request, origin string) bool {
+	if origin == "" { return true } // Non-browser clients may omit Origin; authenticate private streams separately.
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return false
+	}
+	if req.TLS != nil && strings.EqualFold(u.Scheme, "https") && strings.EqualFold(u.Host, req.Host) {
+		return true
+	}
+	if req.TLS == nil && strings.EqualFold(u.Scheme, "http") && strings.EqualFold(u.Host, req.Host) {
+		return true
+	}
+	for _, configured := range strings.Split(os.Getenv("WS_ALLOWED_ORIGINS"), ",") {
+		if configured = strings.TrimSpace(configured); configured != "" && strings.EqualFold(configured, origin) {
+			return true
+		}
+	}
+	return false
 }
 
 // registerClient registers a new client
