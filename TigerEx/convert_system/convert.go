@@ -99,115 +99,28 @@ func NewConvertService() *ConvertService {
 
 // GetQuote gets conversion quote
 func (s *ConvertService) GetQuote(ctx context.Context, fromAsset, toAsset string, amount decimal.Decimal) (*ConvertQuote, error) {
-	if amount.LessThan(decimal.Zero) {
+	_ = ctx
+	if amount.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("amount must be positive")
 	}
-	
-	// Get rate (in production would call exchange API)
-	rate := s.getRate(fromAsset, toAsset)
-	if rate.IsZero() {
-		return nil, fmt.Errorf("conversion pair not available: %s/%s", fromAsset, toAsset)
+	if fromAsset == "" || toAsset == "" || fromAsset == toAsset {
+		return nil, fmt.Errorf("invalid conversion pair")
 	}
-	
-	// Calculate to amount
-	toAmount := amount.Mul(rate)
-	
-	// Calculate fee
-	fee := s.calculateFee(amount, fromAsset)
-	
-	// Calculate slippage (estimate based on amount)
-	slippage := s.estimateSlippage(amount, fromAsset, toAsset)
-	
-	quote := &ConvertQuote{
-		QuoteID:     fmt.Sprintf("quote_%s", uuid.New().String()[:8]),
-		FromAsset:  fromAsset,
-		ToAsset:    toAsset,
-		FromAmount: amount,
-		ToAmount:   toAmount.Sub(fee),
-		Rate:       rate,
-		Fee:        fee,
-		Slippage:   slippage,
-		ValidUntil: time.Now().Add(10 * time.Second).UnixMilli(),
-	}
-	
-	// Cache quote
-	s.mu.Lock()
-	s.quotes[quote.QuoteID] = quote
-	s.mu.Unlock()
-	
-	return quote, nil
+	return nil, fmt.Errorf("conversion quote unavailable: live price provider is not configured")
 }
 
 // ExecuteConversion executes conversion
 func (s *ConvertService) ExecuteConversion(ctx context.Context, userID, quoteID string) (*Conversion, error) {
-	s.mu.RLock()
-	quote, exists := s.quotes[quoteID]
-	s.mu.RUnlock()
-	
-	if !exists {
-		return nil, fmt.Errorf("quote not found or expired")
-	}
-	
-	// Check quote validity
-	if time.Now().UnixMilli() > quote.ValidUntil {
-		return nil, fmt.Errorf("quote expired")
-	}
-	
-	conversion := &Conversion{
-		ID:          fmt.Sprintf("conv_%s", uuid.New().String()[:8]),
-		UserID:      userID,
-		Type:        ConvertTypeConvert,
-		FromAsset:   quote.FromAsset,
-		ToAsset:     quote.ToAsset,
-		FromAmount:  quote.FromAmount,
-		ToAmount:    quote.ToAmount,
-		Rate:        quote.Rate,
-		Fee:         quote.Fee,
-		Status:      "completed",
-		Timestamp:   time.Now().UnixMilli(),
-	}
-	
-	now := time.Now().UnixMilli()
-	conversion.CompletedAt = &now
-	
-	s.mu.Lock()
-	s.conversions[conversion.ID] = conversion
-	delete(s.quotes, quoteID)
-	s.mu.Unlock()
-	
-	return conversion, nil
+	_ = ctx
+	_ = userID
+	_ = quoteID
+	return nil, fmt.Errorf("conversion execution unavailable: atomic ledger and settlement adapter are not configured")
 }
 
 // getRate gets exchange rate between assets
 func (s *ConvertService) getRate(fromAsset, toAsset string) decimal.Decimal {
-	// In production would call price API
-	// Simplified mock rates
-	rates := map[string]decimal.Decimal{
-		"BTC_USD":  decimal.NewFromFloat(50000),
-		"ETH_USD":  decimal.NewFromFloat(3000),
-		"BNB_USD":  decimal.NewFromFloat(600),
-		"SOL_USD":  decimal.NewFromFloat(150),
-		"USDT_USD": decimal.NewFromFloat(1),
-		"USDC_USD": decimal.NewFromFloat(1),
-		"BTC_ETH":  decimal.NewFromFloat(16.67),
-		"ETH_BTC":  decimal.NewFromFloat(0.06),
-		"BTC_USDT": decimal.NewFromFloat(50000),
-		"ETH_USDT": decimal.NewFromFloat(3000),
-	}
-	
-	// Direct rate
-	if rate, ok := rates[fromAsset+"_"+toAsset]; ok {
-		return rate
-	}
-	
-	// Cross rate via USD
-	fromUSD, fromOK := rates[fromAsset+"_USD"]
-	toUSD, toOK := rates[toAsset+"_USD"]
-	
-	if fromOK && toOK && toUSD.GreaterThan(decimal.Zero) {
-		return fromUSD.Div(toUSD)
-	}
-	
+	_ = fromAsset
+	_ = toAsset
 	return decimal.Zero
 }
 
@@ -262,19 +175,9 @@ func (s *ConvertService) GetUserConversions(userID string, limit, offset int) []
 
 // ApplyDiscount applies volume discount
 func (s *ConvertService) ApplyDiscount(userID string, baseFee decimal.Decimal) decimal.Decimal {
-	// Get user volume (in production would query database)
-	userVolume := decimal.NewFromFloat(50000) // Mock
-	
-	discount := decimal.Zero
-	for _, tier := range s.feeConfig.DiscountTiers {
-		if userVolume.GreaterThanOrEqual(tier.VolumeThreshold) {
-			discount = tier.DiscountRate
-		}
-	}
-	
-	discountedFee := baseFee.Mul(decimal.NewFromInt(1).Sub(discount))
-	
-	return discountedFee
+	// Discounts require verified, persisted user-volume data; never invent eligibility.
+	_ = userID
+	return baseFee
 }
 
 // ============================================================================
@@ -292,31 +195,8 @@ type ConvertPair struct {
 
 // GetAvailablePairs returns available convert pairs
 func (s *ConvertService) GetAvailablePairs() []*ConvertPair {
-	assets := []string{"BTC", "ETH", "BNB", "SOL", "USDT", "USDC", "ADA", "DOGE", "XRP", "MATIC"}
-	
-	var pairs []*ConvertPair
-	for _, from := range assets {
-		for _, to := range assets {
-			if from == to {
-				continue
-			}
-			
-			rate := s.getRate(from, to)
-			if rate.IsZero() {
-				continue
-			}
-			
-			pairs = append(pairs, &ConvertPair{
-				FromAsset: from,
-				ToAsset:   to,
-				Rate:      rate,
-				MinAmount: decimal.NewFromFloat(10),
-				MaxAmount: decimal.NewFromFloat(1000000),
-			})
-		}
-	}
-	
-	return pairs
+	// A pair is only advertised after a live pricing adapter can quote it.
+	return []*ConvertPair{}
 }
 
 // ============================================================================
@@ -395,9 +275,7 @@ func (s *ConvertService) GetStats() *ConversionStats {
 	}
 	
 	// Calculate average slippage
-	if stats.TotalCount > 0 {
-		stats.AvgSlippage = decimal.NewFromFloat(0.15) // Mock
-	}
+	// No synthetic slippage statistic: only verified executed conversions may contribute.
 	
 	return stats
 }
