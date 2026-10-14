@@ -44,7 +44,7 @@ func NewApp() *App {
 	router.Use(gin.Recovery())
 	// Browser origins must be explicitly configured. Never combine a wildcard
 	// origin with credentialed requests.
-	if cfg.CORSOrigin != "" {
+	if cfg.CORSOrigin != "" && cfg.CORSOrigin != "*" {
 		router.Use(cors.New(cors.Config{
 			AllowOrigins:     []string{cfg.CORSOrigin},
 			AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
