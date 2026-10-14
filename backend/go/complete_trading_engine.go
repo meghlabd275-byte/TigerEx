@@ -1846,30 +1846,86 @@ func NewRiskManager(engine *MatchingEngine) *RiskManager {
 }
 
 func (rm *RiskManager) checkOrderRisk(order *Order) error {
-	// Check leverage
+	if rm == nil || rm.engine == nil || order == nil {
+		return errors.New("risk manager, engine, and order are required")
+	}
+	if math.IsNaN(order.Leverage) || math.IsInf(order.Leverage, 0) || order.Leverage < 0 {
+		return errors.New("leverage must be finite and non-negative")
+	}
 	if order.Leverage > rm.maxLeverage {
 		return fmt.Errorf("leverage exceeds maximum of %d", int(rm.maxLeverage))
 	}
-	
-	// Check order value
+
+	// Market orders have no client price to use for notional checks. Estimate
+	// their full requested notional from executable book depth and fail closed
+	// when the book cannot cover the requested quantity.
 	orderValue := order.Price * order.Quantity
+	effectivePrice := order.Price
+	if order.Type == OrderTypeMarket {
+		state := rm.engine.getMarketState(order.Symbol)
+		if state == nil || state.OrderBook == nil {
+			return errors.New("market book unavailable for market-order risk check")
+		}
+		state.mu.RLock()
+		levels := state.OrderBook.Asks
+		if order.Side == OrderSideSell {
+			levels = state.OrderBook.Bids
+		}
+		remaining := order.Quantity
+		orderValue = 0
+		for _, level := range levels {
+			if level == nil || math.IsNaN(level.Price) || math.IsInf(level.Price, 0) ||
+				math.IsNaN(level.Quantity) || math.IsInf(level.Quantity, 0) ||
+				level.Price <= 0 || level.Quantity < 0 {
+				state.mu.RUnlock()
+				return errors.New("invalid market book level; refusing market order")
+			}
+			fillQuantity := math.Min(remaining, level.Quantity)
+			orderValue += fillQuantity * level.Price
+			remaining -= fillQuantity
+			if remaining <= 1e-12 {
+				break
+			}
+		}
+		state.mu.RUnlock()
+		if remaining > 1e-12 {
+			return errors.New("insufficient book depth to safely evaluate market-order risk")
+		}
+		effectivePrice = orderValue / order.Quantity
+	}
+	if math.IsNaN(orderValue) || math.IsInf(orderValue, 0) || orderValue < 0 {
+		return errors.New("order notional is invalid")
+	}
 	if orderValue > rm.maxOrderValue {
 		return fmt.Errorf("order value exceeds maximum of %.2f", rm.maxOrderValue)
 	}
-	
-	// Check user position
+
+	// Copy position pointers while holding the map lock, then inspect each
+	// position under its own lock to avoid racing map access and position updates.
+	rm.engine.mu.RLock()
 	userPositions := rm.engine.userPositions[order.UserID]
-	if userPositions != nil {
-		for _, pos := range userPositions {
-			if pos.Symbol == order.Symbol {
-				newSize := pos.Size + order.Quantity
-				if newSize * order.Price > rm.maxPositionPerUser {
-					return fmt.Errorf("position size exceeds maximum of %.2f", rm.maxPositionPerUser)
-				}
+	positions := make([]*Position, 0, len(userPositions))
+	for _, pos := range userPositions {
+		if pos != nil {
+			positions = append(positions, pos)
+		}
+	}
+	rm.engine.mu.RUnlock()
+
+	for _, pos := range positions {
+		pos.mu.RLock()
+		sameSymbol := pos.Symbol == order.Symbol
+		currentSize := pos.Size
+		pos.mu.RUnlock()
+		if sameSymbol {
+			newSize := currentSize + order.Quantity
+			if math.IsNaN(newSize) || math.IsInf(newSize, 0) ||
+				math.IsNaN(effectivePrice) || math.IsInf(effectivePrice, 0) ||
+				newSize*effectivePrice > rm.maxPositionPerUser {
+				return fmt.Errorf("position size exceeds maximum of %.2f", rm.maxPositionPerUser)
 			}
 		}
 	}
-	
 	return nil
 }
 
