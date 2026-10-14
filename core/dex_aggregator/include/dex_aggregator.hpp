@@ -720,10 +720,11 @@ public:
         return tx;
     }
     
-    // Execute swap (would call blockchain)
-    std::string execute_swap(const SwapTransaction& tx) {
-        // In production, would broadcast to blockchain
-        return "0x" + std::string(64, '0');  // Return fake tx hash
+    // Execute swap only when a real signer/RPC broadcaster is injected.
+    // This implementation deliberately fails closed rather than returning a
+    // fabricated transaction hash that could be mistaken for settlement.
+    std::optional<std::string> execute_swap(const SwapTransaction& /*tx*/) {
+        return std::nullopt;
     }
     
     // Get best price across DEXes

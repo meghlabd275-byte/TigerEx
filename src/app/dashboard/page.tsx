@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import type { Route } from 'next';
 import { useRouter } from 'next/navigation';
 import { 
   Wallet, 
@@ -335,7 +336,7 @@ export default function DashboardPage() {
                       </td>
                       <td className="py-4 px-4 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <Link href={`/trade/${balance.asset}-USDT`} className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-500 transition-colors">
+                          <Link href={`/trade/${balance.asset}-USDT` as Route} className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-500 transition-colors">
                             Trade
                           </Link>
                         </div>

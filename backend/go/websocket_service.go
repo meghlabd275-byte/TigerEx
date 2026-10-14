@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // =============================================================================
@@ -50,7 +53,6 @@ const (
 	StreamOrderbook = "orderbook"
 	StreamAccount  = "account"
 	StreamOrder    = "order"
-	StreamTrade   = "trade"
 )
 
 // =============================================================================
@@ -260,7 +262,14 @@ func NewWebSocketService() *WebSocketService {
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
 		CheckOrigin: func(r *http.Request) bool {
-			return true // Allow all origins in development
+            origin := strings.TrimSpace(r.Header.Get("Origin"))
+            // Non-browser clients commonly omit Origin. Browser origins must
+            // match an explicit administrator-managed allowlist.
+            if origin == "" { return true }
+            for _, candidate := range strings.Split(os.Getenv("TIGEREX_WS_ALLOWED_ORIGINS"), ",") {
+                if strings.TrimSpace(candidate) != "" && strings.TrimSpace(candidate) == origin { return true }
+            }
+            return false
 		},
 	}
 	
@@ -275,52 +284,46 @@ func NewWebSocketService() *WebSocketService {
 
 // HandleConnection handles WebSocket upgrade
 func (ws *WebSocketService) HandleConnection(w http.ResponseWriter, r *http.Request) {
-	// Get token from query params or headers
-	token := r.URL.Query().Get("token")
-	
-	// Upgrade connection
-	conn, err := ws.upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("WebSocket upgrade error: %v", err)
-		return
-	}
-	
-	wsConn := NewConnection(conn, ws)
-	ws.addConnection(wsConn)
-	
-	// Authenticate if token provided
-	if token != "" {
-		userID, err := ws.authenticate(r.Context(), token)
-		if err == nil {
-			wsConn.UserID = userID
-			wsConn.IsAuth = true
-			
-			// Send auth success
-			wsConn.Send(map[string]interface{}{
-				"type": "auth",
-				"success": true,
-				"userId": userID,
-			})
-		} else {
-			// Send auth failed but allow connection
-			wsConn.Send(map[string]interface{}{
-				"type": "auth",
-				"success": false,
-				"error":  err.Error(),
-			})
-		}
-	}
-	
-	// Start goroutines
-	go wsConn.ReadLoop()
-	go wsConn.WriteLoop()
-	
-	// Send connection established
-	wsConn.Send(map[string]interface{}{
-		"type": "connected",
-		"id":   wsConn.ID,
-		"time": time.Now().Unix(),
-	})
+    // Query-string bearer tokens leak into proxy/access logs. Use an
+    // Authorization header or a secure HttpOnly access-token cookie instead.
+    if r.URL.Query().Get("token") != "" {
+        http.Error(w, "query-string tokens are not accepted", http.StatusBadRequest)
+        return
+    }
+    token := ""
+    if header := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(header, "Bearer ") {
+        token = strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+    }
+    if token == "" {
+        if cookie, err := r.Cookie("tigerex_access_token"); err == nil { token = strings.TrimSpace(cookie.Value) }
+    }
+
+    userID := ""
+    if token != "" {
+        var err error
+        userID, err = ws.authenticate(r.Context(), token)
+        if err != nil {
+            http.Error(w, "invalid or unavailable authentication", http.StatusUnauthorized)
+            return
+        }
+    }
+
+    conn, err := ws.upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        log.Printf("WebSocket upgrade error: %v", err)
+        return
+    }
+    wsConn := NewConnection(conn, ws)
+    if token != "" {
+        wsConn.UserID = userID
+        wsConn.Token = token
+        wsConn.IsAuth = true
+    }
+    ws.addConnection(wsConn)
+
+    go wsConn.ReadLoop()
+    go wsConn.WriteLoop()
+    wsConn.Send(map[string]interface{}{"type": "connected", "id": wsConn.ID, "time": time.Now().Unix(), "authenticated": wsConn.IsAuth})
 }
 
 // addConnection adds connection to service
@@ -346,11 +349,11 @@ func (ws *WebSocketService) removeConnection(id string) {
 
 // handleMessage handles incoming message
 func (ws *WebSocketService) handleMessage(conn *WSConnection, data []byte) {
-	ws.stats.MessagesIn++
+	ws.mutex.Lock(); ws.stats.MessagesIn++; ws.mutex.Unlock()
 	
 	var msg WSMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
-		ws.stats.Errors++
+		ws.mutex.Lock(); ws.stats.Errors++; ws.mutex.Unlock()
 		conn.Send(WSError("Invalid message format"))
 		return
 	}
@@ -366,26 +369,40 @@ func (ws *WebSocketService) handleMessage(conn *WSConnection, data []byte) {
 		conn.Send(WSMessage{Type: WSMsgPong, Time: time.Now().Unix()})
 		
 	default:
-		ws.stats.Errors++
+		ws.mutex.Lock(); ws.stats.Errors++; ws.mutex.Unlock()
 		conn.Send(WSError("Unknown message type"))
 	}
 }
 
 // handleSubscribe handles subscription
 func (ws *WebSocketService) handleSubscribe(conn *WSConnection, streams []string) {
-	for _, stream := range streams {
-		ws.subscriptionMgr.Subscribe(conn, stream)
-		
-		// Send initial data based on stream type
-		ws.sendInitialData(conn, stream)
-	}
-	
-	conn.Send(map[string]interface{}{
-		"type":      "subscription",
-		"success":   true,
-		"streams":   streams,
-		"timestamp": time.Now().Unix(),
-	})
+    accepted := make([]string, 0, len(streams))
+    for _, stream := range streams {
+        stream = strings.TrimSpace(stream)
+        if stream == "" || len(stream) > 256 {
+            conn.Send(WSError("invalid stream name"))
+            continue
+        }
+        streamType := getStreamType(stream)
+        if streamType == "" {
+            conn.Send(WSError("unsupported stream"))
+            continue
+        }
+        if strings.HasSuffix(stream, "@account") || strings.HasSuffix(stream, "@order") {
+            owner := strings.TrimSuffix(strings.TrimSuffix(stream, "@account"), "@order")
+            if !conn.IsAuth || owner == "" || owner != conn.UserID {
+                conn.Send(WSError("authenticated owner access is required for private streams"))
+                continue
+            }
+        }
+        ws.subscriptionMgr.Subscribe(conn, stream)
+        accepted = append(accepted, stream)
+        ws.sendInitialData(conn, stream)
+    }
+    conn.Send(map[string]interface{}{
+        "type": "subscription", "success": len(accepted) > 0,
+        "streams": accepted, "timestamp": time.Now().Unix(),
+    })
 }
 
 // handleUnsubscribe handles unsubscription
@@ -403,38 +420,9 @@ func (ws *WebSocketService) handleUnsubscribe(conn *WSConnection, streams []stri
 
 // sendInitialData sends initial data for stream
 func (ws *WebSocketService) sendInitialData(conn *WSConnection, stream string) {
-	// Get stream type
-	streamType := getStreamType(stream)
-	
-	switch streamType {
-	case StreamTicker:
-		// Send current ticker data
-		conn.Send(map[string]interface{}{
-			"type":  stream,
-			"data": getTickerData(stream),
-		})
-		
-	case StreamDepth:
-		// Send current order book
-		conn.Send(map[string]interface{}{
-			"type":  stream,
-			"data": getDepthData(stream),
-		})
-		
-	case StreamKline:
-		// Send recent klines
-		conn.Send(map[string]interface{}{
-			"type":  stream,
-			"data": getKlineData(stream),
-		})
-		
-	case StreamTrade:
-		// Send recent trades
-		conn.Send(map[string]interface{}{
-			"type":  stream,
-			"data": getRecentTrades(stream),
-		})
-	}
+    // Do not manufacture snapshots. Live broadcasts can be published by a
+    // configured market-data provider; initial snapshots require that provider.
+    conn.Send(WSError("initial snapshot provider is not configured; no synthetic data is returned"))
 }
 
 // =============================================================================
@@ -500,9 +488,11 @@ func (ws *WebSocketService) BroadcastOrder(userID string, order interface{}) {
 // =============================================================================
 
 type WSMessage struct {
-	Type    string   `json:"type"`
-	Streams []string `json:"streams,omitempty"`
-	Time    int64    `json:"time"`
+    Type string `json:"type,omitempty"`
+    Streams []string `json:"streams,omitempty"`
+    Time int64 `json:"time,omitempty"`
+    Stream string `json:"stream,omitempty"`
+    Data interface{} `json:"data,omitempty"`
 }
 
 func WSError(message string) map[string]interface{} {
@@ -514,63 +504,53 @@ func WSError(message string) map[string]interface{} {
 }
 
 // =============================================================================
-// DATA PROVIDERS (Mock implementations)
+// STREAM TYPE PARSING
 // =============================================================================
 
 func getStreamType(stream string) string {
-	for _, t := range []string{StreamTicker, StreamTrade, StreamDepth, StreamKline} {
-		if len(stream) > len(t) && stream[:len(t)] == t {
-			return t
-		}
-	}
-	return stream
-}
-
-func getTickerData(symbol string) interface{} {
-	return map[string]interface{}{
-		"symbol":        symbol,
-		"priceChange":  "123.45",
-		"priceChangePercent": "1.23",
-		"lastPrice":     "10000.00",
-		"highPrice":     "10100.00",
-		"lowPrice":      "9900.00",
-		"volume":        "12345.67",
-	}
-}
-
-func getDepthData(symbol string) interface{} {
-	return map[string]interface{}{
-		"lastUpdateId": time.Now().UnixMilli(),
-		"bids": [][]string{{"9999.00", "1.23"}, {"9998.50", "2.34"}},
-		"asks": [][]string{{"10000.50", "1.11"}, {"10001.00", "2.22"}},
-	}
-}
-
-func getKlineData(symbol string) interface{} {
-	now := time.Now()
-	return [][]interface{}{
-		{int(now.Unix()), "10000", "10050", "9990", "10020", "100.5"},
-	}
-}
-
-func getRecentTrades(symbol string) interface{} {
-	now := time.Now()
-	return [][]interface{}{
-		{int(now.Unix()), "10000.00", "0.5", "buy"},
-	}
+    switch {
+    case strings.HasSuffix(stream, "@ticker"): return StreamTicker
+    case strings.HasSuffix(stream, "@trade"): return StreamTrade
+    case strings.HasSuffix(stream, "@depth"): return StreamDepth
+    case strings.Contains(stream, "@kline_"): return StreamKline
+    case strings.HasSuffix(stream, "@orderbook"): return StreamOrderbook
+    case strings.HasSuffix(stream, "@account"): return StreamAccount
+    case strings.HasSuffix(stream, "@order"): return StreamOrder
+    default: return ""
+    }
 }
 
 // =============================================================================
 // AUTHENTICATION
 // =============================================================================
 
-func (ws *WebSocketService) authenticate(ctx context.Context, token string) (string, error) {
-	// In production, validate JWT token
-	// For now, return a mock user ID if token is valid format
-	if len(token) > 10 {
-		return "user-123", nil
-	}
-	return "", fmt.Errorf("invalid token")
+func (ws *WebSocketService) authenticate(ctx context.Context, tokenString string) (string, error) {
+    secret := []byte(os.Getenv("JWT_SECRET"))
+    if len(secret) < 32 {
+        return "", fmt.Errorf("JWT_SECRET must be configured with at least 32 bytes")
+    }
+    parsed, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+        if token.Method != jwt.SigningMethodHS256 {
+            return nil, fmt.Errorf("unexpected JWT signing method")
+        }
+        return secret, nil
+    }, jwt.WithValidMethods([]string{"HS256"}))
+    if err != nil || parsed == nil || !parsed.Valid {
+        return "", fmt.Errorf("invalid token")
+    }
+    claims, ok := parsed.Claims.(jwt.MapClaims)
+    if !ok {
+        return "", fmt.Errorf("invalid claims")
+    }
+    exp, err := claims.GetExpirationTime()
+    if err != nil || exp == nil {
+        return "", fmt.Errorf("token expiration is required")
+    }
+    userID, ok := claims["user_id"].(string)
+    if !ok || strings.TrimSpace(userID) == "" {
+        return "", fmt.Errorf("user_id claim is required")
+    }
+    return userID, nil
 }
 
 // =============================================================================
@@ -650,26 +630,6 @@ func (ws *WebSocketService) processMessages() {
 			"data": msg.Data,
 		})
 	}
-}
-
-// startBroadcastScheduler starts broadcasting data periodically
-func (ws *WebSocketService) startBroadcastScheduler() {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	
-	for range ticker.C {
-		// Broadcast ticker updates for common pairs
-		pairs := []string{"BTC/USDT", "ETH/USDT", "BNB/USDT"}
-		for _, pair := range pairs {
-			ws.BroadcastTicker(pair, getTickerData(pair))
-		}
-	}
-}
-
-// WSMessage for broadcasting
-type WSMessage struct {
-	Stream string
-	Data   interface{}
 }
 
 var (
