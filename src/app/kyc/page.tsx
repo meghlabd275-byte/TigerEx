@@ -124,15 +124,18 @@ export default function KycPage() {
     
     try {
       // Send OTP
-      await fetch('/api/kyc/send-verification-otp', {
+      const response = await fetch('/api/kyc/send-verification-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           emailOrPhone: identity,
           type: identityType === 'phone' ? 'phone' : 'email'
         }),
       });
-      
+      if (!response.ok) {
+        throw new Error('Verification-code delivery is unavailable');
+      }
+
       setStep('personal');
       startOtpTimer();
     } catch (err) {
@@ -239,31 +242,11 @@ export default function KycPage() {
 
   // Simulate liveness check
   const handleLivenessCapture = useCallback(() => {
-    if (isVerifying) return;
-    
-    setIsVerifying(true);
-    
-    setTimeout(() => {
-      const nextStep = livenessStep + 1;
-      const progress = (nextStep / livenessInstructions.length) * 100;
-      
-      setLivenessStep(nextStep);
-      setLivenessProgress(progress);
-      
-      if (nextStep >= livenessInstructions.length) {
-        setIsLivenessComplete(true);
-        
-        if (cameraStream) {
-          cameraStream.getTracks().forEach(track => track.stop());
-        }
-        
-        // Submit for review
-        submitKyc();
-      } else {
-        setIsVerifying(false);
-      }
-    }, 2000);
-  }, [livenessStep, cameraStream, isVerifying]);
+    // A camera prompt is not biometric liveness verification. Do not advance the
+    // KYC flow until a configured, audited liveness provider returns a verified result.
+    setError('Biometric liveness verification is unavailable. KYC cannot continue until the verification provider is configured.');
+  }, []);
+
 
   // Submit KYC
   const submitKyc = async () => {
