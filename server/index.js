@@ -7,6 +7,37 @@
  */
 
 require("dotenv").config();
+
+const JWT_SECRET = process.env.JWT_SECRET;
+const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || process.env.REFRESH_SECRET;
+const PORT = Number(process.env.PORT || 8080);
+const isProduction = process.env.NODE_ENV === "production";
+
+function assertRuntimeConfiguration() {
+  const weakSecret = (value) => !value || Buffer.byteLength(value, "utf8") < 32 ||
+    /change-in-production|change-me|example|default|tigerex-secret/i.test(value);
+  if (weakSecret(JWT_SECRET)) {
+    throw new Error("JWT_SECRET must be a unique, high-entropy secret of at least 32 bytes.");
+  }
+  if (weakSecret(REFRESH_SECRET) || REFRESH_SECRET === JWT_SECRET) {
+    throw new Error("JWT_REFRESH_SECRET must be a different, unique secret of at least 32 bytes.");
+  }
+  if (!process.env.DATABASE_URL &&
+      !(process.env.DB_USER && process.env.DB_HOST && process.env.DB_NAME && process.env.DB_PASSWORD)) {
+    throw new Error("Configure DATABASE_URL or DB_USER, DB_HOST, DB_NAME, and DB_PASSWORD.");
+  }
+  if (!process.env.REDIS_URL && !process.env.REDIS_HOST) {
+    throw new Error("Configure REDIS_URL or REDIS_HOST explicitly.");
+  }
+  if (isProduction && !process.env.CORS_ORIGIN) {
+    throw new Error("CORS_ORIGIN must be explicitly configured in production.");
+  }
+  if (isProduction && !process.env.REDIS_URL && !process.env.REDIS_PASSWORD) {
+    throw new Error("REDIS_PASSWORD is required for production Redis connections.");
+  }
+}
+assertRuntimeConfiguration();
+
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -37,13 +68,17 @@ const io = new Server(server, {
 });
 
 // Database
-const pool = new Pool({
-  user: process.env.DB_USER || "tigerex",
-  host: process.env.DB_HOST || "localhost",
-  database: process.env.DB_NAME || "tigerex",
-  password: process.env.DB_PASSWORD || "tigerex",
-  port: process.env.DB_PORT || 5432,
-});
+const pool = new Pool(process.env.DATABASE_URL
+  ? { connectionString: process.env.DATABASE_URL, max: 20, connectionTimeoutMillis: 5000 }
+  : {
+      user: process.env.DB_USER,
+      host: process.env.DB_HOST,
+      database: process.env.DB_NAME,
+      password: process.env.DB_PASSWORD,
+      port: Number(process.env.DB_PORT || 5432),
+      max: 20,
+      connectionTimeoutMillis: 5000,
+    });
 
 pool.on("error", (err, client) => {
   console.error("Unexpected error on idle client", err);
@@ -52,11 +87,15 @@ pool.on("error", (err, client) => {
 
 console.log("✅ PostgreSQL Database pool initialized");
 
-const redis = new Redis({
-  port: process.env.REDIS_PORT || 6379,
-  host: process.env.REDIS_HOST || "localhost",
-  password: process.env.REDIS_PASSWORD || undefined,
-});
+const redis = process.env.REDIS_URL
+  ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 3, enableOfflineQueue: false })
+  : new Redis({
+      port: Number(process.env.REDIS_PORT || 6379),
+      host: process.env.REDIS_HOST,
+      password: process.env.REDIS_PASSWORD || undefined,
+      maxRetriesPerRequest: 3,
+      enableOfflineQueue: false,
+    });
 
 redis.on("connect", () => console.log("✅ Redis client connected"));
 redis.on("error", (err) => console.error("❌ Redis client error", err));
@@ -103,100 +142,22 @@ function connectBinanceWebSocket() {
 }
 // ============================================================================
 
-const JWT_SECRET = process.env.JWT_SECRET || "tigerex-secret-key-change-in-production";
-const REFRESH_SECRET = process.env.REFRESH_SECRET || "tigerex-refresh-secret-key";
-const PORT = process.env.PORT || 8080;
+// Secrets and port are validated before service initialization.
 
-// All supported trading pairs (100+) - DEFINED BEFORE DB INIT
-const TRADING_PAIRS = [
-  // Top 30 Cryptocurrencies
-  { symbol: "BTCUSDT", base: "BTC", quote: "USDT", basePrice: 65000 },
-  { symbol: "ETHUSDT", base: "ETH", quote: "USDT", basePrice: 3500 },
-  { symbol: "BNBUSDT", base: "BNB", quote: "USDT", basePrice: 600 },
-  { symbol: "SOLUSDT", base: "SOL", quote: "USDT", basePrice: 150 },
-  { symbol: "XRPUSDT", base: "XRP", quote: "USDT", basePrice: 2.5 },
-  { symbol: "ADAUSDT", base: "ADA", quote: "USDT", basePrice: 0.98 },
-  { symbol: "DOGEUSDT", base: "DOGE", quote: "USDT", basePrice: 0.33 },
-  { symbol: "POLKAUSDT", base: "POLKA", quote: "USDT", basePrice: 8.5 },
-  { symbol: "LINKUSDT", base: "LINK", quote: "USDT", basePrice: 28 },
-  { symbol: "LITUSDT", base: "LIT", quote: "USDT", basePrice: 4.2 },
-  { symbol: "MATICUSDT", base: "MATIC", quote: "USDT", basePrice: 1.2 },
-  { symbol: "AVAXUSDT", base: "AVAX", quote: "USDT", basePrice: 45 },
-  { symbol: "ATOMUSDT", base: "ATOM", quote: "USDT", basePrice: 13 },
-  { symbol: "LTCUSDT", base: "LTC", quote: "USDT", basePrice: 120 },
-  { symbol: "UNIUSDT", base: "UNI", quote: "USDT", basePrice: 9.8 },
-  { symbol: "ARBUSDT", base: "ARB", quote: "USDT", basePrice: 1.5 },
-  { symbol: "OPTIMUSDT", base: "OPTIM", quote: "USDT", basePrice: 2.8 },
-  { symbol: "FTMUSDT", base: "FTM", quote: "USDT", basePrice: 0.85 },
-  { symbol: "OPERAUSDT", base: "OPERA", quote: "USDT", basePrice: 0.55 },
-  { symbol: "SUIUSDT", base: "SUI", quote: "USDT", basePrice: 2.2 },
-  { symbol: "APOUSDT", base: "APO", quote: "USDT", basePrice: 12 },
-  { symbol: "APTUSDT", base: "APT", quote: "USDT", basePrice: 9.5 },
-  { symbol: "IGUSDT", base: "IG", quote: "USDT", basePrice: 0.008 },
-  { symbol: "INJUSDT", base: "INJ", quote: "USDT", basePrice: 28 },
-  { symbol: "SEIAUSDT", base: "SEIA", quote: "USDT", basePrice: 0.35 },
-  { symbol: "GRAUSDT", base: "GRA", quote: "USDT", basePrice: 0.025 },
-  { symbol: "TIAUSDT", base: "TIA", quote: "USDT", basePrice: 10 },
-  { symbol: "RUNUSDT", base: "RUN", quote: "USDT", basePrice: 12 },
-  { symbol: "SCUSDT", base: "SC", quote: "USDT", basePrice: 0.015 },
-  { symbol: "TGRUSDT", base: "TGR", quote: "USDT", basePrice: 1.5 },
-  { symbol: "ZAUSDT", base: "ZA", quote: "USDT", basePrice: 0.45 },
-  { symbol: "DYDXUSDT", base: "DYDX", quote: "USDT", basePrice: 3.2 },
-  { symbol: "ZKUSDT", base: "ZK", quote: "USDT", basePrice: 0.85 },
-  { symbol: "POPULUSDT", base: "POPUL", quote: "USDT", basePrice: 0.0012 },
-  { symbol: "ORCAUSDT", base: "ORCA", quote: "USDT", basePrice: 1.8 },
-  { symbol: "PYTHUSDT", base: "PYTH", quote: "USDT", basePrice: 0.35 },
-  { symbol: "JITOUSDT", base: "JITO", quote: "USDT", basePrice: 2.5 },
-  { symbol: "JUPUSDT", base: "JUP", quote: "USDT", basePrice: 1.1 },
-  { symbol: "MANGOUSDT", base: "MANGO", quote: "USDT", basePrice: 0.055 },
-  { symbol: "WUSDT", base: "W", quote: "USDT", basePrice: 0.75 },
-  { symbol: "USDCUSDT", base: "USDC", quote: "USDT", basePrice: 1.0 },
-  { symbol: "USDUUSDT", base: "USD", quote: "USDT", basePrice: 1.0 },
-  { symbol: "WBTCUSDT", base: "WBTC", quote: "USDT", basePrice: 65000 },
-  { symbol: "WETHUSDT", base: "WETH", quote: "USDT", basePrice: 3500 },
-  { symbol: "STETHUSDT", base: "STETH", quote: "USDT", basePrice: 3480 },
-  { symbol: "RETHUSDT", base: "RETH", quote: "USDT", basePrice: 4200 },
-  { symbol: "CBETHUSDT", base: "CBETH", quote: "USDT", basePrice: 3650 },
-  { symbol: "ETHBTC", base: "ETH", quote: "BTC", basePrice: 0.054 },
-  { symbol: "SOLBTC", base: "SOL", quote: "BTC", basePrice: 0.0023 },
-  { symbol: "BNBBTC", base: "BNB", quote: "BTC", basePrice: 0.0092 },
-  { symbol: "ETHBNB", base: "ETH", quote: "BNB", basePrice: 5.8 },
-  { symbol: "SOLBNB", base: "SOL", quote: "BNB", basePrice: 0.25 },
-  { symbol: "DAIUSDT", base: "DAI", quote: "USDT", basePrice: 1.0 },
-  { symbol: "TUSDUSDT", base: "TUSD", quote: "USDT", basePrice: 1.0 },
-  { symbol: "BUSDUSDT", base: "BUSD", quote: "USDT", basePrice: 1.0 },
-  { symbol: "FEIUSDT", base: "FEI", quote: "USDT", basePrice: 0.98 },
-  { symbol: "USDPUSDT", base: "USDP", quote: "USDT", basePrice: 0.99 },
-  { symbol: "PENUSDT", base: "PEN", quote: "USDT", basePrice: 0.0008 },
-  { symbol: "WIREUSDT", base: "WIRE", quote: "USDT", basePrice: 0.18 },
-  { symbol: "VIRTUSDT", base: "VIRT", quote: "USDT", basePrice: 0.55 },
-  { symbol: "PHANTUSDT", base: "PHANT", quote: "USDT", basePrice: 0.65 },
-  { symbol: "AAVEUSDT", base: "AAVE", quote: "USDT", basePrice: 450 },
-  { symbol: "CRVUSDT", base: "CRV", quote: "USDT", basePrice: 1.2 },
-  { symbol: "CONVUSDT", base: "CONV", quote: "USDT", basePrice: 3.5 },
-  { symbol: "LENDOUSDT", base: "LENDO", quote: "USDT", basePrice: 0.85 },
-  { symbol: "SNXUSDT", base: "SNX", quote: "USDT", basePrice: 8.2 },
-  { symbol: "SANDUUSDT", base: "SANDU", quote: "USDT", basePrice: 0.72 },
-  { symbol: "ENJUSDT", base: "ENJ", quote: "USDT", basePrice: 0.65 },
-  { symbol: "AXSUSDT", base: "AXS", quote: "USDT", basePrice: 8.5 },
-  { symbol: "GMSUSDT", base: "GMS", quote: "USDT", basePrice: 22 },
-  { symbol: "MANAUSDT", base: "MANA", quote: "USDT", basePrice: 0.85 },
-  { symbol: "LOOKSUSDT", base: "LOOKS", quote: "USDT", basePrice: 0.085 },
-  { symbol: "BLURUSUSDT", base: "BLUR", quote: "USDT", basePrice: 0.55 },
-  { symbol: "MAGUSDT", base: "MAG", quote: "USDT", basePrice: 0.015 },
-  { symbol: "MOVEUSDT", base: "MOVE", quote: "USDT", basePrice: 0.045 },
-  { symbol: "MVUSDT", base: "MV", quote: "USDT", basePrice: 1.5 },
-  { symbol: "WARSUSDT", base: "WARS", quote: "USDT", basePrice: 0.25 },
-  { symbol: "FLRUSDT", base: "FLR", quote: "USDT", basePrice: 0.038 },
-  { symbol: "ARKMUSDT", base: "ARKM", quote: "USDT", basePrice: 3.8 },
-  { symbol: "BTCSTUSDT", base: "BTCST", quote: "USDT", basePrice: 0.12 },
-  { symbol: "RENUSDT", base: "REN", quote: "USDT", basePrice: 0.28 },
-  { symbol: "HERUSDT", base: "HER", quote: "USDT", basePrice: 0.00025 },
-  { symbol: "NOSUSDT", base: "NOS", quote: "USDT", basePrice: 0.0002 },
-  { symbol: "AGLDUSDT", base: "AGLD", quote: "USDT", basePrice: 0.55 },
-  { symbol: "USTUSDT", base: "UST", quote: "USDT", basePrice: 0.001 },
-  { symbol: "LUNCUSDT", base: "LUNC", quote: "USDT", basePrice: 0.00008 },
-];
+// Market metadata is loaded from the durable market configuration; no symbols or prices are fabricated.
+let TRADING_PAIRS = [];
+
+async function loadTradingPairs() {
+  const result = await pool.query(
+    "SELECT symbol, base_asset, quote_asset FROM markets WHERE status = 'trading' ORDER BY display_priority ASC"
+  );
+  TRADING_PAIRS = result.rows.map((market) => ({
+    symbol: String(market.symbol).toUpperCase(),
+    base_asset: String(market.base_asset).toUpperCase(),
+    quote_asset: String(market.quote_asset).toUpperCase(),
+  }));
+  return TRADING_PAIRS;
+}
 
 // Initialize all tables
 // initializeDatabase(); // Now handled by migration script
@@ -209,8 +170,8 @@ app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false 
 app.use(compression());
 app.use(morgan("combined"));
 app.use(cors({ origin: process.env.CORS_ORIGIN || "http://localhost:3000", credentials: true }));
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: false, limit: "1mb", parameterLimit: 100 }));
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -283,13 +244,6 @@ async function authenticateRequest(req, res, next) {
   req.userId = decoded.userId;
   req.sessionId = sessionId;
   next();
-}
-
-// Get base price for symbol
-function getBasePriceForSymbol(symbol) {
-  const pair = TRADING_PAIRS.find(p => p.symbol === symbol);
-  if (!pair) return 0;
-  return pair.basePrice;
 }
 
 // Real order matching engine - Production grade
@@ -522,13 +476,13 @@ app.post("/api/v1/auth/register", async (req, res) => {
       [userId, email, username, passwordHash, userReferralCode, referralCode || null]
     );
 
-    // Create default wallets with test USDT
-    const currencies = ["USDT", "BTC", "ETH", "BNB", "SOL", "TGR"];
+    // Wallet records start at zero. Deposits must be credited only by the
+    // verified blockchain/fiat deposit pipeline, never by registration.
+    const currencies = [...new Set(TRADING_PAIRS.flatMap((market) => [market.base_asset, market.quote_asset]))];
     for (const currency of currencies) {
-      const initialBalance = currency === "USDT" ? 10000 : 0;
       await pool.query(
         `INSERT INTO wallets (id, user_id, currency, balance) VALUES ($1, $2, $3, $4)`,
-        [uuidv4(), userId, currency, initialBalance]
+        [uuidv4(), userId, currency, 0]
       );
     }
 
@@ -1311,7 +1265,12 @@ io.on("connection", (socket) => {
 
 async function startServer() {
   await initializeDatabase();
-  connectBinanceWebSocket(); // Connect to Binance WebSocket on server start
+  await loadTradingPairs();
+  if (TRADING_PAIRS.length > 0 && process.env.MARKET_DATA_WS_URL) {
+    console.warn("MARKET_DATA_WS_URL is configured, but the legacy Node server does not provide a verified market-data ingestion pipeline; no provider is connected.");
+  } else if (TRADING_PAIRS.length === 0) {
+    console.warn("No active markets are configured. Trading and market endpoints must remain unavailable until markets are provisioned.");
+  }
   server.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════════════════════════╗
