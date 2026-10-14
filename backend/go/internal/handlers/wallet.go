@@ -217,43 +217,18 @@ func (h *WalletHandler) Transfer(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
 		return
 	}
-
 	var req TransferRequest
 	if err := ParseJSON(r, &req); err != nil {
 		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "Invalid request body")
 		return
 	}
-
-	if req.ToAddress == "" || req.Amount == "" || req.Token == "" {
+	if req.ToAddress == "" || req.Amount == "" || req.Token == "" || req.Blockchain == "" {
 		WriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "Missing required fields")
 		return
 	}
-
-	// Get user wallet seed from database
-	// For demo, use mock
-	masterSeed := "demo seed phrase"
-
-	tx, err := h.service.SignAndBroadcast(&wallet.SendTransaction{
-		From:       "0xDemo",
-		To:         req.ToAddress,
-		Amount:     stringToBigInt(req.Amount),
-		Token:      req.Token,
-		Blockchain: req.Blockchain,
-	}, masterSeed)
-
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "TRANSFER_FAILED", "Transfer failed")
-		return
-	}
-
-	WriteSuccess(w, map[string]interface{}{
-		"tx_hash":   tx,
-		"from":      "0xDemo",
-		"to":        req.ToAddress,
-		"amount":    req.Amount,
-		"token":     req.Token,
-		"blockchain": req.Blockchain,
-	})
+	// Never sign with a source-code seed or report a transfer without a
+	// user-scoped custody key, policy checks, and verified broadcast lifecycle.
+	WriteError(w, http.StatusServiceUnavailable, "CUSTODY_NOT_CONFIGURED", "Transfers are unavailable until authenticated custody signing and policy controls are configured")
 }
 
 // Swap handles swap request
@@ -262,42 +237,17 @@ func (h *WalletHandler) Swap(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
 		return
 	}
-
 	var req SwapRequest
 	if err := ParseJSON(r, &req); err != nil {
 		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "Invalid request body")
 		return
 	}
-
-	if req.FromToken == "" || req.ToToken == "" || req.FromAmount == "" {
+	if req.FromToken == "" || req.ToToken == "" || req.FromAmount == "" || req.Blockchain == "" {
 		WriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "Missing required fields")
 		return
 	}
-
-	userSeed := "demo seed phrase"
-
-	swapReq := &wallet.SwapRequest{
-		FromToken:    req.FromToken,
-		ToToken:      req.ToToken,
-		FromAmount:   stringToBigInt(req.FromAmount),
-		MinOutAmount: stringToBigInt(req.MinOutAmount),
-		Blockchain:   req.Blockchain,
-		Slippage:     req.Slippage,
-	}
-
-	tx, err := h.service.ExecuteSwap(swapReq, userSeed)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "SWAP_FAILED", "Swap failed")
-		return
-	}
-
-	WriteSuccess(w, map[string]interface{}{
-		"tx_hash":     tx,
-		"from_token":  req.FromToken,
-		"to_token":    req.ToToken,
-		"from_amount": req.FromAmount,
-		"blockchain":  req.Blockchain,
-	})
+	// Never fabricate a swap transaction using a source-code seed phrase.
+	WriteError(w, http.StatusServiceUnavailable, "CUSTODY_NOT_CONFIGURED", "Swaps are unavailable until authenticated custody signing, a verified quote, and settlement controls are configured")
 }
 
 // GetSupportedNetworks returns supported networks
