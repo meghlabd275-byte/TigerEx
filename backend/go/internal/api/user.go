@@ -33,6 +33,7 @@ type Order struct {
 	Type           string    `json:"type"`
 	Price          float64   `json:"price,omitempty"`
 	StopPrice      float64   `json:"stopPrice,omitempty"`
+	TrailingDistance float64 `json:"trailingDistance,omitempty"`
 	Quantity      float64   `json:"quantity"`
 	FilledQuantity float64   `json:"filledQuantity"`
 	Status         string    `json:"status"`
@@ -44,6 +45,30 @@ type Order struct {
 }
 
 // Trade represents a trade execution
+type Transfer struct {
+	ID string `json:"id"`
+	FromUserID string `json:"fromUserId"`
+	ToUserID string `json:"toUserId"`
+	Asset string `json:"asset"`
+	Amount float64 `json:"amount"`
+	Status string `json:"status"`
+	CreatedAt int64 `json:"createdAt"`
+}
+
+// StakingPosition represents a persisted user staking position.
+type StakingPosition struct {
+	ID string `json:"id"`
+	UserID string `json:"userId"`
+	ProductID string `json:"productId"`
+	Asset string `json:"asset"`
+	Amount float64 `json:"amount"`
+	Reward float64 `json:"reward"`
+	Status string `json:"status"`
+	StartedAt int64 `json:"startedAt"`
+	UnlockAt int64 `json:"unlockAt,omitempty"`
+}
+
+// Trade represents an executed trade.
 type Trade struct {
 	ID            string  `json:"id"`
 	OrderID       string  `json:"orderId"`

@@ -156,7 +156,7 @@ func (s *AdminService) AddBlockchain(ctx context.Context, config *BlockchainConf
 }
 
 // UpdateBlockchain updates blockchain configuration
-func (s *AdminService) UpdateBlockchain(ctx context.Context, id uuid.UUID, updates map[string]interface{
+func (s *AdminService) UpdateBlockchain(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error {
 	return ErrAdminPersistenceUnavailable
 }
 
@@ -178,7 +178,7 @@ func (s *AdminService) AddToken(ctx context.Context, config *TokenConfig) error 
 }
 
 // UpdateToken updates token configuration
-func (s *AdminService) UpdateToken(ctx context.Context, id uuid.UUID, updates map[string]interface{
+func (s *AdminService) UpdateToken(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error {
 	return ErrAdminPersistenceUnavailable
 }
 
@@ -212,7 +212,7 @@ func (s *AdminService) CreateLaunchpadProject(ctx context.Context, project *Laun
 }
 
 // UpdateLaunchpadProject updates launchpad project
-func (s *AdminService) UpdateLaunchpadProject(ctx context.Context, id uuid.UUID, updates map[string]interface{
+func (s *AdminService) UpdateLaunchpadProject(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error {
 	return ErrAdminPersistenceUnavailable
 }
 
@@ -364,11 +364,11 @@ func (s *AdminService) BatchClaimAirdrop(ctx context.Context, campaignID uuid.UU
 // ============ Audit Log ============
 
 // LogAction logs admin action
-func (s *AdminService) LogAction(ctx context.Context, adminID uuid.UUID, action, entityType, entityID string, oldValue, newValue interface{
+func (s *AdminService) LogAction(ctx context.Context, adminID uuid.UUID, action, entityType, entityID string, oldValue, newValue interface{}) error {
 	return ErrAdminPersistenceUnavailable
 }
 
 // GetAuditLog returns audit logs
-func (s *AdminService) GetAuditLog(ctx context.Context, filters map[string]interface{
+func (s *AdminService) GetAuditLog(ctx context.Context, filters map[string]interface{}) ([]map[string]interface{}, error) {
 	return nil, ErrAdminPersistenceUnavailable
 }
