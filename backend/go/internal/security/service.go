@@ -15,7 +15,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/pbkdf2"
 
-	"tigerex-api/internal/api"
+	"tigerex/backend/internal/api"
 )
 
 var (
