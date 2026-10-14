@@ -447,94 +447,89 @@ func unavailableMarketData() gin.HandlerFunc {
 	}
 }
 
-var mockMarkets = map[string]struct {
-	BaseAsset  string
-	QuoteAsset string
-	Status     string
-}{
-	"BTCUSDT": {BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"},
-	"ETHUSDT": {BaseAsset: "ETH", QuoteAsset: "USDT", Status: "TRADING"},
-	"BNBUSDT": {BaseAsset: "BNB", QuoteAsset: "USDT", Status: "TRADING"},
-	"SOLUSDT": {BaseAsset: "SOL", QuoteAsset: "USDT", Status: "TRADING"},
-	"XRPUSDT": {BaseAsset: "XRP", QuoteAsset: "USDT", Status: "TRADING"},
-	"ADAUSDT": {BaseAsset: "ADA", QuoteAsset: "USDT", Status: "TRADING"},
-	"DOGEUSDT": {BaseAsset: "DOGE", QuoteAsset: "USDT", Status: "TRADING"},
+func unavailableService() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"success": false,
+			"error": gin.H{"code": 503, "message": "This endpoint is unavailable until its authoritative persistent service is configured"},
+		})
+	}
 }
 
 func (s *Server) GetExchangeInfo() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetExchangeInfoV3() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetDepth() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetDepthV3() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetMarkets() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetTicker() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetOrderBook() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetKlines() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetKlinesV3() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetRecentTrades() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetTradesV3() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetHistoricalTrades() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetAggTrades() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetTickerPrice() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetTickerPriceV3() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetBookTicker() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) GetBookTickerV3() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) Get24hrTicker() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 func (s *Server) Get24hrTickerV3() gin.HandlerFunc {
-	return unavailableMarketData()
+	return unavailableService()
 }
 
 // Health
@@ -570,424 +565,329 @@ func (s *Server) GetServerTime() gin.HandlerFunc {
 
 // Account
 func (s *Server) GetAccount() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"makerCommission": 10, "takerCommission": 10, "canTrade": true, "canWithdraw": true, "canDeposit": true}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetBalances() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{{"asset": "BTC", "free": "1.0", "locked": "0.0"}, {"asset": "ETH", "free": "10.0", "locked": "0.0"}, {"asset": "USDT", "free": "10000.0", "locked": "0.0"}}})
-	}
+	return unavailableService()
 }
 
 // Orders
 func (s *Server) PlaceOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req struct {
-			Symbol    string `json:"symbol" binding:"required"`
-			Side      string `json:"side" binding:"required,oneof=BUY SELL"`
-			Type      string `json:"type" binding:"required,oneof=LIMIT MARKET STOP_LIMIT STOP_MARKET"`
-			Quantity  string `json:"quantity" binding:"required"`
-			Price     string `json:"price"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
-			return
-		}
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"symbol": req.Symbol, "orderId": uuid.New().String(), "side": req.Side, "type": req.Type, "status": "NEW"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) CancelOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"status": "CANCELED"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetOpenOrders() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetOrderHistory() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetMyTrades() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 // Advanced Orders
 func (s *Server) PlaceOCOOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"orderListId": uuid.New().String(), "orderListStatus": "EXECUTING"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) PlaceTrailingStopOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"orderId": uuid.New().String(), "type": "TRAILING_STOP", "status": "NEW"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) PlaceIcebergOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"orderId": uuid.New().String(), "type": "LIMIT", "status": "NEW"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) PlaceTWAPOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"orderId": uuid.New().String(), "type": "TWAP", "status": "NEW"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) PlaceBatchOrders() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{{"orderId": uuid.New().String()}}})
-	}
+	return unavailableService()
 }
 
 // Futures
 func (s *Server) GetFuturesAccount() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"feeTier": 5, "canTrade": true, "totalMargin": "10000.00"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetPosition() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) PlaceFuturesOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"orderId": uuid.New().String(), "status": "NEW"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) CancelFuturesOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"status": "CANCELED"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) SetLeverage() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"code": 200, "msg": "success"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) SetMarginType() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"code": 200, "msg": "success"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetFundingRate() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"symbol": "BTCUSDT", "fundingRate": "0.0001", "nextFundingTime": time.Now().Add(8*time.Hour).UnixMilli()}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetOpenInterest() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"symbol": "BTCUSDT", "openInterest": "500000.00"}})
-	}
+	return unavailableService()
 }
 
 // COIN-M Futures
-func (s *Server) GetCoinFuturesAccount() gin.HandlerFunc  { return s.GetFuturesAccount() }
-func (s *Server) PlaceCoinFuturesOrder() gin.HandlerFunc { return s.PlaceFuturesOrder() }
-func (s *Server) CancelCoinFuturesOrder() gin.HandlerFunc { return s.CancelFuturesOrder() }
-func (s *Server) SetCoinLeverage() gin.HandlerFunc { return s.SetLeverage() }
+func (s *Server) GetCoinFuturesAccount() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) PlaceCoinFuturesOrder() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) CancelCoinFuturesOrder() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) SetCoinLeverage() gin.HandlerFunc {
+	return unavailableService()
+}
 
 // Options
 func (s *Server) GetOptionsAccount() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"free": "100.00", "locked": "0.00"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetOptionsPosition() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) PlaceOptionsOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"orderId": uuid.New().String(), "status": "NEW"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) CancelOptionsOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"status": "CANCELED"}})
-	}
+	return unavailableService()
 }
 
 // Margin
 func (s *Server) GetMarginAccount() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"marginLevel": "10.00", "totalMargin": "10000.00"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) MarginTransfer() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"tranId": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) ApplyMarginLoan() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"tranId": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) RepayMarginLoan() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"tranId": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
-func (s *Server) PlaceMarginOrder() gin.HandlerFunc { return s.PlaceOrder() }
-func (s *Server) CancelMarginOrder() gin.HandlerFunc { return s.CancelOrder() }
+func (s *Server) PlaceMarginOrder() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) CancelMarginOrder() gin.HandlerFunc {
+	return unavailableService()
+}
 
 // Wallet
 func (s *Server) GetDepositAddress() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"address": "0x" + randomHex(40), "tag": ""}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) ApplyWithdraw() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"id": uuid.New().String(), "status": "pending"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetWithdrawHistory() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetDepositHistory() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) Transfer() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"tranId": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetCapitalBalance() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{{"coin": "BTC", "free": "1.0"}, {"coin": "USDT", "free": "10000.0"}}})
-	}
+	return unavailableService()
 }
 
 // Staking
 func (s *Server) GetStakingProducts() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{{"poolId": "ETH2", "poolName": "ETH 2.0", "asset": "ETH", "apy": 5.0}}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) SubscribeStaking() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"positionId": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetStakingPosition() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) RedeemStaking() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"positionId": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) DoETHStaking() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"validatorPubkey": randomHex(96), "txHash": randomHex(64)}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) RedeemETHStaking() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"txHash": randomHex(64)}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetETHStaking() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"totalStaked": "10000.00", "validatorCount": 100, "apr": 5.0}})
-	}
+	return unavailableService()
 }
 
 // Earn
 func (s *Server) GetEarnProducts() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{{"asset": "USDT", "apy": 10.0}}})
-	}
+	return unavailableService()
 }
 
-func (s *Server) SubscribeEarn() gin.HandlerFunc { return s.SubscribeStaking() }
-func (s *Server) GetEarnPosition() gin.HandlerFunc { return s.GetStakingPosition() }
-func (s *Server) RedeemEarn() gin.HandlerFunc { return s.RedeemStaking() }
+func (s *Server) SubscribeEarn() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) GetEarnPosition() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) RedeemEarn() gin.HandlerFunc {
+	return unavailableService()
+}
 
 // Lending
 func (s *Server) GetLendingProducts() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) SubscribeLending() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"id": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetLendingAccount() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"asset": "USDT", "lendFree": "10000.00"}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) RedeemLending() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"id": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
 // Sub-account
 func (s *Server) ListSubAccounts() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) CreateSubAccount() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"email": "sub@" + randomHex(8) + ".example.com", "uid": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) TransferSubAccount() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"tranId": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) GetSubAccountBalances() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 // Copy Trading
 func (s *Server) GetCopyTradingOrders() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) PlaceCopyTradingOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"orderId": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
-func (s *Server) CancelCopyTradingOrder() gin.HandlerFunc { return s.CancelOrder() }
-func (s *Server) GetCopyTradingOpenOrders() gin.HandlerFunc { return s.GetOpenOrders() }
-func (s *Server) GetCopyTradingPositions() gin.HandlerFunc { return s.GetPosition() }
+func (s *Server) CancelCopyTradingOrder() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) GetCopyTradingOpenOrders() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) GetCopyTradingPositions() gin.HandlerFunc {
+	return unavailableService()
+}
 
 // Trading Bot
 func (s *Server) GetBotOrders() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
-	}
+	return unavailableService()
 }
 
 func (s *Server) PlaceBotOrder() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"orderId": uuid.New().String()}})
-	}
+	return unavailableService()
 }
 
-func (s *Server) CancelBotOrder() gin.HandlerFunc { return s.CancelOrder() }
-func (s *Server) GetBotOpenOrders() gin.HandlerFunc { return s.GetOpenOrders() }
-func (s *Server) GetBotPositions() gin.HandlerFunc { return s.GetPosition() }
+func (s *Server) CancelBotOrder() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) GetBotOpenOrders() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) GetBotPositions() gin.HandlerFunc {
+	return unavailableService()
+}
 
 func (s *Server) StopBot() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"code": 200, "msg": "success"}})
-	}
+	return unavailableService()
 }
 
-func (s *Server) PauseBot() gin.HandlerFunc { return s.StopBot() }
-func (s *Server) ResumeBot() gin.HandlerFunc { return s.StopBot() }
+func (s *Server) PauseBot() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) ResumeBot() gin.HandlerFunc {
+	return unavailableService()
+}
 
 // WebSocket
 var wsUpgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 
 func (s *Server) HandleWebSocket() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
-		if err != nil {
-			log.Printf("WebSocket upgrade error: %v", err)
-			return
-		}
-		defer conn.Close()
-		for {
-			mt, msg, err := conn.ReadMessage()
-			if err != nil {
-				break
-			}
-			if mt == websocket.TextMessage {
-				conn.WriteMessage(websocket.TextMessage, []byte(`{"e":"heartbeat"}`))
-			}
-		}
-	}
+	return unavailableService()
 }
 
-func (s *Server) HandleFuturesWebSocket() gin.HandlerFunc { return s.HandleWebSocket() }
-func (s *Server) HandleDeliveryWebSocket() gin.HandlerFunc { return s.HandleWebSocket() }
-func (s *Server) HandleOptionsWebSocket() gin.HandlerFunc { return s.HandleWebSocket() }
-func (s *Server) HandleSpotWebSocket() gin.HandlerFunc { return s.HandleWebSocket() }
+func (s *Server) HandleFuturesWebSocket() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) HandleDeliveryWebSocket() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) HandleOptionsWebSocket() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) HandleSpotWebSocket() gin.HandlerFunc {
+	return unavailableService()
+}
 
 // Admin
-func (s *Server) AdminPing() gin.HandlerFunc { return s.Ping() }
-func (s *Server) AdminStats() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(200, gin.H{"success": true, "data": gin.H{"totalUsers": 100000, "totalVolume": "1000000000.00"}})
-	}
+func (s *Server) AdminPing() gin.HandlerFunc {
+	return unavailableService()
 }
-func (s *Server) AdminExchangeInfo() gin.HandlerFunc { return s.GetExchangeInfo() }
+func (s *Server) AdminStats() gin.HandlerFunc {
+	return unavailableService()
+}
+func (s *Server) AdminExchangeInfo() gin.HandlerFunc {
+	return unavailableService()
+}
 
 // Helpers
 func randomHex(n int) string {
