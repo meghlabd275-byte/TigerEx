@@ -41,11 +41,35 @@ export class TigerExClient extends EventEmitter {
 
     constructor(config: Config) {
         super();
-        this.config = config;
-        this.baseURL = config.baseUrl || (config.testnet 
-            ? 'https://api-test.tigerex.com' 
+        if (!config || typeof config !== 'object') {
+            throw new TypeError('A TigerEx SDK configuration is required');
+        }
+        if (config.apiKey && !config.apiSecret) {
+            throw new TypeError('apiSecret is required when apiKey is configured');
+        }
+        const configuredBase = config.baseUrl || (config.testnet
+            ? 'https://api-test.tigerex.com'
             : 'https://api.tigerex.com');
-        this.timeout = config.timeout || 30000;
+        let parsedBase: URL;
+        try {
+            parsedBase = new URL(configuredBase);
+        } catch {
+            throw new TypeError('baseUrl must be a valid absolute URL');
+        }
+        const localHttp = parsedBase.protocol === 'http:' &&
+            (parsedBase.hostname === 'localhost' || parsedBase.hostname === '127.0.0.1' || parsedBase.hostname === '::1');
+        if (parsedBase.protocol !== 'https:' && !localHttp) {
+            throw new TypeError('HTTPS is required for SDK traffic; HTTP is allowed only for loopback development');
+        }
+        if (parsedBase.username || parsedBase.password || parsedBase.search || parsedBase.hash) {
+            throw new TypeError('baseUrl must not contain credentials, a query string, or a fragment');
+        }
+        this.config = { ...config };
+        this.baseURL = configuredBase.replace(/\\/+$/, '');
+        this.timeout = config.timeout ?? 30000;
+        if (!Number.isSafeInteger(this.timeout) || this.timeout < 1 || this.timeout > 120000) {
+            throw new RangeError('timeout must be an integer between 1 and 120000 milliseconds');
+        }
     }
 
     // =========================================================================
@@ -59,61 +83,305 @@ export class TigerExClient extends EventEmitter {
         signed: boolean = false
     ): Promise<T> {
         const timestamp = Date.now();
-        const queryString = this.buildQueryString(params);
-        
-        let url = `${this.baseURL}${endpoint}`;
-        if (method === 'GET' && queryString) {
-            url += `?${queryString}`;
+        const normalizedMethod = method.toUpperCase();
+        if (!['GET', 'POST', 'PUT', 'DELETE'].includes(normalizedMethod)) {
+            throw new TypeError(`Unsupported HTTP method: ${method}`);
+        }
+        if (!endpoint.startsWith('/') || endpoint.startsWith('//')) {
+            throw new TypeError('endpoint must be an absolute path on the configured API origin');
         }
 
+        const requestParams: Record<string, any> = { ...params };
+        if (signed) requestParams.timestamp = timestamp;
+        const queryString = this.buildQueryString(requestParams);
+        const url = `${this.baseURL}${endpoint}${(normalizedMethod === 'GET' || normalizedMethod === 'DELETE') && queryString ? `?${queryString}` : ''}`;
         const headers: Record<string, string> = {
+            'Accept': 'application/json',
             'Content-Type': 'application/json',
             'User-Agent': 'TigerEx-Node-SDK/1.0.0',
         };
 
-        if (this.config.apiKey) {
-            headers['X-MEX-APIKEY'] = this.config.apiKey;
-        }
+        if (this.config.apiKey) headers['X-MEX-APIKEY'] = this.config.apiKey;
+        if (signed) headers['X-MEX-SIGNATURE'] = this.sign(queryString);
 
-        if (signed) {
-            const signature = this.sign(queryString + `&timestamp=${timestamp}`);
-            headers['X-MEX-SIGNATURE'] = signature;
-        }
+        const bodyParams = (normalizedMethod === 'POST' || normalizedMethod === 'PUT')
+            ? JSON.stringify(requestParams)
+            : undefined;
+        if (bodyParams !== undefined) headers['Content-Length'] = Buffer.byteLength(bodyParams).toString();
 
         const options: https.RequestOptions = {
-            method,
+            method: normalizedMethod,
             headers,
             timeout: this.timeout,
         };
 
-        return new Promise((resolve, reject) => {
-            const req = (this.baseURL.startsWith('https') ? https : http).request(url, options, (res) => {
-                let data = '';
-                res.on('data', (chunk) => data += chunk);
-                res.on('end', () => {
-                    this.lastResponseTime = Date.now() - timestamp;
-                    try {
-                        const parsed = JSON.parse(data);
-                        resolve(parsed as T);
-                    } catch (e) {
-                        reject(e);
+        return new Promise<T>((resolve, reject) => {
+            let settled = false;
+            const finishError = (error: Error) => {
+                if (settled) return;
+                settled = true;
+                reject(error);
+            };
+            const transport = this.baseURL.startsWith('https:') ? https : http;
+            const req = transport.request(url, options, (res) => {
+                const chunks: Buffer[] = [];
+                let totalBytes = 0;
+                const maxResponseBytes = 10 * 1024 * 1024;
+                res.on('data', (chunk: Buffer | string) => {
+                    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                    totalBytes += bytes.length;
+                    if (totalBytes > maxResponseBytes) {
+                        req.destroy(new Error('TigerEx API response exceeded the 10 MiB safety limit'));
+                        return;
                     }
+                    chunks.push(bytes);
                 });
+                res.on('end', () => {
+                    if (settled) return;
+                    settled = true;
+                    this.lastResponseTime = Date.now() - timestamp;
+                    const raw = Buffer.concat(chunks).toString('utf8');
+                    let parsed: any;
+                    try {
+                        parsed = raw.length ? JSON.parse(raw) : {};
+                    } catch {
+                        reject(new Error(`TigerEx API returned invalid JSON (HTTP ${res.statusCode ?? 'unknown'})`));
+                        return;
+                    }
+                    if ((res.statusCode ?? 500) < 200 || (res.statusCode ?? 500) >= 300) {
+                        const message = typeof parsed?.error?.message === 'string'
+                            ? parsed.error.message
+                            : typeof parsed?.message === 'string'
+                                ? parsed.message
+                                : `TigerEx API request failed with HTTP ${res.statusCode}`;
+                        const error: any = new Error(message);
+                        error.statusCode = res.statusCode;
+                        error.response = parsed;
+                        reject(error);
+                        return;
+                    }
+                    resolve(parsed as T);
+                });
+                res.on('error', finishError);
             });
 
-            req.on('error', reject);
-            req.on('timeout', () => reject(new Error('Request timeout')));
-
-            if (method === 'POST' || method === 'PUT') {
-                req.write(JSON.stringify(params));
-            }
+            req.on('error', finishError);
+            req.on('timeout', () => req.destroy(new Error('TigerEx API request timed out')));
+            if (bodyParams !== undefined) req.write(bodyParams);
             req.end();
         });
     }
 
     private buildQueryString(params: Record<string, any>): string {
-        const sorted = Object.keys(params).sort();
-        return sorted.map(k => `${k}=${params[k]}`).join('&');
+        const encode = (value: string) => encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+            `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+        return Object.keys(params)
+            .filter((key) => params[key] !== undefined && params[key] !== null)
+            .sort()
+            .map((key) => {
+                const value = params[key];
+                if (typeof value === 'object') {
+                    throw new TypeError(`Query parameter "${key}" must be a scalar value`);
+                }
+                return `${encode(key)}=${encode(String(value))}`;
+            })
+            .join('&');
+    }
+
+    private sign(message: string): string {
+        return crypto
+            .createHmac('sha256', this.config.apiSecret)
+            .update(message)
+            .digest('hex');
+    }
+
+* TigerEx Node.js SDK
+ * Production-grade TypeScript/JavaScript SDK for TigerEx exchange API
+ */
+
+import * as crypto from 'crypto';
+import * as https from 'https';
+import * as http from 'http';
+import { EventEmitter } from 'events';
+
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+
+export interface Config {
+    apiKey: string;
+    apiSecret: string;
+    testnet?: boolean;
+    baseUrl?: string;
+    timeout?: number;
+}
+
+export interface APIResponse<T = any> {
+    success: boolean;
+    data?: T;
+    error?: {
+        code: number;
+        message: string;
+    };
+}
+
+// ============================================================================
+// CLIENT
+// ============================================================================
+
+export class TigerExClient extends EventEmitter {
+    private config: Config;
+    private baseURL: string;
+    private timeout: number;
+    private lastResponseTime: number = 0;
+
+    constructor(config: Config) {
+        super();
+        if (!config || typeof config !== 'object') {
+            throw new TypeError('A TigerEx SDK configuration is required');
+        }
+        if (config.apiKey && !config.apiSecret) {
+            throw new TypeError('apiSecret is required when apiKey is configured');
+        }
+        const configuredBase = config.baseUrl || (config.testnet
+            ? 'https://api-test.tigerex.com'
+            : 'https://api.tigerex.com');
+        let parsedBase: URL;
+        try {
+            parsedBase = new URL(configuredBase);
+        } catch {
+            throw new TypeError('baseUrl must be a valid absolute URL');
+        }
+        const localHttp = parsedBase.protocol === 'http:' &&
+            (parsedBase.hostname === 'localhost' || parsedBase.hostname === '127.0.0.1' || parsedBase.hostname === '::1');
+        if (parsedBase.protocol !== 'https:' && !localHttp) {
+            throw new TypeError('HTTPS is required for SDK traffic; HTTP is allowed only for loopback development');
+        }
+        if (parsedBase.username || parsedBase.password || parsedBase.search || parsedBase.hash) {
+            throw new TypeError('baseUrl must not contain credentials, a query string, or a fragment');
+        }
+        this.config = { ...config };
+        this.baseURL = configuredBase.replace(/\\/+$/, '');
+        this.timeout = config.timeout ?? 30000;
+        if (!Number.isSafeInteger(this.timeout) || this.timeout < 1 || this.timeout > 120000) {
+            throw new RangeError('timeout must be an integer between 1 and 120000 milliseconds');
+        }
+    }
+
+    // =========================================================================
+    // PRIVATE METHODS
+    // =========================================================================
+
+    private async request<T = any>(
+        method: string,
+        endpoint: string,
+        params: Record<string, any> = {},
+        signed: boolean = false
+    ): Promise<T> {
+        const timestamp = Date.now();
+        const normalizedMethod = method.toUpperCase();
+        if (!['GET', 'POST', 'PUT', 'DELETE'].includes(normalizedMethod)) {
+            throw new TypeError(`Unsupported HTTP method: ${method}`);
+        }
+        if (!endpoint.startsWith('/') || endpoint.startsWith('//')) {
+            throw new TypeError('endpoint must be an absolute path on the configured API origin');
+        }
+
+        const requestParams: Record<string, any> = { ...params };
+        if (signed) requestParams.timestamp = timestamp;
+        const queryString = this.buildQueryString(requestParams);
+        const url = `${this.baseURL}${endpoint}${(normalizedMethod === 'GET' || normalizedMethod === 'DELETE') && queryString ? `?${queryString}` : ''}`;
+        const headers: Record<string, string> = {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'TigerEx-Node-SDK/1.0.0',
+        };
+
+        if (this.config.apiKey) headers['X-MEX-APIKEY'] = this.config.apiKey;
+        if (signed) headers['X-MEX-SIGNATURE'] = this.sign(queryString);
+
+        const bodyParams = (normalizedMethod === 'POST' || normalizedMethod === 'PUT')
+            ? JSON.stringify(requestParams)
+            : undefined;
+        if (bodyParams !== undefined) headers['Content-Length'] = Buffer.byteLength(bodyParams).toString();
+
+        const options: https.RequestOptions = {
+            method: normalizedMethod,
+            headers,
+            timeout: this.timeout,
+        };
+
+        return new Promise<T>((resolve, reject) => {
+            let settled = false;
+            const finishError = (error: Error) => {
+                if (settled) return;
+                settled = true;
+                reject(error);
+            };
+            const transport = this.baseURL.startsWith('https:') ? https : http;
+            const req = transport.request(url, options, (res) => {
+                const chunks: Buffer[] = [];
+                let totalBytes = 0;
+                const maxResponseBytes = 10 * 1024 * 1024;
+                res.on('data', (chunk: Buffer | string) => {
+                    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                    totalBytes += bytes.length;
+                    if (totalBytes > maxResponseBytes) {
+                        req.destroy(new Error('TigerEx API response exceeded the 10 MiB safety limit'));
+                        return;
+                    }
+                    chunks.push(bytes);
+                });
+                res.on('end', () => {
+                    if (settled) return;
+                    settled = true;
+                    this.lastResponseTime = Date.now() - timestamp;
+                    const raw = Buffer.concat(chunks).toString('utf8');
+                    let parsed: any;
+                    try {
+                        parsed = raw.length ? JSON.parse(raw) : {};
+                    } catch {
+                        reject(new Error(`TigerEx API returned invalid JSON (HTTP ${res.statusCode ?? 'unknown'})`));
+                        return;
+                    }
+                    if ((res.statusCode ?? 500) < 200 || (res.statusCode ?? 500) >= 300) {
+                        const message = typeof parsed?.error?.message === 'string'
+                            ? parsed.error.message
+                            : typeof parsed?.message === 'string'
+                                ? parsed.message
+                                : `TigerEx API request failed with HTTP ${res.statusCode}`;
+                        const error: any = new Error(message);
+                        error.statusCode = res.statusCode;
+                        error.response = parsed;
+                        reject(error);
+                        return;
+                    }
+                    resolve(parsed as T);
+                });
+                res.on('error', finishError);
+            });
+
+            req.on('error', finishError);
+            req.on('timeout', () => req.destroy(new Error('TigerEx API request timed out')));
+            if (bodyParams !== undefined) req.write(bodyParams);
+            req.end();
+        });
+    }
+
+    private buildQueryString(params: Record<string, any>): string {
+        const encode = (value: string) => encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+            `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+        return Object.keys(params)
+            .filter((key) => params[key] !== undefined && params[key] !== null)
+            .sort()
+            .map((key) => {
+                const value = params[key];
+                if (typeof value === 'object') {
+                    throw new TypeError(`Query parameter "${key}" must be a scalar value`);
+                }
+                return `${encode(key)}=${encode(String(value))}`;
+            })
+            .join('&');
     }
 
     private sign(message: string): string {
@@ -402,7 +670,9 @@ export class WebSocketClient extends EventEmitter {
             : 'wss://stream.tigerex.com/ws';
         
         if (options.apiKey) {
-            this.url += `?apiKey=${options.apiKey}`;
+            // Keep query credentials correctly encoded. Prefer server-side auth tokens
+            // for private streams where the exchange supports them.
+            this.url += `?apiKey=${encodeURIComponent(options.apiKey)}`;
         }
     }
 
@@ -412,10 +682,9 @@ export class WebSocketClient extends EventEmitter {
             if (typeof window !== 'undefined') {
                 this.ws = new (window as any).WebSocket(this.url);
             } else {
-                // Node.js - would need ws package in real implementation
-                console.log('WebSocket would connect to:', this.url);
-                this.isConnected = true;
-                this.emit('open');
+                // Never report a successful connection without a real WebSocket transport.
+                this.isConnected = false;
+                this.emit('error', new Error('Node.js WebSocket transport is not configured. Install and wire a supported WebSocket implementation before connecting.'));
                 return;
             }
 
