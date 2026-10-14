@@ -24,12 +24,12 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	"tigerex-api/internal/api"
-	"tigerex-api/internal/auth"
-	"tigerex-api/internal/kyc"
-	"tigerex-api/internal/security"
-	"tigerex-api/internal/trading"
-	"tigerex-api/internal/wallet"
+	"tigerex/backend/internal/api"
+	"tigerex/backend/internal/auth"
+	"tigerex/backend/internal/kyc"
+	"tigerex/backend/internal/security"
+	"tigerex/backend/internal/trading"
+	"tigerex/backend/internal/wallet"
 )
 
 // Config holds all configuration
