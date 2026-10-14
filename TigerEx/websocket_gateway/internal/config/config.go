@@ -24,6 +24,12 @@ type ServerConfig struct {
 	Mode           string
 }
 
+// RateLimitConfig bounds client message rates.
+type RateLimitConfig struct {
+	MessagesPerSecond int
+	BurstSize int
+}
+
 // AuthConfig holds authentication configuration
 type AuthConfig struct {
 	Required      bool
