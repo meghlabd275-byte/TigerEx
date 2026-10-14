@@ -659,7 +659,6 @@ func (s *AdminService) UpdateFeeConfigHandler(c *gin.Context) {
 	feeID := c.Param("id")
 
 	var req struct {
-		AdminID string `json:"admin_id" binding:"required"`
 		Updates map[string]interface{} `json:"updates" binding:"required"`
 	}
 
