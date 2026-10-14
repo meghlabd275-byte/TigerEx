@@ -533,6 +533,30 @@ func NewMatchingEngine(config EngineConfig) *MatchingEngine {
 
 // InitializeMarket initializes a new trading market
 func (me *MatchingEngine) InitializeMarket(symbol, base, quote string, pricePrec, qtyPrec int, minPrice, maxPrice, tickSize, lotSize float64) error {
+	symbol = strings.TrimSpace(symbol)
+	base = strings.TrimSpace(base)
+	quote = strings.TrimSpace(quote)
+	if symbol == "" || base == "" || quote == "" {
+		return errors.New("symbol, base asset, and quote asset are required")
+	}
+	if base == quote {
+		return errors.New("base and quote assets must differ")
+	}
+	if pricePrec < 0 || qtyPrec < 0 {
+		return errors.New("price and quantity precision must be non-negative")
+	}
+	for name, value := range map[string]float64{
+		"minimum price": minPrice, "maximum price": maxPrice,
+		"tick size": tickSize, "lot size": lotSize,
+	} {
+		if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+			return fmt.Errorf("%s must be finite and positive", name)
+		}
+	}
+	if maxPrice < minPrice {
+		return errors.New("maximum price must be greater than or equal to minimum price")
+	}
+
 	me.mu.Lock()
 	defer me.mu.Unlock()
 	
