@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, HistogramData, LineData } from 'lightweight-charts';
+import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, Time, HistogramData, LineData } from 'lightweight-charts';
 
 // ============================================================================
 // TYPES
@@ -388,7 +388,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
-  const indicatorSeriesRef = useRef<Map<string, ISeriesApi>>(new Map());
+  const indicatorSeriesRef = useRef<Map<string, ISeriesApi<any>>>(new Map());
   
   const [selectedInterval, setSelectedInterval] = useState(interval);
   const [isLoading, setIsLoading] = useState(false);
@@ -401,7 +401,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
       width: width || chartContainerRef.current.clientWidth,
       height: height || 400,
       layout: {
-        background: { type: 'solid', color: theme === 'dark' ? '#1a1a2e' : '#ffffff' },
+        background: { type: ColorType.Solid, color: theme === 'dark' ? '#1a1a2e' : '#ffffff' },
         textColor: theme === 'dark' ? '#d1d4dc' : '#333333',
         fontSize: 12,
         fontFamily: '-apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif'
