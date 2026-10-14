@@ -170,7 +170,7 @@ func (c *BinanceSpotClient) GetBookTicker(symbol string) (*BookTickerResponse, e
 }
 
 // WebSocket Methods
-func (c *BinanceSpotClient) WS AggTrades(params *WsAggTradesParams) (<-chan *WsAggTradeResponse, error) {
+func (c *BinanceSpotClient) WSAggTrades(params *WsAggTradesParams) (<-chan *WsAggTradeResponse, error) {
 	ch := make(chan *WsAggTradeResponse)
 	return ch, nil
 }
