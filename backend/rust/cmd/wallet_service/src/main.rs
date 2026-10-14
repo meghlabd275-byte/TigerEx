@@ -499,44 +499,11 @@ impl WalletService {
     // =============================================================================
     
     /// Transfer tokens
-    pub async fn transfer(&self, request: TransferRequest) -> Result<TransferResponse, WalletError> {
-        // Get wallet
-        let wallet = {
-            let wallets = self.wallets.read().await;
-            wallets.get(&request.wallet_id)
-                .cloned()
-                .ok_or(WalletError::WalletNotFound)?
-        };
-        
-        // Get source address
-        let from_address = self.get_address(&request.wallet_id, &request.blockchain).await?;
-        
-        // Validate destination address
-        if !self.validate_address(&request.to_address, &request.blockchain) {
-            return Err(WalletError::InvalidAddress);
-        }
-        
-        // Get blockchain config
-        let config = self.blockchain_configs.get(&request.blockchain)
-            .ok_or(WalletError::ChainNotSupported)?;
-        
-        // In production, sign and broadcast transaction
-        // For now, simulate transaction
-        let tx_hash = self.simulate_transfer(&request, &from_address.address, config).await?;
-        
-        info!("Transfer from {} to {} on {}: {} {}",
-            from_address.address, request.to_address, request.blockchain, request.amount, request.token_symbol);
-        
-        Ok(TransferResponse {
-            transaction_hash: tx_hash,
-            from_address: from_address.address,
-            to_address: request.to_address,
-            amount: request.amount.clone(),
-            fee: "0.001".to_string(),
-            estimated_confirm_time: 60,
-        })
+    pub async fn transfer(&self, _request: TransferRequest) -> Result<TransferResponse, WalletError> {
+        Err(WalletError::NetworkError("transaction signing and blockchain broadcast provider is not configured".to_string()))
     }
-    
+
+
     /// Get transaction history
     pub async fn get_transactions(&self, wallet_id: &str, blockchain: Option<String>) -> Result<Vec<Transaction>, WalletError> {
         let addresses = self.get_addresses(wallet_id).await?;
