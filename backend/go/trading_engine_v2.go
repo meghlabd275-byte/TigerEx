@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/m"
 	"github.com/gorilla/rpc"
 	"github.com/gorilla/rpc/json"
 	"golang.org/x/time/rate"
