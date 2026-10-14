@@ -648,39 +648,8 @@ impl WalletService {
         Ok(vec![])
     }
     
-    async fn simulate_transfer(&self, request: &TransferRequest, from: &str, config: &BlockchainConfig) -> Result<String, WalletError> {
-        // Generate mock transaction hash
-        let mut hasher = Sha256::new();
-        hasher.update(format!("{}:{}:{}:{}", from, request.to_address, request.amount, Utc::now()).as_bytes());
-        let hash = hasher.finalize();
-        let tx_hash = format!("0x{}", hex::encode(hash));
-        
-        // Record transaction
-        let tx = Transaction {
-            id: Uuid::new_v4().to_string(),
-            wallet_address_id: request.wallet_id.clone(),
-            blockchain: request.blockchain.clone(),
-            hash: tx_hash.clone(),
-            from_address: from.to_string(),
-            to_address: request.to_address.clone(),
-            amount: request.amount.clone(),
-            token_symbol: request.token_symbol.clone(),
-            fee: "0.001".to_string(),
-            status: TransactionStatus::Pending,
-            block_number: None,
-            timestamp: Utc::now(),
-            created_at: Utc::now(),
-        };
-        
-        // Store transaction
-        {
-            let mut txs = self.transactions.write().await;
-            txs.entry(request.wallet_id.clone())
-                .or_insert_with(Vec::new)
-                .push(tx);
-        }
-        
-        Ok(tx_hash)
+    async fn simulate_transfer(&self, _request: &TransferRequest, _from: &str, _config: &BlockchainConfig) -> Result<String, WalletError> {
+        Err(WalletError::NetworkError("mock transaction hashes are disabled; chain broadcast provider is not configured".to_string()))
     }
 }
 
