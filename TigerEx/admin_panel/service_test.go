@@ -1,0 +1,58 @@
+package admin
+
+import (
+	"testing"
+)
+
+func TestCreateAdminRejectsNilAndDuplicateIdentity(t *testing.T) {
+	s := NewService()
+	if err := s.CreateAdmin(nil); err == nil {
+		t.Fatal("expected nil admin to be rejected")
+	}
+
+	first := &AdminUser{ID: "admin-1", Email: " Ops@Example.com ", Password: "test-password", Permissions: []string{"users:read"}}
+	if err := s.CreateAdmin(first); err != nil {
+		t.Fatalf("CreateAdmin() error = %v", err)
+	}
+	if first.Email != "ops@example.com" {
+		t.Fatalf("email was not normalized: %q", first.Email)
+	}
+	if err := s.CreateAdmin(&AdminUser{ID: "admin-1", Email: "other@example.com", Password: "test-password"}); err == nil {
+		t.Fatal("expected duplicate ID to be rejected")
+	}
+	if err := s.CreateAdmin(&AdminUser{ID: "admin-2", Email: "OPS@example.com", Password: "test-password"}); err == nil {
+		t.Fatal("expected duplicate normalized email to be rejected")
+	}
+}
+
+func TestCreateAdminDoesNotRetainCallerOwnedPermissions(t *testing.T) {
+	s := NewService()
+	admin := &AdminUser{ID: "admin-1", Email: "ops@example.com", Password: "test-password", Permissions: []string{"users:read"}}
+	if err := s.CreateAdmin(admin); err != nil {
+		t.Fatal(err)
+	}
+
+	admin.Permissions[0] = "*"
+	admin.Email = "attacker@example.com"
+	if !s.HasPermission("admin-1", "users:read") {
+		t.Fatal("caller mutation changed stored permissions")
+	}
+	if s.HasPermission("admin-1", "withdrawals:approve") {
+		t.Fatal("caller mutation unexpectedly granted wildcard permissions")
+	}
+	if _, err := s.VerifyAdmin("attacker@example.com", "test-password"); err == nil {
+		t.Fatal("caller mutation changed the stored login identity")
+	}
+	if _, err := s.VerifyAdmin(" OPS@EXAMPLE.COM ", "test-password"); err != nil {
+		t.Fatalf("normalized email login failed: %v", err)
+	}
+}
+
+func TestCloneUserReportCopiesFlags(t *testing.T) {
+	source := &UserReport{UserID: "user-1", Flags: []string{"review"}}
+	copy := cloneUserReport(source)
+	copy.Flags[0] = "changed"
+	if source.Flags[0] != "review" {
+		t.Fatal("cloneUserReport exposed the original flags slice")
+	}
+}
