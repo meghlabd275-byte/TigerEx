@@ -56,6 +56,20 @@ jobs:
       - name: Type-check frontend
         run: npm run type-check
 
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test Rust security/backend crate
+        run: cargo test --manifest-path backend/rust/Cargo.toml
+
+      - name: Test Rust exchange engine crate
+        run: cargo test --manifest-path TigerEx/core_exchange_engine/Cargo.toml
+
   build:
     runs-on: ubuntu-latest
     needs: test
