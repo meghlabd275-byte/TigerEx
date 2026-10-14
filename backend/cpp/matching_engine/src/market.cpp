@@ -95,7 +95,7 @@ bool create_leveraged_token(MatchingEngine& engine, const std::string& symbol,
                          const std::string& underlying, int leverage) {
     MarketInfo info;
     info.symbol = symbol;
-    info.base_asset = underlying + leverage + "L";
+    info.base_asset = underlying + std::to_string(leverage) + "L";
     info.quote_asset = "USDT";
     info.market_type = MarketType::LeveragedToken;
     info.state = MarketState::Open;
@@ -158,7 +158,7 @@ std::vector<MarketInfo> get_all_markets_info(const MatchingEngine& engine) {
     result.reserve(symbols.size());
     
     for (const auto& symbol : symbols) {
-        auto* info = engine.get_market(symbol);
+        auto info = engine.get_market(symbol);
         if (info) {
             result.push_back(*info);
         }

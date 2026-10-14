@@ -13,6 +13,7 @@
 #include "order.hpp"
 #include "order_book.hpp"
 #include <unordered_map>
+#include <optional>
 #include <shared_mutex>
 #include <atomic>
 #include <memory>
@@ -200,7 +201,7 @@ public:
      * @param symbol Market symbol
      * @return Pointer to market info or nullptr
      */
-    MarketInfo* get_market(const std::string& symbol);
+    std::optional<MarketInfo> get_market(const std::string& symbol) const;
     
     /**
      * Check if market exists

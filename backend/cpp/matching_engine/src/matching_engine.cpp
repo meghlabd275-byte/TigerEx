@@ -82,12 +82,12 @@ bool MatchingEngine::remove_market(const std::string& symbol) {
     return true;
 }
 
-MarketInfo* MatchingEngine::get_market(const std::string& symbol) {
+std::optional<MarketInfo> MatchingEngine::get_market(const std::string& symbol) const {
     std::shared_lock lock(engine_mutex_);
-    
     auto it = markets_.find(symbol);
-    if (it == markets_.end()) return nullptr;
-    return &it->second;
+    if (it == markets_.end()) return std::nullopt;
+    // Return a value snapshot; never expose an internal pointer after unlocking.
+    return it->second;
 }
 
 bool MatchingEngine::has_market(const std::string& symbol) const {

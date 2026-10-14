@@ -100,7 +100,7 @@ impl MatchingEngine {
             incoming.remaining -= traded;
             if maker.remaining == Decimal::ZERO {
                 let removed = book.remove(index);
-                self.live_order_ids.remove(&removed.id);
+                self.used_order_ids.remove(&removed.id);
             }
         }
 
@@ -109,7 +109,7 @@ impl MatchingEngine {
             self.next_sequence = self.next_sequence.checked_add(1)
                 .ok_or_else(|| EngineError::InvalidOrder("sequence exhausted".into()))?;
             incoming.sequence = self.next_sequence;
-            self.live_order_ids.insert(incoming.id.clone());
+            self.used_order_ids.insert(incoming.id.clone());
             book.push(incoming);
         }
         Ok(SubmitResult { trades, resting_quantity })
@@ -119,7 +119,7 @@ impl MatchingEngine {
         for book in self.books.values_mut() {
             if let Some(index) = book.iter().position(|order| order.id == order_id) {
                 book.remove(index);
-                self.live_order_ids.remove(order_id);
+                self.used_order_ids.remove(order_id);
                 return true;
             }
         }
