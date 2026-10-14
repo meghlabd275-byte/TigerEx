@@ -115,6 +115,12 @@ func AuthRequired() gin.HandlerFunc {
 		}
 
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			if token.Method != jwt.SigningMethodHS256 {
+				return nil, fmt.Errorf("unexpected JWT signing method: %s", token.Method.Alg())
+			}
+			if len(JWTSecret) < 32 {
+				return nil, fmt.Errorf("JWT signing key is not configured")
+			}
 			return JWTSecret, nil
 		})
 
@@ -183,6 +189,12 @@ func AdminAuthRequired() gin.HandlerFunc {
 		}
 
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			if token.Method != jwt.SigningMethodHS256 {
+				return nil, fmt.Errorf("unexpected JWT signing method: %s", token.Method.Alg())
+			}
+			if len(JWTSecret) < 32 {
+				return nil, fmt.Errorf("JWT signing key is not configured")
+			}
 			return JWTSecret, nil
 		})
 
