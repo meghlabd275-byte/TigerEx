@@ -650,20 +650,31 @@ func (me *MatchingEngine) SubmitOrder(order *Order) (*OrderResult, error) {
 		order.ClientOrderID = order.OrderID
 	}
 	
+	// Client-supplied execution state is never trusted for a new order.
+	order.FilledQuantity = 0
+	order.RemainingQuantity = order.Quantity
+	order.AverageFillPrice = 0
 	order.Status = StatusPendingNew
 	order.CreatedAt = time.Now()
 	order.UpdatedAt = time.Now()
-	
-	// Process order
+
+	// Enforce order-ID and per-user client-order-ID uniqueness before mutation.
 	me.mu.Lock()
+	if _, exists := me.orders[order.OrderID]; exists {
+		me.mu.Unlock()
+		return nil, errors.New("order ID already exists")
+	}
+	for _, existing := range me.userOrders[order.UserID] {
+		if existing.ClientOrderID == order.ClientOrderID {
+			me.mu.Unlock()
+			return nil, errors.New("client order ID already exists")
+		}
+	}
 	me.orders[order.OrderID] = order
-	
-	// Add to user's orders
 	if me.userOrders[order.UserID] == nil {
 		me.userOrders[order.UserID] = make(map[string]*Order)
 	}
 	me.userOrders[order.UserID][order.OrderID] = order
-	
 	me.mu.Unlock()
 	
 	// The market was resolved and validated before order registration.
