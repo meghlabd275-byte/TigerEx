@@ -6,8 +6,13 @@ package admin
 import (
 	"errors"
 	"fmt"
+	"net/mail"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -83,109 +88,102 @@ type AdminManager struct {
 }
 
 func NewAdminManager() *AdminManager {
-	am := &AdminManager{
+	return &AdminManager{
 		admins:     make(map[string]*Admin),
 		emailIndex: make(map[string]string),
 		auditLogs:  make([]AuditLog, 0, 10000),
 	}
-	am.createDefaultAdmin()
-	return am
 }
 
-func (am *AdminManager) createDefaultAdmin() {
-	// Default super admin for initial setup
-	admin := &Admin{
-		ID:         "ADMIN001",
-		Email:      "admin@tigerex.com",
-		Username:  "admin",
-		Role:      RoleSuperAdmin,
-		Status:    StatusActive,
-		CreatedAt: time.Now(),
-	}
-	am.admins[admin.ID] = admin
-	am.emailIndex[admin.Email] = admin.ID
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func validAdminEmail(email string) bool {
+	parsed, err := mail.ParseAddress(email)
+	return err == nil && parsed.Address == email && strings.Contains(email, "@")
+}
+
+func cloneAdmin(admin *Admin, includeHash bool) *Admin {
+	if admin == nil { return nil }
+	copy := *admin
+	copy.Permissions = append([]string(nil), admin.Permissions...)
+	if !includeHash { copy.PasswordHash = "" }
+	return &copy
 }
 
 func (am *AdminManager) CreateAdmin(email, username, password, role string) (*Admin, error) {
-	am.mu.Lock()
-	defer am.mu.Unlock()
-
-	if _, exists := am.emailIndex[email]; exists {
-		return nil, errors.New("email already exists")
+	email = normalizeEmail(email)
+	username = strings.TrimSpace(username)
+	if !validAdminEmail(email) || username == "" {
+		return nil, errors.New("valid email and username are required")
 	}
-
+	if len(password) < 12 {
+		return nil, errors.New("password must be at least 12 characters")
+	}
 	validRoles := map[string]bool{
-		RoleSuperAdmin: true,
-		RoleAdmin:     true,
-		RoleModerator: true,
-		RoleSupport:   true,
+		RoleSuperAdmin: true, RoleAdmin: true, RoleModerator: true, RoleSupport: true,
 	}
-
 	if !validRoles[role] {
 		return nil, errors.New("invalid role")
 	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil { return nil, fmt.Errorf("hash admin password: %w", err) }
 
-	admin := &Admin{
-		ID:        fmt.Sprintf("ADM%d%d", time.Now().Unix(), time.Now().Nanosecond()),
-		Email:     email,
-		Username:  username,
-		Role:      role,
-		Status:    StatusActive,
-		CreatedAt: time.Now(),
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	if _, exists := am.emailIndex[email]; exists {
+		return nil, errors.New("email already exists")
 	}
-
+	now := time.Now().UTC()
+	admin := &Admin{
+		ID: uuid.NewString(), Email: email, Username: username,
+		PasswordHash: string(hash), Role: role, Status: StatusActive,
+		CreatedAt: now,
+	}
 	am.admins[admin.ID] = admin
 	am.emailIndex[email] = admin.ID
-
 	am.logAction(admin.ID, "create_admin", "admin", admin.ID, "Created admin: "+username, "")
-
-	return admin, nil
+	return cloneAdmin(admin, false), nil
 }
 
 func (am *AdminManager) GetAdmin(adminID string) (*Admin, error) {
 	am.mu.RLock()
 	defer am.mu.RUnlock()
-
 	admin, exists := am.admins[adminID]
-	if !exists {
-		return nil, errors.New("admin not found")
-	}
-	return admin, nil
+	if !exists { return nil, errors.New("admin not found") }
+	return cloneAdmin(admin, false), nil
 }
 
 func (am *AdminManager) GetAdminByEmail(email string) (*Admin, error) {
 	am.mu.RLock()
 	defer am.mu.RUnlock()
-
-	adminID, exists := am.emailIndex[email]
-	if !exists {
-		return nil, errors.New("admin not found")
-	}
-
-	return am.admins[adminID], nil
+	adminID, exists := am.emailIndex[normalizeEmail(email)]
+	if !exists { return nil, errors.New("admin not found") }
+	return cloneAdmin(am.admins[adminID], false), nil
 }
 
 func (am *AdminManager) Login(email, password string) (*Admin, error) {
+	email = normalizeEmail(email)
 	am.mu.RLock()
 	adminID, exists := am.emailIndex[email]
+	var stored *Admin
+	if exists { stored = cloneAdmin(am.admins[adminID], true) }
 	am.mu.RUnlock()
-
-	if !exists {
+	if !exists || stored == nil || stored.Status != StatusActive ||
+		bcrypt.CompareHashAndPassword([]byte(stored.PasswordHash), []byte(password)) != nil {
 		return nil, errors.New("invalid credentials")
 	}
 
-	am.mu.RLock()
-	admin := am.admins[adminID]
-	am.mu.RUnlock()
-
-	if admin.Status != StatusActive {
-		return nil, errors.New("account is not active")
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	current, ok := am.admins[adminID]
+	if !ok || current.Status != StatusActive {
+		return nil, errors.New("invalid credentials")
 	}
-
-	admin.LastLoginAt = time.Now()
-	am.logAction(admin.ID, ActionLogin, "admin", admin.ID, "Admin logged in", "")
-
-	return admin, nil
+	current.LastLoginAt = time.Now().UTC()
+	am.logAction(current.ID, ActionLogin, "admin", current.ID, "Admin logged in", "")
+	return cloneAdmin(current, false), nil
 }
 
 func (am *AdminManager) BanUser(adminID, userID, reason string) error {
@@ -243,10 +241,10 @@ func (am *AdminManager) GetAuditLogs(limit int) []AuditLog {
 	am.mu.RLock()
 	defer am.mu.RUnlock()
 
-	if limit > 0 && len(am.auditLogs) > limit {
-		return am.auditLogs[-limit:]
-	}
-	return am.auditLogs
+	if limit <= 0 { return nil }
+	start := len(am.auditLogs) - limit
+	if start < 0 { start = 0 }
+	return append([]AuditLog(nil), am.auditLogs[start:]...)
 }
 
 func (am *AdminManager) GetAdminAuditLogs(adminID string, limit int) []AuditLog {
@@ -261,7 +259,7 @@ func (am *AdminManager) GetAdminAuditLogs(adminID string, limit int) []AuditLog 
 			count++
 		}
 	}
-	return logs
+	return append([]AuditLog(nil), logs...)
 }
 
 func (am *AdminManager) logAction(adminID, action, targetType, targetID, details, ip string) {
@@ -279,7 +277,7 @@ func (am *AdminManager) logAction(adminID, action, targetType, targetID, details
 	am.auditLogs = append(am.auditLogs, log)
 
 	if len(am.auditLogs) > 10000 {
-		am.auditLogs = am.auditLogs[-10000:]
+		am.auditLogs = append([]AuditLog(nil), am.auditLogs[len(am.auditLogs)-10000:]...)
 	}
 }
 
@@ -346,7 +344,7 @@ func (am *AdminManager) GetAllAdmins() []*Admin {
 
 	admins := make([]*Admin, 0, len(am.admins))
 	for _, admin := range am.admins {
-		admins = append(admins, admin)
+		admins = append(admins, cloneAdmin(admin, false))
 	}
 	return admins
 }
