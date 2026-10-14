@@ -200,26 +200,14 @@ func (s *InstitutionalService) RequestOTCQuote(clientID, symbol, side string, qu
 	if client.Status != ClientStatusActive {
 		return nil, fmt.Errorf("client not active")
 	}
-	
-	s.quoteCounter++
-	quote := &OTCQuote{
-		ID:         fmt.Sprintf("OTC%d", s.quoteCounter),
-		ClientID:  clientID,
-		Symbol:    symbol,
-		Side:      side,
-		Quantity:  quantity,
-		Status:    QuoteStatusPending,
-		ExpiresAt: time.Now().Add(30 * time.Minute),
-		CreatedAt: time.Now(),
+	if symbol == "" || (side != "BUY" && side != "SELL") || quantity <= 0 {
+		return nil, fmt.Errorf("invalid OTC quote request")
 	}
-	
-	// Calculate price (mock - in production use real pricing)
-	quote.Price = getOTCPrice(symbol, client.Tier)
-	quote.TotalValue = quote.Price * quantity
-	quote.Fee = quote.TotalValue * 0.001 // 0.1% fee for OTC
-	
-	s.quotes[quote.ID] = quote
-	return quote, nil
+
+	// Do not invent a market price or create a quote that cannot be hedged and
+	// settled. A real authoritative pricing/quote provider must be integrated
+	// before this operation can accept institutional orders.
+	return nil, fmt.Errorf("OTC pricing unavailable: authoritative pricing provider is not configured")
 }
 
 func (s *InstitutionalService) ApproveQuote(quoteID string) error {
@@ -316,40 +304,6 @@ func (s *InstitutionalService) GetClientReport(clientID string) map[string]inter
 // HELPERS
 // ============================================================================
 
-func getOTCPrice(symbol string, tier ClientTier) float64 {
-	// Mock pricing - in production use real market data with discounts based on tier
-	basePrice := 50000.0 // BTC base
-	
-	discounts := map[ClientTier]float64{
-		ClientTierBronze:   0.0,
-		ClientTierSilver:   0.001,
-		ClientTierGold:     0.002,
-		ClientTierPlatinum: 0.003,
-		ClientTierDiamond:  0.005,
-	}
-	
-	discount := discounts[tier]
-	return basePrice * (1 - discount)
-}
-
 func main() {
-	fmt.Println("TigerEx Institutional Desk v1.0.0")
-	
-	inst := NewInstitutionalService()
-	
-	// Register client
-	client, _ := inst.RegisterClient("Hedge Fund ABC", EntityTypeHedgeFund, "HF-2024-001", "US", "contact@hfabc.com", "+1-555-0100")
-	fmt.Printf("Client: %s\n", client.Name)
-	
-	// Approve
-	inst.ApproveClient(client.ID)
-	
-	// Request OTC quote
-	quote, _ := inst.RequestOTCQuote(client.ID, "BTC/USDT", "BUY", 100)
-	fmt.Printf("Quote: %.2f @ $%.2f\n", quote.Quantity, quote.Price)
-	
-	// Approve and fill
-	inst.ApproveQuote(quote.ID)
-	trade, _ := inst.FillQuote(quote.ID)
-	fmt.Printf("Trade: %s - Volume: $%.2f\n", trade.ID, trade.Price*trade.Quantity)
+	fmt.Println("TigerEx Institutional Desk: trading disabled until authoritative pricing and settlement integrations are configured")
 }
