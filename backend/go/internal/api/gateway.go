@@ -9,9 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -70,9 +68,8 @@ func hGetOrder(_r *Request) *Response {
 	return errorResp("unavailable", "canonical order service is not configured")
 }
 
-func hOpenOrders(r *Request) *Response {
-	if r.UserID == "" { return errorResp("unauthorized", "auth required") }
-	return &Response{Success: true, Data: map[string]interface{}{"orders": []interface{}{}}}
+func hOpenOrders(_r *Request) *Response {
+	return errorResp("unavailable", "persistent order service is not configured")
 }
 
 // Account handlers
@@ -84,9 +81,8 @@ func hDepositAddr(_r *Request) *Response {
 	return errorResp("unavailable", "chain-specific address derivation and custody provider are not configured")
 }
 
-func hWithdrawHistory(r *Request) *Response {
-	if r.UserID == "" { return errorResp("unauthorized", "auth required") }
-	return &Response{Success: true, Data: map[string]interface{}{"withdraws": []interface{}{}}}
+func hWithdrawHistory(_r *Request) *Response {
+	return errorResp("unavailable", "persistent withdrawal history service is not configured")
 }
 
 // Auth middleware
@@ -97,17 +93,9 @@ func auth(h Handler) Handler {
 	}
 }
 
-func isValidSymbol(s string) bool {
-	matched, _ := regexp.MatchString(`^[A-Z]{2,10}USDT$`, s)
-	return matched || s == ""
-}
 
-func randStr(n int) string {
-	const letters = "0123456789abcdefghijklmnopqrstuvwxyz"
-	b := make([]byte, n)
-	for i := range b { b[i] = letters[i%len(letters)] }
-	return string(b)
-}
+
+
 
 type Server struct {
 	router *mux.Router
