@@ -1501,29 +1501,7 @@ export function TradingApp() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  // Mock user for demo
-  useEffect(() => {
-    setUser({
-      userId: 'demo-user-1',
-      email: 'demo@tigerex.com',
-      username: 'DemoTrader',
-      kycLevel: 'intermediate',
-      twoFactorEnabled: true
-    });
-  }, []);
-
-  // Mock balances for demo
-  useEffect(() => {
-    setBalances([
-      { currency: 'BTC', available: '0.5432', locked: '0.1', total: '0.6432', usdValue: '21,500' },
-      { currency: 'ETH', available: '5.2341', locked: '0', total: '5.2341', usdValue: '10,200' },
-      { currency: 'USDT', available: '10,000', locked: '500', total: '10,500', usdValue: '10,500' },
-      { currency: 'BNB', available: '25.5', locked: '0', total: '25.5', usdValue: '7,650' },
-      { currency: 'SOL', available: '100', locked: '10', total: '110', usdValue: '12,100' },
-      { currency: 'XRP', available: '5000', locked: '0', total: '5000', usdValue: '2,500' },
-      { currency: 'ADA', available: '10000', locked: '0', total: '10000', usdValue: '4,000' },
-    ]);
-  }, []);
+  // Identity and balances remain empty until authenticated, authoritative API data is supplied.
 
   return (
     <AppContext.Provider value={{
