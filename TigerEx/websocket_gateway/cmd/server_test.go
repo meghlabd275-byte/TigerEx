@@ -3,6 +3,9 @@ package main
 import (
 	"testing"
 	"time"
+	"net/http"
+	"net/http/httptest"
+	"os"
 
 	"tigerex/websocket_gateway/internal/config"
 )
@@ -37,4 +40,35 @@ func TestClientTokenBucketFailsClosedForInvalidLimits(t *testing.T) {
 			t.Fatal("message accepted with invalid rate-limit configuration")
 		}
 	}
+}
+
+func TestOriginValidationRequiresExactOriginOrExplicitAllowlist(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://exchange.example/ws", nil)
+	if !isAllowedOrigin(req, "http://exchange.example") {
+		t.Fatal("same origin should be allowed")
+	}
+	if isAllowedOrigin(req, "http://exchange.example:8080") {
+		t.Fatal("same hostname on a different port must not be allowed")
+	}
+	if isAllowedOrigin(req, "https://exchange.example") {
+		t.Fatal("scheme mismatch must not be allowed without explicit configuration")
+	}
+	if isAllowedOrigin(req, "http://exchange.example.evil.invalid") {
+		t.Fatal("lookalike origin must not be allowed")
+	}
+	if isAllowedOrigin(req, "http://exchange.example/path") {
+		t.Fatal("non-origin URL path must not be accepted")
+	}
+	if !isAllowedOrigin(req, "") {
+		t.Fatal("native clients without Origin should remain supported")
+	}
+
+	t.Setenv("WS_ALLOWED_ORIGINS", "https://trade.example, https://admin.example")
+	if !isAllowedOrigin(req, "https://trade.example") {
+		t.Fatal("explicitly configured reverse-proxy origin should be allowed")
+	}
+	if isAllowedOrigin(req, "https://attacker.example") {
+		t.Fatal("origin outside allowlist must be rejected")
+	}
+	_ = os.Getenv("WS_ALLOWED_ORIGINS")
 }
