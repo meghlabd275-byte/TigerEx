@@ -675,33 +675,16 @@ app.get("/api/v1/kyc/status", authenticateRequest, async (req, res) => {
 // FUTURES TRADING ROUTES
 // ============================================================================
 
-// Open a futures position
-app.post("/api/v1/futures/position/open", authenticateRequest, async (req, res) => {
-  try {
-    const { symbol, side, quantity, leverage, marginMode, positionMode } = req.body;
-
-    if (!symbol || !side || !quantity || !leverage || !marginMode || !positionMode) {
-      return res.status(400).json({ success: false, error: "Missing required futures trading fields" });
-    }
-
-    // Placeholder for futures trading logic
-    // In a real system, this would involve complex margin calculations, order placement on a futures exchange, etc.
-
-    const positionId = uuidv4();
-    await pool.query(
-      `INSERT INTO futures_positions (id, user_id, symbol, side, quantity, leverage, margin_mode, position_mode, status, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open', NOW())`,
-      [positionId, req.userId, symbol, side, quantity, leverage, marginMode, positionMode]
-    );
-
-    res.json({ success: true, message: "Futures position opened successfully", data: { positionId } });
-  } catch (error) {
-    console.error("Open futures position error:", error);
-    res.status(500).json({ success: false, error: "Internal server error" });
-  }
+// Futures order execution is disabled until the canonical risk engine, margin ledger,
+// matching engine, and liquidation pipeline are connected.
+app.post("/api/v1/futures/position/open", authenticateRequest, async (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    error: "Futures trading unavailable: canonical risk and execution services are not configured",
+  });
 });
 
-// Close a futures position
+// // Close a futures position
 app.post("/api/v1/futures/position/close", authenticateRequest, async (req, res) => {
   try {
     const { positionId, closeQuantity } = req.body;
