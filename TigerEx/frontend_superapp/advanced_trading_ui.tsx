@@ -77,22 +77,12 @@ export const TradingChart: React.FC<TradingChartProps> = ({ symbol, onTrade }) =
   const [indicators, setIndicators] = useState<string[]>(['SMA 20']);
   const [crosshair, setCrosshair] = useState({ x: 0, y: 0, visible: false });
 
-  // Real-time data simulation
+  // Do not synthesize candles; populate this chart only from a verified feed.
   useEffect(() => {
-    const interval = setInterval(() => {
-      const lastCandle = candleData[candleData.length - 1];
-      const newCandle: CandleData = {
-        time: Date.now(),
-        open: lastCandle?.close || 50000,
-        high: lastCandle?.close + Math.random() * 100 || 50100,
-        low: lastCandle?.close - Math.random() * 100 || 49900,
-        close: lastCandle?.close + (Math.random() - 0.5) * 50 || 50000,
-        volume: Math.random() * 1000000
-      };
-      setCandleData(prev => [...prev.slice(-500), newCandle]);
-    }, 1000);
-    
-    return () => clearInterval(interval);
+    setCandleData([]);
+  }, []);
+
+  return () => clearInterval(interval);
   }, [candleData]);
 
   return (
