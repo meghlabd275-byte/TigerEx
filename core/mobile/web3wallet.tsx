@@ -252,15 +252,12 @@ export const WalletProvider = ({ children }) => {
     }
   };
   
-  // Connect DApp
-  const connectDApp = async (address, dAppUrl, network = activeNetwork) => {
-    try {
-      // In production, implement wallet_connect protocol
-      return { success: true, session: { address, dAppUrl, network } };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  };
+  // DApp connections remain disabled until a real WalletConnect-compatible
+  // session protocol, origin validation, and explicit user approval are integrated.
+  const connectDApp = async (_address, _dAppUrl, _network = activeNetwork) => ({
+    success: false,
+    error: 'DApp connection unavailable: secure WalletConnect session support is not configured.',
+  });
   
   // Get token balance
   const getTokenBalance = async (address, tokenAddress, network = activeNetwork) => {
