@@ -30,12 +30,17 @@
   },
   "include": [
     "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts"
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    ".next/types/**/*.ts",
+    "middleware.ts",
+    "next.config.ts"
   ],
   "exclude": [
     "node_modules",
-    "TigerEx/__tests__/**"
+    "TigerEx/**",
+    "core/**",
+    "mobile/**",
+    "tiger-exchange/**"
   ]
 }
