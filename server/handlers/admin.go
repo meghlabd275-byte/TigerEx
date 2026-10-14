@@ -4,6 +4,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -795,54 +796,17 @@ func DeletePair(c *gin.Context) {
 
 func ImportPairsFromCEX(c *gin.Context) {
 	adminID := checkAdminPermission(c, "pairs")
-	if adminID == "" {
-		return
-	}
-
+	if adminID == "" { return }
 	var req struct {
 		Source string `json:"source" binding:"required,oneof=binance bybit okx kucoin gate huobi"`
 	}
-	c.ShouldBindJSON(&req)
-
-	// Mock import from exchanges
-	importPairs := map[string][]string{
-		"binance": {"BTC-USDT", "ETH-USDT", "BNB-USDT", "SOL-USDT", "XRP-USDT", "ADA-USDT", "DOGE-USDT"},
-		"bybit":   {"BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT"},
-		"okx":     {"BTC-USDT", "ETH-USDT", "BNB-USDT", "SOL-USDT"},
-		"kucoin":  {"BTC-USDT", "ETH-USDT", "KCS-USDT", "SOL-USDT"},
-		"gate":    {"BTC-USDT", "ETH-USDT", "GT-USDT", "SOL-USDT"},
-		"huobi":   {"BTC-USDT", "ETH-USDT", "HT-USDT", "SOL-USDT"},
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": http.StatusBadRequest, "message": "A supported exchange source is required"}})
+		return
 	}
-
-	pairs := importPairs[req.Source]
-	imported := 0
-
-	for _, symbol := range pairs {
-		parts := strings.Split(symbol, "-")
-		if len(parts) == 2 {
-			pairID := uuid.New()
-			_, err := models.Pool.Exec(c.Request.Context(), `
-				INSERT INTO market_pairs (id, symbol, base_currency, quote_currency, source_exchange, created_by)
-				VALUES ($1, $2, $3, $4, $5, $6)
-				ON CONFLICT (symbol) DO NOTHING
-			`, pairID, symbol, parts[0], parts[1], req.Source, adminID)
-
-			if err == nil {
-				imported++
-			}
-		}
-	}
-
-	models.LogAdminAction(adminID, c.GetString("admin_username"), "IMPORT_PAIRS", "pairs", "", gin.H{
-		"source": req.Source, "imported": imported,
-	})
-
-	c.JSON(200, gin.H{"success": true, "data": gin.H{
-		"imported": imported,
-		"message":  fmt.Sprintf("Imported %d pairs from %s", imported, req.Source),
-	}})
+	// Live instrument metadata must be fetched, validated, normalized, and reconciled by a real provider adapter.
+	c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": http.StatusServiceUnavailable, "message": "Live instrument-catalogue adapters are not configured; no pairs were imported"}})
 }
-
 // ============ FEES MANAGEMENT ============
 
 func CreateFeeStructure(c *gin.Context) {
