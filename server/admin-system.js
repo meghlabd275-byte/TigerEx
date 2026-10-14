@@ -70,10 +70,10 @@ function addAdminTables() {
       metric_type TEXT NOT NULL,
       metric_name TEXT NOT NULL,
       value REAL NOT NULL,
-      timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-      INDEX idx_metric_time (metric_type, timestamp)
+      timestamp TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_metric_time ON system_metrics(metric_type, timestamp)`);
 
   // Feature flags
   db.exec(`
