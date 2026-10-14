@@ -85,28 +85,6 @@ func (s *Service) CreateDefaultWallets(ctx context.Context, userID string) error
 	return ErrCustodyUnavailable
 }
 
-// GetDefaultNetwork returns the default network for an asset
-func (s *Service) getDefaultNetwork(asset string) string {
-	networks := map[string]string{
-		"BTC":  "Bitcoin",
-		"ETH":  "Ethereum",
-		"USDT": "Ethereum",
-		"BNB": "BNB Smart Chain",
-		"SOL": "Solana",
-		"XRP": "XRP Ledger",
-		"ADA": "Cardano",
-		"DOGE": "Dogecoin",
-		"AVAX": "Avalanche C-Chain",
-		"MATIC": "Polygon",
-		"DOT": "Polkadot",
-	}
-	
-	if network, ok := networks[asset]; ok {
-		return network
-	}
-	return "Ethereum"
-}
-
 // GetWallets retrieves wallets only from a configured durable wallet store.
 func (s *Service) GetWallets(ctx context.Context, userID string) ([]api.Wallet, error) {
 	if userID == "" {
@@ -132,41 +110,6 @@ func (s *Service) GetDepositAddress(ctx context.Context, userID, asset, network 
 	return nil, ErrCustodyUnavailable
 }
 
-// generateAddress generates a new deposit address
-func (s *Service) generateAddress(asset, network string) string {
-	// This is a placeholder - real implementation would use HD wallet derivation
-	// For now, generate a random address format
-	
-	bytes := make([]byte, 20)
-	rand.Read(bytes)
-	
-	switch asset {
-	case "BTC":
-		return "bc1" + hex.EncodeToString(bytes)[:39]
-	case "ETH", "USDT", "BNB", "MATIC", "AVAX":
-		return "0x" + hex.EncodeToString(bytes)
-	case "SOL":
-		return base58Encode(bytes)
-	case "XRP":
-		return "r" + base58Encode(bytes)
-	default:
-		return hex.EncodeToString(bytes)
-	}
-}
-
-// base58Encode encodes bytes in base58
-func base58Encode(data []byte) string {
-	// Simplified base58 encoding
-	alphabet := "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-	var result []byte
-	
-	for _, b := range data {
-		result = append(result, alphabet[int(b)%len(alphabet)])
-	}
-	
-	return string(result)
-}
-
 // RequestWithdrawal must be implemented atomically against the ledger, policy engine,
 // approval workflow, and chain signer. Do not return a pending withdrawal without those
 // durable side effects.
@@ -178,33 +121,6 @@ func (s *Service) RequestWithdrawal(ctx context.Context, req *WithdrawalRequest)
 		return nil, ErrInvalidAmount
 	}
 	return nil, ErrCustodyUnavailable
-}
-
-// getWithdrawalFee calculates withdrawal fee
-func (s *Service) getWithdrawalFee(asset, network, feeLevel string) float64 {
-	// Fee schedule by asset and network
-	fees := map[string]float64{
-		"BTC-Bitcoin":        0.0005,
-		"BTC-Lightning":      0.0001,
-		"ETH-Ethereum":      0.005,
-		"USDT-Ethereum":     1.0,
-		"BNB-BNB Smart Chain": 0.001,
-		"SOL-Solana":        0.01,
-		"XRP-XRP Ledger":     0.0001,
-		"ADA-Cardano":       0.2,
-		"DOGE-Dogecoin":     1.0,
-		"AVAX-Avalanche C-Chain": 0.01,
-		"MATIC-Polygon":     0.1,
-		"DOT-Polkadot":      0.1,
-	}
-	
-	key := asset + "-" + network
-	if fee, ok := fees[key]; ok {
-		return fee
-	}
-	
-	// Default fee
-	return 0.01
 }
 
 // CheckWithdrawalWhitelist fails closed until the persistent policy store is configured.
