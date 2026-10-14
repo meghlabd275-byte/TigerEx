@@ -410,27 +410,15 @@ func GetUserTransactions(ctx context.Context, userID uuid.UUID, limit int) ([]Tr
 	return txs, nil
 }
 
-// GenerateDepositAddress generates a new deposit address for a user
+// GenerateDepositAddress requires a configured chain-specific address derivation provider.
+// This model deliberately refuses to invent an address: storing a random string as a
+// deposit address can permanently lose customer funds.
 func GenerateDepositAddress(ctx context.Context, userID uuid.UUID, currency, network string) (*WalletAddress, error) {
-	// In production, this would call blockchain node APIs
-	// For now, generate a mock address based on currency and network
-	address := generateMockAddress(currency, network)
-
-	var walletAddr WalletAddress
-	err := Pool.QueryRow(ctx, `
-		INSERT INTO wallet_addresses (user_id, currency, network, address, is_default)
-		VALUES ($1, $2, $3, $4, 
-			NOT EXISTS(SELECT 1 FROM wallet_addresses WHERE user_id = $1 AND currency = $2 AND network = $3)
-		)
-		RETURNING id, user_id, currency, network, address, address_tag, is_default, created_at
-	`, userID, currency, network, address).Scan(
-		&walletAddr.ID, &walletAddr.UserID, &walletAddr.Currency, &walletAddr.Network, 
-		&walletAddr.Address, &walletAddr.AddressTag, &walletAddr.IsDefault, &walletAddr.CreatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &walletAddr, nil
+	_ = ctx
+	_ = userID
+	_ = currency
+	_ = network
+	return nil, errors.New("deposit address derivation provider is not configured")
 }
 
 // GetUserAddresses retrieves all addresses for a user
@@ -469,19 +457,3 @@ func generateSessionToken() string {
 	return hex.EncodeToString(b)
 }
 
-func generateMockAddress(currency, network string) string {
-	prefixes := map[string]string{
-		"BTC":  "1",
-		"ETH":  "0x",
-		"USDT": "T",
-		"USDC": "0x",
-		"BNB":  "0x",
-	}
-	prefix := prefixes[currency]
-	if prefix == "" {
-		prefix = "0x"
-	}
-	b := make([]byte, 20)
-	rand.Read(b)
-	return prefix + hex.EncodeToString(b)
-}
