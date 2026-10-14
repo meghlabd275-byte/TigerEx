@@ -127,22 +127,6 @@ func (s *ConvertService) calculateFee(amount decimal.Decimal, asset string) deci
 	return fee
 }
 
-// estimateSlippage estimates slippage
-func (s *ConvertService) estimateSlippage(amount decimal.Decimal, fromAsset, toAsset string) decimal.Decimal {
-	// Larger orders have more slippage
-	// Simplified estimation
-	baseSlippage := decimal.NewFromFloat(0.1) // 0.1% base
-	
-	// Scale based on amount
-	amountFactor := amount.Div(decimal.NewFromFloat(10000))
-	if amountFactor.GreaterThan(decimal.NewFromFloat(1)) {
-		amountFactor = decimal.NewFromFloat(1)
-	}
-	
-	slippage := baseSlippage.Add(amountFactor.Mul(decimal.NewFromFloat(0.5)))
-	
-	return slippage.Mul(decimal.NewFromInt(100)) // Return as percentage
-}
 
 // GetUserConversions returns user conversion history
 func (s *ConvertService) GetUserConversions(userID string, limit, offset int) []*Conversion {
