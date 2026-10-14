@@ -117,20 +117,9 @@ func (s *Service) InitializePools() {
 }
 
 func (s *Service) addPool(token0, token1, blockchain, provider, poolAddr string, feeTier int, routerAddr string) {
-	pool := &LiquidityPool{
-		ID:          uuid.New(),
-		Token0:     token0,
-		Token1:     token1,
-		Reserve0:    big.NewInt(1000000000000000000), // Mock reserves
-		Reserve1:    big.NewInt(1000000000000000000),
-		Liquidity:   big.NewInt(1000000000000000000),
-		Blockchain:  blockchain,
-		Provider:    provider,
-		PoolAddress: poolAddr,
-		FeeTier:     feeTier,
-	}
-	poolKey := s.getPoolKey(token0, token1, blockchain, provider)
-	s.pools[poolKey] = pool
+	// Pool state must be discovered and verified from chain RPC. This legacy helper
+	// intentionally does not seed fabricated reserves or liquidity.
+	_, _, _, _, _, _, _ = token0, token1, blockchain, provider, poolAddr, feeTier, routerAddr
 }
 
 func (s *Service) getPoolKey(token0, token1, blockchain, provider string) string {
