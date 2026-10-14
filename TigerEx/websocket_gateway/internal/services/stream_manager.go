@@ -141,9 +141,13 @@ func (sm *StreamManager) Broadcast(stream string, message []byte) {
 	defer sm.mu.RUnlock()
 
 	for _, client := range sm.clients {
-		if client.Streams[stream] {
-			// Send to client (implementation would use websocket connection)
-			_ = message
+		if client.Streams[stream] && client.Send != nil {
+			// A bounded, non-blocking send prevents a slow consumer from stalling
+			// every other subscriber. The transport closes clients whose queues fill.
+			select {
+			case client.Send <- append([]byte(nil), message...):
+			default:
+			}
 		}
 	}
 }
@@ -153,10 +157,13 @@ func (sm *StreamManager) BroadcastToUser(userID string, message []byte) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
+	if userID == "" { return }
 	for _, client := range sm.clients {
-		if client.UserID == userID {
-			// Send to client
-			_ = message
+		if client.UserID == userID && client.Send != nil {
+			select {
+			case client.Send <- append([]byte(nil), message...):
+			default:
+			}
 		}
 	}
 }
