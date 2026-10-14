@@ -404,6 +404,7 @@ pub mod orderbook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orderbook::{Order, OrderBook, OrderType, Side};
     
     #[test]
     fn test_orderbook_match() {
