@@ -432,24 +432,15 @@ const futuresEndpoints = {
 // ============================================================================
 
 function initializeFundingRates() {
-  const symbols = TRADING_PAIRS.filter(p => p.symbol.includes('USDT')).map(p => p.symbol);
-  const nowTime = new Date().toISOString();
-
-  symbols.forEach(symbol => {
-    const fundingRate = (Math.random() - 0.5) * 0.0001; // -0.005% to +0.005%
-    const nextFundingTime = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(); // 8 hours from now
-
-    try {
-      db.prepare(\`
-        INSERT OR IGNORE INTO funding_rates (id, symbol, funding_rate, next_funding_time)
-        VALUES (?, ?, ?, ?)
-      \`).run(uuidv4(), symbol, fundingRate, nextFundingTime);
-    } catch (e) {
-      // Already exists
-    }
-  });
-
-  console.log('✅ Funding rates initialized');
+  // Funding rates are financial inputs. Generating random values or assigning a
+  // generic eight-hour schedule would fabricate liabilities for open positions.
+  // A configured, authenticated exchange/oracle adapter must persist verified
+  // funding observations before this capability can be enabled.
+  return {
+    success: false,
+    code: 'FUNDING_RATE_PROVIDER_UNAVAILABLE',
+    message: 'Funding-rate initialization requires a configured live provider; no synthetic rates were written.'
+  };
 }
 
 module.exports = {
