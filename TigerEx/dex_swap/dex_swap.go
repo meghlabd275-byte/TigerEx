@@ -476,32 +476,12 @@ func (tb *TransactionBuilder) BuildSwapTransaction(req SwapRequest, quote QuoteR
 
 // buildUniswapV2Swap builds Uniswap V2 swap transaction data
 func (tb *TransactionBuilder) buildUniswapV2Swap(req SwapRequest, quote QuoteResult) ([]byte, error) {
-	// In production, would encode:
-	// swapExactETHForTokens / swapExactTokensForETH / swapExactTokensForTokens
-	// with appropriate parameters
-	
-	// Mock transaction data
-	data := fmt.Sprintf(`{
-		"to": "%s",
-		"data": "0x38ed1739...",
-		"value": "%s"
-	}`, tb.protocol.RouterAddr, req.AmountIn.String())
-	
-	return []byte(data), nil
+	return nil, fmt.Errorf("Uniswap V2 transaction encoding is unavailable until verified ABI encoding is configured")
 }
 
 // buildUniswapV3Swap builds Uniswap V3 swap transaction data
 func (tb *TransactionBuilder) buildUniswapV3Swap(req SwapRequest, quote QuoteResult) ([]byte, error) {
-	// In production, would use Multicall contract
-	// for exactInputSingle or exactInput
-	
-	data := fmt.Sprintf(`{
-		"to": "%s",
-		"data": "0x04e45aaf...",
-		"value": "%s"
-	}`, tb.protocol.RouterAddr, req.AmountIn.String())
-	
-	return []byte(data), nil
+	return nil, fmt.Errorf("Uniswap V3 transaction encoding is unavailable until verified ABI encoding is configured")
 }
 
 // ValidateAddress validates an Ethereum address
