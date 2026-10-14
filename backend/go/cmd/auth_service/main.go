@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"os/signal"
 	"syscall"
 	"time"
@@ -192,14 +193,19 @@ func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	// Get environment variables
+	// Load signing keys from deployment secrets only. Never start with a known default.
 	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		jwtSecret = "tigerex-default-secret-change-in-production"
-	}
 	jwtRefreshSecret := os.Getenv("JWT_REFRESH_SECRET")
-	if jwtRefreshSecret == "" {
-		jwtRefreshSecret = "tigerex-default-refresh-secret-change-in-production"
+	if len([]byte(jwtSecret)) < 32 {
+		log.Fatal("JWT_SECRET must be configured with at least 32 bytes")
+	}
+	if len([]byte(jwtRefreshSecret)) < 32 || jwtRefreshSecret == jwtSecret {
+		log.Fatal("JWT_REFRESH_SECRET must be a distinct secret of at least 32 bytes")
+	}
+	for _, weak := range []string{"change-in-production", "change-me", "example", "default", "tigerex-secret"} {
+		if strings.Contains(strings.ToLower(jwtSecret), weak) || strings.Contains(strings.ToLower(jwtRefreshSecret), weak) {
+			log.Fatal("JWT secrets must not contain known placeholder values")
+		}
 	}
 
 	// Initialize auth service
