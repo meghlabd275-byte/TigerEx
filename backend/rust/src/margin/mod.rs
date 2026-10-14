@@ -51,19 +51,42 @@ impl MarginService {
         }
     }
 
-    /// Open position
+    /// Open a position only against an explicitly funded account.
+    /// Account balances must be populated by the authoritative ledger integration.
     pub fn open_position(&mut self, user_id: &str, symbol: &str, side: PositionSide,
                     size: f64, entry_price: f64, leverage: f64) -> Result<MarginPosition, String> {
-        if leverage > self.max_leverage {
-            return Err(format!("Max leverage is {}", self.max_leverage));
+        if user_id.is_empty() || symbol.is_empty() {
+            return Err("user and symbol are required".to_string());
+        }
+        if !size.is_finite() || size <= 0.0 ||
+           !entry_price.is_finite() || entry_price <= 0.0 ||
+           !leverage.is_finite() || leverage < 1.0 || leverage > self.max_leverage {
+            return Err("size, entry price, and leverage must be valid positive values".to_string());
         }
 
         let margin = (size * entry_price) / leverage;
-        
+        if !margin.is_finite() || margin <= 0.0 {
+            return Err("calculated margin is invalid".to_string());
+        }
+
+        let account = self.accounts.get_mut(user_id)
+            .ok_or_else(|| "margin account is not funded by the authoritative ledger".to_string())?;
+        if account.available_margin < margin {
+            return Err("insufficient available margin".to_string());
+        }
+
         let liquidation_price = match side {
-            PositionSide::Long => entry_price * (1.0 - 1.0/leverage + self.maintenance_margin),
-            PositionSide::Short => entry_price * (1.0 + 1.0/leverage - self.maintenance_margin),
+            PositionSide::Long => entry_price * (1.0 - 1.0 / leverage + self.maintenance_margin),
+            PositionSide::Short => entry_price * (1.0 + 1.0 / leverage - self.maintenance_margin),
         };
+        if !liquidation_price.is_finite() || liquidation_price <= 0.0 {
+            return Err("calculated liquidation price is invalid".to_string());
+        }
+
+        // Reserve margin before publishing the position; this in-memory service is not
+        // a substitute for the required durable atomic ledger reservation.
+        account.available_margin -= margin;
+        account.total_margin += margin;
 
         let position = MarginPosition {
             id: format!("pos_{}", current_timestamp_ms()),
@@ -78,20 +101,7 @@ impl MarginService {
             unrealized_pnl: 0.0,
             roe: 0.0,
         };
-
         self.positions.insert(position.id.clone(), position.clone());
-        
-        // Update account
-        let account = self.accounts.entry(user_id.to_string())
-            .or_insert_with(|| MarginAccount {
-                user_id: user_id.to_string(),
-                total_margin: 0.0,
-                available_margin: 10000.0, // Mock
-                margin_ratio: 1.0,
-                liquidation_flag: false,
-            });
-        account.total_margin += margin;
-
         Ok(position)
     }
 
@@ -146,11 +156,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_open_position() {
+    fn test_open_position_fails_closed_without_ledger_funded_account() {
         let mut service = MarginService::new();
         let result = service.open_position(
             "user1", "BTC/USDT", PositionSide::Long, 1.0, 50000.0, 10.0
         );
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert!(service.get_positions("user1").is_empty());
+    }
+
+    #[test]
+    fn test_open_position_rejects_invalid_inputs() {
+        let mut service = MarginService::new();
+        let result = service.open_position(
+            "user1", "BTC/USDT", PositionSide::Long, f64::NAN, 50000.0, 10.0
+        );
+        assert!(result.is_err());
     }
 }
