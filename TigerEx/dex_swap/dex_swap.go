@@ -268,96 +268,12 @@ func (s *DexSwapService) GetQuote(ctx context.Context, req QuoteRequest) (*Quote
 
 // getQuoteFromProtocol gets a quote from a specific protocol
 func (s *DexSwapService) getQuoteFromProtocol(ctx context.Context, fromToken, toToken string, amountIn decimal.Decimal, protocol *SwapProtocol) (*QuoteResult, error) {
-	// Get token pair
-	pairKey := fmt.Sprintf("%s_%s", fromToken, toToken)
-	
-	// In production, this would query the blockchain
-	// For now, return a mock quote based on reserves
-	pair, exists := s.tokenPairs[pairKey]
-	
-	if !exists {
-		// Generate mock quote
-		return s.generateMockQuote(fromToken, toToken, amountIn, protocol)
-	}
-	
-	// Calculate output based on reserves
-	reserve0, _ := decimal.NewFromString(pair.Reserve0)
-	reserve1, _ := decimal.NewFromString(pair.Reserve1)
-	
-	// Simple AMM formula: output = (input * reserve_out) / (reserve_in + input)
-	inputWithFee := amountIn.Mul(protocol.Fee.Add(decimal.NewFromInt(10000))).Div(decimal.NewFromInt(10000))
-	numerator := inputWithFee.Mul(reserve1)
-	denominator := reserve0.Add(inputWithFee)
-	amountOut := numerator.Div(denominator)
-	
-	// Calculate price impact
-	priceImpact := calculatePriceImpact(amountIn, amountOut, reserve0, reserve1)
-	
-	return &QuoteResult{
-		FromToken:    fromToken,
-		ToToken:      toToken,
-		AmountIn:     amountIn,
-		AmountOut:    amountOut,
-		AmountOutMin: amountOut,
-		PriceImpact:  priceImpact,
-		Route: SwapRoute{
-			FromToken:    s.tokens[fromToken],
-			ToToken:      s.tokens[toToken],
-			Protocols:    []DexNetwork{protocol.ID},
-			Path:         []string{fromToken, toToken},
-			AmountIn:     amountIn.String(),
-			AmountOutMin: amountOut.String(),
-			AmountOut:    amountOut.String(),
-		},
-		EstimatedGas: 150000,
-	}, nil
+	return nil, fmt.Errorf("DEX protocol quote unavailable: live chain state adapter is not configured")
 }
 
 // generateMockQuote generates a mock quote for demo purposes
 func (s *DexSwapService) generateMockQuote(fromToken, toToken string, amountIn decimal.Decimal, protocol *SwapProtocol) (*QuoteResult, error) {
-	// Mock exchange rates
-	rates := map[string]decimal.Decimal{
-		"ETH_USDT": decimal.NewFromFloat(3000),
-		"WBTC_USDT": decimal.NewFromFloat(60000),
-		"USDC_USDT": decimal.NewFromFloat(1),
-		"DAI_USDT": decimal.NewFromFloat(1),
-		"MATIC_USDT": decimal.NewFromFloat(0.8),
-		"LINK_USDT": decimal.NewFromFloat(15),
-		"UNI_USDT": decimal.NewFromFloat(7),
-	}
-	
-	key := fmt.Sprintf("%s_%s", fromToken, toToken)
-	rate, exists := rates[key]
-	if !exists {
-		// Try reverse
-		revKey := fmt.Sprintf("%s_%s", toToken, fromToken)
-		revRate, revExists := rates[revKey]
-		if !revExists {
-			return nil, fmt.Errorf("no exchange rate found for %s -> %s", fromToken, toToken)
-		}
-		rate = decimal.NewFromInt(1).Div(revRate)
-	}
-	
-	amountOut := amountIn.Mul(rate)
-	amountOut = amountOut.Mul(decimal.NewFromInt(10000).Sub(protocol.Fee.Mul(100))).Div(decimal.NewFromInt(10000))
-	
-	priceImpact := decimal.NewFromFloat(0.1) // 0.1% for mock
-	
-	return &QuoteResult{
-		FromToken:    fromToken,
-		ToToken:      toToken,
-		AmountIn:     amountIn,
-		AmountOut:    amountOut,
-		AmountOutMin: amountOut,
-		PriceImpact:  priceImpact,
-		Route: SwapRoute{
-			Protocols: []DexNetwork{protocol.ID},
-			Path:      []string{fromToken, toToken},
-			AmountIn:  amountIn.String(),
-			AmountOut: amountOut.String(),
-		},
-		EstimatedGas: 150000,
-	}, nil
+	return nil, fmt.Errorf("mock DEX quotes are disabled")
 }
 
 // calculatePriceImpact calculates price impact of a swap
@@ -390,20 +306,8 @@ func (s *DexSwapService) ExecuteSwap(ctx context.Context, req SwapRequest) (*Swa
 
 // simulateSwapExecution simulates swap execution
 func (s *DexSwapService) simulateSwapExecution(swapID string, result *SwapResult) {
-	// Simulate transaction time
-	time.Sleep(2 * time.Second)
-	
-	result.Status = string(SwapStatusConfirmed)
-	result.Hash = fmt.Sprintf("0x%s", uuid.New().String()[2:66])
-	result.GasUsed = 150000
-	result.BlockNumber = 18000000
-	result.TransactionTime = 2 * time.Second
-	
-	// Send to feed
-	select {
-	case s.swapFeed <- *result:
-	default:
-	}
+	// Intentionally disabled: only a verified chain receipt may confirm a swap.
+	return
 }
 
 // GetSwapStatus returns the status of a swap
