@@ -706,28 +706,13 @@ app.get("/api/v1/futures/positions", authenticateRequest, async (req, res) => {
 // MARGIN TRADING ROUTES
 // ============================================================================
 
-// Deposit collateral to margin account
-app.post("/api/v1/margin/deposit", authenticateRequest, async (req, res) => {
-  try {
-    const { currency, amount } = req.body;
-
-    if (!currency || !amount) {
-      return res.status(400).json({ success: false, error: "Missing currency or amount" });
-    }
-
-    // Update margin account balance
-    await pool.query(
-      `INSERT INTO margin_accounts (user_id, currency, balance, created_at, updated_at)
-      VALUES ($1, $2, $3, NOW(), NOW())
-      ON CONFLICT (user_id, currency) DO UPDATE SET balance = margin_accounts.balance + $3, updated_at = NOW()`,
-      [req.userId, currency, amount]
-    );
-
-    res.json({ success: true, message: "Margin collateral deposited successfully" });
-  } catch (error) {
-    console.error("Margin deposit error:", error);
-    res.status(500).json({ success: false, error: "Internal server error" });
-  }
+// Margin transfers are fail-closed until a canonical, transactionally safe
+// ledger-backed collateral transfer service is configured.
+app.post("/api/v1/margin/deposit", authenticateRequest, async (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    error: "Margin collateral transfers are unavailable until the ledger service is configured",
+  });
 });
 
 // Withdraw collateral from margin account
@@ -776,28 +761,13 @@ app.get("/api/v1/margin/balance", authenticateRequest, async (req, res) => {
 // WALLET ROUTES
 // ============================================================================
 
-// Generate new deposit address
-app.post("/api/v1/wallet/address", authenticateRequest, async (req, res) => {
-  try {
-    const { currency, network } = req.body;
-
-    if (!currency || !network) {
-      return res.status(400).json({ success: false, error: "Missing currency or network" });
-    }
-
-    // Placeholder for actual blockchain address generation
-    // In a real application, this would interact with a blockchain node or a third-party wallet service
-    const newAddress = uuidv4(); // Generate a UUID as a placeholder address
-
-    // Save the generated address to the user's wallet or a dedicated address table
-    // For simplicity, we'll just return it for now.
-    // In a real system, you'd associate this address with the user and currency/network
-
-    res.json({ success: true, data: { currency, network, address: newAddress } });
-  } catch (error) {
-    console.error("Generate address error:", error);
-    res.status(500).json({ success: false, error: "Internal server error" });
-  }
+// Never return fabricated UUIDs as blockchain deposit addresses. Enable this
+// endpoint only after a real custody/address-derivation provider is integrated.
+app.post("/api/v1/wallet/address", authenticateRequest, async (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    error: "Deposit address generation is unavailable: no verified custody provider is configured",
+  });
 });
 
 // Initiate a deposit
