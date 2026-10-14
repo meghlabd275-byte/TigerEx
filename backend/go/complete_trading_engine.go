@@ -666,8 +666,9 @@ func (me *MatchingEngine) SubmitOrder(order *Order) (*OrderResult, error) {
 	case OrderTypeTWAP:
 		trades, err = me.addTWAPOrder(state, order)
 	case OrderTypePO:
-		trades, err = me.executeLimitOrder(state, order)
+		// The matching path must see post-only before it evaluates crossing.
 		order.IsPostOnly = true
+		trades, err = me.executeLimitOrder(state, order)
 	case OrderTypeFOK:
 		trades, err = me.executeFOKOrder(state, order)
 	case OrderTypeIOC:
@@ -730,7 +731,7 @@ func (me *MatchingEngine) validateOrder(order *Order) error {
 	switch order.Type {
 	case OrderTypeMarket, OrderTypeLimit, OrderTypeStopLoss, OrderTypeStopLimit,
 		OrderTypeTakeProfit, OrderTypeStopMarket, OrderTypeTrailingStop, OrderTypeOCO,
-		OrderTypeOTO, OrderTypeIceberg, OrderTypeTWAP, OrderTypePO, OrderTypeFOK, OrderTypeIOC:
+		OrderTypeIceberg, OrderTypeTWAP, OrderTypePO, OrderTypeFOK, OrderTypeIOC:
 	default:
 		return errors.New("unsupported order type")
 	}
