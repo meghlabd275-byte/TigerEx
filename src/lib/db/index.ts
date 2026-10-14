@@ -5,7 +5,7 @@
  */
 
 import Database from 'better-sqlite3';
-import { randomBytes, createHash, createCipheriv, createDecipheriv } from 'crypto';
+import { randomBytes, randomInt, createHash, createCipheriv, createDecipheriv } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 
 const DB_PATH = process.env.DB_PATH || './tigerex.db';
@@ -429,7 +429,7 @@ export function generateToken(): string {
 }
 
 export function generateOTP(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return randomInt(100000, 1000000).toString();
 }
 
 // UUID generation
