@@ -371,10 +371,10 @@ function RegisterForm() {
             <div className="mb-8">
               <div className="flex items-center justify-center space-x-2">
                 <div className={`w-3 h-3 rounded-full ${step === 'identity' ? 'bg-blue-500' : 'bg-green-500'}`} />
-                <div className={`w-8 h-0.5 ${['otp', 'password', 'success'].includes(step) ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
-                <div className={`w-3 h-3 rounded-full ${step === 'otp' ? 'bg-blue-500' : ['otp', 'password', 'success'].includes(step) ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
-                <div className={`w-8 h-0.5 ${['password', 'success'].includes(step) ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
-                <div className={`w-3 h-3 rounded-full ${step === 'password' ? 'bg-blue-500' : step === 'success' ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+                <div className={`w-8 h-0.5 ${['otp', 'password'].includes(step) ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+                <div className={`w-3 h-3 rounded-full ${step === 'otp' ? 'bg-blue-500' : ['otp', 'password'].includes(step) ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+                <div className={`w-8 h-0.5 ${['password'].includes(step) ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+                <div className={`w-3 h-3 rounded-full ${step === 'password' ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
               </div>
             </div>
           )}

@@ -12,6 +12,12 @@ import {
   Plus, Minus, AlertTriangle, Check, X, Info, Lock
 } from 'lucide-react';
 
+declare global {
+  interface Window {
+    TradingView?: { widget: new (options: Record<string, unknown>) => unknown };
+  }
+}
+
 // =============================================================================
 // TYPES & INTERFACES
 // =============================================================================
@@ -759,8 +765,8 @@ const TradingChart: React.FC<{ symbol: string }> = ({ symbol }) => {
     script.src = 'https://s3.tradingview.com/tv.js';
     script.async = true;
     script.onload = () => {
-      if (typeof TradingView !== 'undefined' && containerRef.current) {
-        new TradingView.widget({
+      if (typeof window.TradingView !== 'undefined' && containerRef.current) {
+        new window.TradingView.widget({
           symbol: symbol,
           interval: '15',
           timezone: 'Etc/UTC',
