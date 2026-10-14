@@ -6,18 +6,18 @@ import (
 	"errors"
 	"math"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
 
 	"tigerex/backend/internal/api"
 )
 
 var (
-	ErrInvalidSymbol  = errors.New("invalid symbol")
-	ErrInvalidOrder  = errors.New("invalid order")
-	ErrNoLiquidity  = errors.New("no liquidity")
+	ErrInvalidSymbol = errors.New("invalid symbol")
+	ErrInvalidOrder = errors.New("invalid order")
+	ErrNoLiquidity = errors.New("no liquidity")
 	ErrTradingPaused = errors.New("trading paused")
+	ErrMarketDataUnavailable = errors.New("market data provider is not configured")
+	ErrPersistenceUnavailable = errors.New("durable trading persistence is not configured")
 )
 
 // Config holds trading configuration
@@ -65,191 +65,109 @@ func NewService(config Config) *Service {
 	return &Service{config: config}
 }
 
-// GetMarkets retrieves all markets
+// GetMarkets returns no markets until an authoritative market repository is configured.
+// Never advertise hard-coded or illustrative instruments as tradable.
 func (s *Service) GetMarkets(ctx context.Context) []api.Market {
-	// This is a placeholder - real implementation would query database
-	return []api.Market{
-		{
-			Symbol:       "BTC/USDT",
-			BaseAsset:    "BTC",
-			QuoteAsset:   "USDT",
-			Status:       "trading",
-			MinPrice:     0.01,
-			MaxPrice:     1000000,
-			MinQuantity:  0.00001,
-			MaxQuantity:  1000,
-			MinNotional:  10,
-			StepSize:     0.00001,
-			Precision:    8,
-		},
-		{
-			Symbol:       "ETH/USDT",
-			BaseAsset:    "ETH",
-			QuoteAsset:   "USDT",
-			Status:       "trading",
-			MinPrice:     0.01,
-			MaxPrice:     100000,
-			MinQuantity:  0.0001,
-			MaxQuantity:  10000,
-			MinNotional:  10,
-			StepSize:     0.0001,
-			Precision:    8,
-		},
-	}
+	return nil
 }
 
-// GetTicker retrieves ticker for a symbol
+// GetTicker retrieves ticker for a symbol.
 func (s *Service) GetTicker(ctx context.Context, symbol string) (*api.Ticker, error) {
-	if symbol == "" {
+	if strings.TrimSpace(symbol) == "" {
 		return nil, ErrInvalidSymbol
 	}
-	
-	// This is a placeholder - real implementation would fetch from market data
-	return &api.Ticker{
-		Symbol:           symbol,
-		Price:           45000.0,
-		PriceChange:     1000.0,
-		PriceChangePct:  2.27,
-		Volume:          1000000000.0,
-		QuoteVolume:     45000000000.0,
-		High:           46000.0,
-		Low:            44000.0,
-		Timestamp:      api.Now(),
-	}, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, ErrMarketDataUnavailable
 }
 
-// GetOrderBookDepth retrieves order book depth
+// GetOrderBookDepth retrieves order book depth.
 func (s *Service) GetOrderBookDepth(ctx context.Context, symbol string, limit int) (*api.OrderBook, error) {
-	if symbol == "" {
+	if strings.TrimSpace(symbol) == "" {
 		return nil, ErrInvalidSymbol
 	}
-	
-	if limit <= 0 || limit > 1000 {
-		limit = 100
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	
-	// This is a placeholder - real implementation would fetch from order book
-	return &api.OrderBook{
-		LastUpdateID: api.Now(),
-		Bids:        [][]string{{"44900.00", "1.5"}, {"44890.00", "2.0"}},
-		Asks:        [][]string{{"45100.00", "1.5"}, {"45110.00", "2.0"}},
-	}, nil
+	if limit <= 0 || limit > 1000 {
+		return nil, ErrInvalidOrder
+	}
+	return nil, ErrMarketDataUnavailable
 }
 
-// GetRecentTrades retrieves recent trades
+// GetRecentTrades retrieves recent trades from durable market-data storage.
 func (s *Service) GetRecentTrades(ctx context.Context, symbol string, limit int, fromID int64) ([]api.Trade, error) {
-	if symbol == "" {
+	if strings.TrimSpace(symbol) == "" {
 		return nil, ErrInvalidSymbol
 	}
-	
-	// This is a placeholder - real implementation would fetch from trade history
-	return []api.Trade{}, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, ErrMarketDataUnavailable
 }
 
 // GetKlines retrieves kline/candlestick data
 func (s *Service) GetKlines(ctx context.Context, symbol, interval string, startTime, endTime int64, limit int) ([]api.KLine, error) {
-	if symbol == "" {
+	if strings.TrimSpace(symbol) == "" {
 		return nil, ErrInvalidSymbol
 	}
-	
-	if limit <= 0 || limit > 1000 {
-		limit = 500
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	
-	// This is a placeholder - real implementation would fetch from kline storage
-	return []api.KLine{}, nil
+	return nil, ErrMarketDataUnavailable
 }
 
-// GetExchangeInfo retrieves exchange information
+// GetExchangeInfo reports degraded service state until market metadata is sourced from storage.
 func (s *Service) GetExchangeInfo(ctx context.Context) *api.ExchangeInfo {
 	return &api.ExchangeInfo{
-		Timezone:        "UTC",
-		ServerTime:     api.Now(),
-		ExchangeStatus: "online",
-		Symbols:       s.GetMarkets(ctx),
+		Timezone: "UTC",
+		ServerTime: api.Now(),
+		ExchangeStatus: "degraded",
+		Symbols: nil,
 	}
 }
 
-// CreateOrder creates a new order
+// CreateOrder validates request shape but refuses execution until live market metadata,
+// durable order storage, a matching engine, and an atomic ledger are wired in.
+// Returning an order here would falsely imply that it was accepted or persisted.
 func (s *Service) CreateOrder(ctx context.Context, req *OrderRequest) (*api.Order, error) {
-	if req == nil || req.UserID == "" || req.Symbol == "" {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if req == nil || strings.TrimSpace(req.UserID) == "" || strings.TrimSpace(req.Symbol) == "" {
 		return nil, ErrInvalidOrder
 	}
-	
-	// Validate order
-	if req.Quantity <= 0 {
-		return nil, errors.New("invalid quantity")
+	if req.Quantity <= 0 || math.IsNaN(req.Quantity) || math.IsInf(req.Quantity, 0) {
+		return nil, ErrInvalidOrder
 	}
-	
-	// Parse side
-	side := strings.ToLower(req.Side)
+	side := strings.ToLower(strings.TrimSpace(req.Side))
 	if side != "buy" && side != "sell" {
-		return nil, errors.New("invalid side")
+		return nil, ErrInvalidOrder
 	}
-	
-	// Parse order type
-	orderType := strings.ToLower(req.Type)
-	validTypes := []string{"market", "limit", "stop_loss", "stop_limit", "trailing_stop"}
-	valid := false
-	for _, t := range validTypes {
-		if orderType == t {
-			valid = true
-			break
+	orderType := strings.ToLower(strings.TrimSpace(req.Type))
+	switch orderType {
+	case "market":
+	case "limit":
+		if req.Price <= 0 || math.IsNaN(req.Price) || math.IsInf(req.Price, 0) {
+			return nil, ErrInvalidOrder
 		}
+	case "stop_loss":
+		if req.StopPrice <= 0 || math.IsNaN(req.StopPrice) || math.IsInf(req.StopPrice, 0) {
+			return nil, ErrInvalidOrder
+		}
+	case "stop_limit":
+		if req.Price <= 0 || req.StopPrice <= 0 || math.IsNaN(req.Price) || math.IsInf(req.Price, 0) || math.IsNaN(req.StopPrice) || math.IsInf(req.StopPrice, 0) {
+			return nil, ErrInvalidOrder
+		}
+	case "trailing_stop":
+		if req.TrailingDistance <= 0 || math.IsNaN(req.TrailingDistance) || math.IsInf(req.TrailingDistance, 0) {
+			return nil, ErrInvalidOrder
+		}
+	default:
+		return nil, ErrInvalidOrder
 	}
-	if !valid {
-		return nil, errors.New("invalid order type")
-	}
-	
-	// Validate price for limit orders
-	if orderType == "limit" && req.Price <= 0 {
-		return nil, errors.New("price required for limit orders")
-	}
-	
-	// Validate stop price for stop orders
-	if (orderType == "stop_loss" || orderType == "stop_limit") && req.StopPrice <= 0 {
-		return nil, errors.New("stop price required for stop orders")
-	}
-	
-	// Get market
-	market := s.getMarket(req.Symbol)
-	if market == nil {
-		return nil, ErrInvalidSymbol
-	}
-	
-	// Round quantities
-	req.Quantity = s.roundToStep(req.Quantity, market.StepSize)
-	
-	// Create order
-	order := &api.Order{
-		ID:              uuid.New().String(),
-		UserID:          req.UserID,
-		Symbol:         req.Symbol,
-		Side:           side,
-		Type:           orderType,
-		Quantity:       req.Quantity,
-		FilledQuantity: 0,
-		Status:         "new",
-		TimeInForce:   "GTC",
-		ClientOrderID: req.ClientOrderID,
-		CreatedAt:     api.Now(),
-		UpdatedAt:     api.Now(),
-	}
-	
-	if orderType == "limit" || orderType == "stop_limit" {
-		order.Price = s.roundToStep(req.Price, market.StepSize)
-	}
-	
-	if orderType == "stop_loss" || orderType == "stop_limit" {
-		order.StopPrice = s.roundToStep(req.StopPrice, market.StepSize)
-	}
-	
-	// This is a placeholder - real implementation would:
-	// 1. Lock funds
-	// 2. Add to order book or execution queue
-	// 3. Return order
-	
-	return order, nil
+	return nil, ErrTradingPaused
 }
 
 // getMarket retrieves market by symbol
@@ -271,174 +189,108 @@ func (s *Service) roundToStep(value, step float64) float64 {
 	return math.Floor(value/step+0.5) * step
 }
 
-// GetOrders retrieves orders for a user
+// GetOrders retrieves orders from durable storage.
 func (s *Service) GetOrders(ctx context.Context, userID, symbol, side, status string, limit int, fromID string) ([]api.Order, error) {
-	if userID == "" {
+	if strings.TrimSpace(userID) == "" {
 		return nil, ErrInvalidOrder
 	}
-	
-	// This is a placeholder - real implementation would query database
-	return []api.Order{}, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, ErrPersistenceUnavailable
 }
 
-// GetOrder retrieves a single order
+// GetOrder retrieves a single order from durable storage.
 func (s *Service) GetOrder(ctx context.Context, userID, orderID string) (*api.Order, error) {
-	if userID == "" || orderID == "" {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(orderID) == "" {
 		return nil, ErrInvalidOrder
 	}
-	
-	// This is a placeholder - real implementation would query database
-	return nil, ErrInvalidOrder
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, ErrPersistenceUnavailable
 }
 
-// CancelOrder cancels an order
+// CancelOrder refuses to claim a cancellation without durable order and ledger state.
 func (s *Service) CancelOrder(ctx context.Context, userID, orderID string) (*api.Order, error) {
-	if userID == "" || orderID == "" {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(orderID) == "" {
 		return nil, ErrInvalidOrder
 	}
-	
-	// This is a placeholder - real implementation would:
-	// 1. Get order
-	// 2. Verify ownership
-	// 3. Cancel if possible
-	// 4. Unlock funds
-	// 5. Return updated order
-	
-	return nil, ErrInvalidOrder
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, ErrPersistenceUnavailable
 }
 
-// CancelAllOrders cancels all orders for a user
+// CancelAllOrders refuses to claim cancellations without durable order and ledger state.
 func (s *Service) CancelAllOrders(ctx context.Context, userID, symbol string) ([]api.Order, error) {
-	if userID == "" {
+	if strings.TrimSpace(userID) == "" {
 		return nil, ErrInvalidOrder
 	}
-	
-	// This is a placeholder - real implementation would cancel all orders
-	return []api.Order{}, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, ErrPersistenceUnavailable
 }
 
-// GetUserTrades retrieves trades for a user
+// GetUserTrades retrieves trades from durable trade history.
 func (s *Service) GetUserTrades(ctx context.Context, userID, symbol string, limit int, fromID int64) ([]api.Trade, error) {
-	if userID == "" {
+	if strings.TrimSpace(userID) == "" {
 		return nil, ErrInvalidOrder
 	}
-	
-	// This is a placeholder - real implementation would query database
-	return []api.Trade{}, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, ErrPersistenceUnavailable
 }
 
-// GetStakingProducts retrieves staking products
+// GetStakingProducts returns no products until configured products are loaded from
+// an authoritative provider/repository. It never advertises invented yields.
 func (s *Service) GetStakingProducts(ctx context.Context) []api.StakingProduct {
-	return []api.StakingProduct{
-		{
-			ID:         "eth-staking",
-			Asset:     "ETH",
-			APY:       4.5,
-			MinStake:  0.01,
-			LockPeriod: 0,
-			Status:   "active",
-		},
-		{
-			ID:         "sol-staking",
-			Asset:     "SOL",
-			APY:       6.2,
-			MinStake:  1.0,
-			LockPeriod: 0,
-			Status:   "active",
-		},
-		{
-			ID:         "dot-staking",
-			Asset:     "DOT",
-			APY:       12.0,
-			MinStake:  10.0,
-			LockPeriod: 28,
-			Status:   "active",
-		},
-	}
+	return nil
 }
 
-// Stake stakes assets
+// Stake fails closed until a durable staking provider and ledger are configured.
 func (s *Service) Stake(ctx context.Context, req *StakeRequest) (*api.StakingPosition, error) {
-	if req == nil || req.UserID == "" || req.Asset == "" {
+	if req == nil || strings.TrimSpace(req.UserID) == "" || strings.TrimSpace(req.Asset) == "" || req.Amount <= 0 || math.IsNaN(req.Amount) || math.IsInf(req.Amount, 0) {
 		return nil, ErrInvalidOrder
 	}
-	
-	// This is a placeholder - real implementation would:
-	// 1. Lock funds
-	// 2. Create staking position
-	// 3. Return position
-	
-	position := &api.StakingPosition{
-		ID:            uuid.New().String(),
-		UserID:        req.UserID,
-		Asset:        req.Asset,
-		Amount:       req.Amount,
-		APY:          5.0,
-		StartTime:    api.Now(),
-		LockPeriodDays: 0,
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	
-	return position, nil
+	return nil, ErrPersistenceUnavailable
 }
 
-// Unstake unstakes assets
+// Unstake fails closed until a durable staking provider and ledger are configured.
 func (s *Service) Unstake(ctx context.Context, req *UnstakeRequest) (*api.StakingPosition, error) {
-	if req == nil || req.UserID == "" || req.PositionID == "" {
+	if req == nil || strings.TrimSpace(req.UserID) == "" || strings.TrimSpace(req.PositionID) == "" || (req.Amount != 0 && (req.Amount < 0 || math.IsNaN(req.Amount) || math.IsInf(req.Amount, 0))) {
 		return nil, ErrInvalidOrder
 	}
-	
-	// This is a placeholder - real implementation would:
-	// 1. Check position
-	// 2. Calculate rewards
-	// 3. Unlock funds
-	// 4. Return position
-	
-	return nil, ErrInvalidOrder
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, ErrPersistenceUnavailable
 }
 
-// GetStakingPositions retrieves staking positions
+// GetStakingPositions retrieves positions from durable storage.
 func (s *Service) GetStakingPositions(ctx context.Context, userID string) ([]api.StakingPosition, error) {
-	if userID == "" {
+	if strings.TrimSpace(userID) == "" {
 		return nil, ErrInvalidOrder
 	}
-	
-	// This is a placeholder - real implementation would query database
-	return []api.StakingPosition{}, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, ErrPersistenceUnavailable
 }
 
-// GetSavingsProducts retrieves savings products
+// GetSavingsProducts returns no products until authoritative rates and terms are configured.
 func (s *Service) GetSavingsProducts(ctx context.Context) []api.SavingsProduct {
-	return []api.SavingsProduct{
-		{
-			ID:     "usdt-flexible",
-			Asset: "USDT",
-			APY:   3.5,
-			Type:  "flexible",
-			Status: "active",
-		},
-		{
-			ID:     "usdt-fixed-30",
-			Asset: "USDT",
-			APY:   4.5,
-			Type:  "fixed",
-			Status: "active",
-		},
-	}
+	return nil
 }
 
-// GetLendingProducts retrieves lending products
+// GetLendingProducts returns no products until authoritative rates and terms are configured.
 func (s *Service) GetLendingProducts(ctx context.Context) []api.LendingProduct {
-	return []api.LendingProduct{
-		{
-			ID:          "usdt-lending",
-			Asset:       "USDT",
-			BorrowAPY:   12.5,
-			LendAPY:     10.0,
-			Collateral: []string{"BTC", "ETH"},
-			MinAmount:  100,
-			Status:    "active",
-		},
-	}
+	return nil
 }
 
 // StakingPosition represents a staking position (for API compatibility)
