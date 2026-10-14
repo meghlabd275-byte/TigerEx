@@ -39,16 +39,17 @@ const darkTheme = {
   },
 };
 
-type Theme = typeof lightTheme;
+type Theme = Omit<typeof lightTheme, 'mode'> & { mode: 'light' | 'dark' };
 
 // Theme Context
-const ThemeContext = React.createContext<{ theme: Theme; toggleTheme: () => void }>({
+const ThemeContext = React.createContext<{ theme: Theme; toggleTheme: () => void; mounted: boolean }>({
   theme: lightTheme,
   toggleTheme: () => {},
+  mounted: false,
 });
 
 const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [theme, setTheme] = useState(lightTheme);
+  const [theme, setTheme] = useState<Theme>(lightTheme);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -68,7 +69,7 @@ const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   if (!mounted) return <>{children}</>;
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, toggleTheme, mounted }}>
       {children}
     </ThemeContext.Provider>
   );
@@ -77,7 +78,7 @@ const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 const useTheme = () => React.useContext(ThemeContext);
 
 // Icons
-const Icon = ({ name, className }: { name: string; className?: string }) => {
+const Icon = ({ name, className, style }: { name: string; className?: string; style?: React.CSSProperties }) => {
   const icons: Record<string, JSX.Element> = {
     home: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />,
     market: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />,
@@ -101,7 +102,7 @@ const Icon = ({ name, className }: { name: string; className?: string }) => {
     moon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />,
     logout: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />,
   };
-  return <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">{icons[name]}</svg>;
+  return <svg className={className} style={style} fill="none" stroke="currentColor" viewBox="0 0 24 24">{icons[name]}</svg>;
 };
 
 // Navigation Items
@@ -239,7 +240,7 @@ const Header: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) => {
 };
 
 // Main Layout
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+function DashboardShell({ children }: { children: React.ReactNode }) {
   const { theme, toggleTheme, mounted } = useTheme();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -255,10 +256,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  if (!mounted) return null;
+  if (!mounted) return <div className="min-h-screen" style={{ backgroundColor: theme.colors.background }}>{children}</div>;
 
   return (
-    <ThemeProvider>
       <div className="min-h-screen" style={{ backgroundColor: theme.colors.background }}>
         {/* Mobile Sidebar Overlay */}
         {!sidebarCollapsed && (
@@ -289,6 +289,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </nav>
       </div>
-    </ThemeProvider>
   );
+}
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  return <ThemeProvider><DashboardShell>{children}</DashboardShell></ThemeProvider>;
 }
