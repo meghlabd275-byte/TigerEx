@@ -423,16 +423,20 @@ RiskCheckResult MatchingEngine::check_risk(const Order& order) {
         return result;
     }
     
-    // Check market state
-    auto market_it = markets_.find(order.symbol);
-    if (market_it != markets_.end()) {
-        if (market_it->second.state != MarketState::Open) {
+    // Read market metadata under the engine lock. Do not retain map iterators
+    // after releasing the lock, because markets can be removed concurrently.
+    int leverage = 1;
+    {
+        std::shared_lock lock(engine_mutex_);
+        auto market_it = markets_.find(order.symbol);
+        if (market_it == markets_.end() || market_it->second.state != MarketState::Open) {
             result.allowed = false;
-            result.reason = "Market not open";
+            result.reason = "Market missing or not open";
             return result;
         }
+        leverage = std::max(1, market_it->second.max_leverage);
     }
-    
+
     // Check order value
     int64_t order_value = order.price[0] * order.quantity[0];
     
@@ -463,9 +467,6 @@ RiskCheckResult MatchingEngine::check_risk(const Order& order) {
         order.market_type == MarketType::Futures) {
         
         // For margin trading, calculate margin requirement
-        int leverage = market_it != markets_.end() ? 
-                      market_it->second.max_leverage : 1;
-        
         result.margin_required = order_value / leverage;
         result.position_value = std::abs(new_position) * order.price[0];
         
@@ -566,8 +567,14 @@ void MatchingEngine::reset_circuit_breaker(const std::string& symbol) {
 
 MatchingEngine::EngineStats MatchingEngine::get_stats() const {
     EngineStats stats = stats_;
-    stats.market_count = markets_.size();
-    stats.order_count = order_books_.empty() ? 0 : order_books_.begin()->second->order_count();
+    {
+        std::shared_lock lock(engine_mutex_);
+        stats.market_count = static_cast<uint32_t>(markets_.size());
+        stats.order_count = 0;
+        for (const auto& entry : order_books_) {
+            stats.order_count += entry.second->order_count();
+        }
+    }
     return stats;
 }
 
