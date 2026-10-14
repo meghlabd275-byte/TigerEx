@@ -145,33 +145,34 @@ func (s *Service) ClosePosition(ctx context.Context, positionID uuid.UUID, size 
 
 // CalculateUnrealizedPNL calculates unrealized PnL
 func (s *Service) CalculateUnrealizedPNL(pos *Position, markPrice *big.Int) *big.Int {
-	var pnl *big.Int
-
-	if pos.Side == PositionLong {
-		priceDiff := new(big.Int).Sub(markPrice, pos.EntryPrice)
-		pnl = new(big.Int).Mul(priceDiff, pos.Size)
-	} else {
-		priceDiff := new(big.Int).Sub(pos.EntryPrice, markPrice)
-		pnl = new(big.Int).Mul(priceDiff, pos.Size)
+	if pos == nil || markPrice == nil || pos.EntryPrice == nil || pos.Size == nil {
+		return nil
 	}
 
-	// Apply leverage factor
-	leverage := big.NewInt(int64(pos.Leverage))
-	pnl = new(big.Int).Div(pnl, big.NewInt(1))
-	return pnl
+	var priceDiff *big.Int
+	if pos.Side == PositionLong {
+		priceDiff = new(big.Int).Sub(markPrice, pos.EntryPrice)
+	} else if pos.Side == PositionShort {
+		priceDiff = new(big.Int).Sub(pos.EntryPrice, markPrice)
+	} else {
+		return nil
+	}
+	return new(big.Int).Mul(priceDiff, pos.Size)
 }
 
 // CheckLiquidation checks if position should be liquidated
 func (s *Service) CheckLiquidation(pos *Position) bool {
-	if pos.LiquidationPrice == nil || pos.Status != PositionOpen {
+	if pos == nil || pos.LiquidationPrice == nil || pos.MarkPrice == nil || pos.Status != PositionOpen {
 		return false
 	}
 
 	if pos.Side == PositionLong {
 		return pos.MarkPrice.Cmp(pos.LiquidationPrice) <= 0
-	} else {
+	}
+	if pos.Side == PositionShort {
 		return pos.MarkPrice.Cmp(pos.LiquidationPrice) >= 0
 	}
+	return false
 }
 
 // LiquidatePosition liquidates a position
