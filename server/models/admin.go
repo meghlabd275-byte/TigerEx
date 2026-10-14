@@ -3,6 +3,10 @@ package models
 
 import (
 	"context"
+	"errors"
+	"net/mail"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -415,30 +419,57 @@ type Admin struct {
 	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
-// Create default super admin
+// CreateDefaultAdmin bootstraps the first administrator only from explicit deployment secrets.
+// It never creates a publicly known username or password.
 func CreateDefaultAdmin() error {
 	ctx := context.Background()
-
-	// Check if admin exists
 	var count int
-	err := Pool.QueryRow(ctx, "SELECT COUNT(*) FROM admins").Scan(&count)
+	if err := Pool.QueryRow(ctx, "SELECT COUNT(*) FROM admins").Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	email := strings.ToLower(strings.TrimSpace(os.Getenv("TIGEREX_BOOTSTRAP_ADMIN_EMAIL")))
+	password := os.Getenv("TIGEREX_BOOTSTRAP_ADMIN_PASSWORD")
+	if email == "" || password == "" {
+		return errors.New("no administrators exist; configure TIGEREX_BOOTSTRAP_ADMIN_EMAIL and TIGEREX_BOOTSTRAP_ADMIN_PASSWORD for one-time bootstrap")
+	}
+	if len(password) < 16 {
+		return errors.New("TIGEREX_BOOTSTRAP_ADMIN_PASSWORD must be at least 16 characters")
+	}
+	parsed, err := mail.ParseAddress(email)
+	if err != nil || parsed.Address != email || !strings.Contains(email, "@") {
+		return errors.New("TIGEREX_BOOTSTRAP_ADMIN_EMAIL must be a valid email address")
+	}
+	username := strings.SplitN(email, "@", 2)[0]
+	if len(username) < 3 {
+		return errors.New("bootstrap email local part must contain at least 3 characters")
+	}
+	passwordHash, err := HashPassword(password)
 	if err != nil {
 		return err
 	}
 
-	if count == 0 {
-		// Create default super admin
-		salt := GenerateSalt()
-		PWHash := HashPasswordWithSalt("admin123", salt)
-
-		_, err = Pool.Exec(ctx, `
-		INSERT INTO admins (id, username, email, password_hash, password_salt, role, status, permissions, super_admin_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, uuid.New(), "superadmin", "admin@tigerex.com", PWHash, salt, RoleSuperAdmin, "active", []string{PermFullAccess}, nil)
-		if err != nil {
-			return err
-		}
+	// Re-check under a transaction so concurrent starts cannot create multiple bootstrap accounts.
+	tx, err := Pool.Begin(ctx)
+	if err != nil {
+		return err
 	}
-
-	return nil
+	defer tx.Rollback(ctx)
+	if err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM admins FOR UPDATE").Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return tx.Commit(ctx)
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO admins (id, username, email, password_hash, role, status, permissions)
+		VALUES ($1, $2, $3, $4, $5, 'active', $6)
+	`, uuid.New(), username, email, passwordHash, RoleSuperAdmin, []string{PermFullAccess})
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
