@@ -566,9 +566,12 @@ void MatchingEngine::reset_circuit_breaker(const std::string& symbol) {
 // ============================================================================
 
 MatchingEngine::EngineStats MatchingEngine::get_stats() const {
-    EngineStats stats = stats_;
+    EngineStats stats;
     {
         std::shared_lock lock(engine_mutex_);
+        // market_count/order_count are non-atomic and must be snapshotted under
+        // the same lock used by market lifecycle operations.
+        stats = stats_;
         stats.market_count = static_cast<uint32_t>(markets_.size());
         stats.order_count = 0;
         for (const auto& entry : order_books_) {
