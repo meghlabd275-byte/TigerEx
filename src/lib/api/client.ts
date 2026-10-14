@@ -65,7 +65,8 @@ class AuthService {
 
   async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    hasRetriedAfterRefresh = false
   ): Promise<T> {
     const token = this.getToken();
     const headers: HeadersInit = {
@@ -82,9 +83,25 @@ class AuthService {
       headers,
     });
 
-    if (response.status === 401 && this.refreshToken) {
-      await this.refreshAccessToken();
-      return this.request<T>(endpoint, options);
+    // Refresh at most once per request. Never recursively refresh the refresh endpoint.
+    // Read the persisted refresh token too, so a page reload does not silently disable refresh.
+    const storedRefreshToken =
+      this.refreshToken ||
+      (typeof window !== 'undefined' ? localStorage.getItem('tigerex_refresh_token') : null);
+
+    if (
+      response.status === 401 &&
+      endpoint !== '/auth/refresh' &&
+      !hasRetriedAfterRefresh &&
+      storedRefreshToken
+    ) {
+      try {
+        await this.refreshAccessToken();
+      } catch (error) {
+        this.clearTokens();
+        throw error;
+      }
+      return this.request<T>(endpoint, options, true);
     }
 
     if (!response.ok) {
@@ -144,13 +161,21 @@ class AuthService {
       throw new Error('No refresh token available');
     }
 
-    const response = await this.request<ApiResponse<LoginResponse>>('/auth/refresh', {
-      method: 'POST',
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
+    try {
+      // This endpoint is excluded from automatic refresh in request(), preventing
+      // an invalid/expired refresh token from causing an infinite retry loop.
+      const response = await this.request<ApiResponse<LoginResponse>>('/auth/refresh', {
+        method: 'POST',
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
 
-    if (response.data) {
+      if (!response.data?.access_token || !response.data?.refresh_token) {
+        throw new Error('Refresh endpoint returned an invalid token response');
+      }
       this.setTokens(response.data.access_token, response.data.refresh_token);
+    } catch (error) {
+      this.clearTokens();
+      throw error;
     }
   }
 
