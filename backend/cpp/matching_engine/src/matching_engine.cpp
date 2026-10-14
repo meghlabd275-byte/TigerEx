@@ -696,7 +696,7 @@ bool MatchingEngine::validate_order(const Order& order, std::string& error) {
     }
     
     // Check market is open
-    auto* market = get_market(order.symbol);
+    auto market = get_market(order.symbol);
     if (!market) {
         error = "Market not found";
         return false;
