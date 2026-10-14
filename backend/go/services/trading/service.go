@@ -1341,42 +1341,12 @@ func (s *TradingService) updatePosition(ctx context.Context, order *Order) {
 // ============================================================================
 
 func (s *TradingService) startMarketDataFeed(ctx context.Context) {
-	// In production, this would connect to price feeds
-	// For now, simulate with mock data
-	ticker := &Ticker{
-		Timestamp: time.Now(),
+	// Market data must come from an explicitly configured, monitored provider adapter.
+	// Do not publish generated ticker values as exchange data.
+	if s.logger != nil {
+		s.logger.Error("market data feed disabled: no verified provider adapter configured")
 	}
-	
-	s.tickerMu.Lock()
-	for symbol, sym := range s.symbols {
-		ticker.Symbol = symbol
-		ticker.Price = sym.LastPrice
-		ticker.PriceChange = sym.PriceChange
-		ticker.PriceChangePct = sym.PriceChangePct
-		ticker.High24h = sym.High24h
-		ticker.Low24h = sym.Low24h
-		ticker.Volume24h = sym.Volume24h
-		ticker.QuoteVolume24h = sym.QuoteVolume24h
-		
-		// Set bid/ask
-		ticker.BidPrice = sym.LastPrice * 0.9995
-		ticker.AskPrice = sym.LastPrice * 1.0005
-		ticker.BidQty = sym.Volume24h * 0.1
-		ticker.AskQty = sym.Volume24h * 0.1
-		
-		s.tickers[symbol] = ticker
-	}
-	s.tickerMu.Unlock()
-	
-	// Update every second
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		
-		for range ticker.C {
-			s.updateTickers()
-		}
-	}()
+	return
 }
 
 func (s *TradingService) updateTickers() {
