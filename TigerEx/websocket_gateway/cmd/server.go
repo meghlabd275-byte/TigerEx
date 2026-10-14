@@ -44,6 +44,7 @@ type Client struct {
 	manager  *services.StreamManager
 	socket   *websocket.Conn
 	owner    *Server
+	done     chan struct{}
 }
 
 // NewServer creates a new WebSocket server
@@ -134,6 +135,7 @@ func (s *Server) registerClient(r *http.Request, conn *websocket.Conn) *Client {
 		UserID:  "", // Never trust a client-supplied userId for private event routing.
 		Streams: make(map[string]bool),
 		Send:    make(chan []byte, 256),
+		done:    make(chan struct{}),
 		manager: s.manager,
 		socket: conn,
 		owner: s,
@@ -159,7 +161,7 @@ func (s *Server) unregisterClient(client *Client) {
 	delete(s.clients, client)
 	s.mu.Unlock()
 	s.manager.UnregisterClient(&models.Client{ID: client.ID, UserID: client.UserID})
-	close(client.Send)
+	close(client.done)
 	_ = client.socket.Close()
 	log.Printf("Client disconnected: %s", client.ID)
 }
@@ -307,6 +309,9 @@ func (c *Client) writePump() {
 	ticker := time.NewTicker(30 * time.Second); defer ticker.Stop()
 	for {
 		select {
+		case <-c.done:
+			_ = c.socket.WriteMessage(websocket.CloseMessage, []byte{})
+			return
 		case message, ok := <-c.Send:
 			_ = c.socket.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			if !ok { _ = c.socket.WriteMessage(websocket.CloseMessage, []byte{}); return }
