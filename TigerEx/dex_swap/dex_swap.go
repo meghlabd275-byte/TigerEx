@@ -263,59 +263,7 @@ func (s *DexSwapService) initializeProtocols() {
 
 // GetQuote returns a swap quote
 func (s *DexSwapService) GetQuote(ctx context.Context, req QuoteRequest) (*QuoteResult, error) {
-	// Validate tokens
-	if req.FromToken == "" || req.ToToken == "" {
-		return nil, fmt.Errorf("from and to tokens are required")
-	}
-	
-	if req.AmountIn.LessThanOrEqual(decimal.Zero) {
-		return nil, fmt.Errorf("amount must be positive")
-	}
-	
-	// Determine DEX networks to use
-	networks := req.DexNetworks
-	if len(networks) == 0 {
-		networks = []DexNetwork{DexNetworkUniswapV2, DexNetworkSushiswap}
-	}
-	
-	// Get best quote across protocols
-	var bestQuote *QuoteResult
-	bestAmountOut := decimal.Zero
-	
-	for _, network := range networks {
-		protocol, exists := s.protocols[network]
-		if !exists {
-			continue
-		}
-		
-		quote, err := s.getQuoteFromProtocol(ctx, req.FromToken, req.ToToken, req.AmountIn, protocol)
-		if err != nil {
-			continue
-		}
-		
-		if quote.AmountOut.GreaterThan(bestAmountOut) {
-			bestAmountOut = quote.AmountOut
-			bestQuote = quote
-		}
-	}
-	
-	if bestQuote == nil {
-		return nil, fmt.Errorf("no quote available")
-	}
-	
-	// Calculate min output with slippage
-	slippage := req.Slippage
-	if slippage.IsZero() {
-		slippage = s.config.MaxSlippage
-	}
-	
-	amountOutMin := bestQuote.AmountOut.Mul(decimal.NewFromInt(10000).Sub(slippage.Mul(100))).Div(decimal.NewFromInt(10000))
-	bestQuote.AmountOutMin = amountOutMin
-	
-	// Set valid until
-	bestQuote.ValidUntil = time.Now().Add(s.config.CacheDuration).UnixMilli()
-	
-	return bestQuote, nil
+	return nil, fmt.Errorf("DEX quoting unavailable: no verified on-chain RPC, pool state, or route adapter is configured")
 }
 
 // getQuoteFromProtocol gets a quote from a specific protocol
@@ -437,53 +385,7 @@ func calculatePriceImpact(amountIn, amountOut, reserveIn, reserveOut decimal.Dec
 
 // ExecuteSwap executes a swap
 func (s *DexSwapService) ExecuteSwap(ctx context.Context, req SwapRequest) (*SwapResult, error) {
-	// Get quote first
-	quoteReq := QuoteRequest{
-		FromToken:   req.FromToken,
-		ToToken:     req.ToToken,
-		AmountIn:    req.AmountIn,
-		DexNetworks: req.DexNetworks,
-	}
-	
-	quote, err := s.GetQuote(ctx, quoteReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get quote: %w", err)
-	}
-	
-	// Validate amount out min
-	if req.AmountOutMin.GreaterThan(quote.AmountOutMin) {
-		return nil, fmt.Errorf("amount out min too high: %s > %s", req.AmountOutMin, quote.AmountOutMin)
-	}
-	
-	// Create swap result
-	swapID := uuid.New().String()
-	result := &SwapResult{
-		SwapID:       swapID,
-		Status:       string(SwapStatusPending),
-		FromToken:    req.FromToken,
-		ToToken:      req.ToToken,
-		AmountIn:     req.AmountIn,
-		AmountOut:     quote.AmountOut,
-		AmountOutMin: quote.AmountOutMin,
-		PriceImpact:  quote.PriceImpact,
-		Timestamp:    time.Now().UnixMilli(),
-	}
-	
-	// Store pending swap
-	s.mu.Lock()
-	s.pendingSwaps[swapID] = result
-	s.mu.Unlock()
-	
-	// In production, this would:
-	// 1. Build the transaction
-	// 2. Sign with user's wallet
-	// 3. Submit to network
-	// 4. Wait for confirmation
-	
-	// Simulate execution
-	go s.simulateSwapExecution(swapID, result)
-	
-	return result, nil
+	return nil, fmt.Errorf("DEX execution unavailable: transaction signing and chain broadcast are not configured")
 }
 
 // simulateSwapExecution simulates swap execution
