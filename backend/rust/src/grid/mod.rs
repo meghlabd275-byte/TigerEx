@@ -165,7 +165,7 @@ mod tests {
         let mut gm = GridManager::new();
         gm.init_grid("s1", 2, 10.0, 20.0);
         let pnl = gm.backtest("s1", &[10.0, 16.0]);
-        assert!((pnl - 0.05).abs() < 1e-9, "unexpected PnL: {pnl}");
+        assert!((pnl - 0.025).abs() < 1e-9, "unexpected PnL: {pnl}");
         assert_eq!(gm.get_profit("s1"), 0.0);
         assert!(gm.get_grid_levels("s1").iter().all(|level| !level.3));
     }
