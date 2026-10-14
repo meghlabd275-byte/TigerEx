@@ -1976,7 +1976,7 @@ func CancelOrderHandler(w http.ResponseWriter, r *http.Request) {
 	).Scan(&dbStatus)
 	
 	if err == pgx.ErrNoRows {
-		WriteJSON(w.http.StatusNotFound, APIResponse){
+		WriteJSON(w, http.StatusNotFound, APIResponse{
 			Success: false,
 			Error:   &APIError{Code: 404, Message: "Order not found or cannot be cancelled"},
 		})
