@@ -47,12 +47,12 @@ var mockPrices = map[string]Ticker{
 
 // Get all markets
 func GetMarkets(c *gin.Context) {
-	rows, err := models.Pool.Query(c.Request.Context(), \`
+	rows, err := models.Pool.Query(c.Request.Context(), `
 		SELECT symbol, base_currency, quote_currency, status
 		FROM markets
 		WHERE status IN ('active', 'trading')
 		ORDER BY symbol
-	\`)
+	`)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Configured market metadata is unavailable"}})
 		return
