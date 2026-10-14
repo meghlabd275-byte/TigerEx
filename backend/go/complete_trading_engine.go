@@ -1519,8 +1519,14 @@ func (me *MatchingEngine) GetTicker(symbol string) (*Ticker, error) {
 
 // GetTradeHistory returns trade history
 func (me *MatchingEngine) GetTradeHistory(symbol string, limit int) ([]*Trade, error) {
-	// This would typically query from persistent storage
-	return []*Trade{}, nil
+	if strings.TrimSpace(symbol) == "" {
+		return nil, errors.New("symbol is required")
+	}
+	if limit <= 0 || limit > 1000 {
+		return nil, errors.New("limit must be between 1 and 1000")
+	}
+	// Never return a successful empty history when no authoritative store exists.
+	return nil, ErrTradeHistoryUnavailable
 }
 
 // =============================================================================
@@ -1970,6 +1976,7 @@ func (me *MatchingEngine) Stop() {
 // =============================================================================
 
 var ErrRedisUnavailable = errors.New("redis client is not configured; cache operation unavailable")
+var ErrTradeHistoryUnavailable = errors.New("trade history persistence is not configured")
 
 // RedisClient is an intentionally unconfigured adapter. It must not report
 // successful cache operations until a real Redis client is injected.
