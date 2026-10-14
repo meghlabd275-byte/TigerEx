@@ -12,8 +12,13 @@ export function passwordStrength(password: string) {
   return { label: 'Strong', color: 'bg-green-500', text: 'text-green-400', score };
 }
 
-export function isProbablyRegistered(identifier: string) {
-  return /registered|demo|test|user|@tigerex/i.test(identifier) || identifier.replace(/\D/g, '').endsWith('0000');
+/**
+ * @deprecated Registration status must come from the authenticated server's
+ * registration-check endpoint. Identifiers, email domains, and numeric suffixes
+ * are not evidence that an account exists.
+ */
+export function isProbablyRegistered(_identifier: string): boolean {
+  return false;
 }
 
 export const socialProviders = ['Google', 'Apple', 'Telegram', 'Facebook', 'X', 'LinkedIn', 'Discord', 'Line', 'WeChat'];
