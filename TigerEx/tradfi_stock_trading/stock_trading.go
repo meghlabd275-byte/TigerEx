@@ -57,36 +57,17 @@ func NewStockTrading() *StockTrading {
 
 // Get quote
 func (s *StockTrading) GetQuote(symbol string) *StockQuote {
-	if q, ok := s.Quotes[symbol]; ok {
-		return q
-	}
-	
-	// Mock data
-	return &StockQuote{
-		Symbol: symbol,
-		Price: 150.0,
-		Change: 2.5,
-		Volume: 1000000,
-	}
+	return s.Quotes[symbol]
 }
 
 // Place market order
 func (s *StockTrading) PlaceMarketOrder(userID, symbol string, quantity int, side OrderSide) *StockOrder {
 	quote := s.GetQuote(symbol)
-	
-	order := &StockOrder{
-		ID: fmt.Sprintf("order_%d", time.Now().UnixNano()),
-		UserID: userID,
-		Symbol: symbol,
-		Side: side,
-		Quantity: quantity,
-		Price: quote.Price,
-		Type: OrderMarket,
-		Status: "filled",
+	if quote == nil || quantity <= 0 {
+		return nil
 	}
-	
-	s.Orders[order.ID] = order
-	return order
+	// A quote alone is not an execution venue; never fabricate an immediate fill.
+	return nil
 }
 
 func main() {
