@@ -56,6 +56,22 @@ jobs:
       - name: Type-check frontend
         run: npm run type-check
 
+  cpp-matching-engine:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install C++ build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libssl-dev
+
+      - name: Configure matching engine
+        run: cmake -S backend/cpp/matching_engine -B build/matching-engine -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Compile matching engine with warnings
+        run: cmake --build build/matching-engine --parallel 2
+
   rust:
     runs-on: ubuntu-latest
     steps:
