@@ -752,7 +752,6 @@ func (m *MatchingEngine) executeLimitOrder(ob *OrderBook, order *Order) []*Trade
 	ob.LastUpdateID++
 
 	if len(trades) > 0 {
-		order.Status = order.Remaining > 0 && order.FilledQuantity > 0: OrderStatusPartiallyFilled
 		if order.Remaining > 0 && order.FilledQuantity > 0 {
 			order.Status = OrderStatusPartiallyFilled
 		} else if order.Remaining <= 0 || order.FilledQuantity > 0 {
