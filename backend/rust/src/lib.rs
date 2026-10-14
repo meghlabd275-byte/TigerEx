@@ -6,7 +6,7 @@ pub mod crypto {
         aead::{Aead, KeyInit},
         Aes256Gcm, Nonce,
     };
-    use argon2::{Argon2, PasswordHasher};
+    use argon2::{password_hash::{PasswordHash, SaltString}, Argon2, PasswordHasher, PasswordVerifier};
     use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
     use rand::rngs::OsRng;
     use rand::RngCore;
@@ -22,13 +22,19 @@ pub mod crypto {
     /// Hash password using Argon2id (memory-hard function)
     pub fn hash_password(password: &str) -> Result<String, String> {
         let argon2 = Argon2::default();
-        let salt = generate_random_bytes(16);
-        
+        let salt = SaltString::generate(&mut OsRng);
         let hash = argon2
             .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| format!("Hash error: {}", e))?;
-            
-        Ok(format!("{}:{:x?}", hash.hash.len(), salt))
+            .map_err(|e| format!("Password hashing failed: {}", e))?;
+        // Store the full PHC string, including algorithm, parameters, salt, and hash.
+        Ok(hash.to_string())
+    }
+
+    /// Verify a password against its encoded Argon2 PHC string.
+    pub fn verify_password(password: &str, encoded_hash: &str) -> Result<bool, String> {
+        let parsed = PasswordHash::new(encoded_hash)
+            .map_err(|e| format!("Invalid encoded password hash: {}", e))?;
+        Ok(Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
     }
 
     /// Encrypt data with AES-256-GCM
