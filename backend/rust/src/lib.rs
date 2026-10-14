@@ -1,3 +1,5 @@
+pub mod grid;
+
 //! TigerEx Rust Crypto Module
 //! High-performance cryptographic operations for security-critical functions
 
@@ -74,7 +76,8 @@ pub mod crypto {
     /// Generate Ed25519 keypair for signing
     pub fn generate_signing_keypair() -> (SigningKey, VerifyingKey) {
         let signing_key = SigningKey::generate(&mut OsRng);
-        (signing_key, signing_key.verifying_key())
+        let verifying_key = signing_key.verifying_key();
+        (signing_key, verifying_key)
     }
 
     /// Sign data with Ed25519
@@ -346,7 +349,7 @@ pub mod orderbook {
             }
             self.bids = merged;
 
-            merged.clear();
+            let mut merged: Vec<(f64, f64)> = Vec::new();
             for (price, qty) in &self.asks {
                 if let Some(last) = merged.last_mut() {
                     if (last.0 - price).abs() < f64::EPSILON {
@@ -369,7 +372,7 @@ pub mod orderbook {
                 
                 if bid_price >= ask_price {
                     let price = (bid_price + ask_price) / 2.0;
-                    let qty = bid_qty.min(ask_qty);
+                    let qty = (*bid_qty).min(*ask_qty);
                     
                     matches.push((
                         format!("BID-{}", bid_price),
@@ -430,5 +433,18 @@ mod tests {
         
         // Should match
         assert!(!book.match_orders().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod password_hash_tests {
+    use super::crypto::{hash_password, verify_password};
+
+    #[test]
+    fn argon2_hash_is_stored_and_verified() {
+        let encoded = hash_password("A-long-test-password-91!").expect("hash should succeed");
+        assert!(encoded.starts_with("$argon2id$"));
+        assert!(verify_password("A-long-test-password-91!", &encoded).unwrap());
+        assert!(!verify_password("wrong-password", &encoded).unwrap());
     }
 }
