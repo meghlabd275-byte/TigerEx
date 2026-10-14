@@ -44,6 +44,9 @@ jobs:
         working-directory: TigerEx/rest_api_gateway
         run: go test ./internal/...
 
+      - name: Test admin service validation and isolation
+        run: GO111MODULE=off go test ./TigerEx/admin_panel
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
