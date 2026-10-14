@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net"
+	"net/url"
+	"time"
 	"os"
 	"os/signal"
 	"strings"
@@ -15,6 +18,8 @@ import (
 	"tigerex/websocket_gateway/internal/config"
 	"tigerex/websocket_gateway/internal/models"
 	"tigerex/websocket_gateway/internal/services"
+
+	"github.com/gorilla/websocket"
 )
 
 // ============================================================================
@@ -37,6 +42,8 @@ type Client struct {
 	Streams   map[string]bool
 	Send      chan []byte
 	manager  *services.StreamManager
+	socket   *websocket.Conn
+	owner    *Server
 }
 
 // NewServer creates a new WebSocket server
@@ -97,38 +104,25 @@ func main() {
 
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// Upgrade to WebSocket
-	// In production, use gorilla/websocket or nhooyr.io/websocket
-	
-	// For now, handle as regular HTTP with upgrade
-	if r.Header.Get("Upgrade") == "" {
-		// Return WebSocket connection info
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "ready",
-			"info":  "WebSocket endpoint ready for connections",
-		})
-		return
-	}
-
-	client := s.registerClient(r)
-
-	// Handle client in production
-	// - Read messages
-	// - Write messages
-	// - Heartbeat
-
-	for {
-		select {
-		case <-r.Context().Done():
-			s.unregisterClient(client)
-			return
-		}
-	}
+	if r.Method != http.MethodGet { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
+	s.mu.RLock()
+	atCapacity := s.config.Server.MaxConnections > 0 && len(s.clients) >= s.config.Server.MaxConnections
+	s.mu.RUnlock()
+	if atCapacity { http.Error(w, "connection capacity reached", http.StatusServiceUnavailable); return }
+	upgrader := websocket.Upgrader{ReadBufferSize: 4096, WriteBufferSize: 4096, CheckOrigin: func(req *http.Request) bool {
+		origin := req.Header.Get("Origin"); if origin == "" { return true }
+		u, err := url.Parse(origin); if err != nil || u.Hostname() == "" { return false }
+		host, _, err := net.SplitHostPort(req.Host); if err != nil { host = req.Host }
+		return strings.EqualFold(u.Hostname(), host)
+	}}
+	conn, err := upgrader.Upgrade(w, r, nil); if err != nil { return }
+	client := s.registerClient(r, conn)
+	go client.writePump()
+	client.readPump()
 }
 
 // registerClient registers a new client
-func (s *Server) registerClient(r *http.Request) *Client {
+func (s *Server) registerClient(r *http.Request, conn *websocket.Conn) *Client {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -141,7 +135,9 @@ func (s *Server) registerClient(r *http.Request) *Client {
 		Streams: make(map[string]bool),
 		Send:    make(chan []byte, 256),
 		manager: s.manager,
-	}
+		socket: conn,
+		owner: s,
+}
 
 	s.clients[client] = true
 	s.manager.RegisterClient(&models.Client{
@@ -159,14 +155,12 @@ func (s *Server) registerClient(r *http.Request) *Client {
 // unregisterClient unregisters a client
 func (s *Server) unregisterClient(client *Client) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	if _, ok := s.clients[client]; !ok { s.mu.Unlock(); return }
 	delete(s.clients, client)
-	s.manager.UnregisterClient(&models.Client{
-		ID:     client.ID,
-		UserID: client.UserID,
-	})
-
+	s.mu.Unlock()
+	s.manager.UnregisterClient(&models.Client{ID: client.ID, UserID: client.UserID})
+	close(client.Send)
+	_ = client.socket.Close()
 	log.Printf("Client disconnected: %s", client.ID)
 }
 
@@ -232,6 +226,7 @@ func (c *Client) handleSubscribe(msg models.WSMessage) error {
 		ID:      c.ID,
 		UserID:  c.UserID,
 		Streams: c.Streams,
+		Send: c.Send,
 	}, streams)
 }
 
@@ -288,9 +283,39 @@ func parseStreamParams(value interface{}) ([]string, error) {
 func (c *Client) handlePing(msg models.WSMessage) error {
 	response := models.NewWSMessage("pong")
 	response.ID = msg.ID
-	data, _ := response.ToJSON()
-	c.Send <- data
-	return nil
+	data, err := response.ToJSON()
+	if err != nil { return err }
+	select { case c.Send <- data: return nil; default: return fmt.Errorf("outbound queue is full") }
+}
+
+func (c *Client) readPump() {
+	defer c.owner.unregisterClient(c)
+	c.socket.SetReadLimit(1 << 20)
+	_ = c.socket.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.socket.SetPongHandler(func(string) error { return c.socket.SetReadDeadline(time.Now().Add(60 * time.Second)) })
+	for {
+		_, data, err := c.socket.ReadMessage(); if err != nil { return }
+		if err := c.handleMessage(data); err != nil {
+			var request models.WSMessage; _ = json.Unmarshal(data, &request)
+			payload, marshalErr := models.NewWSError(request.ID, 400, err.Error()).ToJSON(); if marshalErr != nil { return }
+			select { case c.Send <- payload: default: return }
+		}
+	}
+}
+
+func (c *Client) writePump() {
+	ticker := time.NewTicker(30 * time.Second); defer ticker.Stop()
+	for {
+		select {
+		case message, ok := <-c.Send:
+			_ = c.socket.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if !ok { _ = c.socket.WriteMessage(websocket.CloseMessage, []byte{}); return }
+			if err := c.socket.WriteMessage(websocket.TextMessage, message); err != nil { c.owner.unregisterClient(c); return }
+		case <-ticker.C:
+			_ = c.socket.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := c.socket.WriteMessage(websocket.PingMessage, nil); err != nil { c.owner.unregisterClient(c); return }
+		}
+	}
 }
 
 // ============================================================================
