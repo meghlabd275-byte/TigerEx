@@ -17,9 +17,7 @@ export function getSupportedCountries() {
   const displayNames = typeof Intl !== 'undefined' && 'DisplayNames' in Intl
     ? new Intl.DisplayNames(['en'], { type: 'region' })
     : null;
-  const regions = typeof Intl !== 'undefined' && 'supportedValuesOf' in Intl
-    ? Intl.supportedValuesOf('region')
-    : Object.keys(dialingCodes);
+  const regions = Object.keys(dialingCodes);
 
   return regions.map((region) => ({
     region,

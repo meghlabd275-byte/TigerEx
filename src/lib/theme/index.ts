@@ -12,21 +12,21 @@ export function useThemeClass() {
 }
 
 export function useThemeWithDefault() {
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
+  const [theme, setThemeState] = useState<"light" | "dark">("dark");
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("tigerex-theme");
     if (saved === "light" || saved === "dark") {
-      setTheme(saved);
+      setThemeState(saved);
     } else if (window.matchMedia("(prefers-color-scheme: light)").matches) {
-      setTheme("light");
+      setThemeState("light");
     }
     setMounted(true);
   }, []);
 
   const toggleTheme = useCallback(() => {
-    setTheme((prev) => {
+    setThemeState((prev) => {
       const next = prev === "dark" ? "light" : "dark";
       localStorage.setItem("tigerex-theme", next);
       document.documentElement.setAttribute("data-theme", next);
@@ -37,7 +37,7 @@ export function useThemeWithDefault() {
   const setTheme = useCallback((newTheme: "light" | "dark") => {
     localStorage.setItem("tigerex-theme", newTheme);
     document.documentElement.setAttribute("data-theme", newTheme);
-    setTheme(newTheme);
+    setThemeState(newTheme);
   }, []);
 
   return { theme: mounted ? theme : "dark", toggleTheme, setTheme, mounted };
