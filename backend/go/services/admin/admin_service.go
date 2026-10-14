@@ -127,7 +127,7 @@ func (am *AdminManager) CreateAdmin(email, username, password, role string) (*Ad
 	if !validRoles[role] {
 		return nil, errors.New("invalid role")
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
 	if err != nil { return nil, fmt.Errorf("hash admin password: %w", err) }
 
 	am.mu.Lock()
