@@ -31,10 +31,11 @@ func AdminLogin(c *gin.Context) {
 	}
 
 	var admin models.Admin
+	var passwordSalt string
 	err := models.Pool.QueryRow(c.Request.Context(), `
-		SELECT id, username, email, password_hash, role, status, permissions 
+		SELECT id, username, email, password_hash, password_salt, role, status, permissions
 		FROM admins WHERE username = $1 OR email = $1
-	`, req.Username).Scan(&admin.ID, &admin.Username, &admin.Email, &admin.PasswordHash, &admin.Role, &admin.Status, &admin.Permissions)
+	`, req.Username).Scan(&admin.ID, &admin.Username, &admin.Email, &admin.PasswordHash, &passwordSalt, &admin.Role, &admin.Status, &admin.Permissions)
 
 	if err != nil || admin.Username == "" {
 		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Invalid credentials"}})
@@ -46,7 +47,7 @@ func AdminLogin(c *gin.Context) {
 		return
 	}
 
-	valid := bcrypt.CompareHashAndPassword([]byte(admin.PasswordHash), []byte(req.Password+"tigerex"))
+	valid := bcrypt.CompareHashAndPassword([]byte(admin.PasswordHash), []byte(req.Password+passwordSalt))
 	if valid != nil {
 		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Invalid credentials"}})
 		return
@@ -58,7 +59,15 @@ func AdminLogin(c *gin.Context) {
 		"role":     admin.Role,
 		"exp":      time.Now().Add(24 * time.Hour).Unix(),
 	})
-	tokenStr, _ := token.SignedString(middleware.JWTSecret)
+	if len(middleware.JWTSecret) < 32 {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": http.StatusServiceUnavailable, "message": "Admin authentication signing key is not configured"}})
+		return
+	}
+	tokenStr, err := token.SignedString(middleware.JWTSecret)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": http.StatusInternalServerError, "message": "Could not create authenticated session"}})
+		return
+	}
 
 	// Update last login
 	_, _ = models.Pool.Exec(c.Request.Context(), "UPDATE admins SET last_login_at = NOW() WHERE id = $1", admin.ID)
