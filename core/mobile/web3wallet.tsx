@@ -117,7 +117,8 @@ export const WalletProvider = ({ children }) => {
       const walletData = {
         address: wallet.address,
         privateKey: wallet.privateKey,
-        mnemonic: mnemonic,
+        // Do not retain the recovery phrase in long-lived provider state.
+        mnemonic: null,
         network: network,
         createdAt: Date.now(),
       };
@@ -139,22 +140,31 @@ export const WalletProvider = ({ children }) => {
   // Import wallet from private key
   const importWallet = async (privateKey, password, network = 'ethereum') => {
     try {
+      if (typeof password !== 'string' || password.length < 8) {
+        throw new Error('Wallet password must be at least 8 characters');
+      }
+      if (!Object.prototype.hasOwnProperty.call(SUPPORTED_NETWORKS, network)) {
+        throw new Error('Unsupported network');
+      }
       const wallet = new ethers.Wallet(privateKey);
-      const mnemonic = null; // A private-key import does not provide the wallet's original recovery phrase.
-      
+      const encrypted = await wallet.encrypt(password);
+      await AsyncStorage.setItem(`wallet_${wallet.address}`, JSON.stringify({
+        encrypted,
+        network,
+      }));
+      // A private-key import has no recovery phrase. Keep the signing key in
+      // memory only; persistent storage contains the password-encrypted wallet.
       const walletData = {
         address: wallet.address,
-        privateKey: privateKey,
-        mnemonic: mnemonic,
+        privateKey: wallet.privateKey,
+        mnemonic: null,
         network: network,
         createdAt: Date.now(),
       };
-      
       setWallets(prev => ({ ...prev, [wallet.address]: walletData }));
-      
       return { success: true, address: wallet.address };
     } catch (error) {
-      return { success: false, error: error.message };
+      return { success: false, error: error instanceof Error ? error.message : 'Wallet import failed' };
     }
   };
   
