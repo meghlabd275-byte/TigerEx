@@ -765,34 +765,14 @@ func validateAPIKey(ctx context.Context, keyHash string) (string, error) {
 
 // Generate JWT validation
 func validateJWT(ctx context.Context, token string) (string, error) {
-	// Decode JWT (simplified - should use proper JWT library in production)
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return "", errors.New("invalid token format")
-	}
-	
-	// Decode payload
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return "", err
-	}
-	
-	var claims struct {
-		UserID   string `json:"userId"`
-		Expiry  int64  `json:"exp"`
-		Scope   string `json:"scope"`
-	}
-	
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", err
-	}
-	
-	// Check expiry
-	if claims.Expiry > 0 && claims.Expiry < time.Now().Unix() {
-		return "", errors.New("token expired")
-	}
-	
-	return claims.UserID, nil
+	// This legacy gateway does not have a verified signature/issuer/audience verifier.
+	// Parsing claims without verifying the signature is an authentication bypass.
+	// Fail closed until a vetted verifier is configured.
+	return "", errors.New("JWT verification is not configured; authentication unavailable")
+}
+ 
+// =============================================================================
+// ENCRYPTION
 }
 
 // =============================================================================
