@@ -1178,12 +1178,12 @@ func ChangePassword(c *gin.Context) {
 // ============ FUTURES ============
 
 func GetFuturesContracts(c *gin.Context) {
-	rows, err := models.Pool.Query(c.Request.Context(), \`
+	rows, err := models.Pool.Query(c.Request.Context(), `
 		SELECT symbol, base_currency, quote_currency, contract_type, status
 		FROM futures_contracts
 		WHERE status = 'active'
 		ORDER BY symbol
-	\`)
+	`)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Configured futures contracts are unavailable"}})
 		return
