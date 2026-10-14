@@ -246,6 +246,11 @@ func (h *OCOHandler) TriggerOCO(pairID, triggeredOrderID string, orders map[stri
 	return nil
 }
 
+// isFinitePositive rejects non-finite and non-positive quantities/prices.
+func isFinitePositive(value float64) bool {
+	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
 // AlgoExecutionHandler handles TWAP, VWAP, and iceberg orders
 type AlgoExecutionHandler struct {
 	executions map[string]*AlgoExecution
@@ -271,7 +276,7 @@ type AlgoExecution struct {
 
 func NewAlgoExecutionHandler() *AlgoExecutionHandler {
 	return &AlgoExecutionHandler{
-		executions: make(map[string]*api.Order),
+		executions: make(map[string]*AlgoExecution),
 	}
 }
 
@@ -283,6 +288,12 @@ func (h *AlgoExecutionHandler) CreateTWAPExecution(
 	slices int,
 	maxSlippage float64,
 ) *AlgoExecution {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(symbol) == "" ||
+		(side != "buy" && side != "sell") || !isFinitePositive(quantity) ||
+		startTime <= 0 || endTime <= startTime || slices <= 0 ||
+		math.IsNaN(maxSlippage) || math.IsInf(maxSlippage, 0) || maxSlippage < 0 {
+		return nil
+	}
 
 	exec := &AlgoExecution{
 		OrderID:     uuid.New().String(),
@@ -301,7 +312,7 @@ func (h *AlgoExecutionHandler) CreateTWAPExecution(
 		CreatedAt:   api.Now(),
 	}
 
-	h.executions[exec.OrderID] = nil
+	h.executions[exec.OrderID] = exec
 	return exec
 }
 
@@ -314,6 +325,11 @@ func (h *AlgoExecutionHandler) CreateVWAPExecution(
 	maxSlippage float64,
 	volumeProfile []float64,
 ) *AlgoExecution {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(symbol) == "" ||
+		(side != "buy" && side != "sell") || !isFinitePositive(quantity) ||
+		!isFinitePositive(price) || !isFinitePositive(displayQty) || displayQty > quantity {
+		return nil
+	}
 
 	exec := &AlgoExecution{
 		OrderID:     uuid.New().String(),
@@ -361,7 +377,10 @@ func (h *AlgoExecutionHandler) CreateIcebergExecution(
 
 // CheckSlice checks if a new slice should be executed
 func (h *AlgoExecutionHandler) CheckSlice(exec *AlgoExecution, currentPrice, vwap float64) bool {
-	if exec == nil || exec.Status != "active" {
+	if exec == nil || exec.Status != "active" || !isFinitePositive(currentPrice) ||
+		!isFinitePositive(vwap) || !isFinitePositive(exec.TotalQty) ||
+		!isFinitePositive(exec.SliceQty) || exec.ExecutedQty < 0 ||
+		math.IsNaN(exec.ExecutedQty) || math.IsInf(exec.ExecutedQty, 0) {
 		return false
 	}
 
@@ -392,7 +411,9 @@ func (h *AlgoExecutionHandler) CheckSlice(exec *AlgoExecution, currentPrice, vwa
 
 // UpdateExecution updates execution with trade result
 func (h *AlgoExecutionHandler) UpdateExecution(exec *AlgoExecution, tradePrice, tradeQty float64) {
-	if exec == nil {
+	if exec == nil || exec.Status != "active" || !isFinitePositive(tradePrice) ||
+		!isFinitePositive(tradeQty) || !isFinitePositive(exec.TotalQty) ||
+		exec.ExecutedQty < 0 || exec.ExecutedQty+tradeQty > exec.TotalQty {
 		return
 	}
 
@@ -433,8 +454,13 @@ type GridPosition struct {
 	Side       string // "buy" or "sell"
 }
 
-// CreateGridBot creates a new grid trading bot
+// CreateGridBot creates a new grid trading bot. Invalid configurations return nil.
 func CreateGridBot(userID, symbol string, upperPrice, lowerPrice float64, gridCount int) *GridTradingBot {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(symbol) == "" ||
+		!isFinitePositive(upperPrice) || !isFinitePositive(lowerPrice) ||
+		upperPrice <= lowerPrice || gridCount < 1 || gridCount > 1000 {
+		return nil
+	}
 	gridSpacing := (upperPrice - lowerPrice) / float64(gridCount)
 
 	bot := &GridTradingBot{
@@ -515,12 +541,10 @@ func (b *DCABot) ShouldExecute() bool {
 
 // Execute performs a DCA purchase
 func (b *DCABot) Execute(currentPrice float64) {
-	if !b.ShouldExecute() {
-		return
-	}
-
-	b.CompletedOrders++
-	b.NextBuyTime = api.Now() + int64(b.IntervalHours*3600)
+	// Deliberately does not increment CompletedOrders: this helper has no
+	// execution/ledger dependency and must never pretend a purchase occurred.
+	// A production executor must persist a confirmed fill before advancing state.
+	_ = currentPrice
 }
 
 // CopyTradingHandler handles copy trading
