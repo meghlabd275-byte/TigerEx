@@ -15,7 +15,7 @@ export class ApiClient {
 
   // Generic request methods
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+    const response = await fetch(`${this.baseUrl.replace(/\\/$/, '')}${endpoint}`, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
@@ -23,7 +23,21 @@ export class ApiClient {
         ...options.headers,
       },
     });
-    return response.json();
+
+    const payload: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      const body = payload && typeof payload === 'object'
+        ? payload as { message?: unknown; error?: unknown }
+        : {};
+      const message = typeof body.message === 'string'
+        ? body.message
+        : typeof body.error === 'string'
+          ? body.error
+          : `TigerEx API request failed with status ${response.status}`;
+      throw new Error(message);
+    }
+
+    return payload as T;
   }
 
   // ============ Trading Endpoints ============
@@ -43,7 +57,7 @@ export class ApiClient {
   }
 
   async cancelOrder(orderId: string): Promise<{ success: boolean }> {
-    return this.request(`/api/v1/orders/${orderId}`, { method: 'DELETE' });
+    return this.request(`/api/v1/orders/${encodeURIComponent(orderId)}`, { method: 'DELETE' });
   }
 
   async getOrders(options?: { symbol?: string; status?: string }): Promise<any[]> {
@@ -68,15 +82,15 @@ export class ApiClient {
   }
 
   async getTicker(symbol: string): Promise<any> {
-    return this.request(`/api/v1/markets/${symbol}/ticker`);
+    return this.request(`/api/v1/markets/${encodeURIComponent(symbol)}/ticker`);
   }
 
   async getOrderBook(symbol: string, limit = 20): Promise<any> {
-    return this.request(`/api/v1/markets/${symbol}/orderbook?limit=${limit}`);
+    return this.request(`/api/v1/markets/${encodeURIComponent(symbol)}/orderbook?limit=${encodeURIComponent(String(limit))}`);
   }
 
   async getKlines(symbol: string, interval: string, limit = 100): Promise<any[]> {
-    return this.request(`/api/v1/markets/${symbol}/klines?interval=${interval}&limit=${limit}`);
+    return this.request(`/api/v1/markets/${encodeURIComponent(symbol)}/klines?interval=${encodeURIComponent(interval)}&limit=${encodeURIComponent(String(limit))}`);
   }
 
   // ============ Wallet Endpoints ============
