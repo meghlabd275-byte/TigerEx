@@ -225,7 +225,7 @@ func (s *AdminService) Login(email, password, ipAddress string) (*Admin, string,
 
 	var admin *Admin
 	for _, a := range s.admins {
-		if a.Email == email {
+		if a.Email == strings.ToLower(strings.TrimSpace(email)) {
 			admin = a
 			break
 		}
@@ -607,7 +607,6 @@ func (s *AdminService) GetWhiteLabelsHandler(c *gin.Context) {
 
 func (s *AdminService) CreateWhiteLabelHandler(c *gin.Context) {
 	var req struct {
-		AdminID string `json:"admin_id" binding:"required"`
 		Name    string `json:"name" binding:"required"`
 		Domain string `json:"domain" binding:"required"`
 	}
@@ -617,7 +616,7 @@ func (s *AdminService) CreateWhiteLabelHandler(c *gin.Context) {
 		return
 	}
 
-	wl, err := s.CreateWhiteLabel(req.AdminID, req.Name, req.Domain)
+	wl, err := s.CreateWhiteLabel(c.GetString("adminID"), req.Name, req.Domain)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
 		return
@@ -635,7 +634,6 @@ func (s *AdminService) UpdateTradingPairHandler(c *gin.Context) {
 	symbol := c.Param("symbol")
 
 	var req struct {
-		AdminID string `json:"admin_id" binding:"required"`
 		Updates map[string]interface{} `json:"updates" binding:"required"`
 	}
 
@@ -644,7 +642,7 @@ func (s *AdminService) UpdateTradingPairHandler(c *gin.Context) {
 		return
 	}
 
-	if err := s.UpdateTradingPair(req.AdminID, symbol, req.Updates); err != nil {
+	if err := s.UpdateTradingPair(c.GetString("adminID"), symbol, req.Updates); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
 		return
 	}
@@ -670,7 +668,7 @@ func (s *AdminService) UpdateFeeConfigHandler(c *gin.Context) {
 		return
 	}
 
-	if err := s.UpdateFeeConfig(req.AdminID, feeID, req.Updates); err != nil {
+	if err := s.UpdateFeeConfig(c.GetString("adminID"), feeID, req.Updates); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
 		return
 	}
@@ -685,7 +683,6 @@ func (s *AdminService) GetSettingsHandler(c *gin.Context) {
 
 func (s *AdminService) UpdateSettingHandler(c *gin.Context) {
 	var req struct {
-		AdminID string `json:"admin_id" binding:"required"`
 		Key     string `json:"key" binding:"required"`
 		Value   string `json:"value" binding:"required"`
 	}
@@ -695,7 +692,7 @@ func (s *AdminService) UpdateSettingHandler(c *gin.Context) {
 		return
 	}
 
-	if err := s.UpdateSetting(req.AdminID, req.Key, req.Value); err != nil {
+	if err := s.UpdateSetting(c.GetString("adminID"), req.Key, req.Value); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
 		return
 	}
