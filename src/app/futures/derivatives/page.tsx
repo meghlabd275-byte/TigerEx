@@ -1,90 +1,124 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 interface Derivative {
   symbol: string;
-  price: number;
-  change24h: number;
-  volume24h: number;
-  openInterest: number;
-  fundingRate: number;
-  nextFunding: string;
+  type: string;
+  status: string;
 }
+
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || '/api/v1').replace(/\/$/, '');
 
 export default function FuturesDerivativesPage() {
   const [selectedType, setSelectedType] = useState('perpetual');
-  const [derivatives, setDerivatives] = useState<Derivative[]>([
-    { symbol: 'BTC-USDT-PERP', price: 43250.00, change24h: 2.5, volume24h: 125000000, openInterest: 450000000, fundingRate: 0.01, nextFunding: '4h 30m' },
-    { symbol: 'ETH-USDT-PERP', price: 2280.00, change24h: 1.8, volume24h: 85000000, openInterest: 280000000, fundingRate: 0.01, nextFunding: '4h 30m' },
-    { symbol: 'SOL-USDT-PERP', price: 98.50, change24h: -1.2, volume24h: 45000000, openInterest: 120000000, fundingRate: -0.01, nextFunding: '4h 30m' },
-  ]);
+  const [derivatives, setDerivatives] = useState<Derivative[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadContracts() {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetch(API_BASE + '/futures/contracts', {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || payload?.success !== true || !Array.isArray(payload.data)) {
+          throw new Error(payload?.error?.message || 'Futures contract metadata is unavailable.');
+        }
+        setDerivatives(payload.data.filter((item: unknown): item is Derivative =>
+          !!item && typeof item === 'object' &&
+          typeof (item as Derivative).symbol === 'string' &&
+          typeof (item as Derivative).type === 'string' &&
+          typeof (item as Derivative).status === 'string'
+        ));
+      } catch (cause) {
+        if (!controller.signal.aborted) {
+          setDerivatives([]);
+          setError(cause instanceof Error ? cause.message : 'Unable to load futures contracts.');
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+    void loadContracts();
+    return () => controller.abort();
+  }, []);
+
+  const filtered = useMemo(
+    () => derivatives.filter(item => item.type.toLowerCase() === selectedType && item.status.toLowerCase() === 'active'),
+    [derivatives, selectedType],
+  );
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <div className="p-6">
-        <h1 className="text-2xl font-bold mb-6">Futures Derivatives</h1>
-        
-        <div className="flex gap-4 mb-6">
-          <button
-            onClick={() => setSelectedType('perpetual')}
-            className={`px-4 py-2 rounded-lg ${selectedType === 'perpetual' ? 'bg-blue-600' : 'bg-gray-700'}`}
-          >
-            Perpetual
-          </button>
-          <button
-            onClick={() => setSelectedType('delivery')}
-            className={`px-4 py-2 rounded-lg ${selectedType === 'delivery' ? 'bg-blue-600' : 'bg-gray-700'}`}
-          >
-            Delivery
-          </button>
-          <button
-            onClick={() => setSelectedType('quarterly')}
-            className={`px-4 py-2 rounded-lg ${selectedType === 'quarterly' ? 'bg-blue-600' : 'bg-gray-700'}`}
-          >
-            Quarterly
-          </button>
+    <main className="min-h-screen bg-gray-900 p-4 text-white sm:p-6">
+      <div className="mx-auto max-w-7xl">
+        <h1 className="mb-2 text-2xl font-bold">Futures Derivatives</h1>
+        <p className="mb-6 text-sm text-gray-400">
+          Contract metadata is loaded from TigerEx. Price, funding, volume and open-interest figures are withheld until connected to verified live feeds.
+        </p>
+
+        <div className="mb-6 flex flex-wrap gap-3">
+          {['perpetual', 'delivery', 'quarterly'].map(type => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => setSelectedType(type)}
+              className={`rounded-lg px-4 py-2 capitalize ${selectedType === type ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-600'}`}
+            >
+              {type}
+            </button>
+          ))}
         </div>
 
-        <div className="bg-gray-800 rounded-lg overflow-hidden">
+        {error && (
+          <div role="alert" className="mb-4 rounded-lg border border-amber-800 bg-amber-950/40 p-4 text-sm text-amber-200">
+            {error}
+          </div>
+        )}
+
+        <div className="overflow-x-auto rounded-lg border border-gray-700 bg-gray-800">
           <table className="min-w-full">
             <thead className="bg-gray-700">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Symbol</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Price</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">24h Change</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">24h Volume</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Open Interest</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Funding Rate</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Next Funding</th>
-                <th className="px-6 py-3 text-center text-xs font-medium text-gray-300 uppercase">Action</th>
+                {['Symbol', 'Price', '24h Change', '24h Volume', 'Open Interest', 'Funding Rate', 'Next Funding', 'Execution'].map(label => (
+                  <th key={label} className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-300">{label}</th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-700">
-              {derivatives.map((d) => (
-                <tr key={d.symbol} className="hover:bg-gray-750">
-                  <td className="px-6 py-4 font-medium">{d.symbol}</td>
-                  <td className="px-6 py-4 text-right">${d.price.toLocaleString()}</td>
-                  <td className={`px-6 py-4 text-right ${d.change24h >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {d.change24h >= 0 ? '+' : ''}{d.change24h}%
-                  </td>
-                  <td className="px-6 py-4 text-right">${(d.volume24h / 1000000).toFixed(1)}M</td>
-                  <td className="px-6 py-4 text-right">${(d.openInterest / 1000000).toFixed(0)}M</td>
-                  <td className={`px-6 py-4 text-right ${d.fundingRate >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {d.fundingRate}%
-                  </td>
-                  <td className="px-6 py-4 text-right">{d.nextFunding}</td>
-                  <td className="px-6 py-4 text-center">
-                    <button className="px-4 py-1 bg-blue-600 rounded hover:bg-blue-700">
-                      Trade
-                    </button>
+              {loading ? (
+                <tr><td colSpan={8} className="px-6 py-10 text-center text-gray-400">Loading contract metadata…</td></tr>
+              ) : filtered.length === 0 ? (
+                <tr><td colSpan={8} className="px-6 py-10 text-center text-gray-400">
+                  No configured active {selectedType} contracts were returned by the backend.
+                </td></tr>
+              ) : filtered.map(contract => (
+                <tr key={contract.symbol}>
+                  <td className="px-4 py-4 font-medium">{contract.symbol}</td>
+                  <td className="px-4 py-4 text-gray-500">—</td>
+                  <td className="px-4 py-4 text-gray-500">—</td>
+                  <td className="px-4 py-4 text-gray-500">—</td>
+                  <td className="px-4 py-4 text-gray-500">—</td>
+                  <td className="px-4 py-4 text-gray-500">—</td>
+                  <td className="px-4 py-4 text-gray-500">—</td>
+                  <td className="px-4 py-4">
+                    <span className="rounded bg-gray-700 px-3 py-1.5 text-xs text-gray-300">Unavailable</span>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        <p className="mt-4 text-xs text-gray-500">
+          Futures orders are disabled by the backend until durable matching, margin accounting, and liquidation controls are connected.
+        </p>
       </div>
-    </div>
+    </main>
   );
 }
