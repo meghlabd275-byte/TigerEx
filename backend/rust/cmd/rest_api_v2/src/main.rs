@@ -732,173 +732,48 @@ async fn handle_exchange_info() -> impl IntoResponse {
 // API HANDLERS - Market Data
 // ============================================================================
 
+fn unavailable_market_data() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiResponse::<String>::error(503, "Live market data provider is not configured")),
+    ).into_response()
+}
+
 async fn handle_ticker(
-    Path(symbol): Path<String>,
-    state: AxumState<Arc<AppState>>,
+    Path(_symbol): Path<String>,
+    _state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let symbol = symbol.to_uppercase();
-    if !validate_symbol(&symbol) {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Invalid symbol"))).into_response();
-    }
-    
-    // Generate mock ticker data
-    let ticker = match symbol.as_str() {
-        "BTCUSDT" => Ticker {
-            symbol: symbol.clone(),
-            price: "67432.50".to_string(),
-            price_change: "1250.30".to_string(),
-            price_change_percent: "1.89".to_string(),
-            high: "68200.00".to_string(),
-            low: "66100.00".to_string(),
-            volume: "28500.00".to_string(),
-            quote_volume: "1890000000.00".to_string(),
-            open_time: current_timestamp() - 86400000,
-            close_time: current_timestamp(),
-        },
-        "ETHUSDT" => Ticker {
-            symbol: symbol.clone(),
-            price: "3520.75".to_string(),
-            price_change: "45.25".to_string(),
-            price_change_percent: "1.30".to_string(),
-            high: "3580.00".to_string(),
-            low: "3475.00".to_string(),
-            volume: "125000.00".to_string(),
-            quote_volume: "440000000.00".to_string(),
-            open_time: current_timestamp() - 86400000,
-            close_time: current_timestamp(),
-        },
-        _ => Ticker {
-            symbol: symbol.clone(),
-            price: "100.00".to_string(),
-            price_change: "0.00".to_string(),
-            price_change_percent: "0.00".to_string(),
-            high: "105.00".to_string(),
-            low: "95.00".to_string(),
-            volume: "10000.00".to_string(),
-            quote_volume: "1000000.00".to_string(),
-            open_time: current_timestamp() - 86400000,
-            close_time: current_timestamp(),
-        },
-    };
-    
-    Json(ApiResponse::success(ticker))
+    unavailable_market_data()
 }
 
 async fn handle_all_tickers(
-    state: AxumState<Arc<AppState>>,
+    _state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let tickers = vec![
-        Ticker { symbol: "BTCUSDT".to_string(), price: "67432.50".to_string(), price_change: "1250.30".to_string(), price_change_percent: "1.89".to_string(), high: "68200.00".to_string(), low: "66100.00".to_string(), volume: "28500.00".to_string(), quote_volume: "1890000000.00".to_string(), open_time: current_timestamp() - 86400000, close_time: current_timestamp() },
-        Ticker { symbol: "ETHUSDT".to_string(), price: "3520.75".to_string(), price_change: "45.25".to_string(), price_change_percent: "1.30".to_string(), high: "3580.00".to_string(), low: "3475.00".to_string(), volume: "125000.00".to_string(), quote_volume: "440000000.00".to_string(), open_time: current_timestamp() - 86400000, close_time: current_timestamp() },
-        Ticker { symbol: "BNBUSDT".to_string(), price: "595.25".to_string(), price_change: "12.50".to_string(), price_change_percent: "2.15".to_string(), high: "602.00".to_string(), low: "582.00".to_string(), volume: "85000.00".to_string(), quote_volume: "50000000.00".to_string(), open_time: current_timestamp() - 86400000, close_time: current_timestamp() },
-        Ticker { symbol: "SOLUSDT".to_string(), price: "178.50".to_string(), price_change: "-2.30".to_string(), price_change_percent: "-1.27".to_string(), high: "185.00".to_string(), low: "175.00".to_string(), volume: "250000.00".to_string(), quote_volume: "44000000.00".to_string(), open_time: current_timestamp() - 86400000, close_time: current_timestamp() },
-        Ticker { symbol: "XRPUSDT".to_string(), price: "0.5235".to_string(), price_change: "0.0125".to_string(), price_change_percent: "2.45".to_string(), high: "0.5350".to_string(), low: "0.5100".to_string(), volume: "1500000.00".to_string(), quote_volume: "780000.00".to_string(), open_time: current_timestamp() - 86400000, close_time: current_timestamp() },
-    ];
-    
-    Json(ApiResponse::success(tickers))
+    unavailable_market_data()
 }
 
 async fn handle_order_book(
-    Path(symbol): Path<String>,
-    Query(params): Query<OrderBookParams>,
-    state: AxumState<Arc<AppState>>,
+    Path(_symbol): Path<String>,
+    Query(_params): Query<OrderBookParams>,
+    _state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let symbol = symbol.to_uppercase();
-    if !validate_symbol(&symbol) {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Invalid symbol"))).into_response();
-    }
-    
-    let limit = params.limit.unwrap_or(20).max(5).min(100) as usize;
-    
-    // Generate mock order book data
-    let order_book = OrderBook {
-        symbol: symbol.clone(),
-        last_update_id: current_timestamp(),
-        bids: vec![
-            ["67400.00".to_string(), "1.25".to_string()],
-            ["67390.00".to_string(), "2.50".to_string()],
-            ["67380.00".to_string(), "5.00".to_string()],
-            ["67370.00".to_string(), "8.75".to_string()],
-            ["67360.00".to_string(), "15.00".to_string()],
-        ][..limit.min(5)].to_vec(),
-        asks: vec![
-            ["67450.00".to_string(), "1.50".to_string()],
-            ["67460.00".to_string(), "3.00".to_string()],
-            ["67470.00".to_string(), "6.25".to_string()],
-            ["67480.00".to_string(), "10.00".to_string()],
-            ["67490.00".to_string(), "20.00".to_string()],
-        ][..limit.min(5)].to_vec(),
-    };
-    
-    Json(ApiResponse::success(order_book))
+    unavailable_market_data()
 }
 
 async fn handle_klines(
-    Query(params): Query<KlineParams>,
-    state: AxumState<Arc<AppState>>,
+    Query(_params): Query<KlineParams>,
+    _state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    if !validate_symbol(&params.symbol) {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Invalid symbol"))).into_response();
-    }
-    
-    let limit = params.limit.unwrap_or(500).max(1).min(1500) as usize;
-    
-    // Generate mock kline data
-    let mut klines = Vec::new();
-    let base_time = current_timestamp() - (limit as i64 * 3600000);
-    let base_price = 67400.0;
-    
-    for i in 0..limit {
-        let time = base_time + (i as i64 * 3600000);
-        let variance = ((i as f64 * 0.1).sin() * 500.0) + (i as f64 * 0.5);
-        klines.push(Kline {
-            open_time: time,
-            open: format!("{:.2}", base_price + variance),
-            high: format!("{:.2}", base_price + variance + 100.0),
-            low: format!("{:.2}", base_price + variance - 100.0),
-            close: format!("{:.2}", base_price + variance + 50.0),
-            volume: format!("{:.2}", 1000.0 + i as f64 * 10.0),
-            close_time: time + 3600000,
-            quote_volume: format!("{:.2}", 67400000.0 + i as f64 * 1000.0),
-            num_trades: 1000 + i as i64 * 10,
-        });
-    }
-    
-    Json(ApiResponse::success(klines))
+    unavailable_market_data()
 }
 
 async fn handle_recent_trades(
-    Path(symbol): Path<String>,
-    Query(params): Query<PaginationParams>,
-    state: AxumState<Arc<AppState>>,
+    Path(_symbol): Path<String>,
+    Query(_params): Query<PaginationParams>,
+    _state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let symbol = symbol.to_uppercase();
-    if !validate_symbol(&symbol) {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Invalid symbol"))).into_response();
-    }
-    
-    let limit = params.limit.unwrap_or(100).max(1).min(1000) as usize;
-    
-    // Generate mock trades
-    let trades: Vec<Trade> = (0..limit).map(|i| Trade {
-        trade_id: format!("TRD{}", current_timestamp() + i as i64),
-        order_id: format!("ORD{}", current_timestamp() + i as i64),
-        user_id: format!("user{}", i % 100),
-        symbol: symbol.clone(),
-        side: if i % 2 == 0 { "buy".to_string() } else { "sell".to_string() },
-        price: "67432.50".to_string(),
-        quantity: format!("{:.8}", 0.001 + (i as f64 * 0.001)),
-        fee: format!("{:.8}", 0.0001),
-        fee_currency: "USDT".to_string(),
-        created_at: current_timestamp() - (i as i64 * 1000),
-    }).collect();
-    
-    Json(ApiResponse::success(trades))
+    unavailable_market_data()
 }
-
-// ============================================================================
-// API HANDLERS - Account
-// ============================================================================
 
 async fn handle_account_info(
     Path(user_id): Path<String>,
