@@ -120,96 +120,20 @@ class DataCollector:
         end_time: Optional[int] = None,
         limit: int = 1000
     ) -> pd.DataFrame:
-        """
-        Fetch OHLCV (Open, High, Low, Close, Volume) data
-        
-        Args:
-            symbol: Trading pair (e.g., 'BTCUSDT')
-            interval: Time interval (1m, 5m, 1h, 1d)
-            start_time: Start timestamp in milliseconds
-            end_time: End timestamp in milliseconds
-            limit: Maximum number of records
-            
-        Returns:
-            DataFrame with OHLCV data
-        """
-        # In production, would call actual exchange API
-        # This is a placeholder that generates mock data
-        
-        intervals_ms = {
-            '1m': 60000,
-            '5m': 300000,
-            '15m': 900000,
-            '1h': 3600000,
-            '4h': 14400000,
-            '1d': 86400000
-        }
-        
-        interval_ms = intervals_ms.get(interval, 60000)
-        
-        if end_time is None:
-            end_time = int(time.time() * 1000)
-        if start_time is None:
-            start_time = end_time - (limit * interval_ms)
-        
-        # Generate synthetic data for demonstration
-        n_points = min(limit, int((end_time - start_time) / interval_ms))
-        
-        timestamps = [start_time + i * interval_ms for i in range(n_points)]
-        
-        # Generate realistic price movement
-        base_price = 50000.0  # Base BTC price
-        prices = []
-        current_price = base_price
-        
-        for _ in range(n_points):
-            # Random walk with drift
-            change = np.random.normal(0.0001, 0.02)
-            current_price *= (1 + change)
-            prices.append(current_price)
-        
-        data = []
-        for i, ts in enumerate(timestamps):
-            price = prices[i]
-            volatility = 0.005
-            
-            data.append({
-                'timestamp': ts,
-                'open': price * (1 + np.random.uniform(-volatility, volatility)),
-                'high': price * (1 + np.random.uniform(0, volatility * 2)),
-                'low': price * (1 - np.random.uniform(0, volatility * 2)),
-                'close': price,
-                'volume': np.random.uniform(100, 1000),
-                'quote_volume': price * np.random.uniform(100, 1000)
-            })
-        
-        df = pd.DataFrame(data)
-        df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
-        
-        return df
-    
-    def fetch_order_book(
-        self,
-        symbol: str,
-        depth: int = 20
-    ) -> Dict:
-        """Fetch order book data"""
-        # Placeholder for order book data
-        return {
-            'bids': [(f"price_{i}", np.random.uniform(1000, 10000)) for i in range(depth)],
-            'asks': [(f"price_{i}", np.random.uniform(1000, 10000)) for i in range(depth)],
-            'timestamp': int(time.time() * 1000)
-        }
-    
+        """Fetch real OHLCV data only; fail closed until a verified adapter is configured."""
+        raise RuntimeError("No verified market-data adapter is configured; synthetic OHLCV is disabled.")
+
+    def fetch_order_book(self, symbol: str, depth: int = 20) -> Dict:
+        """Fetch a real order book; fail closed until a verified adapter is configured."""
+        raise RuntimeError("No verified market-data adapter is configured; synthetic order books are disabled.")
+
     def fetch_funding_rate(self, symbol: str) -> float:
-        """Fetch current funding rate"""
-        # Placeholder
-        return 0.0001
-    
+        """Fetch a verified funding rate; never substitute a constant."""
+        raise RuntimeError("No verified derivatives-data adapter is configured; funding-rate placeholders are disabled.")
+
     def fetch_open_interest(self, symbol: str) -> float:
-        """Fetch open interest"""
-        # Placeholder
-        return 1000000000.0
+        """Fetch verified open interest; never substitute a constant."""
+        raise RuntimeError("No verified derivatives-data adapter is configured; open-interest placeholders are disabled.")
 
 
 # ============================================================================
