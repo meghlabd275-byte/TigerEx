@@ -215,39 +215,6 @@ func (s *AdminService) initDefaultSettings() {
 	}
 }
 
-func (s *AdminService) initTradingPairs() {
-	pairs := []*TradingPairConfig{
-		{Symbol: "BTC/USDT", BaseAsset: "BTC", QuoteAsset: "USDT", MinPrice: 0.01, MaxPrice: 1000000, TickSize: 0.01, MinQuantity: 0.00001, MaxQuantity: 10000, StepSize: 0.00001, MakerFee: 0.001, TakerFee: 0.001, Status: "trading"},
-		{Symbol: "ETH/USDT", BaseAsset: "ETH", QuoteAsset: "USDT", MinPrice: 0.01, MaxPrice: 100000, TickSize: 0.01, MinQuantity: 0.0001, MaxQuantity: 1000000, StepSize: 0.0001, MakerFee: 0.001, TakerFee: 0.001, Status: "trading"},
-		{Symbol: "BNB/USDT", BaseAsset: "BNB", QuoteAsset: "USDT", MinPrice: 0.01, MaxPrice: 10000, TickSize: 0.01, MinQuantity: 0.001, MaxQuantity: 1000000, StepSize: 0.001, MakerFee: 0.001, TakerFee: 0.001, Status: "trading"},
-		{Symbol: "SOL/USDT", BaseAsset: "SOL", QuoteAsset: "USDT", MinPrice: 0.001, MaxPrice: 10000, TickSize: 0.001, MinQuantity: 0.01, MaxQuantity: 10000000, StepSize: 0.01, MakerFee: 0.001, TakerFee: 0.001, Status: "trading"},
-		{Symbol: "XRP/USDT", BaseAsset: "XRP", QuoteAsset: "USDT", MinPrice: 0.0001, MaxPrice: 1000, TickSize: 0.0001, MinQuantity: 1, MaxQuantity: 100000000, StepSize: 1, MakerFee: 0.001, TakerFee: 0.001, Status: "trading"},
-		{Symbol: "ADA/USDT", BaseAsset: "ADA", QuoteAsset: "USDT", MinPrice: 0.0001, MaxPrice: 10, TickSize: 0.0001, MinQuantity: 10, MaxQuantity: 100000000, StepSize: 10, MakerFee: 0.001, TakerFee: 0.001, Status: "trading"},
-		{Symbol: "DOGE/USDT", BaseAsset: "DOGE", QuoteAsset: "USDT", MinPrice: 0.00001, MaxPrice: 10, TickSize: 0.00001, MinQuantity: 100, MaxQuantity: 1000000000, StepSize: 100, MakerFee: 0.001, TakerFee: 0.001, Status: "trading"},
-		{Symbol: "DOT/USDT", BaseAsset: "DOT", QuoteAsset: "USDT", MinPrice: 0.001, MaxPrice: 1000, TickSize: 0.001, MinQuantity: 0.1, MaxQuantity: 10000000, StepSize: 0.1, MakerFee: 0.001, TakerFee: 0.001, Status: "trading"},
-	}
-
-	for _, p := range pairs {
-		s.tradingPairs[p.Symbol] = p
-	}
-}
-
-func (s *AdminService) initFeeConfigs() {
-	fees := []*FeeConfig{
-		{Type: "withdraw", Asset: "BTC", Network: "bitcoin", FeeType: "fixed", FeeAmount: 0.0005, MinFee: 0.0001, MaxFee: 0.001, UpdatedAt: time.Now()},
-		{Type: "withdraw", Asset: "ETH", Network: "ethereum", FeeType: "fixed", FeeAmount: 0.005, MinFee: 0.001, MaxFee: 0.01, UpdatedAt: time.Now()},
-		{Type: "withdraw", Asset: "USDT", Network: "trc20", FeeType: "percentage", FeeAmount: 1, MinFee: 1, MaxFee: 100, UpdatedAt: time.Now()},
-		{Type: "deposit", Asset: "USDT", Network: "trc20", FeeType: "fixed", FeeAmount: 0, MinFee: 0, MaxFee: 0, UpdatedAt: time.Now()},
-		{Type: "trade", Asset: "*", Network: "*", FeeType: "percentage", FeeAmount: 0.1, MinFee: 0, MaxFee: 0, UpdatedAt: time.Now()},
-		{Type: "transfer", Asset: "*", Network: "*", FeeType: "fixed", FeeAmount: 0.1, MinFee: 0.1, MaxFee: 10, UpdatedAt: time.Now()},
-	}
-
-	for _, f := range fees {
-		id := fmt.Sprintf("%s_%s_%s", f.Type, f.Asset, f.Network)
-		s.feeConfigs[id] = f
-	}
-}
-
 // =============================================================================
 // ADMIN AUTHENTICATION
 // =============================================================================
