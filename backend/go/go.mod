@@ -3,6 +3,7 @@ module tigerex/backend
 go 1.21
 
 require (
+	github.com/gorilla/mux v1.8.1
 	github.com/gin-gonic/gin v1.9.1
 	github.com/golang-jwt/jwt/v5 v5.2.0
 	github.com/google/uuid v1.6.0
