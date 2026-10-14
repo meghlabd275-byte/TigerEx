@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <mutex>
 
 namespace tigerex {
 
@@ -74,7 +75,7 @@ bool OrderBook::add_order(Order& order) {
     
     // Update status
     order.status = OrderStatus::Open;
-    order.updated_at = order.id.timestamp_ns;
+    order.updated_at = std::chrono::nanoseconds(order.id.timestamp_ns);
     
     // Store the order in its price level and index the actual list iterator.
     // The index must never contain a default-constructed iterator.
@@ -91,7 +92,7 @@ bool OrderBook::add_order(Order& order) {
     }
     
     // Update sequence
-    sequence_.fetch_add(1);
+    sequence_atom_.fetch_add(1);
     
     return true;
 }
@@ -470,7 +471,7 @@ std::array<std::vector<LevelAggregation>, 2> OrderBook::get_depth(uint32_t level
 OrderBook::Snapshot OrderBook::create_snapshot(uint32_t depth) const {
     Snapshot snapshot;
     snapshot.symbol = symbol_;
-    snapshot.sequence = sequence_.load();
+    snapshot.sequence = sequence_atom_.load();
     snapshot.bids = get_bid_levels(depth);
     snapshot.asks = get_ask_levels(depth);
     snapshot.last_price = last_price_;

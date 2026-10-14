@@ -315,4 +315,16 @@ inline Price price_multiply(const Price& a, const Price& b) {
 
 } // namespace tigerex
 
+// OrderId equality compares client/server identifiers; the hash must use the
+// same identity fields (timestamp and sequence are metadata, not identity).
+namespace std {
+template <> struct hash<tigerex::OrderId> {
+    size_t operator()(const tigerex::OrderId& id) const noexcept {
+        const size_t a = hash<uint64_t>{}(id.client_order_id);
+        const size_t b = hash<uint64_t>{}(id.server_order_id);
+        return a ^ (b + static_cast<size_t>(0x9e3779b97f4a7c15ULL) + (a << 6) + (a >> 2));
+    }
+};
+} // namespace std
+
 #endif // TIGEREX_ORDER_HPP

@@ -12,6 +12,8 @@
 
 #include "order.hpp"
 #include <array>
+#include <map>
+#include <mutex>
 #include <deque>
 #include <list>
 #include <unordered_map>
@@ -239,7 +241,7 @@ public:
     /**
      * Get sequence number for optimistic locking
      */
-    uint64_t sequence() const { return sequence_.load(); }
+    uint64_t sequence() const { return sequence_atom_.load(); }
     
     // ============================================================================
     // PRICE LIMITS
@@ -585,7 +587,7 @@ inline bool OrderBook::has_order(const OrderId& order_id) const {
 inline Order* OrderBook::get_order(const OrderId& order_id) {
     auto it = orders_.find(order_id);
     if (it == orders_.end()) return nullptr;
-    return &(it->second);
+    return &(*it->second);
 }
 
 } // namespace tigerex

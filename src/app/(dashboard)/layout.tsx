@@ -165,7 +165,7 @@ const Sidebar: React.FC<{ collapsed: boolean }> = ({ collapsed }) => {
         {/* Bottom Items */}
         <div className="py-4 border-t" style={{ borderColor: theme.colors.border }}>
           {bottomNavItems.map((item) => (
-            <Link key={item.name} href={item.href}
+            <Link key={item.name} href={item.href as Route}
               className="flex items-center gap-3 px-4 py-3 mx-2 rounded-lg transition-all"
               style={{ color: theme.colors.textSecondary }}>
               <Icon name={item.icon} className="w-5 h-5 flex-shrink-0" />
@@ -282,7 +282,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-slate-900 border-t dark:border-slate-700 lg:hidden z-30" style={{ borderColor: theme.colors.border }}>
           <div className="flex justify-around py-2">
             {navItems.slice(0, 5).map((item) => (
-              <Link key={item.name} href={item.href} className="flex flex-col items-center p-2">
+              <Link key={item.name} href={item.href as Route} className="flex flex-col items-center p-2">
                 <Icon name={item.icon} className="w-5 h-5" style={{ color: theme.colors.textSecondary }} />
                 <span className="text-xs mt-1" style={{ color: theme.colors.textSecondary }}>{item.name}</span>
               </Link>

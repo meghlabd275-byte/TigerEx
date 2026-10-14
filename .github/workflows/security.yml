@@ -24,12 +24,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language:
-          - javascript-typescript
-          - go
-          - python
-          - cpp
-          - rust
+        include:
+          - language: javascript-typescript
+            build-mode: autobuild
+          - language: go
+            build-mode: autobuild
+          - language: python
+            build-mode: none
+          - language: cpp
+            build-mode: manual
+          - language: rust
+            build-mode: none
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,7 +43,7 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.language == 'cpp' && 'manual' || 'autobuild' }}
+          build-mode: ${{ matrix.build-mode }}
 
       - name: Install C++ build dependencies
         if: matrix.language == 'cpp'
@@ -53,8 +58,8 @@ jobs:
         run: cmake --build build/matching-engine --parallel 2
 
       - name: Autobuild compiled languages
-        if: matrix.language != 'cpp'
-        uses: github/codeql-action/autobuild@v3
+        if: matrix.build-mode == 'autobuild'
+        uses: github/codeql-action/autobuild@v4
 
       - name: Analyze source
         uses: github/codeql-action/analyze@v4
