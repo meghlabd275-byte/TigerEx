@@ -5,7 +5,6 @@ import (
 	"time"
 	"net/http"
 	"net/http/httptest"
-	"os"
 
 	"tigerex/websocket_gateway/internal/config"
 )
@@ -70,5 +69,4 @@ func TestOriginValidationRequiresExactOriginOrExplicitAllowlist(t *testing.T) {
 	if isAllowedOrigin(req, "https://attacker.example") {
 		t.Fatal("origin outside allowlist must be rejected")
 	}
-	_ = os.Getenv("WS_ALLOWED_ORIGINS")
 }
