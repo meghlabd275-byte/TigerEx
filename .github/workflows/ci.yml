@@ -27,7 +27,7 @@ jobs:
 
       - name: Test backend Go module
         working-directory: backend/go
-        run: go test -mod=mod ./internal/wallet ./internal/perpetual ./internal/admin ./internal/trading ./services/admin
+        run: go test -mod=mod ./internal/wallet ./internal/perpetual ./internal/admin ./internal/trading ./services/admin ./cmd/admin_service
 
   test:
     runs-on: ubuntu-latest
