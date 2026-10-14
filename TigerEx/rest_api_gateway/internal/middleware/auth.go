@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/hex"
 	"strings"
+	"sync"
 	"time"
 
 	"tigerEx/rest_api_gateway/internal/config"
@@ -192,6 +193,7 @@ func hashBody(body string) string {
 
 // AntiPhishingMiddleware handles anti-phishing code verification
 type AntiPhishingMiddleware struct {
+	mu sync.RWMutex
 	userAntiPhishingCodes map[string]string // userID -> code
 }
 
@@ -204,20 +206,31 @@ func NewAntiPhishingMiddleware() *AntiPhishingMiddleware {
 
 // SetAntiPhishingCode sets anti-phishing code for a user
 func (ap *AntiPhishingMiddleware) SetAntiPhishingCode(userID, code string) {
+	if userID == "" { return }
+	ap.mu.Lock()
+	defer ap.mu.Unlock()
+	if code == "" {
+		delete(ap.userAntiPhishingCodes, userID)
+		return
+	}
 	ap.userAntiPhishingCodes[userID] = code
 }
 
 // GetAntiPhishingCode gets anti-phishing code for a user
 func (ap *AntiPhishingMiddleware) GetAntiPhishingCode(userID string) string {
+	ap.mu.RLock()
+	defer ap.mu.RUnlock()
 	return ap.userAntiPhishingCodes[userID]
 }
 
 // VerifyAntiPhishingCode verifies anti-phishing code
 func (ap *AntiPhishingMiddleware) VerifyAntiPhishingCode(userID, code string) bool {
+	if userID == "" || code == "" { return false }
+	ap.mu.RLock()
 	storedCode, ok := ap.userAntiPhishingCodes[userID]
-	if !ok {
-		return true // If no code set, skip verification
-	}
+	ap.mu.RUnlock()
+	// Missing configuration must never silently disable a security check.
+	if !ok || storedCode == "" { return false }
 	return subtle.ConstantTimeCompare([]byte(storedCode), []byte(code)) == 1
 }
 
