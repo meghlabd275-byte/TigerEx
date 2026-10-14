@@ -600,143 +600,9 @@ func (s *TradingService) loadPositions(ctx context.Context) error {
 // ============================================================================
 
 func (s *TradingService) CreateOrder(ctx context.Context, userID uint64, req *CreateOrderRequest) (*CreateOrderResponse, error) {
-	// Validate symbol
-	symbol, ok := s.symbols[req.Symbol]
-	if !ok {
-		return &CreateOrderResponse{Success: false}, errors.New("invalid symbol")
-	}
-	
-	// Validate order type
-	if err := s.validateOrderType(req.Type, req.Price); err != nil {
-		return &CreateOrderResponse{Success: false}, err
-	}
-	
-	// Validate quantity
-	if req.Quantity < symbol.MinQty || req.Quantity > symbol.MaxQty {
-		return &CreateOrderResponse{Success: false}, fmt.Errorf("quantity must be between %f and %f", symbol.MinQty, symbol.MaxQty)
-	}
-	
-	// Validate price for limit orders
-	if req.Type == OrderTypeLimit {
-		if req.Price == nil || *req.Price <= 0 {
-			return &CreateOrderResponse{Success: false}, errors.New("price is required for limit orders")
-		}
-		if *req.Price < symbol.MinPrice || *req.Price > symbol.MaxPrice {
-			return &CreateOrderResponse{Success: false}, fmt.Errorf("price must be between %f and %f", symbol.MinPrice, symbol.MaxPrice)
-		}
-	}
-	
-	// Validate leverage
-	if req.Leverage <= 0 {
-		req.Leverage = 1
-	}
-	if req.Leverage > symbol.MaxLeverage {
-		req.Leverage = symbol.MaxLeverage
-	}
-	
-	// Generate order ID
-	orderID := generateOrderID(userID, req.Symbol)
-	clientOrderID := req.ClientOrderID
-	if clientOrderID == "" {
-		clientOrderID = uuid.New().String()
-	}
-	
-	// Calculate margin requirement for margin/futures orders
-	marginRequired := 0.0
-	if symbol.AllowMargin && req.Leverage > 1 {
-		price := req.Price
-		if price == nil {
-			// Use current market price for market orders
-			price = &symbol.LastPrice
-		}
-		marginRequired = (*price * req.Quantity) / float64(req.Leverage)
-	}
-	
-	// Get current time
-	now := time.Now()
-	
-	// Create order
-	order := &Order{
-		ID:              generateOrderIDNumber(),
-		OrderID:         orderID,
-		UserID:          userID,
-		Symbol:          req.Symbol,
-		Side:            req.Side,
-		Type:            req.Type,
-		Status:          OrderStatusPending,
-		PositionSide:    req.PositionSide,
-		OriginalQty:     req.Quantity,
-		ExecutedQty:     0,
-		RemainingQty:    req.Quantity,
-		IcebergQty:      0,
-		AvgPrice:        0,
-		MakerFee:        0,
-		TakerFee:        0,
-		TimeInForce:     req.TimeInForce,
-		Leverage:        req.Leverage,
-		MarginMode:      req.MarginMode,
-		MarginRequired:  marginRequired,
-		ClientOrderID:   clientOrderID,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	}
-	
-	// Set price
-	if req.Price != nil {
-		order.Price = *req.Price
-	}
-	
-	// Set stop price
-	if req.StopPrice != nil {
-		order.StopPrice = *req.StopPrice
-	}
-	
-	// Set trigger price
-	if req.TriggerPrice != nil {
-		order.TriggerPrice = *req.TriggerPrice
-	}
-	
-	// Set iceberg quantity
-	if req.IcebergQty != nil {
-		order.IcebergQty = *req.IcebergQty
-	}
-	
-	// Store order
-	s.orderMu.Lock()
-	s.orders[orderID] = order
-	s.orderMu.Unlock()
-	
-	// Save to database
-	if err := s.saveOrder(ctx, order); err != nil {
-		s.logger.Error("Failed to save order", "error", err)
-	}
-	
-	// Process order immediately if market order
-	if req.Type == OrderTypeMarket {
-		go s.processMarketOrder(ctx, order)
-	} else if order.TriggerPrice > 0 {
-		// Add to stop order watchlist
-		go s.watchTriggerOrder(ctx, order)
-	} else {
-		// Add to order book
-		go s.addToOrderBook(ctx, order)
-	}
-	
-	// Publish order created event
-	s.publishOrderEvent("order_created", order)
-	
-	return &CreateOrderResponse{
-		Success:         true,
-		OrderID:         order.OrderID,
-		ClientOrderID:   order.ClientOrderID,
-		TransactionTime: order.CreatedAt.UnixMilli(),
-		Price:           order.Price,
-		OrigQty:         order.OriginalQty,
-		Status:          string(order.Status),
-		TimeInForce:     string(order.TimeInForce),
-		Type:            string(order.Type),
-		Side:            string(order.Side),
-	}, nil
+	// This service has no verified connection to the canonical matching engine,
+	// transactional ledger, or durable idempotency/event-sequencing layer.
+	return &CreateOrderResponse{Success: false}, errors.New("order execution unavailable: canonical matching engine is not configured")
 }
 
 func (s *TradingService) CancelOrder(ctx context.Context, userID uint64, req *CancelOrderRequest) (*CancelOrderResponse, error) {
@@ -1350,27 +1216,9 @@ func (s *TradingService) startMarketDataFeed(ctx context.Context) {
 }
 
 func (s *TradingService) updateTickers() {
-	s.tickerMu.Lock()
-	defer s.tickerMu.Unlock()
-	
-	for symbol, ticker := range s.tickers {
-		// Simulate price movement
-		change := (math.random.Float64() - 0.5) * 0.001
-		ticker.Price = ticker.Price * (1 + change)
-		ticker.PriceChange = ticker.PriceChange + change*ticker.Price
-		ticker.PriceChangePct = (ticker.PriceChange / (ticker.Price - ticker.PriceChange)) * 100
-		
-		if ticker.Price > ticker.High24h {
-			ticker.High24h = ticker.Price
-		}
-		if ticker.Price < ticker.Low24h || ticker.Low24h == 0 {
-			ticker.Low24h = ticker.Price
-		}
-		
-		ticker.BidPrice = ticker.Price * 0.9995
-		ticker.AskPrice = ticker.Price * 1.0005
-		ticker.Timestamp = time.Now()
-	}
+	// Synthetic ticker mutation is intentionally disabled. Live provider events must
+	// be validated and ingested through a configured market-data adapter.
+	return
 }
 
 // ============================================================================
@@ -1378,42 +1226,12 @@ func (s *TradingService) updateTickers() {
 // ============================================================================
 
 func (s *TradingService) processOrders(ctx context.Context) {
-	orderChan := make(chan *Order, 1000)
-	
-	go func() {
-		for order := range orderChan {
-			s.orderMu.Lock()
-			s.orders[order.OrderID] = order
-			s.orderMu.Unlock()
-		}
-	}()
-	
-	// Process pending orders
-	go func() {
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		
-		for range ticker.C {
-			s.orderMu.RLock()
-			var pending []*Order
-			for _, order := range s.orders {
-				if order.Status == OrderStatusPending {
-					pending = append(pending, order)
-				}
-			}
-			s.orderMu.RUnlock()
-			
-			for _, order := range pending {
-				if order.Type == OrderTypeMarket {
-					s.processMarketOrder(ctx, order)
-				} else if order.Status == OrderStatusTriggered {
-					s.processMarketOrder(ctx, order)
-				}
-			}
-		}
-	}()
-	
-	s.orderChan = orderChan
+	// This legacy in-memory queue is not an authoritative, durable matching engine.
+	// Do not accept or fill orders through it.
+	if s.logger != nil {
+		s.logger.Error("order processing disabled: canonical durable matching engine is not configured")
+	}
+	return
 }
 
 // ============================================================================
