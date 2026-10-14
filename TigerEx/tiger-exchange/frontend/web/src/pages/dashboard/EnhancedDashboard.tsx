@@ -6,8 +6,8 @@ interface PortfolioData {
   totalBalance: number;
   totalLocked: number;
   totalValue: number;
-  dailyChange: number;
-  dailyChangePercent: number;
+  dailyChange: number | null;
+  dailyChangePercent: number | null;
 }
 
 interface RecentTrade {
@@ -27,59 +27,65 @@ export default function EnhancedDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
+
     const fetchDashboardData = async () => {
+      setLoading(true);
       try {
-        setLoading(true);
-        
-        // Fetch wallet balance
         const balanceResponse = await api.get('/api/v1/wallet/balance');
-        if (balanceResponse.data.success) {
+        if (cancelled) return;
+
+        if (balanceResponse.data?.success && Array.isArray(balanceResponse.data.data)) {
           const wallets = balanceResponse.data.data;
-          const totalBalance = wallets.reduce((sum: number, w: any) => sum + w.balance, 0);
-          const totalLocked = wallets.reduce((sum: number, w: any) => sum + w.locked, 0);
-          
+          const totalBalance = wallets.reduce((sum: number, wallet: any) => {
+            const value = Number(wallet?.balance);
+            return sum + (Number.isFinite(value) && value >= 0 ? value : 0);
+          }, 0);
+          const totalLocked = wallets.reduce((sum: number, wallet: any) => {
+            const value = Number(wallet?.locked);
+            return sum + (Number.isFinite(value) && value >= 0 ? value : 0);
+          }, 0);
+          const performance = balanceResponse.data.performance;
+          const dailyChange = Number(performance?.dailyChange);
+          const dailyChangePercent = Number(performance?.dailyChangePercent);
+
           setPortfolioData({
             totalBalance,
             totalLocked,
             totalValue: totalBalance + totalLocked,
-            dailyChange: Math.random() * 1000 - 500, // Placeholder
-            dailyChangePercent: Math.random() * 5 - 2.5, // Placeholder
+            dailyChange: performance?.dailyChange != null && Number.isFinite(dailyChange) ? dailyChange : null,
+            dailyChangePercent: performance?.dailyChangePercent != null && Number.isFinite(dailyChangePercent) ? dailyChangePercent : null,
           });
+        } else {
+          setPortfolioData(null);
         }
 
-        // Fetch KYC status
-        const kycResponse = await api.get('/api/v1/kyc/status');
-        if (kycResponse.data.success) {
-          setKycStatus(kycResponse.data.data);
-        }
+        // Never invent fills; show an empty state until a real authenticated
+        // execution-history endpoint is integrated.
+        setRecentTrades([]);
 
-        // Fetch recent trades (placeholder data)
-        setRecentTrades([
-          {
-            id: '1',
-            symbol: 'BTCUSDT',
-            side: 'buy',
-            price: 65000,
-            quantity: 0.1,
-            timestamp: new Date().toISOString(),
-          },
-          {
-            id: '2',
-            symbol: 'ETHUSDT',
-            side: 'sell',
-            price: 3500,
-            quantity: 1.5,
-            timestamp: new Date(Date.now() - 3600000).toISOString(),
-          },
-        ]);
+        try {
+          const kycResponse = await api.get('/api/v1/kyc/status');
+          if (!cancelled) setKycStatus(kycResponse.data?.success ? kycResponse.data.data : null);
+        } catch {
+          if (!cancelled) setKycStatus(null);
+        }
       } catch (err) {
-        console.error('Failed to fetch dashboard data:', err);
+        if (!cancelled) {
+          setPortfolioData(null);
+          setRecentTrades([]);
+          setKycStatus(null);
+          console.error('Failed to fetch dashboard data:', err);
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
-    fetchDashboardData();
+    void fetchDashboardData();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (loading) {
@@ -120,16 +126,15 @@ export default function EnhancedDashboard() {
               <div className="bg-gray-800 rounded-lg p-6">
                 <div className="text-gray-400 text-sm mb-2">Total Value</div>
                 <div className="text-3xl font-bold mb-2">${portfolioData.totalValue.toFixed(2)}</div>
-                <div className={`text-sm ${portfolioData.dailyChangePercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {portfolioData.dailyChangePercent >= 0 ? '+' : ''}
-                  {portfolioData.dailyChangePercent.toFixed(2)}% today
+                <div className={`text-sm ${portfolioData.dailyChangePercent !== null && portfolioData.dailyChangePercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {portfolioData.dailyChangePercent === null ? 'Performance unavailable' : `${portfolioData.dailyChangePercent >= 0 ? '+' : ''}${portfolioData.dailyChangePercent.toFixed(2)}% today`}
                 </div>
               </div>
 
               <div className="bg-gray-800 rounded-lg p-6">
                 <div className="text-gray-400 text-sm mb-2">Daily Change</div>
-                <div className={`text-3xl font-bold mb-2 ${portfolioData.dailyChange >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {portfolioData.dailyChange >= 0 ? '+' : ''}${portfolioData.dailyChange.toFixed(2)}
+                <div className={`text-3xl font-bold mb-2 ${portfolioData.dailyChange !== null && portfolioData.dailyChange >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {portfolioData.dailyChange === null ? '—' : `${portfolioData.dailyChange >= 0 ? '+' : ''}${portfolioData.dailyChange.toFixed(2)}`}
                 </div>
                 <div className="text-sm text-gray-400">24h change</div>
               </div>
