@@ -1,192 +1,95 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
+const ADMIN_API_URL = process.env.TIGEREX_ADMIN_API_URL?.replace(/\/$/, '');
 
-/**
- * Withdrawal Management API - Admin endpoints
- * Handles withdrawal requests approval, rejection, and processing
- */
+function unavailable() {
+  return NextResponse.json(
+    { success: false, error: 'TIGEREX_ADMIN_API_URL is not configured; withdrawal operations are disabled.' },
+    { status: 503 },
+  );
+}
 
-// Get all withdrawal requests
+function authHeader(request: NextRequest): string | null {
+  const value = request.headers.get('authorization');
+  if (!value || !/^Bearer\s+\S+$/i.test(value)) return null;
+  return value;
+}
+
+async function backendRequest(path: string, token: string, init: RequestInit = {}) {
+  if (!ADMIN_API_URL) return unavailable();
+  try {
+    const response = await fetch(\`\${ADMIN_API_URL}\${path}\`, {
+      ...init,
+      headers: {
+        Accept: 'application/json',
+        Authorization: token,
+        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        ...init.headers,
+      },
+      cache: 'no-store',
+    });
+    const body = await response.json().catch(() => ({ success: false, error: 'Invalid backend response' }));
+    return NextResponse.json(body, { status: response.status });
+  } catch {
+    return NextResponse.json(
+      { success: false, error: 'Admin backend is unavailable; no withdrawal state was changed.' },
+      { status: 502 },
+    );
+  }
+}
+
+// Proxy live withdrawal records to the authenticated durable admin backend.
 export async function GET(request: NextRequest) {
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const status = searchParams.get('status');
-    const page = searchParams.get('page') || '1';
-    const limit = searchParams.get('limit') || '20';
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    // Mock withdrawal data
-    const withdrawals = [
-      {
-        id: 'withdraw_001',
-        userId: 'user_001',
-        email: 'user@example.com',
-        currency: 'BTC',
-        amount: 0.5,
-        fee: 0.0005,
-        netAmount: 0.4995,
-        address: '0x742d35Cc6634C0532925a3b844Bc9e7595f4e2E1',
-        network: 'Bitcoin',
-        status: 'pending',
-        createdAt: Date.now() - 3600000,
-        kycLevel: 2
-      },
-      {
-        id: 'withdraw_002',
-        userId: 'user_002',
-        email: 'user2@example.com',
-        currency: 'ETH',
-        amount: 2.5,
-        fee: 0.005,
-        netAmount: 2.495,
-        address: '0x742d35Cc6634C0532925a3b844Bc9e7595f4e2E1',
-        network: 'Ethereum',
-        status: 'approved',
-        approvedAt: Date.now() - 1800000,
-        approvedBy: 'admin@tigerex.com',
-        createdAt: Date.now() - 7200000,
-        kycLevel: 2
-      },
-      {
-        id: 'withdraw_003',
-        userId: 'user_003',
-        email: 'user3@example.com',
-        currency: 'USDT',
-        amount: 5000,
-        fee: 1,
-        netAmount: 4999,
-        address: '0x742d35Cc6634C0532925a3b844Bc9e7595f4e2E1',
-        network: 'Tron',
-        status: 'processing',
-        createdAt: Date.now() - 10800000,
-        kycLevel: 2
-      }
-    ];
-
-    let filtered = withdrawals;
-    if (status && status !== 'all') {
-      filtered = withdrawals.filter(w => w.status === status);
-    }
-
-    return NextResponse.json({
-      success: true,
-      data: filtered,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total: filtered.length
-      },
-      stats: {
-        pending: withdrawals.filter(w => w.status === 'pending').length,
-        processing: withdrawals.filter(w => w.status === 'processing').length,
-        approved: withdrawals.filter(w => w.status === 'approved').length,
-        rejected: withdrawals.filter(w => w.status === 'rejected').length
-      }
-    });
-  } catch (error: any) {
-    console.error('Withdrawals list error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+  const token = authHeader(request);
+  if (!token) {
+    return NextResponse.json({ success: false, error: 'Authorization required' }, { status: 401 });
   }
+  const { searchParams } = new URL(request.url);
+  const query = new URLSearchParams();
+  for (const key of ['status', 'currency']) {
+    const value = searchParams.get(key);
+    if (value) query.set(key, value);
+  }
+  const suffix = query.size ? \`?\${query.toString()}\` : '';
+  return backendRequest(\`/admin/withdrawals\${suffix}\`, token);
 }
 
-// Process withdrawal (approve/reject)
+// Process a single withdrawal only through the backend's persisted state transition.
 export async function PUT(request: NextRequest) {
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-    const { withdrawalId, action, reason } = body;
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    if (!withdrawalId || !action) {
-      return NextResponse.json(
-        { success: false, error: 'Withdrawal ID and action are required' },
-        { status: 400 }
-      );
-    }
-
-    if (!['approve', 'reject', 'process'].includes(action)) {
-      return NextResponse.json(
-        { success: false, error: 'Invalid action' },
-        { status: 400 }
-      );
-    }
-
-    // In production, this would process the withdrawal in the backend
-    const status = action === 'reject' ? 'rejected' : action === 'approve' ? 'approved' : 'processing';
-    
-    return NextResponse.json({
-      success: true,
-      message: `Withdrawal ${withdrawalId} ${status}`,
-      withdrawalId,
-      status,
-      processedAt: Date.now()
-    });
-  } catch (error: any) {
-    console.error('Withdrawal process error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+  const token = authHeader(request);
+  if (!token) {
+    return NextResponse.json({ success: false, error: 'Authorization required' }, { status: 401 });
   }
+
+  let body: { withdrawalId?: string; action?: string; reason?: string; txHash?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const withdrawalId = body.withdrawalId?.trim();
+  if (!withdrawalId || !/^[a-zA-Z0-9_-]{1,128}$/.test(withdrawalId)) {
+    return NextResponse.json({ success: false, error: 'A valid withdrawalId is required' }, { status: 400 });
+  }
+  if (!body.action || !['approve', 'reject', 'process'].includes(body.action)) {
+    return NextResponse.json({ success: false, error: 'Invalid action' }, { status: 400 });
+  }
+  return backendRequest(\`/admin/withdrawals/\${encodeURIComponent(withdrawalId)}\`, token, {
+    method: 'PUT',
+    body: JSON.stringify({ action: body.action, txHash: body.txHash }),
+  });
 }
 
-// Bulk process withdrawals
+// Bulk operations are deliberately disabled until the backend offers an atomic bulk endpoint.
 export async function POST(request: NextRequest) {
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-    const { withdrawalIds, action, reason } = body;
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    if (!withdrawalIds || !Array.isArray(withdrawalIds) || withdrawalIds.length === 0) {
-      return NextResponse.json(
-        { success: false, error: 'Withdrawal IDs array is required' },
-        { status: 400 }
-      );
-    }
-
-    if (!['approve', 'reject'].includes(action)) {
-      return NextResponse.json(
-        { success: false, error: 'Invalid action' },
-        { status: 400 }
-      );
-    }
-
-    // In production, this would bulk process withdrawals
-    return NextResponse.json({
-      success: true,
-      message: `${withdrawalIds.length} withdrawals ${action}d`,
-      processedCount: withdrawalIds.length,
-      processedAt: Date.now()
-    });
-  } catch (error: any) {
-    console.error('Withdrawal bulk process error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+  const token = authHeader(request);
+  if (!token) {
+    return NextResponse.json({ success: false, error: 'Authorization required' }, { status: 401 });
   }
+  if (!ADMIN_API_URL) return unavailable();
+  return NextResponse.json(
+    { success: false, error: 'Bulk withdrawal processing is not supported by the backend; use the single-withdrawal endpoint.' },
+    { status: 501 },
+  );
 }
