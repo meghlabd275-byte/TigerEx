@@ -45,11 +45,7 @@ impl Default for AppState {
             orders: Mutex::new(Vec::new()),
             order_history: Mutex::new(Vec::new()),
             positions: Mutex::new(Vec::new()),
-            watchlist: Mutex::new(vec![
-                WatchlistItem { symbol: "BTCUSDT".to_string(), added_at: current_timestamp() },
-                WatchlistItem { symbol: "ETHUSDT".to_string(), added_at: current_timestamp() },
-                WatchlistItem { symbol: "BNBUSDT".to_string(), added_at: current_timestamp() },
-            ]),
+            watchlist: Mutex::new(Vec::new()),
             trading_pairs: Mutex::new(get_default_trading_pairs()),
             transactions: Mutex::new(Vec::new()),
             api_keys: Mutex::new(Vec::new()),
@@ -69,68 +65,9 @@ fn current_timestamp() -> i64 {
 
 /// Get default trading pairs
 fn get_default_trading_pairs() -> Vec<TradingPair> {
-    vec![
-        TradingPair {
-            symbol: "BTCUSDT".to_string(),
-            base_asset: "BTC".to_string(),
-            quote_asset: "USDT".to_string(),
-            price_precision: 2,
-            quantity_precision: 6,
-            min_price: "0.01".to_string(),
-            max_price: "1000000".to_string(),
-            min_quantity: "0.000001".to_string(),
-            max_quantity: "100".to_string(),
-            status: "trading".to_string(),
-        },
-        TradingPair {
-            symbol: "ETHUSDT".to_string(),
-            base_asset: "ETH".to_string(),
-            quote_asset: "USDT".to_string(),
-            price_precision: 2,
-            quantity_precision: 5,
-            min_price: "0.01".to_string(),
-            max_price: "100000".to_string(),
-            min_quantity: "0.00001".to_string(),
-            max_quantity: "10000".to_string(),
-            status: "trading".to_string(),
-        },
-        TradingPair {
-            symbol: "BNBUSDT".to_string(),
-            base_asset: "BNB".to_string(),
-            quote_asset: "USDT".to_string(),
-            price_precision: 2,
-            quantity_precision: 4,
-            min_price: "0.01".to_string(),
-            max_price: "10000".to_string(),
-            min_quantity: "0.0001".to_string(),
-            max_quantity: "100000".to_string(),
-            status: "trading".to_string(),
-        },
-        TradingPair {
-            symbol: "SOLUSDT".to_string(),
-            base_asset: "SOL".to_string(),
-            quote_asset: "USDT".to_string(),
-            price_precision: 3,
-            quantity_precision: 3,
-            min_price: "0.001".to_string(),
-            max_price: "1000".to_string(),
-            min_quantity: "0.01".to_string(),
-            max_quantity: "100000".to_string(),
-            status: "trading".to_string(),
-        },
-        TradingPair {
-            symbol: "XRPUSDT".to_string(),
-            base_asset: "XRP".to_string(),
-            quote_asset: "USDT".to_string(),
-            price_precision: 5,
-            quantity_precision: 1,
-            min_price: "0.0001".to_string(),
-            max_price: "100".to_string(),
-            min_quantity: "1".to_string(),
-            max_quantity: "10000000".to_string(),
-            status: "trading".to_string(),
-        },
-    ]
+    // Markets must be loaded from the canonical exchange registry.
+    Vec::new()
+}
 }
 
 // ============================================================================
@@ -342,55 +279,9 @@ pub struct DepositAddress {
 
 /// Login with email and password
 #[tauri::command]
-fn login(email: String, _password: String, state: State<AppState>) -> Result<User, String> {
-    let now = current_timestamp();
-    let user = User {
-        user_id: format!("user_{}", &email[..std::cmp::min(8, email.len())]),
-        username: email.split('@').next().unwrap_or("user").to_string(),
-        email: email.clone(),
-        phone: None,
-        kyc_level: 2,
-        two_factor_enabled: false,
-        account_status: "active".to_string(),
-        created_at: now,
-        last_login: now,
-        country: "US".to_string(),
-        language: "en".to_string(),
-        timezone: "UTC".to_string(),
-    };
-    
-    let mut current_user = state.current_user.lock().unwrap();
-    *current_user = Some(user.clone());
-    
-    // Initialize user balances
-    let mut balances = state.balances.lock().unwrap();
-    balances.insert("BTC".to_string(), WalletBalance {
-        currency: "BTC".to_string(),
-        balance: 2.5,
-        locked: 0.5,
-        available: 2.0,
-        balance_usd: 2.5 * 67432.50,
-    });
-    balances.insert("ETH".to_string(), WalletBalance {
-        currency: "ETH".to_string(),
-        balance: 15.0,
-        locked: 2.0,
-        available: 13.0,
-        balance_usd: 15.0 * 3520.75,
-    });
-    balances.insert("USDT".to_string(), WalletBalance {
-        currency: "USDT".to_string(),
-        balance: 50000.0,
-        locked: 10000.0,
-        available: 40000.0,
-        balance_usd: 50000.0,
-    });
-    
-    // Generate session token
-    let mut token = state.session_token.lock().unwrap();
-    *token = Some(format!("session_{}", now));
-    
-    Ok(user)
+fn login(_email: String, _password: String, _state: State<AppState>) -> Result<User, String> {
+    Err("Authenticated identity provider is not configured; login unavailable".to_string())
+}
 }
 
 /// Logout current user
@@ -414,62 +305,9 @@ fn get_current_user(state: State<AppState>) -> Result<Option<User>, String> {
 
 /// Register new user
 #[tauri::command]
-fn register(email: String, password: String, username: String, state: State<AppState>) -> Result<User, String> {
-    // Validate inputs
-    if email.is_empty() || !email.contains('@') {
-        return Err("Invalid email address".to_string());
-    }
-    if password.len() < 8 {
-        return Err("Password must be at least 8 characters".to_string());
-    }
-    if username.is_empty() {
-        return Err("Username is required".to_string());
-    }
-    
-    let now = current_timestamp();
-    let user = User {
-        user_id: format!("user_{}", now),
-        username,
-        email: email.clone(),
-        phone: None,
-        kyc_level: 0,
-        two_factor_enabled: false,
-        account_status: "active".to_string(),
-        created_at: now,
-        last_login: now,
-        country: "US".to_string(),
-        language: "en".to_string(),
-        timezone: "UTC".to_string(),
-    };
-    
-    let mut current_user = state.current_user.lock().unwrap();
-    *current_user = Some(user.clone());
-    
-    // Initialize balances
-    let mut balances = state.balances.lock().unwrap();
-    balances.insert("BTC".to_string(), WalletBalance {
-        currency: "BTC".to_string(),
-        balance: 0.0,
-        locked: 0.0,
-        available: 0.0,
-        balance_usd: 0.0,
-    });
-    balances.insert("ETH".to_string(), WalletBalance {
-        currency: "ETH".to_string(),
-        balance: 0.0,
-        locked: 0.0,
-        available: 0.0,
-        balance_usd: 0.0,
-    });
-    balances.insert("USDT".to_string(), WalletBalance {
-        currency: "USDT".to_string(),
-        balance: 0.0,
-        locked: 0.0,
-        available: 0.0,
-        balance_usd: 0.0,
-    });
-    
-    Ok(user)
+fn register(_email: String, _password: String, _username: String, _state: State<AppState>) -> Result<User, String> {
+    Err("Persistent registration and credential service is not configured; registration unavailable".to_string())
+}
 }
 
 // ============================================================================
@@ -478,27 +316,9 @@ fn register(email: String, password: String, username: String, state: State<AppS
 
 /// Get ticker for a symbol
 #[tauri::command]
-fn get_ticker(symbol: String) -> Result<Ticker, String> {
-    let (price, change, high, low, volume) = match symbol.as_str() {
-        "BTCUSDT" => (67432.50, 1250.50, 68000.00, 66000.00, 12500.5),
-        "ETHUSDT" => (3520.75, 45.25, 3600.00, 3400.00, 45000.0),
-        "BNBUSDT" => (595.25, 12.50, 610.00, 580.00, 15000.0),
-        "SOLUSDT" => (145.50, 3.25, 150.00, 140.00, 25000.0),
-        "XRPUSDT" => (0.52, 0.01, 0.55, 0.50, 50000.0),
-        _ => (100.0, 0.0, 110.0, 90.0, 1000.0),
-    };
-    
-    Ok(Ticker {
-        symbol: symbol.clone(),
-        price,
-        price_change: change,
-        price_change_percent: (change / (price - change)) * 100.0,
-        high_24h: high,
-        low_24h: low,
-        volume_24h: volume,
-        quote_volume_24h: volume * price,
-        trades_24h: (volume * 100.0) as u64,
-    })
+fn get_ticker(_symbol: String) -> Result<Ticker, String> {
+    Err("Live market-data provider is not configured; ticker unavailable".to_string())
+}
 }
 
 /// Get all tickers
@@ -518,95 +338,16 @@ fn get_all_tickers(state: State<AppState>) -> Result<Vec<Ticker>, String> {
 
 /// Get order book for a symbol
 #[tauri::command]
-fn get_order_book(symbol: String) -> Result<OrderBook, String> {
-    let (base_price, spread) = match symbol.as_str() {
-        "BTCUSDT" => (67432.50, 0.50),
-        "ETHUSDT" => (3520.75, 0.25),
-        "BNBUSDT" => (595.25, 0.10),
-        "SOLUSDT" => (145.50, 0.05),
-        "XRPUSDT" => (0.52, 0.0001),
-        _ => (100.0, 0.01),
-    };
-    
-    let mut bids = Vec::new();
-    let mut asks = Vec::new();
-    
-    for i in 0..20 {
-        let bid_price = base_price - (spread * (i as f64 + 1.0));
-        let ask_price = base_price + (spread * (i as f64 + 1.0));
-        let quantity = 10.0 - (i as f64 * 0.4);
-        
-        bids.push(OrderBookEntry {
-            price: bid_price,
-            quantity,
-        });
-        asks.push(OrderBookEntry {
-            price: ask_price,
-            quantity,
-        });
-    }
-    
-    Ok(OrderBook {
-        symbol,
-        bids,
-        asks,
-        last_update_id: current_timestamp() as u64,
-    })
+fn get_order_book(_symbol: String) -> Result<OrderBook, String> {
+    Err("Live order-book provider is not configured; order book unavailable".to_string())
+}
 }
 
 /// Get klines/candlesticks
 #[tauri::command]
-fn get_klines(symbol: String, interval: String, limit: u32) -> Result<Vec<Kline>, String> {
-    let base_price = match symbol.as_str() {
-        "BTCUSDT" => 67432.50,
-        "ETHUSDT" => 3520.75,
-        "BNBUSDT" => 595.25,
-        "SOLUSDT" => 145.50,
-        "XRPUSDT" => 0.52,
-        _ => 100.0,
-    };
-    
-    let interval_ms: i64 = match interval.as_str() {
-        "1m" => 60000,
-        "5m" => 300000,
-        "15m" => 900000,
-        "1h" => 3600000,
-        "4h" => 14400000,
-        "1d" => 86400000,
-        _ => 60000,
-    };
-    
-    let mut klines = Vec::new();
-    let now = current_timestamp();
-    let mut price = base_price;
-    
-    for i in (0..limit).rev() {
-        let open_time = now - (interval_ms * i as i64);
-        let close_time = open_time + interval_ms;
-        
-        // Generate realistic price movement
-        let change = (i as f64 * 0.1).sin() * (base_price * 0.02);
-        let open = price;
-        let close = price + change;
-        let high = open.max(close) + (base_price * 0.005);
-        let low = open.min(close) - (base_price * 0.005);
-        let volume = 1000.0 + (i as f64 * 10.0);
-        
-        klines.push(Kline {
-            open_time,
-            open,
-            high,
-            low,
-            close,
-            volume,
-            close_time,
-            is_closed: true,
-        });
-        
-        price = close;
-    }
-    
-    Ok(klines)
+fn get_klines(_symbol: String, _interval: String, _limit: u32) -> Result<Vec<Kline>, String> {
+    Err("Live candle provider is not configured; klines unavailable".to_string())
+}
 }
 
 // ============================================================================
@@ -615,194 +356,23 @@ fn get_klines(symbol: String, interval: String, limit: u32) -> Result<Vec<Kline>
 
 /// Get user balances
 #[tauri::command]
-fn get_balances(state: State<AppState>) -> Result<Vec<WalletBalance>, String> {
-    let balances = state.balances.lock().unwrap();
-    let mut result = Vec::new();
-    
-    for (_, balance) in balances.iter() {
-        result.push(balance.clone());
-    }
-    
-    if result.is_empty() {
-        // Return default balances if none exist
-        result.push(WalletBalance {
-            currency: "BTC".to_string(),
-            balance: 2.5,
-            locked: 0.5,
-            available: 2.0,
-            balance_usd: 2.5 * 67432.50,
-        });
-        result.push(WalletBalance {
-            currency: "ETH".to_string(),
-            balance: 15.0,
-            locked: 2.0,
-            available: 13.0,
-            balance_usd: 15.0 * 3520.75,
-        });
-        result.push(WalletBalance {
-            currency: "USDT".to_string(),
-            balance: 50000.0,
-            locked: 10000.0,
-            available: 40000.0,
-            balance_usd: 50000.0,
-        });
-    }
-    
-    Ok(result)
+fn get_balances(_state: State<AppState>) -> Result<Vec<WalletBalance>, String> {
+    Err("Persistent account-ledger service is not configured; balances unavailable".to_string())
+}
 }
 
 /// Place an order
 #[tauri::command]
 fn place_order(
-    symbol: String,
-    side: String,
-    order_type: String,
-    quantity: f64,
-    price: Option<f64>,
-    state: State<AppState>,
+    _symbol: String,
+    _side: String,
+    _order_type: String,
+    _quantity: f64,
+    _price: Option<f64>,
+    _state: State<AppState>,
 ) -> Result<Order, String> {
-    // Validate inputs
-    if quantity <= 0.0 {
-        return Err("Quantity must be positive".to_string());
-    }
-    
-    if side != "buy" && side != "sell" {
-        return Err("Side must be 'buy' or 'sell'".to_string());
-    }
-    
-    if order_type != "market" && order_type != "limit" {
-        return Err("Order type must be 'market' or 'limit'".to_string());
-    }
-    
-    if order_type == "limit" && price.is_none() {
-        return Err("Limit orders require a price".to_string());
-    }
-    
-    // Check user is logged in
-    let current_user = state.current_user.lock().unwrap();
-    if current_user.is_none() {
-        return Err("Not logged in".to_string());
-    }
-    drop(current_user);
-    
-    // Get current price
-    let ticker = get_ticker(symbol.clone())?;
-    let execution_price = if order_type == "market" {
-        ticker.price
-    } else {
-        price.unwrap()
-    };
-    
-    // Calculate total
-    let total = quantity * execution_price;
-    
-    // Check balance
-    let base_asset = symbol.clone();
-    let quote_asset = "USDT".to_string();
-    
-    let mut balances = state.balances.lock().unwrap();
-    
-    if side == "buy" {
-        // Check quote currency balance
-        let quote_balance = balances.get(&quote_asset)
-            .map(|b| b.available)
-            .unwrap_or(0.0);
-        
-        if quote_balance < total {
-            return Err("Insufficient balance".to_string());
-        }
-        
-        // Lock funds
-        if let Some(balance) = balances.get_mut(&quote_asset) {
-            balance.available -= total;
-            balance.locked += total;
-        }
-    } else {
-        // Check base currency balance
-        let base_balance = balances.get(&base_asset)
-            .map(|b| b.available)
-            .unwrap_or(0.0);
-        
-        if base_balance < quantity {
-            return Err("Insufficient balance".to_string());
-        }
-        
-        // Lock funds
-        if let Some(balance) = balances.get_mut(&base_asset) {
-            balance.available -= quantity;
-            balance.locked += quantity;
-        }
-    }
-    drop(balances);
-    
-    // Create order
-    let now = current_timestamp();
-    let order = Order {
-        order_id: format!("order_{}", now),
-        symbol: symbol.clone(),
-        side: side.clone(),
-        order_type: order_type.clone(),
-        price: execution_price,
-        quantity,
-        filled_quantity: 0.0,
-        average_price: 0.0,
-        status: if order_type == "market" { "filled".to_string() } else { "open".to_string() },
-        time_in_force: "GTC".to_string(),
-        created_at: now,
-        updated_at: now,
-        client_order_id: None,
-    };
-    
-    // For market orders, fill immediately
-    if order_type == "market" {
-        let mut filled_order = order.clone();
-        filled_order.filled_quantity = quantity;
-        filled_order.average_price = execution_price;
-        
-        // Update balances
-        let mut balances = state.balances.lock().unwrap();
-        
-        if side == "buy" {
-            // Deduct quote, add base
-            if let Some(balance) = balances.get_mut(&quote_asset) {
-                balance.locked -= total;
-            }
-            let base_value = balances.entry(base_asset.clone()).or_insert_with(|| WalletBalance {
-                currency: base_asset.clone(),
-                balance: 0.0,
-                locked: 0.0,
-                available: 0.0,
-                balance_usd: 0.0,
-            });
-            base_value.available += quantity;
-            base_value.balance += quantity;
-        } else {
-            // Deduct base, add quote
-            if let Some(balance) = balances.get_mut(&base_asset) {
-                balance.locked -= quantity;
-                balance.available += quantity;
-            }
-            let quote_value = balances.entry(quote_asset.clone()).or_insert_with(|| WalletBalance {
-                currency: quote_asset.clone(),
-                balance: 0.0,
-                locked: 0.0,
-                available: 0.0,
-                balance_usd: 0.0,
-            });
-            quote_value.available += total;
-            quote_value.balance += total;
-        }
-        
-        // Add to order history
-        let mut history = state.order_history.lock().unwrap();
-        history.push(filled_order);
-    } else {
-        // Add to open orders
-        let mut orders = state.orders.lock().unwrap();
-        orders.push(order.clone());
-    }
-    
-    Ok(order)
+    Err("Authoritative trading service is not configured; order submission disabled".to_string())
+}
 }
 
 /// Cancel an order
