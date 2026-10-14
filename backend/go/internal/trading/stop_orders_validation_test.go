@@ -2,7 +2,9 @@ package trading
 
 import (
 	"math"
-	"testing"\n\n\t"tigerex/backend/internal/api"
+	"testing"
+
+	"tigerex/backend/internal/api"
 )
 
 func TestAlgoExecutionHandlerStoresValidExecutions(t *testing.T) {
@@ -27,7 +29,7 @@ func TestAlgoExecutionHandlerStoresValidExecutions(t *testing.T) {
 
 func TestAlgoExecutionRejectsInvalidInputs(t *testing.T) {
 	h := NewAlgoExecutionHandler()
-	now := apiNowForTest()
+	now := api.Now()
 	if got := h.CreateTWAPExecution("user", "BTC/USDT", "buy", 1, now, now+60, 0, 0); got != nil {
 		t.Fatal("TWAP with zero slices must be rejected")
 	}
@@ -40,8 +42,4 @@ func TestAlgoExecutionRejectsInvalidInputs(t *testing.T) {
 	if got := CreateGridBot("user", "BTC/USDT", 100, 1, 0); got != nil {
 		t.Fatal("grid bot with zero levels must be rejected")
 	}
-}
-
-func apiNowForTest() int64 {
-	return 1_900_000_000
 }
