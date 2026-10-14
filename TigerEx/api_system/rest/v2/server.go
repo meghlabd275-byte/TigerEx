@@ -19,7 +19,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/gorilla/websocket"
 	"golang.org/x/time/rate"
 )
 
@@ -856,7 +855,6 @@ func (s *Server) ResumeBot() gin.HandlerFunc {
 }
 
 // WebSocket
-var wsUpgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 
 func (s *Server) HandleWebSocket() gin.HandlerFunc {
 	return unavailableService()
