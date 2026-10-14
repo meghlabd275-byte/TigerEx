@@ -3,7 +3,7 @@ package handlers
 import (
 	"net/http"
 
-	"tigerex-api/internal/admin"
+	"tigerex/backend/internal/admin"
 )
 
 // AdminHandler handles admin API requests
