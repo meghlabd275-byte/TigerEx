@@ -320,8 +320,13 @@ type BalanceChange struct {
 }
 
 // =============================================================================
-// BLOCKCHAIN SERVICE (Stub for real implementation)
+// BLOCKCHAIN SERVICE ADAPTERS
 // =============================================================================
+
+// ErrBlockchainUnavailable is returned until a real, authenticated chain RPC
+// adapter is configured. Never fabricate confirmations, balances, gas prices,
+// or transaction hashes for custody operations.
+var ErrBlockchainUnavailable = errors.New("blockchain RPC is not configured")
 
 // BTCService handles Bitcoin operations
 type BTCService struct {
@@ -333,21 +338,19 @@ func NewBTCService(network string) *BTCService {
 }
 
 func (s *BTCService) GetDepositConfirmations(ctx context.Context, txHash, network string) (int, error) {
-	// Real implementation would call Bitcoin node
-	return 6, nil
+	return 0, ErrBlockchainUnavailable
 }
 
 func (s *BTCService) BroadcastWithdrawal(ctx context.Context, req *WithdrawalRequest) (string, error) {
-	// Real implementation would call Bitcoin node
-	return "txhash_" + uuid.New().String()[:8], nil
+	return "", ErrBlockchainUnavailable
 }
 
 func (s *BTCService) GetBalance(ctx context.Context, address, network string) (string, error) {
-	return "0", nil
+	return "", ErrBlockchainUnavailable
 }
 
 func (s *BTCService) GetGasPrice(ctx context.Context, network string) (string, error) {
-	return "10", nil
+	return "", ErrBlockchainUnavailable
 }
 
 // ETHService handles Ethereum operations
@@ -360,22 +363,19 @@ func NewETHService(network string) *ETHService {
 }
 
 func (s *ETHService) GetDepositConfirmations(ctx context.Context, txHash, network string) (int, error) {
-	// Real implementation would call Ethereum node
-	return 12, nil
+	return 0, ErrBlockchainUnavailable
 }
 
 func (s *ETHService) BroadcastWithdrawal(ctx context.Context, req *WithdrawalRequest) (string, error) {
-	// Real implementation would call Ethereum node
-	return "0x" + uuid.New().String(), nil
+	return "", ErrBlockchainUnavailable
 }
 
 func (s *ETHService) GetBalance(ctx context.Context, address, network string) (string, error) {
-	return "0", nil
+	return "", ErrBlockchainUnavailable
 }
 
 func (s *ETHService) GetGasPrice(ctx context.Context, network string) (string, error) {
-	// Real implementation would call eth_gasPrice
-	return "20000000000", nil // 20 Gwei
+	return "", ErrBlockchainUnavailable
 }
 
 // WithdrawalRequest for blockchain
