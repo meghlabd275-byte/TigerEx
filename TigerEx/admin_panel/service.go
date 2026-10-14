@@ -91,7 +91,7 @@ type Service struct {
 	auditIndex map[string][]string // targetID -> auditIDs
 
 	// Config
-	RequireApprovalFor.Withdrawal bool
+	RequireApprovalForWithdrawal bool
 	RequireApprovalThreshold float64
 }
 
@@ -104,7 +104,7 @@ func NewService() *Service {
 		flaggedUsers:   make(map[string][]string),
 		auditLogs:    make(map[string]*AuditLog),
 		auditIndex:   make(map[string][]string),
-		RequireApprovalFor.Withdrawal: true,
+		RequireApprovalForWithdrawal: true,
 		RequireApprovalThreshold: 10000,
 	}
 }
@@ -133,8 +133,9 @@ func (s *Service) CreateAdmin(admin *AdminUser) error {
 
 // VerifyAdmin verifies admin credentials
 func (s *Service) VerifyAdmin(email, password string) (*AdminUser, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	// LastLogin is mutable state, so use the write lock while validating and updating it.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	adminID, ok := s.emailToAdmin[email]
 	if !ok {
@@ -153,7 +154,15 @@ func (s *Service) VerifyAdmin(email, password string) (*AdminUser, error) {
 	now := time.Now()
 	admin.LastLogin = &now
 
-	return admin, nil
+	// Return a detached value so callers cannot mutate the service's shared record
+	// without holding the service lock.
+	result := *admin
+	result.Permissions = append([]string(nil), admin.Permissions...)
+	if admin.LastLogin != nil {
+		lastLogin := *admin.LastLogin
+		result.LastLogin = &lastLogin
+	}
+	return &result, nil
 }
 
 // HasPermission checks admin permission
