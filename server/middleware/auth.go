@@ -2,7 +2,9 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -12,7 +14,25 @@ import (
 	"tigerex/server/models"
 )
 
-var JWTSecret = []byte("tigerex-jwt-secret-change-in-production")
+var JWTSecret []byte
+
+// LoadJWTSecret loads the signing key after environment configuration has been loaded.
+// It deliberately has no insecure development fallback: all services using this
+// middleware must be configured with a unique secret of at least 32 bytes.
+func LoadJWTSecret() error {
+	secret := os.Getenv("JWT_SECRET")
+	if len([]byte(secret)) < 32 {
+		return fmt.Errorf("JWT_SECRET must be configured with at least 32 bytes")
+	}
+	lower := strings.ToLower(secret)
+	for _, weak := range []string{"change-in-production", "change-me", "example", "default", "tigerex-secret", "tigerex-jwt-secret"} {
+		if strings.Contains(lower, weak) {
+			return fmt.Errorf("JWT_SECRET contains a prohibited placeholder value")
+		}
+	}
+	JWTSecret = []byte(secret)
+	return nil
+}
 
 // CORS middleware
 func CORS() gin.HandlerFunc {
