@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -22,8 +23,13 @@ import (
 // @termsOfService http://tigerex.com/terms
 
 func main() {
-	// Load .env
-	godotenv.Load()
+	// Load .env before validating security-critical configuration.
+	if err := godotenv.Load(); err != nil {
+		log.Printf("No .env file loaded; using process environment")
+	}
+	if err := middleware.LoadJWTSecret(); err != nil {
+		log.Fatalf("Invalid JWT configuration: %v", err)
+	}
 
 	// Initialize database
 	if err := models.InitDB(); err != nil {
@@ -41,7 +47,7 @@ func main() {
 
 	// Health check
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok", "timestamp": "2024-01-01"})
+		c.JSON(200, gin.H{"status": "ok", "timestamp": time.Now().UTC().Format(time.RFC3339Nano)})
 	})
 	r.GET("/api/v1/ping", func(c *gin.Context) {
 		c.JSON(200, gin.H{"pong": true})
