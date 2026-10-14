@@ -1,12 +1,11 @@
 package main
 
 import (
-	"context"
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -167,8 +166,8 @@ func NewAdminService() *AdminService {
 		},
 	}
 
-	// Initialize default super admin
-	svc.initDefaultAdmin()
+	// Bootstrap an administrator only from explicit deployment-provided credentials.
+	svc.initBootstrapAdmin()
 	svc.initDefaultSettings()
 	svc.initTradingPairs()
 	svc.initFeeConfigs()
@@ -176,19 +175,21 @@ func NewAdminService() *AdminService {
 	return svc
 }
 
-func (s *AdminService) initDefaultAdmin() {
-	hash, _ := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
-	
+func (s *AdminService) initBootstrapAdmin() {
+	email := strings.ToLower(strings.TrimSpace(os.Getenv("TIGEREX_BOOTSTRAP_ADMIN_EMAIL")))
+	password := os.Getenv("TIGEREX_BOOTSTRAP_ADMIN_PASSWORD")
+	if email == "" || password == "" || len(password) < 16 || !strings.Contains(email, "@") {
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
 	admin := &Admin{
-		ID:          uuid.New().String(),
-		Email:       "admin@tigerex.com",
-		Username:    "superadmin",
-		PasswordHash: string(hash),
-		Role:        RoleSuperAdmin,
-		Permissions: []string{"*"},
-		Status:      "active",
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		ID: uuid.NewString(), Email: email, Username: strings.SplitN(email, "@", 2)[0],
+		PasswordHash: string(hash), Role: RoleSuperAdmin, Permissions: []string{"*"},
+		Status: "active", CreatedAt: now, UpdatedAt: now,
 	}
 	s.admins[admin.ID] = admin
 	s.admins[admin.Email] = admin
@@ -288,7 +289,8 @@ func (s *AdminService) Login(email, password, ipAddress string) (*Admin, string,
 	}
 
 	s.sessions[token] = session
-	admin.LastLoginAt = &time.Now{}
+	now := time.Now().UTC()
+	admin.LastLoginAt = &now
 
 	// Log action
 	s.logAction(admin.ID, "login", "admin", admin.ID, "Admin logged in", ipAddress)
@@ -307,26 +309,44 @@ func (s *AdminService) Logout(token string) error {
 	return nil
 }
 
-func (s *AdminService) ValidateSession(token string) (*Admin, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	session, ok := s.sessions[token]
-	if !ok {
-		return nil, APIError{Code: 401, Message: "Invalid session"}
+// AuthMiddleware requires a valid, unexpired session and currently limits this
+// legacy in-memory admin service to super-admins until per-action RBAC is wired.
+func (s *AdminService) AuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		header := c.GetHeader("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "error": "authentication required"})
+			return
+		}
+		token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+		admin, err := s.ValidateSession(token)
+		if err != nil || admin == nil || admin.Role != RoleSuperAdmin || admin.Status != "active" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "error": "invalid or unauthorized session"})
+			return
+		}
+		c.Set("adminID", admin.ID)
+		c.Next()
 	}
+}
 
-	if session.ExpiresAt.Before(time.Now()) {
+func (s *AdminService) ValidateSession(token string) (*Admin, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[token]
+	if !ok { return nil, APIError{Code: 401, Message: "Invalid session"} }
+	if !session.ExpiresAt.After(time.Now()) {
 		delete(s.sessions, token)
 		return nil, APIError{Code: 401, Message: "Session expired"}
 	}
-
 	admin, ok := s.admins[session.AdminID]
-	if !ok {
-		return nil, APIError{Code: 401, Message: "Admin not found"}
+	if !ok || admin.Status != "active" {
+		delete(s.sessions, token)
+		return nil, APIError{Code: 401, Message: "Admin not found or inactive"}
 	}
-
-	return admin, nil
+	copy := *admin
+	copy.PasswordHash = ""
+	copy.Permissions = append([]string(nil), admin.Permissions...)
+	return &copy, nil
 }
 
 // =============================================================================
@@ -739,8 +759,9 @@ func (s *AdminService) HealthCheck(c *gin.Context) {
 // =============================================================================
 
 func generateToken() string {
-	hash := sha256.Sum256([]byte(uuid.New().String() + time.Now().Format(time.RFC3339Nano)))
-	return hex.EncodeToString(hash[:])
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil { return "" }
+	return hex.EncodeToString(bytes)
 }
 
 // =============================================================================
@@ -751,53 +772,50 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 
 	svc := NewAdminService()
+	if len(svc.admins) == 0 {
+		fmt.Fprintln(os.Stderr, "admin bootstrap required: configure TIGEREX_BOOTSTRAP_ADMIN_EMAIL and TIGEREX_BOOTSTRAP_ADMIN_PASSWORD (16+ characters)")
+		os.Exit(1)
+	}
 
 	r := gin.Default()
 
-	// CORS middleware
+	// CORS only permits an explicitly configured origin; never reflect arbitrary origins.
 	r.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(http.StatusNoContent)
+		origin := c.GetHeader("Origin")
+		allowedOrigin := strings.TrimSpace(os.Getenv("ADMIN_CORS_ORIGIN"))
+		if origin != "" && (allowedOrigin == "" || origin != allowedOrigin) {
+			c.AbortWithStatus(http.StatusForbidden)
 			return
 		}
+		if origin != "" {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+			c.Writer.Header().Set("Vary", "Origin")
+		}
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if c.Request.Method == "OPTIONS" { c.AbortWithStatus(http.StatusNoContent); return }
 		c.Next()
 	})
 
 	// Health check
 	r.GET("/health", svc.HealthCheck)
 
-	// API routes
+	// Login is the only unauthenticated admin endpoint.
 	api := r.Group("/api/v1/admin")
-	{
-		// Auth
-		api.POST("/login", svc.LoginHandler)
-		api.POST("/logout", svc.LogoutHandler)
-
-		// Dashboard
-		api.GET("/dashboard", svc.GetDashboardStatsHandler)
-
-		// White Labels
-		api.GET("/white-labels", svc.GetWhiteLabelsHandler)
-		api.POST("/white-labels", svc.CreateWhiteLabelHandler)
-
-		// Trading Pairs
-		api.GET("/trading-pairs", svc.GetTradingPairsHandler)
-		api.PUT("/trading-pairs/:symbol", svc.UpdateTradingPairHandler)
-
-		// Fee Configs
-		api.GET("/fees", svc.GetFeeConfigsHandler)
-		api.PUT("/fees/:id", svc.UpdateFeeConfigHandler)
-
-		// Settings
-		api.GET("/settings", svc.GetSettingsHandler)
-		api.PUT("/settings", svc.UpdateSettingHandler)
-
-		// Audit Logs
-		api.GET("/audit-logs", svc.GetAuditLogsHandler)
-	}
+	api.POST("/login", svc.LoginHandler)
+	protected := api.Group("")
+	protected.Use(svc.AuthMiddleware())
+	protected.POST("/logout", svc.LogoutHandler)
+	protected.GET("/dashboard", svc.GetDashboardStatsHandler)
+	protected.GET("/white-labels", svc.GetWhiteLabelsHandler)
+	protected.POST("/white-labels", svc.CreateWhiteLabelHandler)
+	protected.GET("/trading-pairs", svc.GetTradingPairsHandler)
+	protected.PUT("/trading-pairs/:symbol", svc.UpdateTradingPairHandler)
+	protected.GET("/fees", svc.GetFeeConfigsHandler)
+	protected.PUT("/fees/:id", svc.UpdateFeeConfigHandler)
+	protected.GET("/settings", svc.GetSettingsHandler)
+	protected.PUT("/settings", svc.UpdateSettingHandler)
+	protected.GET("/audit-logs", svc.GetAuditLogsHandler)
 
 	fmt.Println("Starting Admin Service on :8089")
 	r.Run(":8089")
