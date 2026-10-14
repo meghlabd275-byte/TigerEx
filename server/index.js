@@ -131,7 +131,7 @@ async function loadTradingPairs() {
 // MIDDLEWARE
 // ============================================================================
 
-app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+app.use(helmet({ crossOriginEmbedderPolicy: false }));
 app.use(compression());
 app.use(morgan("combined"));
 app.use(cors({ origin: process.env.CORS_ORIGIN || "http://localhost:3000", credentials: true }));
