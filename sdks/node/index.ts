@@ -392,11 +392,9 @@ export class TigerExClient extends EventEmitter {
     }
 
     private generateUUID(): string {
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-            const r = Math.random() * 16 | 0;
-            const v = c === 'x' ? r : (r & 0x3 | 0x8);
-            return v.toString(16);
-        });
+        // Node's CSPRNG-backed UUID implementation; never use Math.random()
+        // for request identifiers, idempotency keys, or security-sensitive IDs.
+        return crypto.randomUUID();
     }
 
     // =========================================================================
