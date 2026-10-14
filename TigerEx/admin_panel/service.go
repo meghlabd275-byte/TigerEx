@@ -451,11 +451,12 @@ func (s *Service) AdjustFee(adminID, asset string, maker, taker float64) error {
 	details := fmt.Sprintf("%s maker:%.4f taker:%.4f", asset, maker, taker)
 
 	log := &AuditLog{
-		ID:        generateAuditID(),
-		AdminID:   adminID,
-		Action:   "ADJUST_FEE",
-		Details:  details,
-		CreatedAt: time.Now(),
+		ID:         generateAuditID(),
+		AdminID:    adminID,
+		Action:     "ADJUST_FEE",
+		TargetType: "ASSET",
+		Details:    details,
+		CreatedAt:  time.Now(),
 	}
 
 	s.appendAuditLog(log, asset)
