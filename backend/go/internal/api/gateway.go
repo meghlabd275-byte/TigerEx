@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -17,7 +19,8 @@ import (
 type Response struct {
 	Success bool        `json:"success"`
 	Data    interface{} `json:"data,omitempty"`
-	Error   *Error     `json:"error,omitempty"`
+	Error   *Error      `json:"error,omitempty"`
+	Status  int         `json:"-"`
 }
 
 type Error struct {
@@ -35,53 +38,36 @@ type Request struct {
 }
 
 func errorResp(code, msg string) *Response {
-	return &Response{Success: false, Error: &Error{Code: code, Message: msg}}
+	status := http.StatusBadRequest
+	if code == "unauthorized" { status = http.StatusUnauthorized }
+	if code == "unavailable" { status = http.StatusServiceUnavailable }
+	return &Response{Success: false, Error: &Error{Code: code, Message: msg}, Status: status}
 }
 
 // Market handlers
-func hTicker(r *Request) *Response {
-	symbol := r.Params["symbol"]
-	if symbol == "" { symbol = "BTCUSDT" }
-	return &Response{Success: true, Data: map[string]interface{}{
-		"symbol": symbol, "price": "50000.00", "volume_24h": "10000.5",
-	}}
+func hTicker(_r *Request) *Response {
+	return errorResp("unavailable", "verified market-data provider is not configured")
 }
 
-func hDepth(r *Request) *Response {
-	return &Response{Success: true, Data: map[string]interface{}{
-		"bids": [][]string{{"50000.00", "1.5"}},
-		"asks": [][]string{{"50000.50", "1.0"}},
-	}}
+func hDepth(_r *Request) *Response {
+	return errorResp("unavailable", "verified order-book provider is not configured")
 }
 
-func hTrades(r *Request) *Response {
-	return &Response{Success: true, Data: map[string]interface{}{
-		"trades": []map[string]interface{}{
-			{"id": 1, "price": "50000", "qty": "0.5"},
-		},
-	}}
+func hTrades(_r *Request) *Response {
+	return errorResp("unavailable", "verified trade feed is not configured")
 }
 
 // Trading handlers
-func hCreateOrder(r *Request) *Response {
-	if r.UserID == "" { return errorResp("unauthorized", "auth required") }
-	return &Response{Success: true, Data: map[string]interface{}{
-		"id": fmt.Sprintf("ord_%d", time.Now().Unix()), "status": "new",
-	}}
+func hCreateOrder(_r *Request) *Response {
+	return errorResp("unavailable", "canonical matching engine and durable ledger are not configured")
 }
 
-func hCancelOrder(r *Request) *Response {
-	if r.UserID == "" { return errorResp("unauthorized", "auth required") }
-	return &Response{Success: true, Data: map[string]interface{}{
-		"order_id": r.Params["id"], "status": "cancelled",
-	}}
+func hCancelOrder(_r *Request) *Response {
+	return errorResp("unavailable", "canonical order service is not configured")
 }
 
-func hGetOrder(r *Request) *Response {
-	if r.UserID == "" { return errorResp("unauthorized", "auth required") }
-	return &Response{Success: true, Data: map[string]interface{}{
-		"id": r.Params["id"], "symbol": "BTCUSDT", "status": "new",
-	}}
+func hGetOrder(_r *Request) *Response {
+	return errorResp("unavailable", "canonical order service is not configured")
 }
 
 func hOpenOrders(r *Request) *Response {
@@ -90,23 +76,12 @@ func hOpenOrders(r *Request) *Response {
 }
 
 // Account handlers
-func hBalance(r *Request) *Response {
-	if r.UserID == "" { return errorResp("unauthorized", "auth required") }
-	return &Response{Success: true, Data: map[string]interface{}{
-		"balances": []map[string]string{
-			{"asset": "USDT", "free": "10000.00"},
-			{"asset": "BTC", "free": "1.00"},
-		},
-	}}
+func hBalance(_r *Request) *Response {
+	return errorResp("unavailable", "persistent account ledger is not configured")
 }
 
-func hDepositAddr(r *Request) *Response {
-	if r.UserID == "" { return errorResp("unauthorized", "auth required") }
-	asset := "BTC"
-	if len(r.Query["asset"]) > 0 { asset = r.Query["asset"][0] }
-	return &Response{Success: true, Data: map[string]string{
-		"asset": asset, "address": "bc1q" + randStr(38),
-	}}
+func hDepositAddr(_r *Request) *Response {
+	return errorResp("unavailable", "chain-specific address derivation and custody provider are not configured")
 }
 
 func hWithdrawHistory(r *Request) *Response {
@@ -175,21 +150,43 @@ func (s *Server) routes() {
 
 func (s *Server) handle(h Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Content-Type", "application/json")
-		
-		if r.Method == "OPTIONS" { w.WriteHeader(http.StatusNoContent); return }
-		
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "no-store")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			allowed := false
+			for _, candidate := range strings.Split(os.Getenv("CORS_ORIGIN"), ",") {
+				if candidate = strings.TrimSpace(candidate); candidate != "" && candidate == origin {
+					allowed = true
+					break
+				}
+			}
+			w.Header().Set("Vary", "Origin")
+			if !allowed {
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-ID")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		req := &Request{
 			Params: mux.Vars(r),
-			Query:  r.URL.Query(),
-			UserID: r.Header.Get("X-User-ID"), // Simplified auth
+			Query: r.URL.Query(),
+			// Never trust a client-supplied X-User-ID as authentication.
+			// Wire a verified JWT/session middleware before enabling private routes.
+			UserID: "",
 		}
-		
 		resp := h(req)
-		
-		if resp.Error != nil { w.WriteHeader(400) }
-		json.NewEncoder(w).Encode(resp)
+		status := resp.Status
+		if status == 0 { status = http.StatusOK }
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 
