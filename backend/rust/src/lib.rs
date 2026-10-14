@@ -1,7 +1,7 @@
-pub mod grid;
-
 //! TigerEx Rust Crypto Module
 //! High-performance cryptographic operations for security-critical functions
+
+pub mod grid;
 
 pub mod crypto {
     use aes_gcm::{
