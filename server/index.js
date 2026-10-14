@@ -180,6 +180,32 @@ const limiter = rateLimit({
 });
 app.use("/api/", limiter);
 
+// Redis-backed authentication throttling is shared across API replicas. Fail
+// closed if the rate-limit store is unavailable instead of silently disabling
+// brute-force protection during a Redis outage.
+const AUTH_RATE_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_RATE_MAX_REQUESTS = 10;
+async function authRateLimit(req, res, next) {
+  try {
+    const ip = String(req.ip || "unknown").slice(0, 128);
+    const route = req.path === "/register" ? "register" : "login";
+    const key = `auth-rate:${route}:${ip}`;
+    const count = Number(await redis.eval(
+      "local n = redis.call('INCR', KEYS[1]); if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]); end; return n",
+      1,
+      key,
+      String(AUTH_RATE_WINDOW_MS)
+    ));
+    if (!Number.isFinite(count) || count > AUTH_RATE_MAX_REQUESTS) {
+      return res.status(429).json({ success: false, error: "Too many authentication attempts. Try again later." });
+    }
+    return next();
+  } catch (error) {
+    console.error("Authentication rate limiter unavailable:", error.message);
+    return res.status(503).json({ success: false, error: "Authentication service temporarily unavailable" });
+  }
+}
+
 
 
 // ============================================================================
@@ -272,7 +298,7 @@ app.get("/api/v1/health", (req, res) => {
 });
 
 // User registration
-app.post("/api/v1/auth/register", async (req, res) => {
+app.post("/api/v1/auth/register", authRateLimit, async (req, res) => {
   try {
     const { email, username, password, referralCode } = req.body;
 
@@ -340,7 +366,7 @@ app.post("/api/v1/auth/register", async (req, res) => {
 });
 
 // Login
-app.post("/api/v1/auth/login", async (req, res) => {
+app.post("/api/v1/auth/login", authRateLimit, async (req, res) => {
   try {
     const { email, password } = req.body;
 
