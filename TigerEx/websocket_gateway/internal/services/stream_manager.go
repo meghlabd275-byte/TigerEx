@@ -1,7 +1,7 @@
 package services
 
 import (
-	"context"
+	"fmt"
 	"sync"
 
 	"tigerEx/websocket_gateway/internal/models"
@@ -15,7 +15,7 @@ import (
 type StreamManager struct {
 	mu        sync.RWMutex
 	streams   map[string]*Stream
-	clients  map[*Client]bool
+	clients  map[string]*models.Client
 	prices   map[string]float64
 }
 
@@ -31,7 +31,7 @@ type Stream struct {
 func NewStreamManager() *StreamManager {
 	sm := &StreamManager{
 		streams: make(map[string]*Stream),
-		clients: make(map[*Client]bool),
+		clients: make(map[string]*models.Client),
 		prices: make(map[string]float64),
 	}
 
@@ -82,13 +82,20 @@ func (sm *StreamManager) Subscribe(client *models.Client, streams []string) erro
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	if client == nil || client.Streams == nil {
+		return fmt.Errorf("client subscription state is required")
+	}
 	for _, stream := range streams {
-		if s, ok := sm.streams[stream]; ok {
-			s.Subscribed++
+		if _, ok := sm.streams[stream]; !ok {
+			return fmt.Errorf("unsupported stream: %s", stream)
+		}
+	}
+	for _, stream := range streams {
+		if !client.Streams[stream] {
+			sm.streams[stream].Subscribed++
 			client.Streams[stream] = true
 		}
 	}
-
 	return nil
 }
 
@@ -97,13 +104,17 @@ func (sm *StreamManager) Unsubscribe(client *models.Client, streams []string) er
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	if client == nil || client.Streams == nil {
+		return fmt.Errorf("client subscription state is required")
+	}
 	for _, stream := range streams {
-		if s, ok := sm.streams[stream]; ok {
-			s.Subscribed--
+		if client.Streams[stream] {
+			if s, ok := sm.streams[stream]; ok && s.Subscribed > 0 {
+				s.Subscribed--
+			}
 			delete(client.Streams, stream)
 		}
 	}
-
 	return nil
 }
 
@@ -129,7 +140,7 @@ func (sm *StreamManager) Broadcast(stream string, message []byte) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	for client := range sm.clients {
+	for _, client := range sm.clients {
 		if client.Streams[stream] {
 			// Send to client (implementation would use websocket connection)
 			_ = message
@@ -142,7 +153,7 @@ func (sm *StreamManager) BroadcastToUser(userID string, message []byte) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	for client := range sm.clients {
+	for _, client := range sm.clients {
 		if client.UserID == userID {
 			// Send to client
 			_ = message
@@ -206,14 +217,14 @@ func (sm *StreamManager) GenerateTicker(symbol string) []byte {
 // RegisterClient registers a client
 func (sm *StreamManager) RegisterClient(client *models.Client) {
 	sm.mu.Lock()
-	sm.clients[client] = true
+	sm.clients[client.ID] = client
 	sm.mu.Unlock()
 }
 
 // UnregisterClient unregisters a client
 func (sm *StreamManager) UnregisterClient(client *models.Client) {
 	sm.mu.Lock()
-	delete(sm.clients, client)
+	delete(sm.clients, client.ID)
 	sm.mu.Unlock()
 }
 
@@ -236,7 +247,8 @@ func (sm *StreamManager) GetStreams() []*Stream {
 
 	var result []*Stream
 	for _, stream := range sm.streams {
-		result = append(result, stream)
+		copy := *stream
+		result = append(result, &copy)
 	}
 
 	return result
