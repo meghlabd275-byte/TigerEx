@@ -7,6 +7,7 @@
 #include "matching_engine.hpp"
 #include <unordered_map>
 #include <vector>
+#include <limits>
 
 namespace tigerex {
 
@@ -21,9 +22,9 @@ struct RiskLimits {
     int64_t min_order_size{100};            // $0.01
     
     // Margin requirements
-    int64_t initial_margin_rate{1000000};  // 10% default
-    int64_t maintenance_margin_rate{500000};  // 5% maintenance
-    int64_t margin_call_level{300000};  // 3% maintenance margin
+    int64_t initial_margin_rate{100000};  // 10% on a 1,000,000 = 100% scale
+    int64_t maintenance_margin_rate{50000};  // 5% on a 1,000,000 = 100% scale
+    int64_t margin_call_level{30000};  // 3% on a 1,000,000 = 100% scale
     
     // Leverage
     int max_leverage{125};  // 125x max (0.8% margin)
@@ -163,8 +164,20 @@ public:
             return result;
         }
         
-        // Check order size
-        int64_t order_value = order.price[0] * order.quantity[0];
+        // Reject malformed or overflowing values before risk checks.
+        if (order.price[0] <= 0 || order.quantity[0] <= 0) {
+            result.allowed = false;
+            result.reason = "Price and quantity must be positive";
+            return result;
+        }
+        const __int128 wide_order_value = static_cast<__int128>(order.price[0]) *
+                                          static_cast<__int128>(order.quantity[0]);
+        if (wide_order_value > std::numeric_limits<int64_t>::max()) {
+            result.allowed = false;
+            result.reason = "Order value overflow";
+            return result;
+        }
+        const int64_t order_value = static_cast<int64_t>(wide_order_value);
         if (order_value > profile->limits.max_order_size) {
             result.allowed = false;
             result.reason = "Order size exceeds limit";
@@ -195,17 +208,28 @@ public:
             return result;
         }
         
-        // Check position limit
-        int64_t new_position = position + order_value;
-        if (std::abs(new_position) > profile->limits.max_position) {
+        // Widen arithmetic to avoid signed overflow, including INT64_MIN.
+        const __int128 wide_position = static_cast<__int128>(position) +
+                                       static_cast<__int128>(order_value);
+        const __int128 magnitude = wide_position < 0 ? -wide_position : wide_position;
+        if (magnitude > profile->limits.max_position ||
+            magnitude > std::numeric_limits<int64_t>::max()) {
             result.allowed = false;
             result.reason = "Position limit exceeded";
             return result;
         }
-        
-        // Check margin
-        result.margin_required = order_value * profile->limits.initial_margin_rate / 1000000;
-        result.position_value = std::abs(new_position);
+
+        // Margin rates use a 1,000,000 scale (100%).
+        const __int128 abs_order_value = order_value < 0
+            ? -static_cast<__int128>(order_value) : static_cast<__int128>(order_value);
+        const __int128 margin = abs_order_value * profile->limits.initial_margin_rate / 1000000;
+        if (margin > std::numeric_limits<int64_t>::max()) {
+            result.allowed = false;
+            result.reason = "Margin requirement overflow";
+            return result;
+        }
+        result.margin_required = static_cast<int64_t>(margin);
+        result.position_value = static_cast<int64_t>(magnitude);
         
         return result;
     }
@@ -218,8 +242,14 @@ public:
      * Calculate margin requirement
      */
     int64_t calculate_margin_requirement(const Order& order, int leverage) {
-        int64_t order_value = order.price[0] * order.quantity[0];
-        return order_value / leverage;
+        if (leverage <= 0 || leverage > 125 || order.price[0] <= 0 || order.quantity[0] <= 0) {
+            return -1; // Invalid input: callers must reject rather than treat as zero margin.
+        }
+        const __int128 value = static_cast<__int128>(order.price[0]) *
+                               static_cast<__int128>(order.quantity[0]);
+        const __int128 margin = value / leverage;
+        if (margin > std::numeric_limits<int64_t>::max()) return -1;
+        return static_cast<int64_t>(margin);
     }
     
     /**
@@ -234,16 +264,20 @@ public:
      * Check margin call
      */
     bool check_margin_call(int64_t position_value, int64_t margin_balance) {
-        int64_t margin_ratio = margin_balance * 100 / position_value;
-        return margin_ratio < 500000;  // 5% = 500000 in bps
+        if (position_value <= 0 || margin_balance < 0) return true; // fail closed
+        const __int128 ratio = static_cast<__int128>(margin_balance) * 1000000 /
+                               position_value;
+        return ratio < 50000; // 5%, scaled by 1,000,000
     }
-    
+
     /**
      * Check liquidation
      */
     bool check_liquidation(int64_t position_value, int64_t margin_balance) {
-        int64_t margin_ratio = margin_balance * 100 / position_value;
-        return margin_ratio < 300000;  // 3% = 300000 in bps
+        if (position_value <= 0 || margin_balance < 0) return true; // fail closed
+        const __int128 ratio = static_cast<__int128>(margin_balance) * 1000000 /
+                               position_value;
+        return ratio < 30000; // 3%, scaled by 1,000,000
     }
     
     // ============================================================================
