@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Home,
   ArrowLeft,
+  ArrowRight,
   MoreVertical,
   Share2,
   Bookmark,

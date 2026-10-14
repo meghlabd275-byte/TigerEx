@@ -9,6 +9,7 @@ interface WalletBalance {
   balance: number;
   locked: number;
   available: number;
+  priceUsd?: number | null;
 }
 
 interface BalanceListProps {
@@ -19,21 +20,7 @@ export function BalanceList({ compact = false }: BalanceListProps) {
   const [balances, setBalances] = useState<WalletBalance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [totalUSD, setTotalUSD] = useState(0);
-
-  // Mock prices for USD conversion
-  const prices: { [key: string]: number } = {
-    'BTC': 65000,
-    'ETH': 3500,
-    'USDT': 1,
-    'USDC': 1,
-    'BNB': 600,
-    'SOL': 150,
-    'XRP': 0.6,
-    'ADA': 0.5,
-    'DOGE': 0.15,
-    'SOL': 150,
-  };
+  const [totalUSD, setTotalUSD] = useState<number | null>(null);
 
   useEffect(() => {
     const fetchBalances = async () => {
@@ -54,12 +41,9 @@ export function BalanceList({ compact = false }: BalanceListProps) {
           setBalances(data.data);
           
           // Calculate total USD
-          let total = 0;
-          data.data.forEach((w: WalletBalance) => {
-            const price = prices[w.currency] || 0;
-            total += w.available * price;
-          });
-          setTotalUSD(total);
+          const pricedBalances = data.data as WalletBalance[];
+          const hasCompletePrices = pricedBalances.every((w) => typeof w.priceUsd === 'number' && Number.isFinite(w.priceUsd) && w.priceUsd >= 0);
+          setTotalUSD(hasCompletePrices ? pricedBalances.reduce((total, w) => total + w.available * (w.priceUsd as number), 0) : null);
           setError(null);
         } else {
           setError(data.error?.message || 'Failed to load balances');
@@ -74,7 +58,7 @@ export function BalanceList({ compact = false }: BalanceListProps) {
     fetchBalances();
   }, []);
 
-  const formatBalance = (balance: number, currency: string) => {
+  const formatBalance = (balance: number, _currency: string) => {
     if (balance === 0) return '0';
     if (balance < 0.0001) return balance.toExponential(2);
     if (balance < 1) return balance.toFixed(6);
@@ -134,7 +118,7 @@ export function BalanceList({ compact = false }: BalanceListProps) {
             </div>
             <div className="text-right">
               <div className="text-white">{formatBalance(balance.available, balance.currency)}</div>
-              <div className="text-gray-500 text-xs">${formatUSD(balance.available * (prices[balance.currency] || 0))}</div>
+              <div className="text-gray-500 text-xs">{typeof balance.priceUsd === "number" ? `${formatUSD(balance.available * balance.priceUsd)}` : "USD value unavailable"}</div>
             </div>
           </div>
         ))}
@@ -147,7 +131,7 @@ export function BalanceList({ compact = false }: BalanceListProps) {
       {/* Total Balance Card */}
       <div className="bg-gradient-to-r from-tiger-orange to-orange-600 rounded-lg p-6">
         <div className="text-white/80 text-sm">Total Assets</div>
-        <div className="text-3xl font-bold text-white mt-1">${formatUSD(totalUSD)}</div>
+        <div className="text-3xl font-bold text-white mt-1">{totalUSD === null ? "Unavailable" : formatUSD(totalUSD)}</div>
       </div>
 
       {/* Balance List */}

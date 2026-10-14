@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Wallet, 
   Send, 
-  Receive, 
+  ArrowDownToLine, 
   ArrowLeftRight, 
   History, 
   Settings,
@@ -33,6 +33,8 @@ import {
   Globe,
   TrendingUp,
   DollarSign,
+  Eye,
+  EyeOff,
   CreditCard,
   Gift,
   Coins,
@@ -121,8 +123,8 @@ export function WalletHeader({ balances }: { balances?: WalletTokenBalance[] | n
       {/* Quick Actions */}
       <div className="grid grid-cols-4 gap-2">
         <button className="flex flex-col items-center gap-1 p-3 bg-[#1e3a5f] rounded-xl hover:bg-[#2a4a70] transition">
-          <Receive className="w-5 h-5 text-[#4A9EEB]" />
-          <span className="text-xs text-gray-300">Receive</span>
+          <ArrowDownToLine className="w-5 h-5 text-[#4A9EEB]" />
+          <span className="text-xs text-gray-300">ArrowDownToLine</span>
         </button>
         <button className="flex flex-col items-center gap-1 p-3 bg-[#3d1e5f] rounded-xl hover:bg-[#4a2870] transition">
           <Send className="w-5 h-5 text-[#9B51E0]" />
@@ -272,7 +274,7 @@ export function TransactionHistory() {
                 tx.type === 'receive' ? 'bg-[#1e5f3d]' : 
                 tx.type === 'send' ? 'bg-[#3d1e5f]' : 'bg-[#5f3d1e]'
               }`}>
-                {tx.type === 'receive' ? <Receive className="w-4 h-4 text-[#4AE39E]" /> :
+                {tx.type === 'receive' ? <ArrowDownToLine className="w-4 h-4 text-[#4AE39E]" /> :
                  tx.type === 'send' ? <Send className="w-4 h-4 text-[#9B51E0]" /> :
                  <ArrowLeftRight className="w-4 h-4 text-[#E39E4A]" />}
               </div>
