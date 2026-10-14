@@ -119,22 +119,8 @@ const DashboardOverview: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Simulate API call
-    setTimeout(() => {
-      setStats({
-        totalUsers: 125847,
-        activeUsers: 89234,
-        verifiedUsers: 67543,
-        totalVolume24h: 2850000000,
-        totalTrades24h: 1523847,
-        totalFees24h: 2850000,
-        openOrders: 45892,
-        pendingWithdrawals: 1234,
-        pendingKYC: 567,
-        openAlerts: 89,
-      });
-      setLoading(false);
-    }, 500);
+    // Dashboard metrics are unavailable until the authenticated admin API is connected.
+    setLoading(false);
   }, []);
 
   const StatCard: React.FC<{
@@ -340,54 +326,8 @@ const UserManagement: React.FC = () => {
   const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null);
 
   useEffect(() => {
-    // Mock data
-    setUsers([
-      {
-        userId: 'usr_001',
-        email: 'john.trader@example.com',
-        username: 'johntrader',
-        kycLevel: 'intermediate',
-        kycStatus: 'approved',
-        status: 'active',
-        createdAt: '2024-01-15T10:30:00Z',
-        lastLogin: '2024-06-03T08:45:00Z',
-        country: 'United States',
-        riskScore: 15,
-        totalDeposits: 125000,
-        totalWithdrawals: 98000,
-        totalVolume: 2450000,
-      },
-      {
-        userId: 'usr_002',
-        email: 'sarah.crypto@example.com',
-        username: 'sarahcrypto',
-        kycLevel: 'advanced',
-        kycStatus: 'approved',
-        status: 'active',
-        createdAt: '2024-02-20T14:20:00Z',
-        lastLogin: '2024-06-03T12:30:00Z',
-        country: 'Singapore',
-        riskScore: 8,
-        totalDeposits: 500000,
-        totalWithdrawals: 450000,
-        totalVolume: 12500000,
-      },
-      {
-        userId: 'usr_003',
-        email: 'mike.hodler@example.com',
-        username: 'mikeh',
-        kycLevel: 'basic',
-        kycStatus: 'pending',
-        status: 'active',
-        createdAt: '2024-06-01T09:00:00Z',
-        lastLogin: '2024-06-03T10:15:00Z',
-        country: 'Germany',
-        riskScore: 25,
-        totalDeposits: 5000,
-        totalWithdrawals: 0,
-        totalVolume: 15000,
-      },
-    ]);
+    // Do not fabricate customer records. Load these from the authenticated admin API.
+    setUsers([]);
   }, []);
 
   const filteredUsers = useMemo(() => {
