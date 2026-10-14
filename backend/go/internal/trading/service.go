@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"tigerex-api/internal/api"
+	"tigerex/backend/internal/api"
 )
 
 var (
