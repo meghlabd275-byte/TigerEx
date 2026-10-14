@@ -33,3 +33,13 @@ func TestTradingOperationsFailClosedWithoutDurableEngine(t *testing.T) {
 		t.Fatalf("CreateOrder error = %v, want ErrServiceUnavailable", err)
 	}
 }
+
+func TestRiskCalculationsHandleMissingMarketData(t *testing.T) {
+	s := NewService()
+	if got := s.CalculateUnrealizedPNL(nil, big.NewInt(1)); got != nil {
+		t.Fatalf("CalculateUnrealizedPNL with nil position = %v, want nil", got)
+	}
+	if s.CheckLiquidation(&Position{Status: PositionOpen, Side: PositionLong}) {
+		t.Fatal("CheckLiquidation reported liquidation without mark/liquidation prices")
+	}
+}
