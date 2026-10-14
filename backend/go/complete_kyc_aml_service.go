@@ -899,7 +899,7 @@ type ReportStatus string
 
 const (
 	ReportDraft ReportStatus = "draft"
-	ReportPending Review ReportStatus = "pending_review"
+	ReportPendingReview ReportStatus = "pending_review"
 	ReportApproved ReportStatus = "approved"
 	ReportSubmitted ReportStatus = "submitted"
 	ReportAccepted ReportStatus = "accepted"
