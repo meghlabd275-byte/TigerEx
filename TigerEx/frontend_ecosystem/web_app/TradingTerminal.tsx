@@ -308,52 +308,19 @@ export default function TradingPage() {
 
   const { connected, messages } = useWebSocket('wss://api.tigerex.com/ws');
 
-  // Simulated data for demo
+  // No demo market data: all figures must come from a verified market-data service.
   useEffect(() => {
-    setTicker({
-      symbol: 'BTC/USDT',
-      price: 50000,
-      change24h: 2.5,
-      volume24h: 1000000000,
-      high24h: 51000,
-      low24h: 49000,
-    });
-
-    const bids: OrderBookEntry[] = [];
-    const asks: OrderBookEntry[] = [];
-    let bidTotal = 0, askTotal = 0;
-
-    for (let i = 0; i < 20; i++) {
-      bidTotal += Math.random() * 2;
-      bids.push({ price: 50000 - i * 5, amount: Math.random() * 2, total: bidTotal });
-      
-      askTotal += Math.random() * 2;
-      asks.push({ price: 50005 + i * 5, amount: Math.random() * 2, total: askTotal });
-    }
-
-    setOrderBook({ bids, asks });
-
-    // Generate chart data
-    const data = [];
-    let price = 50000;
-    for (let i = 0; i < 100; i++) {
-      price += (Math.random() - 0.5) * 100;
-      data.push({ time: new Date(Date.now() - (100 - i) * 60000).toLocaleTimeString(), price });
-    }
-    setChartData(data);
-
-    setPositions([
-      { symbol: 'BTC/USDT', side: 'long', size: 0.5, entryPrice: 49000, markPrice: 50000, unrealizedPnl: 500, leverage: 10 },
-      { symbol: 'ETH/USDT', side: 'short', size: 10, entryPrice: 2800, markPrice: 2750, unrealizedPnl: 500, leverage: 5 },
-    ]);
+    setTicker(null);
+    setOrderBook({ bids: [], asks: [] });
+    setChartData([]);
+    setPositions([]);
   }, []);
 
-  const handleOrderSubmit = (order: any) => {
-    console.log('Order submitted:', order);
-    alert(`Order ${order.side} ${order.quantity} ${order.symbol} at ${order.price}`);
+  const handleOrderSubmit = (_order: any) => {
+    alert('Order submission unavailable: the authenticated trading API is not configured.');
   };
 
-  if (!ticker) return <div>Loading...</div>;
+  if (!ticker) return <div className="trading-page"><p>Live market data is unavailable because no verified market-data provider is configured.</p></div>;
 
   return (
     <div className="trading-page">
