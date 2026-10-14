@@ -221,29 +221,41 @@ function verifyToken(token, type = "access") {
 
 async function authenticateRequest(req, res, next) {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ success: false, error: "No token provided" });
+  if (typeof authHeader !== "string" ||
+      authHeader.length > 8192 ||
+      !/^Bearer [^\s]+$/.test(authHeader)) {
+    return res.status(401).json({ success: false, error: "Missing or invalid bearer token" });
   }
 
-  const token = authHeader.split(" ")[1];
+  const token = authHeader.slice(7);
   const decoded = verifyToken(token, "access");
-  if (!decoded) {
+  if (!decoded || (typeof decoded.userId !== "string" && typeof decoded.userId !== "number")) {
     return res.status(401).json({ success: false, error: "Invalid token" });
   }
 
   const sessionId = req.headers["x-session-id"];
-  if (!sessionId) {
-    return res.status(401).json({ success: false, error: "Session ID not provided" });
+  // Session IDs are generated as UUIDv4 values at login. Bound the input and
+  // reject malformed identifiers before constructing a Redis key.
+  if (typeof sessionId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) {
+    return res.status(401).json({ success: false, error: "Missing or invalid session ID" });
   }
 
-  const cachedSession = await redis.get(`session:${decoded.userId}:${sessionId}`);
-  if (!cachedSession) {
-    return res.status(401).json({ success: false, error: "Invalid or expired session" });
+  try {
+    const cachedSession = await redis.get(`session:${decoded.userId}:${sessionId}`);
+    if (!cachedSession) {
+      return res.status(401).json({ success: false, error: "Invalid or expired session" });
+    }
+  } catch (error) {
+    // Fail closed on session-store failure; never allow an unverified request
+    // through and never let a rejected middleware promise escape Express 4.
+    console.error("Session validation unavailable:", error.message);
+    return res.status(503).json({ success: false, error: "Authentication service temporarily unavailable" });
   }
 
   req.userId = decoded.userId;
   req.sessionId = sessionId;
-  next();
+  return next();
 }
 
 // Real order matching engine - Production grade
