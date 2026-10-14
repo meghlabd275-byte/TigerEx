@@ -96,33 +96,31 @@ bool MatchingEngine::has_market(const std::string& symbol) const {
 }
 
 bool MatchingEngine::set_market_state(const std::string& symbol, MarketState state) {
-    std::unique_lock lock(engine_mutex_);
-    
-    auto it = markets_.find(symbol);
-    if (it == markets_.end()) return false;
-    
-    MarketState old_state = it->second.state;
-    it->second.state = state;
-    it->second.updated_at = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-    ).count();
-    
-    // Handle state transitions
-    if (old_state != MarketState::Open && state == MarketState::Open) {
-        // Market opened - enable trading
-        auto book_it = order_books_.find(symbol);
-        if (book_it != order_books_.end()) {
-            book_it->second->disable_auction_mode();
+    MarketCallback callback;
+    {
+        std::unique_lock lock(engine_mutex_);
+
+        auto it = markets_.find(symbol);
+        if (it == markets_.end()) return false;
+
+        const MarketState old_state = it->second.state;
+        it->second.state = state;
+        it->second.updated_at = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+
+        if (old_state != MarketState::Open && state == MarketState::Open) {
+            auto book_it = order_books_.find(symbol);
+            if (book_it != order_books_.end()) {
+                book_it->second->disable_auction_mode();
+            }
         }
-    } else if (old_state == MarketState::Open && state == MarketState::Halted) {
-        // Market halted - pause trading
+        // Copy the callback under lock, but invoke it only after unlocking.
+        // User callbacks may call back into the engine.
+        callback = market_callback_;
     }
-    
-    // Trigger callback
-    if (market_callback_) {
-        market_callback_(symbol, state);
-    }
-    
+
+    if (callback) callback(symbol, state);
     return true;
 }
 
@@ -381,19 +379,33 @@ bool MatchingEngine::disable_trading(const std::string& symbol) {
 }
 
 bool MatchingEngine::halt_market(const std::string& symbol, const std::string& reason) {
-    std::unique_lock lock(engine_mutex_);
-    
-    // Trigger circuit breaker
-    auto cb_it = circuit_breakers_.find(symbol);
-    if (cb_it != circuit_breakers_.end()) {
-        cb_it->second.triggered = true;
-        cb_it->second.trigger_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    MarketCallback callback;
+    {
+        std::unique_lock lock(engine_mutex_);
+
+        // Fail without side effects if the requested market does not exist.
+        auto market_it = markets_.find(symbol);
+        if (market_it == markets_.end()) return false;
+
+        const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()
         ).count();
-        cb_it->second.reason = reason;
+
+        auto cb_it = circuit_breakers_.find(symbol);
+        if (cb_it != circuit_breakers_.end()) {
+            cb_it->second.triggered = true;
+            cb_it->second.trigger_time = static_cast<uint64_t>(now);
+            cb_it->second.reason = reason;
+        }
+
+        market_it->second.state = MarketState::Halted;
+        market_it->second.updated_at = static_cast<uint64_t>(now);
+        callback = market_callback_;
     }
-    
-    return set_market_state(symbol, MarketState::Halted);
+
+    // Never call application callbacks while holding the engine mutex.
+    if (callback) callback(symbol, MarketState::Halted);
+    return true;
 }
 
 // ============================================================================
