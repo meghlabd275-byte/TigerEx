@@ -58,6 +58,8 @@ const path = require("path");
 // ============================================================================
 
 const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? 1 : false);
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -131,9 +133,18 @@ async function loadTradingPairs() {
 // MIDDLEWARE
 // ============================================================================
 
-app.use(helmet({ crossOriginEmbedderPolicy: false }));
+app.use(helmet({
+  contentSecurityPolicy: { useDefaults: true, directives: { 'default-src': ["'self'"], 'frame-ancestors': ["'none'"], 'object-src': ["'none'"] } },
+  crossOriginEmbedderPolicy: false,
+}));
 app.use(compression());
-app.use(morgan("combined"));
+app.use((req, res, next) => {
+  const requestId = req.headers['x-request-id'] || uuidv4();
+  req.requestId = String(requestId).slice(0, 128);
+  res.setHeader('X-Request-ID', req.requestId);
+  next();
+});
+app.use(morgan(":method :url :status :response-time ms request_id=:req[x-request-id]"));
 app.use(cors({ origin: process.env.CORS_ORIGIN || "http://localhost:3000", credentials: true }));
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false, limit: "1mb", parameterLimit: 100 }));
@@ -144,6 +155,12 @@ const limiter = rateLimit({
   message: { success: false, error: "Rate limit exceeded" }
 });
 app.use("/api/", limiter);
+
+app.get("/health/live", (_req, res) => res.status(200).json({ status: "ok" }));
+app.get("/health/ready", async (_req, res) => {
+  try { await pool.query("SELECT 1"); await redis.ping(); return res.status(200).json({ status: "ready" }); }
+  catch (error) { console.error("Readiness check failed", error); return res.status(503).json({ status: "not_ready" }); }
+});
 
 // Redis-backed authentication throttling is shared across API replicas. Fail
 // closed if the rate-limit store is unavailable instead of silently disabling

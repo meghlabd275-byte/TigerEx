@@ -23,8 +23,11 @@ import {
 } from './types';
 
 // API Configuration
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080/ws';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8080/api/v1');
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL || (process.env.NODE_ENV === 'production' ? '' : 'ws://localhost:8080/ws');
+if (typeof window !== 'undefined' && process.env.NODE_ENV === 'production' && (!API_BASE_URL.startsWith('https://') || !WS_URL.startsWith('wss://'))) {
+  throw new Error('TigerEx production requires NEXT_PUBLIC_API_URL=https://... and NEXT_PUBLIC_WS_URL=wss://...');
+}
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -427,7 +430,12 @@ class WebSocketService {
   connect(token?: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) return;
 
-    const wsUrl = token ? `${WS_URL}?token=${token}` : WS_URL;
+    if (token) {
+      // Do not put bearer credentials in URLs; the server must use an HttpOnly
+      // session or a short-lived, single-use WebSocket ticket instead.
+      throw new Error('Authenticated WebSocket connections require a server-issued short-lived ticket.');
+    }
+    const wsUrl = WS_URL;
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {
