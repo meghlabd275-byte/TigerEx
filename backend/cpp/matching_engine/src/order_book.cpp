@@ -203,7 +203,7 @@ uint32_t OrderBook::process_match(Order& incoming, std::vector<Trade>& trades) {
     auto match_against = [&](auto& book) {
     while (!book.empty() && incoming.remaining_quantity[0] > 0) {
         auto level_it = book.begin();
-        Price& book_price = level_it->first;
+        const Price& book_price = level_it->first;
         PriceLevelData& level_data = level_it->second;
         
         // Check price condition
