@@ -26,6 +26,14 @@ import OtpInput from '@/components/auth/OtpInput';
 import PasswordInput from '@/components/auth/PasswordInput';
 import { useAuth } from '@/components/auth/AuthContext';
 import { ThemeToggle } from '@/components/theme-toggle';
+declare global {
+  interface Window {
+    ethereum?: {
+      request(args: { method: string; params?: unknown[] }): Promise<any>;
+    };
+  }
+}
+
 
 // Login steps
 type LoginStep = 'identity' | 'password' | 'email-otp' | 'phone-otp' | 'two-factor' | 'success';

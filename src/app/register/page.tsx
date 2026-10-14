@@ -22,6 +22,14 @@ import SmartInput, { InputMode, Country, countries } from '@/components/auth/Sma
 import OtpInput from '@/components/auth/OtpInput';
 import PasswordInput, { PasswordStrength } from '@/components/auth/PasswordInput';
 import { ThemeToggle } from '@/components/theme-toggle';
+declare global {
+  interface Window {
+    ethereum?: {
+      request(args: { method: string; params?: unknown[] }): Promise<any>;
+    };
+  }
+}
+
 
 // Register steps
 type RegisterStep = 'identity' | 'otp' | 'password' | 'success';

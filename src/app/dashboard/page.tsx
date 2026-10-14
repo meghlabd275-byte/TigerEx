@@ -34,7 +34,7 @@ interface User {
   id: string;
   email: string;
   username: string;
-  kyc_level: number;
+  kycLevel: number;
   status: string;
 }
 
@@ -238,7 +238,7 @@ export default function DashboardPage() {
             <div className="flex items-center gap-3">
               <div className="text-right">
                 <p className="text-sm text-white font-medium">{user?.username || 'User'}</p>
-                <p className="text-xs text-gray-400">{getKYCLevel(user?.kyc_level || 0)}</p>
+                <p className="text-xs text-gray-400">{getKYCLevel(user?.kycLevel || 0)}</p>
               </div>
               <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
                 <User className="w-5 h-5 text-white" />
@@ -278,7 +278,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Account Info Banner */}
-          {user?.kyc_level === 0 && (
+          {user?.kycLevel === 0 && (
             <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 mb-6 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <Shield className="w-6 h-6 text-yellow-500" />
