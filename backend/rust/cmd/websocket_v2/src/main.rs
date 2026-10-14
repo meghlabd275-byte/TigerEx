@@ -377,106 +377,8 @@ impl WsAppState {
     }
     
     pub fn initialize(&self) {
-        // Initialize ticker data for major symbols
-        let mut tickers = self.ticker_data.write();
-        tickers.insert("BTCUSDT".to_string(), WsTicker {
-            event: "24hrTicker".to_string(),
-            event_time: current_timestamp(),
-            symbol: "BTCUSDT".to_string(),
-            price_change: "1250.30".to_string(),
-            price_change_percent: "1.89".to_string(),
-            weighted_avg_price: "67400.00".to_string(),
-            last_price: "67432.50".to_string(),
-            last_qty: "0.001".to_string(),
-            open_price: "66182.20".to_string(),
-            high_price: "68200.00".to_string(),
-            low_price: "66100.00".to_string(),
-            volume: "28500.00".to_string(),
-            quote_volume: "1890000000.00".to_string(),
-            stats_open_time: current_timestamp() - 86400000,
-            stats_close_time: current_timestamp(),
-            first_trade_id: 1000000,
-            last_trade_id: 1005000,
-            num_trades: 5000,
-        });
-        tickers.insert("ETHUSDT".to_string(), WsTicker {
-            event: "24hrTicker".to_string(),
-            event_time: current_timestamp(),
-            symbol: "ETHUSDT".to_string(),
-            price_change: "45.25".to_string(),
-            price_change_percent: "1.30".to_string(),
-            weighted_avg_price: "3520.00".to_string(),
-            last_price: "3520.75".to_string(),
-            last_qty: "0.1".to_string(),
-            open_price: "3475.50".to_string(),
-            high_price: "3580.00".to_string(),
-            low_price: "3475.00".to_string(),
-            volume: "125000.00".to_string(),
-            quote_volume: "440000000.00".to_string(),
-            stats_open_time: current_timestamp() - 86400000,
-            stats_close_time: current_timestamp(),
-            first_trade_id: 2000000,
-            last_trade_id: 2050000,
-            num_trades: 5000,
-        });
-        tickers.insert("BNBUSDT".to_string(), WsTicker {
-            event: "24hrTicker".to_string(),
-            event_time: current_timestamp(),
-            symbol: "BNBUSDT".to_string(),
-            price_change: "12.50".to_string(),
-            price_change_percent: "2.15".to_string(),
-            weighted_avg_price: "592.00".to_string(),
-            last_price: "595.25".to_string(),
-            last_qty: "0.5".to_string(),
-            open_price: "582.75".to_string(),
-            high_price: "602.00".to_string(),
-            low_price: "582.00".to_string(),
-            volume: "85000.00".to_string(),
-            quote_volume: "50000000.00".to_string(),
-            stats_open_time: current_timestamp() - 86400000,
-            stats_close_time: current_timestamp(),
-            first_trade_id: 3000000,
-            last_trade_id: 3050000,
-            num_trades: 5000,
-        });
-        drop(tickers);
-        
-        // Initialize order book data
-        let mut orderbooks = self.orderbook_data.write();
-        orderbooks.insert("BTCUSDT".to_string(), WsOrderBook {
-            last_update_id: current_timestamp(),
-            bids: vec![
-                ["67400.00".to_string(), "1.25".to_string()],
-                ["67390.00".to_string(), "2.50".to_string()],
-                ["67380.00".to_string(), "5.00".to_string()],
-                ["67370.00".to_string(), "8.75".to_string()],
-                ["67360.00".to_string(), "15.00".to_string()],
-            ],
-            asks: vec![
-                ["67450.00".to_string(), "1.50".to_string()],
-                ["67460.00".to_string(), "3.00".to_string()],
-                ["67470.00".to_string(), "6.25".to_string()],
-                ["67480.00".to_string(), "10.00".to_string()],
-                ["67490.00".to_string(), "20.00".to_string()],
-            ],
-        });
-        orderbooks.insert("ETHUSDT".to_string(), WsOrderBook {
-            last_update_id: current_timestamp(),
-            bids: vec![
-                ["3520.00".to_string(), "10.0".to_string()],
-                ["3518.00".to_string(), "25.0".to_string()],
-                ["3515.00".to_string(), "50.0".to_string()],
-                ["3510.00".to_string(), "100.0".to_string()],
-                ["3505.00".to_string(), "200.0".to_string()],
-            ],
-            asks: vec![
-                ["3525.00".to_string(), "10.0".to_string()],
-                ["3528.00".to_string(), "25.0".to_string()],
-                ["3530.00".to_string(), "50.0".to_string()],
-                ["3535.00".to_string(), "100.0".to_string()],
-                ["3540.00".to_string(), "200.0".to_string()],
-            ],
-        });
+        // Market data remains empty until a verified feed is configured.
+    }
     }
 }
 
@@ -517,115 +419,26 @@ fn validate_symbol(symbol: &str) -> bool {
 // ============================================================================
 
 async fn handle_websocket_connect(
-    Path(user_id): Path<String>,
-    state: AxumState<Arc<WsAppState>>,
+    _user_id: Path<String>,
+    _state: AxumState<Arc<WsAppState>>,
 ) -> impl IntoResponse {
-    let client_id = generate_client_id();
-    
-    // Add client to state
-    let mut clients = state.clients.write().await;
-    clients.insert(client_id.clone(), Arc::new(WsClient::new()));
-    
-    let response = serde_json::json!({
-        "code": 0,
-        "message": "Connected to TigerEx WebSocket",
-        "data": {
-            "client_id": client_id,
-            "server_time": current_timestamp(),
-            "stream_url": format!("/ws/stream/{}", user_id)
-        },
-        "timestamp": current_timestamp()
-    });
-    
-    (StatusCode::OK, Json(response)).into_response()
+    StatusCode::SERVICE_UNAVAILABLE
 }
 
 async fn handle_websocket_subscribe(
-    Path((user_id, stream)): Path<(String, String)>,
-    Query(params): Query<HashMap<String, String>>,
-    state: AxumState<Arc<WsAppState>>,
+    _params: Path<(String, String)>,
+    _query: Query<HashMap<String, String>>,
+    _state: AxumState<Arc<WsAppState>>,
 ) -> impl IntoResponse {
-    let stream = stream.to_lowercase();
-    if !validate_stream(&stream) {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-            "code": 400,
-            "message": "Invalid stream",
-            "timestamp": current_timestamp()
-        }))).into_response();
-    }
-    
-    let symbols: Vec<String> = params
-        .get("symbols")
-        .map(|s| s.split(',').map(|x| x.to_uppercase()).collect())
-        .unwrap_or_default();
-    
-    // Validate symbols
-    for sym in &symbols {
-        if !validate_symbol(sym) {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                "code": 400,
-                "message": format!("Invalid symbol: {}", sym),
-                "timestamp": current_timestamp()
-            }))).into_response();
-        }
-    }
-    
-    // Add subscription
-    let mut subs = state.subscriptions.write().await;
-    let stream_subs = subs.entry(stream.clone()).or_insert_with(Vec::new);
-    for sym in symbols {
-        if !stream_subs.contains(&sym) {
-            stream_subs.push(sym);
-        }
-    }
-    
-    (StatusCode::OK, Json(serde_json::json!({
-        "code": 0,
-        "message": "Subscribed",
-        "data": {
-            "stream": stream,
-            "symbols": symbols
-        },
-        "timestamp": current_timestamp()
-    }))).into_response()
+    StatusCode::SERVICE_UNAVAILABLE
 }
 
 async fn handle_websocket_unsubscribe(
-    Path((user_id, stream)): Path<(String, String)>,
-    Query(params): Query<HashMap<String, String>>,
-    state: AxumState<Arc<WsAppState>>,
+    _params: Path<(String, String)>,
+    _query: Query<HashMap<String, String>>,
+    _state: AxumState<Arc<WsAppState>>,
 ) -> impl IntoResponse {
-    let stream = stream.to_lowercase();
-    if !validate_stream(&stream) {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-            "code": 400,
-            "message": "Invalid stream",
-            "timestamp": current_timestamp()
-        }))).into_response();
-    }
-    
-    let symbols: Vec<String> = params
-        .get("symbols")
-        .map(|s| s.split(',').map(|x| x.to_uppercase()).collect())
-        .unwrap_or_default();
-    
-    // Remove subscription
-    let mut subs = state.subscriptions.write().await;
-    if let Some(stream_subs) = subs.get_mut(&stream) {
-        for sym in symbols {
-            stream_subs.retain(|x| x != &sym);
-        }
-    }
-    
-    (StatusCode::OK, Json(serde_json::json!({
-        "code": 0,
-        "message": "Unsubscribed",
-        "data": {
-            "stream": stream,
-            "symbols": symbols
-        },
-        "timestamp": current_timestamp()
-    }))).into_response()
+    StatusCode::SERVICE_UNAVAILABLE
 }
 
 // ============================================================================
