@@ -116,26 +116,14 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: In production, query database for user
-	// For now, return a mock response for testing
-	loginResp := LoginResponse{
-		AccessToken:  "mock_access_token_" + time.Now().Format("20060102150405"),
-		RefreshToken: "mock_refresh_token_" + time.Now().Format("20060102150405"),
-		ExpiresAt:    time.Now().Add(15 * time.Minute).Unix(),
-		TokenType:    "Bearer",
-		User: &UserResponse{
-			ID:        "user_123",
-			Email:     req.Email,
-			Username:  "testuser",
-			KYCLevel:  1,
-			Status:    "active",
+	WriteJSON(w, http.StatusServiceUnavailable, APIResponse{
+		Success: false,
+		Error: &APIError{
+			Code:    http.StatusServiceUnavailable,
+			Message: "Authentication persistence is not configured; refusing to issue placeholder credentials",
 		},
-	}
-
-	WriteJSON(w, http.StatusOK, APIResponse{
-		Success: true,
-		Data:    loginResp,
 	})
+	return
 }
 
 // RegisterHandler handles user registration
@@ -185,26 +173,14 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: In production, create user in database
-	// For now, return a mock response
-	loginResp := LoginResponse{
-		AccessToken:  "mock_access_token_" + time.Now().Format("20060102150405"),
-		RefreshToken: "mock_refresh_token_" + time.Now().Format("20060102150405"),
-		ExpiresAt:    time.Now().Add(15 * time.Minute).Unix(),
-		TokenType:    "Bearer",
-		User: &UserResponse{
-			ID:        "user_" + time.Now().Format("20060102150405"),
-			Email:     req.Email,
-			Username:  req.Username,
-			KYCLevel:  0,
-			Status:    "active",
+	WriteJSON(w, http.StatusServiceUnavailable, APIResponse{
+		Success: false,
+		Error: &APIError{
+			Code:    http.StatusServiceUnavailable,
+			Message: "Authentication persistence is not configured; refusing to issue placeholder credentials",
 		},
-	}
-
-	WriteJSON(w, http.StatusOK, APIResponse{
-		Success: true,
-		Data:    loginResp,
 	})
+	return
 }
 
 // HealthCheckHandler health check
