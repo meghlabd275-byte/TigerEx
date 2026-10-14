@@ -458,7 +458,10 @@ func CreateDefaultAdmin() error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM admins FOR UPDATE").Scan(&count); err != nil {
+	if _, err := tx.Exec(ctx, "LOCK TABLE admins IN EXCLUSIVE MODE"); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM admins").Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {
