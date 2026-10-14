@@ -126,20 +126,8 @@ func NewFuturesManager() *FuturesManager {
 }
 
 func (fm *FuturesManager) initializeContracts() {
-	contracts := []*FuturesContract{
-		{ID: "BTC-USDT-PERP", Symbol: "BTCUSDT", Name: "BTC/USDT Perpetual", Underlying: "BTC", ContractType: ContractTypePerpetual, Pair: "BTC/USDT", PricePrecision: 2, QuantityPrecision: 4, MinQuantity: 0.001, MaxQuantity: 1000, ContractSize: 0.001, MaxLeverage: 125, InitialMargin: 0.01, MaintenanceMargin: 0.005, SettlementFrequency: SettlementFrequencyHourly, FundingRate: 0.0001, MarkPrice: 67500.0, IndexPrice: 67480.0, Status: "trading"},
-		{ID: "ETH-USDT-PERP", Symbol: "ETHUSDT", Name: "ETH/USDT Perpetual", Underlying: "ETH", ContractType: ContractTypePerpetual, Pair: "ETH/USDT", PricePrecision: 2, QuantityPrecision: 3, MinQuantity: 0.01, MaxQuantity: 10000, ContractSize: 0.01, MaxLeverage: 100, InitialMargin: 0.01, MaintenanceMargin: 0.005, SettlementFrequency: SettlementFrequencyHourly, FundingRate: 0.0001, MarkPrice: 3450.0, IndexPrice: 3445.0, Status: "trading"},
-		{ID: "BNB-USDT-PERP", Symbol: "BNBUSDT", Name: "BNB/USDT Perpetual", Underlying: "BNB", ContractType: ContractTypePerpetual, Pair: "BNB/USDT", PricePrecision: 2, QuantityPrecision: 2, MinQuantity: 0.1, MaxQuantity: 10000, ContractSize: 0.1, MaxLeverage: 75, InitialMargin: 0.02, MaintenanceMargin: 0.01, SettlementFrequency: SettlementFrequencyHourly, FundingRate: 0.0001, MarkPrice: 580.0, IndexPrice: 579.0, Status: "trading"},
-		{ID: "SOL-USDT-PERP", Symbol: "SOLUSDT", Name: "SOL/USDT Perpetual", Underlying: "SOL", ContractType: ContractTypePerpetual, Pair: "SOL/USDT", PricePrecision: 2, QuantityPrecision: 1, MinQuantity: 0.1, MaxQuantity: 100000, ContractSize: 0.1, MaxLeverage: 50, InitialMargin: 0.02, MaintenanceMargin: 0.01, SettlementFrequency: SettlementFrequencyHourly, FundingRate: 0.0001, MarkPrice: 145.0, IndexPrice: 144.5, Status: "trading"},
-		{ID: "XRP-USDT-PERP", Symbol: "XRPUSDT", Name: "XRP/USDT Perpetual", Underlying: "XRP", ContractType: ContractTypePerpetual, Pair: "XRP/USDT", PricePrecision: 5, QuantityPrecision: 0, MinQuantity: 1, MaxQuantity: 10000000, ContractSize: 1, MaxLeverage: 50, InitialMargin: 0.02, MaintenanceMargin: 0.01, SettlementFrequency: SettlementFrequencyHourly, FundingRate: 0.0001, MarkPrice: 0.52, IndexPrice: 0.519, Status: "trading"},
-		{ID: "DOGE-USDT-PERP", Symbol: "DOGEUSDT", Name: "DOGE/USDT Perpetual", Underlying: "DOGE", ContractType: ContractTypePerpetual, Pair: "DOGE/USDT", PricePrecision: 5, QuantityPrecision: 0, MinQuantity: 10, MaxQuantity: 100000000, ContractSize: 10, MaxLeverage: 50, InitialMargin: 0.02, MaintenanceMargin: 0.01, SettlementFrequency: SettlementFrequencyHourly, FundingRate: 0.0001, MarkPrice: 0.12, IndexPrice: 0.119, Status: "trading"},
-		{ID: "ADA-USDT-PERP", Symbol: "ADAUSDT", Name: "ADA/USDT Perpetual", Underlying: "ADA", ContractType: ContractTypePerpetual, Pair: "ADA/USDT", PricePrecision: 4, QuantityPrecision: 0, MinQuantity: 1, MaxQuantity: 10000000, ContractSize: 1, MaxLeverage: 50, InitialMargin: 0.02, MaintenanceMargin: 0.01, SettlementFrequency: SettlementFrequencyHourly, FundingRate: 0.0001, MarkPrice: 0.45, IndexPrice: 0.449, Status: "trading"},
-		{ID: "MATIC-USDT-PERP", Symbol: "MATICUSDT", Name: "MATIC/USDT Perpetual", Underlying: "MATIC", ContractType: ContractTypePerpetual, Pair: "MATIC/USDT", PricePrecision: 4, QuantityPrecision: 1, MinQuantity: 0.1, MaxQuantity: 10000000, ContractSize: 0.1, MaxLeverage: 50, InitialMargin: 0.02, MaintenanceMargin: 0.01, SettlementFrequency: SettlementFrequencyHourly, FundingRate: 0.0001, MarkPrice: 0.58, IndexPrice: 0.579, Status: "trading"},
-	}
-
-	for _, c := range contracts {
-		fm.contracts[c.ID] = c
-	}
+	// Contracts must come from the canonical persistent instrument registry.
+	return
 }
 
 func (fm *FuturesManager) GetContracts() []*FuturesContract {
@@ -165,85 +153,11 @@ func (fm *FuturesManager) GetContract(contractID string) (*FuturesContract, erro
 }
 
 func (fm *FuturesManager) PlaceOrder(userID, contractID, side, orderType string, price, stopPrice, quantity float64, leverage int) (*FuturesOrder, error) {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
-	contract, exists := fm.contracts[contractID]
-	if !exists {
-		return nil, errors.New("contract not found")
-	}
-
-	if quantity < contract.MinQuantity || quantity > contract.MaxQuantity {
-		return nil, errors.New("quantity outside allowed range")
-	}
-
-	if leverage < 1 || leverage > contract.MaxLeverage {
-		return nil, fmt.Errorf("leverage must be between 1 and %d", contract.MaxLeverage)
-	}
-
-	now := time.Now()
-	order := &FuturesOrder{
-		ID:          fmt.Sprintf("FUT%d%d", now.Unix(), now.Nanosecond()),
-		UserID:      userID,
-		ContractID:  contractID,
-		Side:        side,
-		Type:        orderType,
-		Price:       price,
-		StopPrice:  stopPrice,
-		Quantity:    quantity,
-		FilledQty:   0,
-		AvgFillPrice: 0,
-		Leverage:    leverage,
-		Status:      StatusPending,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}
-
-	if orderType == OrderTypeMarket || orderType == OrderTypeStopMarket {
-		order.Status = StatusOpen
-	}
-
-	fm.orders[order.ID] = order
-	return order, nil
+	return nil, errors.New("futures order placement unavailable: canonical risk, ledger and matching services are not configured")
 }
 
 func (fm *FuturesManager) OpenPosition(userID, contractID, side string, quantity, entryPrice float64, leverage int) (*FuturesPosition, error) {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
-	contract, exists := fm.contracts[contractID]
-	if !exists {
-		return nil, errors.New("contract not found")
-	}
-
-	now := time.Now()
-	position := &FuturesPosition{
-		ID:               fmt.Sprintf("POS%d%d", now.Unix(), now.Nanosecond()),
-		UserID:           userID,
-		ContractID:       contractID,
-		ContractSymbol:   contract.Symbol,
-		Side:             side,
-		Leverage:         leverage,
-		EntryPrice:       entryPrice,
-		MarkPrice:        entryPrice,
-		Quantity:          quantity,
-		Margin:            (quantity * entryPrice * contract.ContractSize) / float64(leverage),
-		UnrealizedPNL:    0,
-		RealizedPNL:      0,
-		LiquidationPrice: fm.calculateLiquidationPrice(entryPrice, leverage, side),
-		Status:           StatusOpen,
-		OpenedAt:        now,
-		UpdatedAt:        now,
-	}
-
-	fm.positions[position.ID] = position
-
-	if _, ok := fm.userPositions[userID]; !ok {
-		fm.userPositions[userID] = make(map[string]*FuturesPosition)
-	}
-	fm.userPositions[userID][position.ID] = position
-
-	return position, nil
+	return nil, errors.New("futures position opening unavailable: canonical margin ledger and risk service are not configured")
 }
 
 func (fm *FuturesManager) calculateLiquidationPrice(entryPrice float64, leverage int, side string) float64 {
@@ -257,66 +171,12 @@ func (fm *FuturesManager) calculateLiquidationPrice(entryPrice float64, leverage
 }
 
 func (fm *FuturesManager) ClosePosition(positionID string, closePrice float64) error {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
-	position, exists := fm.positions[positionID]
-	if !exists {
-		return errors.New("position not found")
-	}
-
-	if position.Status != StatusOpen {
-		return errors.New("position is not open")
-	}
-
-	now := time.Now()
-
-	var pnl float64
-	contract := fm.contracts[position.ContractID]
-	notionalValue := position.Quantity * position.MarkPrice * contract.ContractSize
-
-	if position.Side == PositionTypeLong {
-		pnl = (closePrice - position.EntryPrice) * position.Quantity * contract.ContractSize
-	} else {
-		pnl = (position.EntryPrice - closePrice) * position.Quantity * contract.ContractSize
-	}
-
-	position.UnrealizedPNL = pnl
-	position.RealizedPNL += pnl
-	position.MarkPrice = closePrice
-	position.Status = StatusClosed
-	position.ClosedAt = now
-	position.UpdatedAt = now
-
-	return nil
+	return errors.New("futures position closing unavailable: canonical matching and settlement services are not configured")
 }
 
 func (fm *FuturesManager) UpdateMarkPrices() {
-	fm.mu.Lock()
-	defer fm.mu.Unlock()
-
-	for _, contract := range fm.contracts {
-		// Simulate price movement
-		priceChange := (float64(contract.MarkPrice) * 0.001) * (float64(time.Now().Nanosecond()%1000-500) / 100000.0)
-		contract.MarkPrice += priceChange
-		contract.IndexPrice = contract.MarkPrice * 0.9999
-
-		// Update all positions for this contract
-		for _, pos := range fm.positions {
-			if pos.ContractID == contract.ID && pos.Status == StatusOpen {
-				pos.MarkPrice = contract.MarkPrice
-				pos.UpdatedAt = time.Now()
-
-				var pnl float64
-				if pos.Side == PositionTypeLong {
-					pnl = (contract.MarkPrice - pos.EntryPrice) * pos.Quantity * contract.ContractSize
-				} else {
-					pnl = (pos.EntryPrice - contract.MarkPrice) * pos.Quantity * contract.ContractSize
-				}
-				pos.UnrealizedPNL = pnl
-			}
-		}
-	}
+	// Mark prices must be supplied by a verified index/oracle feed.
+	return
 }
 
 func (fm *FuturesManager) GetUserPositions(userID string) []*FuturesPosition {
