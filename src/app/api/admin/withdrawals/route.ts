@@ -22,7 +22,7 @@ async function backendRequest(path: string, token: string, init: RequestInit = {
     headers.set('Accept', 'application/json');
     headers.set('Authorization', token);
     if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-    const response = await fetch(\`\${ADMIN_API_URL}\${path}\`, {
+    const response = await fetch(`${ADMIN_API_URL}${path}`, {
       ...init,
       headers,
       cache: 'no-store',
@@ -49,8 +49,9 @@ export async function GET(request: NextRequest) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
   }
-  const suffix = query.size ? \`?\${query.toString()}\` : '';
-  return backendRequest(\`/admin/withdrawals\${suffix}\`, token);
+  const queryString = query.toString();
+  const suffix = queryString ? `?${queryString}` : '';
+  return backendRequest(`/admin/withdrawals${suffix}`, token);
 }
 
 // Process a single withdrawal only through the backend's persisted state transition.
@@ -74,7 +75,7 @@ export async function PUT(request: NextRequest) {
   if (!body.action || !['approve', 'reject', 'process'].includes(body.action)) {
     return NextResponse.json({ success: false, error: 'Invalid action' }, { status: 400 });
   }
-  return backendRequest(\`/admin/withdrawals/\${encodeURIComponent(withdrawalId)}\`, token, {
+  return backendRequest(`/admin/withdrawals/${encodeURIComponent(withdrawalId)}`, token, {
     method: 'PUT',
     body: JSON.stringify({ action: body.action, txHash: body.txHash }),
   });
