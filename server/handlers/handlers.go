@@ -22,30 +22,7 @@ import (
 
 // ============ MARKET DATA ============
 
-type Ticker struct {
-	Symbol         string  `json:"symbol"`
-	Price          float64 `json:"price"`
-	PriceChange    float64 `json:"priceChange"`
-	PriceChangePct float64 `json:"priceChangePercent"`
-	HighPrice      float64 `json:"highPrice"`
-	LowPrice       float64 `json:"lowPrice"`
-	Volume         float64 `json:"volume"`
-	QuoteVolume    float64 `json:"quoteVolume"`
-	TradesCount    int64   `json:"tradesCount"`
-}
 
-var mockPrices = map[string]Ticker{
-	"BTC-USDT":  {Symbol: "BTC-USDT", Price: 65000, PriceChange: 1500, PriceChangePct: 2.5, HighPrice: 66000, LowPrice: 64000, Volume: 500000000, QuoteVolume: 32500000000, TradesCount: 150000},
-	"ETH-USDT":  {Symbol: "ETH-USDT", Price: 3500, PriceChange: 100, PriceChangePct: 2.9, HighPrice: 3600, LowPrice: 3400, Volume: 200000000, QuoteVolume: 700000000, TradesCount: 80000},
-	"BNB-USDT":  {Symbol: "BNB-USDT", Price: 600, PriceChange: -10, PriceChangePct: -1.6, HighPrice: 620, LowPrice: 590, Volume: 50000000, QuoteVolume: 30000000, TradesCount: 25000},
-	"SOL-USDT":  {Symbol: "SOL-USDT", Price: 150, PriceChange: 8, PriceChangePct: 5.6, HighPrice: 155, LowPrice: 142, Volume: 100000000, QuoteVolume: 15000000, TradesCount: 40000},
-	"XRP-USDT":  {Symbol: "XRP-USDT", Price: 0.6, PriceChange: -0.02, PriceChangePct: -3.2, HighPrice: 0.62, LowPrice: 0.58, Volume: 30000000, QuoteVolume: 18000000, TradesCount: 30000},
-	"ADA-USDT":  {Symbol: "ADA-USDT", Price: 0.5, PriceChange: 0.01, PriceChangePct: 2.0, HighPrice: 0.52, LowPrice: 0.48, Volume: 20000000, QuoteVolume: 10000000, TradesCount: 15000},
-	"DOGE-USDT": {Symbol: "DOGE-USDT", Price: 0.15, PriceChange: 0.005, PriceChangePct: 3.5, HighPrice: 0.16, LowPrice: 0.145, Volume: 10000000, QuoteVolume: 1500000, TradesCount: 12000},
-	"ETH-BTC":   {Symbol: "ETH-BTC", Price: 0.054, PriceChange: -0.001, PriceChangePct: -1.8, HighPrice: 0.056, LowPrice: 0.052, Volume: 50000, QuoteVolume: 2700, TradesCount: 5000},
-}
-
-// Get all markets
 func GetMarkets(c *gin.Context) {
 	rows, err := models.Pool.Query(c.Request.Context(), `
 		SELECT symbol, base_currency, quote_currency, status
@@ -1013,44 +990,13 @@ func GetMyTrades(c *gin.Context) {
 }
 
 func QuoteOrder(c *gin.Context) {
-	var req struct {
-		Symbol   string  `json:"symbol" binding:"required"`
-		Side     string  `json:"side" binding:"required,oneof=buy sell"`
-		Quantity float64 `json:"quantity" binding:"required,gt=0"`
-		Type     string  `json:"orderType"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
-		return
-	}
-
-	ticker := mockPrices[req.Symbol]
-	estPrice := ticker.Price
-	if req.Side == "buy" {
-		estPrice *= 1.001
-	} else {
-		estPrice *= 0.999
-	}
-
-	total := req.Quantity * estPrice
-	fee := total * 0.001
-
-	c.JSON(200, gin.H{
-		"success": true,
-		"data": gin.H{
-			"symbol":   req.Symbol,
-			"price":    estPrice,
-			"quantity": req.Quantity,
-			"total":    total,
-			"fee":      fee,
-			"side":     req.Side,
-			"type":     req.Type,
-		},
+	// Quotes must come from the same live market data and risk services that
+	// validate orders. Never calculate a quote from a hard-coded reference price.
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error": gin.H{"code": 503, "message": "Order quoting is unavailable until live market data and risk checks are configured"},
 	})
 }
-
-// ============ PROFILE ============
-
 func GetProfile(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	if userID == "" {
