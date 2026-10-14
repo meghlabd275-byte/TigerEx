@@ -29,6 +29,9 @@
 #include <variant>
 #include <sstream>
 #include <iomanip>
+#include <limits>
+#include <stdexcept>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/kdf.h>
@@ -137,10 +140,15 @@ struct PasswordReset {
 
 class Crypto {
 public:
-    // Generate random bytes
+    // Generate random bytes. Never continue with weak or uninitialized randomness.
     static std::vector<uint8_t> generate_random(size_t length) {
+        if (length == 0 || length > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            throw std::invalid_argument("Invalid random byte length");
+        }
         std::vector<uint8_t> data(length);
-        RAND_bytes(data.data(), length);
+        if (RAND_bytes(data.data(), static_cast<int>(length)) != 1) {
+            throw std::runtime_error("Cryptographic random number generation failed");
+        }
         return data;
     }
     
@@ -160,55 +168,43 @@ public:
         return result;
     }
     
-    // Argon2id password hashing
+    // PBKDF2-HMAC-SHA-256 password hashing. Use Argon2id when the deployment's
+    // password-hashing library supports it; never downgrade to a fast hash.
     static std::string hash_password(const std::string& password, const std::string& salt) {
-        // Simplified - in production use proper Argon2
-        // Using PBKDF2 as fallback
-        std::vector<uint8_t> salt_bytes = generate_random(16);
-        std::string salt_str(salt.begin(), salt.end());
-        
-        unsigned char hash[EVP_MAX_MD_SIZE];
-        unsigned int hash_len = 0;
-        
-        EVP_KDF* kdf = EVP_KDF_new(NULL);
-        if (kdf) {
-            OSSL_PARAM params[] = {
-                OSSL_PARAM_utf8_string("pass", (char*)password.data(), password.size()),
-                OSSL_PARAM_utf8_string("salt", (char*)salt_str.data(), salt_str.size()),
-                OSSL_PARAM_uint32("iter", 100000),
-                OSSL_PARAM_utf8_string("digest", "SHA256", 6),
-                OSSL_PARAM_END
-            };
-            
-            if (EVP_KDF_derive(kdf, hash, sizeof(hash), params)) {
-                hash_len = 32;
-            }
-            EVP_KDF_free(kdf);
+        if (password.empty() || salt.empty() ||
+            password.size() > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+            salt.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            throw std::invalid_argument("Invalid password or salt length");
         }
-        
-        // Fallback to simple hash if KDF fails
-        if (hash_len == 0) {
-            std::string combined = password + salt;
-            const EVP_MD* md = EVP_sha256();
-            unsigned char* hash_ptr = hash;
-            unsigned int md_len = 0;
-            
-            EVP_Digest(combined.data(), combined.size(), hash_ptr, &md_len, md, NULL);
-            hash_len = md_len;
+
+        constexpr int iterations = 600000;
+        constexpr int output_length = 32;
+        unsigned char hash[output_length] = {};
+        if (PKCS5_PBKDF2_HMAC(
+                password.data(), static_cast<int>(password.size()),
+                reinterpret_cast<const unsigned char*>(salt.data()), static_cast<int>(salt.size()),
+                iterations, EVP_sha256(), output_length, hash) != 1) {
+            throw std::runtime_error("Password hashing failed");
         }
-        
+
         std::ostringstream oss;
-        for (unsigned int i = 0; i < hash_len; i++) {
-            oss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
+        oss << std::hex << std::setfill('0');
+        for (unsigned char byte : hash) {
+            oss << std::setw(2) << static_cast<unsigned int>(byte);
         }
-        
+        OPENSSL_cleanse(hash, sizeof(hash));
         return oss.str();
     }
     
     // Verify password
     static bool verify_password(const std::string& password, const std::string& hash, const std::string& salt) {
-        std::string computed = hash_password(password, salt);
-        return computed == hash;
+        try {
+            const std::string computed = hash_password(password, salt);
+            return computed.size() == hash.size() &&
+                CRYPTO_memcmp(computed.data(), hash.data(), computed.size()) == 0;
+        } catch (const std::exception&) {
+            return false;
+        }
     }
     
     // SHA256
