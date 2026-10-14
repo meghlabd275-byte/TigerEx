@@ -120,9 +120,5 @@ jobs:
       - name: Build Next.js application
         run: npm run build
 
-      - name: Upload Next.js build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: nextjs-build
-          path: .next/
-          if-no-files-found: error
+      # Build output location is deployment-specific; CI verifies compilation above.
+      # Artifact publication belongs in a deployment workflow with an explicit output directory.
