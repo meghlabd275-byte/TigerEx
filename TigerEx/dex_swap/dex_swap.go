@@ -200,65 +200,8 @@ func NewDexSwapService(config ServiceConfig) *DexSwapService {
 
 // initializeProtocols initializes default DEX protocols
 func (s *DexSwapService) initializeProtocols() {
-	// Uniswap V2
-	s.protocols[DexNetworkUniswapV2] = &SwapProtocol{
-		ID:          DexNetworkUniswapV2,
-		Name:        "Uniswap V2",
-		FactoryAddr: "0x5C69bEe701ef814a2B6ae3C9d4c28d4a9a1D9E8b",
-		RouterAddr:  "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
-		ChainID:     1,
-		Fee:         decimal.NewFromFloat(0.003), // 0.3%
-	}
-	
-	// Uniswap V3
-	s.protocols[DexNetworkUniswapV3] = &SwapProtocol{
-		ID:          DexNetworkUniswapV3,
-		Name:        "Uniswap V3",
-		FactoryAddr: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
-		RouterAddr:  "0xE592427A0AEce92De3Edee1F18E0157C05861564",
-		ChainID:     1,
-		Fee:         decimal.NewFromFloat(0.003), // Variable fee
-	}
-	
-	// Sushiswap
-	s.protocols[DexNetworkSushiswap] = &SwapProtocol{
-		ID:          DexNetworkSushiswap,
-		Name:        "SushiSwap",
-		FactoryAddr: "0xC0AEe478e3658e2610c5F7A4A2E1777cE9e4f2Ac",
-		RouterAddr:  "0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F",
-		ChainID:     1,
-		Fee:         decimal.NewFromFloat(0.003), // 0.3%
-	}
-	
-	// PancakeSwap
-	s.protocols[DexNetworkPancakeSwap] = &SwapProtocol{
-		ID:          DexNetworkPancakeSwap,
-		Name:        "PancakeSwap",
-		FactoryAddr: "0xBCfCcbde45cE874adCB698cC183deBcF17952812",
-		RouterAddr:  "0x10ED43C718714eb63D5aA6B0E07e8E5B11DeC0E2",
-		ChainID:     56,
-		Fee:         decimal.NewFromFloat(0.002), // 0.2%
-	}
-	
-	// Curve
-	s.protocols[DexNetworkCurve] = &SwapProtocol{
-		ID:          DexNetworkCurve,
-		Name:        "Curve",
-		FactoryAddr: "0x7D86446dDb609e5D86d5293a2023BfA2A3E60dD",
-		RouterAddr:  "0x8b6E8C16b7cD2D8b2dD8f8b2D8c2d6e9a3c5e7b",
-		ChainID:     1,
-		Fee:         decimal.NewFromFloat(0.0004), // 0.04%
-	}
-	
-	// Balancer
-	s.protocols[DexNetworkBalancer] = &SwapProtocol{
-		ID:          DexNetworkBalancer,
-		Name:        "Balancer",
-		FactoryAddr: "0xBA12222222228d8Ba445958a75a0704d566BF2C8",
-		RouterAddr: "0xBA12222222228d8Ba445958a75a0704d566BF2C8",
-		ChainID:     1,
-		Fee:         decimal.NewFromFloat(0.001), // 0.1%
-	}
+// No hard-coded protocol registry is trusted. Register only chain-specific protocol
+	// addresses that have been verified and supplied through an authenticated admin workflow.
 }
 
 // GetQuote returns a swap quote
@@ -385,22 +328,7 @@ func (s *DexSwapService) SubscribeToSwaps() <-chan SwapResult {
 
 // GetSwapHistory returns swap history for a user
 func (s *DexSwapService) GetSwapHistory(userAddress string, limit int) ([]SwapResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	
-	var history []SwapResult
-	count := 0
-	
-	for _, swap := range s.pendingSwaps {
-		if count >= limit {
-			break
-		}
-		// In production, would filter by user address
-		history = append(history, *swap)
-		count++
-	}
-	
-	return history, nil
+return nil, fmt.Errorf("DEX swap history unavailable: durable user-scoped storage is not configured")
 }
 
 // ============================================================================
@@ -423,21 +351,20 @@ func (s *DexSwapService) ConnectChain(chainID uint64, rpcURL string) error {
 
 // GetGasPrice returns current gas price for a chain
 func (s *DexSwapService) GetGasPrice(chainID uint64) (string, error) {
-	s.mu.RLock()
+s.mu.RLock()
 	client, exists := s.clients[chainID]
 	s.mu.RUnlock()
-	
+
 	if !exists {
-		// Return default gas price
-		return "50000000000", nil // 50 gwei
+		return "", fmt.Errorf("gas price unavailable: no RPC client configured for chain %d", chainID)
 	}
-	
-	ctx := context.Background()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	gasPrice, err := client.SuggestGasPrice(ctx)
 	if err != nil {
-		return "50000000000", nil
+		return "", fmt.Errorf("query gas price for chain %d: %w", chainID, err)
 	}
-	
 	return gasPrice.String(), nil
 }
 
