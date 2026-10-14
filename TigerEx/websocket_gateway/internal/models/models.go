@@ -17,6 +17,7 @@ type WSMessage struct {
 	Type      string          `json:"type"`
 	ID        int64           `json:"id,omitempty"`
 	Result    interface{}     `json:"result,omitempty"`
+	Params    interface{}     `json:"params,omitempty"`
 	Error    *WSError       `json:"error,omitempty"`
 }
 
