@@ -234,77 +234,12 @@ func (s *AutoInvestService) GetUserPlans(userID string) []*InvestmentPlan {
 // ============================================================================
 
 func (s *AutoInvestService) ExecutePlan(planID string) ([]*InvestmentTransaction, error) {
-	s.mu.Lock()
-	plan, ok := s.plans[planID]
-	s.mu.Unlock()
-	
-	if !ok {
-		return nil, fmt.Errorf("plan not found")
-	}
-	
-	if plan.Status != PlanStatusActive {
-		return nil, fmt.Errorf("plan not active")
-	}
-	
-	var transactions []*InvestmentTransaction
-	
-	for _, allocation := range plan.Assets {
-		// Calculate amount for this asset
-		assetAmount := plan.Amount * (allocation.Percent / 100.0)
-		
-		// Get current price (mock)
-		price := s.getPrice(allocation.Asset)
-		quantity := assetAmount / price
-		
-		// Create transaction
-		s.mu.Lock()
-		s.transactionCounter++
-		tx := &InvestmentTransaction{
-			ID:         fmt.Sprintf("TX%d", s.transactionCounter),
-			PlanID:     planID,
-			Asset:     allocation.Asset,
-			Amount:    assetAmount,
-			Price:     price,
-			Quantity:  quantity,
-			Status:    TransactionStatusExecuted,
-			ExecutedAt: func() *time.Time { t := time.Now(); return &t }(),
-			CreatedAt: time.Now(),
-		}
-		s.transactions[tx.ID] = tx
-		s.mu.Unlock()
-		
-		transactions = append(transactions, tx)
-	}
-	
-	// Update next run time
-	s.mu.Lock()
-	plan.NextRun = s.calculateNextRun(plan.Frequency)
-	plan.UpdatedAt = time.Now()
-	s.mu.Unlock()
-	
-	return transactions, nil
+	return nil, fmt.Errorf("auto-invest execution unavailable: persistent ledger, live pricing, risk checks, and canonical order execution are not configured")
 }
 
 func (s *AutoInvestService) ExecuteDuePlans() []*InvestmentTransaction {
-	s.mu.RLock()
-	var duePlans []*InvestmentPlan
-	now := time.Now()
-	
-	for _, plan := range s.plans {
-		if plan.Status == PlanStatusActive && now.After(plan.NextRun) {
-			duePlans = append(duePlans, plan)
-		}
-	}
-	s.mu.RUnlock()
-	
-	var allTransactions []*InvestmentTransaction
-	
-	for _, plan := range duePlans {
-		txs, _ := s.ExecutePlan(plan.ID)
-		allTransactions = append(allTransactions, txs...)
-	}
-	
-	return allTransactions
+	// Scheduled plans must never be reported as executed without a canonical order and ledger.
+	return nil
 }
 
 // ============================================================================
@@ -330,20 +265,7 @@ func (s *AutoInvestService) CreateYieldStrategy(userID string, assets []string, 
 }
 
 func (s *AutoInvestService) OptimizeYield(strategyID string) error {
-	s.mu.RLock()
-	strategy, ok := s.yieldStrategies[strategyID]
-	s.mu.RUnlock()
-	
-	if !ok {
-		return fmt.Errorf("strategy not found")
-	}
-	
-	// In production, this would:
-	// 1. Analyze current yields across assets
-	// 2. Rebalance to maximize APY
-	// 3. Execute rebalancing trades
-	
-	return nil
+	return fmt.Errorf("yield optimization unavailable: verified yield providers and execution are not configured")
 }
 
 // ============================================================================
@@ -400,18 +322,8 @@ func (s *AutoInvestService) calculateNextRun(frequency InvestmentFrequency) time
 }
 
 func (s *AutoInvestService) getPrice(asset string) float64 {
-	// Mock prices - in production, use real market data
-	prices := map[string]float64{
-		"BTC": 50000,
-		"ETH": 3000,
-		"BNB": 600,
-		"SOL": 100,
-	}
-	
-	if price, ok := prices[asset]; ok {
-		return price
-	}
-	return 1.0
+	// No price is valid until supplied by a verified market-data provider.
+	return 0
 }
 
 func generateID(prefix string) string {
