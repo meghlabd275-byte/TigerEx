@@ -11,7 +11,7 @@ import {
   Download, Upload, RefreshCw, Plus, Minus, Lock, Unlock,
   CreditCard, ArrowUpRight, ArrowDownRight, Wallet, Globe,
   Server, Database, HardDrive, Cpu, Wifi, WifiOff,
-  AlertCircle, Info, CheckCircle, XCircle, AlertTriangle, HelpCircle
+  AlertCircle, Info, CheckCircle, XCircle, HelpCircle
 } from 'lucide-react';
 
 // =============================================================================

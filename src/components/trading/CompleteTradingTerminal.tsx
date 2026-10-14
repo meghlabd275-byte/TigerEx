@@ -12,7 +12,7 @@ import {
   Plus, Minus, AlertTriangle, Check, X, Info, Lock,
   Zap, Shield, Globe, Smartphone, Users, CreditCard,
   ArrowRightLeft, Eye, EyeOff, RefreshCcw, Pause, Play,
-  AlertCircle, CheckCircle, XCircle, Info, AlertTriangle
+  AlertCircle, CheckCircle, XCircle
 } from 'lucide-react';
 
 // =============================================================================
