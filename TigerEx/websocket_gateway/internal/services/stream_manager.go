@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"tigerEx/websocket_gateway/internal/models"
+	"tigerex/websocket_gateway/internal/models"
 )
 
 // ============================================================================
