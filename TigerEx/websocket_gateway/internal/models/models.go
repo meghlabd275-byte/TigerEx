@@ -205,6 +205,7 @@ type Client struct {
 	UserID   string
 	Socket  interface{} // *websocket.Conn
 	Streams map[string]bool
+	Send    chan []byte
 	Auth    bool
 }
 
