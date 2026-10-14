@@ -91,6 +91,12 @@ func RateLimiter() gin.HandlerFunc {
 		}
 		v, exists := visitors[ip]
 		if !exists {
+			if len(visitors) >= 10000 {
+				visitorsMu.Unlock()
+				c.JSON(http.StatusTooManyRequests, gin.H{"error": "Rate limiter capacity reached"})
+				c.Abort()
+				return
+			}
 			visitors[ip] = &visitor{lastSeen: now, visits: 1}
 			visitorsMu.Unlock()
 			c.Next()
