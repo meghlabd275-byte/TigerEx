@@ -1215,7 +1215,7 @@ io.on("connection", (socket) => {
   // client create arbitrary rooms or use malformed symbols as room names.
   const resolveActiveMarket = (value) => {
     if (typeof value !== "string" || value.length > 32 ||
-        !/^[A-Z0-9]{2,20}_[A-Z0-9]{2,20}$/.test(value)) {
+        !/^[A-Z0-9]{2,32}(?:[_-][A-Z0-9]{2,20})?$/.test(value)) {
       return null;
     }
     return TRADING_PAIRS.find((pair) => pair.symbol === value) || null;
