@@ -830,158 +830,26 @@ export function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   
-  // Mock data
+  // Administrative data must come from authenticated, persistent backend services.
   const stats: AdminStats = {
-    totalUsers: 125847,
-    activeUsers: 45231,
-    verifiedUsers: 89456,
-    totalVolume24h: 1234567890,
-    tradingVolume24h: 987654321,
-    totalDeposits24h: 34567890,
-    totalWithdrawals24h: 12345678,
-    openOrders: 15432,
-    pendingWithdrawals: 234,
-    pendingKyc: 56,
-    activeAlerts: 12,
+    totalUsers: 0,
+    activeUsers: 0,
+    verifiedUsers: 0,
+    totalVolume24h: 0,
+    tradingVolume24h: 0,
+    totalDeposits24h: 0,
+    totalWithdrawals24h: 0,
+    openOrders: 0,
+    pendingWithdrawals: 0,
+    pendingKyc: 0,
+    activeAlerts: 0,
   };
-
-  const mockUsers: User[] = [
-    {
-      id: 'user1',
-      email: 'john.doe@example.com',
-      username: 'JohnDoe',
-      kycLevel: 3,
-      kycStatus: 'verified',
-      status: 'active',
-      balances: { BTC: 1.5, ETH: 10.0, USDT: 50000 },
-      totalDeposits: 100000,
-      totalWithdrawals: 50000,
-      createdAt: '2024-01-15T10:30:00Z',
-      lastLoginAt: '2026-06-01T14:20:00Z',
-      riskLevel: 'low',
-      twoFactorEnabled: true,
-      ipAddresses: ['192.168.1.1', '10.0.0.1'],
-      country: 'United States',
-    },
-    {
-      id: 'user2',
-      email: 'jane.smith@example.com',
-      username: 'JaneSmith',
-      kycLevel: 2,
-      kycStatus: 'verified',
-      status: 'active',
-      balances: { BTC: 0.5, ETH: 5.0 },
-      totalDeposits: 25000,
-      totalWithdrawals: 10000,
-      createdAt: '2024-03-20T08:15:00Z',
-      lastLoginAt: '2026-06-01T09:45:00Z',
-      riskLevel: 'medium',
-      twoFactorEnabled: false,
-      ipAddresses: ['172.16.0.1'],
-      country: 'United Kingdom',
-    },
-    {
-      id: 'user3',
-      email: 'bob.wilson@example.com',
-      username: 'BobWilson',
-      kycLevel: 1,
-      kycStatus: 'pending',
-      status: 'active',
-      balances: { USDT: 1000 },
-      totalDeposits: 1000,
-      totalWithdrawals: 0,
-      createdAt: '2026-05-28T16:00:00Z',
-      lastLoginAt: '2026-06-01T11:30:00Z',
-      riskLevel: 'high',
-      twoFactorEnabled: false,
-      ipAddresses: ['192.168.2.1', '192.168.2.2', '192.168.2.3'],
-      country: 'Singapore',
-    },
-  ];
-
-  const mockTransactions: Transaction[] = [
-    {
-      id: 'tx1',
-      type: 'deposit',
-      asset: 'BTC',
-      amount: 1.5,
-      fee: 0.00015,
-      status: 'completed',
-      userId: 'user1',
-      userEmail: 'john.doe@example.com',
-      txHash: '0x1234567890abcdef',
-      createdAt: '2026-06-01T10:30:00Z',
-      processedAt: '2026-06-01T10:31:00Z',
-    },
-    {
-      id: 'tx2',
-      type: 'withdrawal',
-      asset: 'USDT',
-      amount: 10000,
-      fee: 10,
-      status: 'pending',
-      userId: 'user2',
-      userEmail: 'jane.smith@example.com',
-      address: '0xabcdef1234567890',
-      createdAt: '2026-06-01T12:00:00Z',
-    },
-  ];
-
-  const mockKycRequests: KYCRequest[] = [
-    {
-      id: 'kyc1',
-      userId: 'user3',
-      userEmail: 'bob.wilson@example.com',
-      level: 2,
-      status: 'pending',
-      submittedAt: '2026-06-01T09:00:00Z',
-      documents: [
-        { type: 'passport', url: '/docs/passport.pdf', verified: false },
-        { type: 'proof_of_address', url: '/docs/address.pdf', verified: false },
-      ],
-      verificationScore: 85,
-    },
-  ];
-
-  const mockAlerts: Alert[] = [
-    {
-      id: 'alert1',
-      type: 'security',
-      severity: 'high',
-      title: 'Multiple Failed Login Attempts',
-      description: 'User user3 has 5 failed login attempts in the last hour',
-      userId: 'user3',
-      status: 'new',
-      createdAt: '2026-06-01T13:00:00Z',
-    },
-    {
-      id: 'alert2',
-      type: 'risk',
-      severity: 'medium',
-      title: 'Large Withdrawal Request',
-      description: 'Withdrawal of $50,000 USDT pending approval',
-      userId: 'user2',
-      status: 'acknowledged',
-      createdAt: '2026-06-01T11:30:00Z',
-    },
-  ];
-
-  const mockMarkets: Market[] = [
-    { symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', status: 'trading', price: 67432.50, change24h: 2.5, volume24h: 1234567, high24h: 68000, low24h: 66000, makerFee: 0.001, takerFee: 0.001 },
-    { symbol: 'ETHUSDT', baseAsset: 'ETH', quoteAsset: 'USDT', status: 'trading', price: 3456.78, change24h: -1.2, volume24h: 876543, high24h: 3500, low24h: 3400, makerFee: 0.001, takerFee: 0.001 },
-    { symbol: 'BNBUSDT', baseAsset: 'BNB', quoteAsset: 'USDT', status: 'trading', price: 598.45, change24h: 0.8, volume24h: 234567, high24h: 600, low24h: 590, makerFee: 0.001, takerFee: 0.001 },
-  ];
-
-  const mockSystemHealth: SystemHealth[] = [
-    { component: 'Matching Engine', status: 'healthy', uptime: 99.99, lastCheck: '2026-06-02T10:00:00Z', latency: 5, errors: 0 },
-    { component: 'Database Primary', status: 'healthy', uptime: 99.95, lastCheck: '2026-06-02T10:00:00Z', latency: 2, errors: 0 },
-    { component: 'Database Replica', status: 'healthy', uptime: 99.98, lastCheck: '2026-06-02T10:00:00Z', latency: 3, errors: 0 },
-    { component: 'Redis Cache', status: 'healthy', uptime: 99.99, lastCheck: '2026-06-02T10:00:00Z', latency: 1, errors: 0 },
-    { component: 'WebSocket Server', status: 'healthy', uptime: 99.90, lastCheck: '2026-06-02T10:00:00Z', latency: 8, errors: 2 },
-    { component: 'Order Processing', status: 'healthy', uptime: 99.95, lastCheck: '2026-06-02T10:00:00Z', latency: 10, errors: 0 },
-    { component: 'Withdrawal Service', status: 'degraded', uptime: 98.50, lastCheck: '2026-06-02T10:00:00Z', latency: 150, errors: 15 },
-    { component: 'KYC Service', status: 'healthy', uptime: 99.80, lastCheck: '2026-06-02T10:00:00Z', latency: 25, errors: 1 },
-  ];
+  const mockUsers: User[] = [];
+  const mockTransactions: Transaction[] = [];
+  const mockKycRequests: KYCRequest[] = [];
+  const mockAlerts: Alert[] = [];
+  const mockMarkets: Market[] = [];
+  const mockSystemHealth: SystemHealth[] = [];
 
   // Tab navigation
   const tabs = [
