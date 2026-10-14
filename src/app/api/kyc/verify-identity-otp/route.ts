@@ -1,55 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const otpStore = new Map<string, { code: string; expires: number }>();
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8080/api/v1');
 
 export async function POST(request: NextRequest) {
+  if (!API_BASE_URL || (process.env.NODE_ENV === 'production' && !API_BASE_URL.startsWith('https://'))) return NextResponse.json({ success: false, error: { code: 'KYC_BACKEND_UNAVAILABLE', message: 'A secure KYC backend is not configured.' } }, { status: 503 });
+  const authorization = request.headers.get('authorization');
+  const sessionId = request.headers.get('x-session-id');
+  if (!authorization || !/^Bearer [^\s]+$/.test(authorization) || !sessionId) return NextResponse.json({ success: false, error: 'Authorization and session are required' }, { status: 401 });
   try {
-    const body = await request.json();
-    const { emailOrPhone, code } = body;
-    
-    if (!emailOrPhone || !code) {
-      return NextResponse.json(
-        { success: false, error: { code: 'INVALID_INPUT', message: 'All fields are required' } },
-        { status: 400 }
-      );
-    }
-    
-    const otpRecord = otpStore.get(emailOrPhone);
-    
-    if (!otpRecord) {
-      return NextResponse.json(
-        { success: false, error: { code: 'INVALID_OTP', message: 'No verification code found' } },
-        { status: 400 }
-      );
-    }
-    
-    if (Date.now() > otpRecord.expires) {
-      otpStore.delete(emailOrPhone);
-      return NextResponse.json(
-        { success: false, error: { code: 'OTP_EXPIRED', message: 'Code has expired' } },
-        { status: 400 }
-      );
-    }
-    
-    if (otpRecord.code !== code) {
-      return NextResponse.json(
-        { success: false, error: { code: 'INVALID_OTP', message: 'Invalid code' } },
-        { status: 400 }
-      );
-    }
-    
-    // Mark as verified
-    otpStore.set(emailOrPhone, { code: 'VERIFIED', expires: Date.now() + 3600000 });
-    
-    return NextResponse.json({
-      success: true,
-      message: 'Identity verified successfully',
-    });
-  } catch (error: any) {
-    console.error('Verify KYC OTP error:', error);
-    return NextResponse.json(
-      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Verification failed' } },
-      { status: 500 }
-    );
+    const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/kyc/verify-identity-otp`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: authorization, 'X-Session-ID': sessionId }, body: JSON.stringify(await request.json()), cache: 'no-store', signal: AbortSignal.timeout(10000) });
+    const data = await response.json().catch(() => ({ success: false, error: 'Invalid KYC backend response' }));
+    return NextResponse.json(data, { status: response.status });
+  } catch {
+    return NextResponse.json({ success: false, error: { code: 'KYC_BACKEND_UNAVAILABLE', message: 'KYC service is unavailable.' } }, { status: 503 });
   }
 }
