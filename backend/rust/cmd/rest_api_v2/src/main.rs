@@ -775,140 +775,50 @@ async fn handle_recent_trades(
     unavailable_market_data()
 }
 
+fn unavailable_business_api() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiResponse::<String>::error(
+            503,
+            "Trading, custody, and account services require a configured durable backend",
+        )),
+    ).into_response()
+}
+
 async fn handle_account_info(
     Path(user_id): Path<String>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let account = Account {
-        user_id: user_id.clone(),
-        account_type: "SPOT".to_string(),
-        balances: vec![
-            Balance { currency: "BTC".to_string(), free: "1.5".to_string(), locked: "0.5".to_string() },
-            Balance { currency: "ETH".to_string(), free: "10.0".to_string(), locked: "2.0".to_string() },
-            Balance { currency: "USDT".to_string(), free: "50000.0".to_string(), locked: "10000.0".to_string() },
-            Balance { currency: "USDC".to_string(), free: "25000.0".to_string(), locked: "0.0".to_string() },
-            Balance { currency: "BNB".to_string(), free: "50.0".to_string(), locked: "10.0".to_string() },
-        ],
-        total_equity: "250000.0".to_string(),
-        total_margin_used: "10000.0".to_string(),
-        total_unrealized_pnl: "2500.0".to_string(),
-        available_balance: "60000.0".to_string(),
-    };
-    
-    Json(ApiResponse::success(account))
+    unavailable_business_api()
 }
 
 async fn handle_account_balances(
     Path(user_id): Path<String>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let balances = vec![
-        Balance { currency: "BTC".to_string(), free: "1.5".to_string(), locked: "0.5".to_string() },
-        Balance { currency: "ETH".to_string(), free: "10.0".to_string(), locked: "2.0".to_string() },
-        Balance { currency: "USDT".to_string(), free: "50000.0".to_string(), locked: "10000.0".to_string() },
-        Balance { currency: "USDC".to_string(), free: "25000.0".to_string(), locked: "0.0".to_string() },
-        Balance { currency: "BNB".to_string(), free: "50.0".to_string(), locked: "10.0".to_string() },
-        Balance { currency: "SOL".to_string(), free: "100.0".to_string(), locked: "25.0".to_string() },
-        Balance { currency: "XRP".to_string(), free: "5000.0".to_string(), locked: "1000.0".to_string() },
-    ];
-    
-    Json(ApiResponse::success(balances))
+    unavailable_business_api()
 }
-
-// ============================================================================
-// API HANDLERS - Orders
-// ============================================================================
 
 async fn handle_create_order(
     Path(user_id): Path<String>,
     Json(payload): Json<CreateOrderRequest>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    // Validate symbol
-    if !validate_symbol(&payload.symbol) {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Invalid symbol"))).into_response();
-    }
-    
-    // Validate order type
-    if !validate_order_type(&payload.order_type) {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Invalid order type"))).into_response();
-    }
-    
-    // Validate side
-    if !validate_side(&payload.side) {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Invalid side"))).into_response();
-    }
-    
-    // Validate time in force if provided
-    if let Some(ref tif) = payload.time_in_force {
-        if !validate_time_in_force(tif) {
-            return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Invalid time in force"))).into_response();
-        }
-    }
-    
-    let order = Order {
-        order_id: generate_order_id(),
-        user_id: user_id.clone(),
-        symbol: payload.symbol.to_uppercase(),
-        side: payload.side.to_lowercase(),
-        order_type: payload.order_type.to_lowercase(),
-        price: payload.price.clone().unwrap_or_else(|| "0".to_string()),
-        quantity: payload.quantity.clone(),
-        filled_quantity: "0".to_string(),
-        average_price: "0".to_string(),
-        status: "new".to_string(),
-        time_in_force: payload.time_in_force.clone().unwrap_or_else(|| "GTC".to_string()),
-        created_at: current_timestamp(),
-        updated_at: current_timestamp(),
-        stop_price: payload.stop_price,
-        iceberg_quantity: payload.iceberg_quantity,
-    };
-    
-    // Store the order
-    let mut orders = state.orders.write().await;
-    let user_orders = orders.entry(user_id.clone()).or_insert_with(Vec::new);
-    user_orders.push(order.clone());
-    
-    Json(ApiResponse::success(order))
+    unavailable_business_api()
 }
 
 async fn handle_get_order(
     Path((user_id, order_id)): Path<(String, String)>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let orders = state.orders.read().await;
-    
-    if let Some(user_orders) = orders.get(&user_id) {
-        for order in user_orders {
-            if order.order_id == order_id {
-                return Json(ApiResponse::success(order.clone())).into_response();
-            }
-        }
-    }
-    
-    (StatusCode::NOT_FOUND, Json(ApiResponse::<String>::error(404, "Order not found"))).into_response()
+    unavailable_business_api()
 }
 
 async fn handle_cancel_order(
     Path((user_id, order_id)): Path<(String, String)>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let mut orders = state.orders.write().await;
-    
-    if let Some(user_orders) = orders.get_mut(&user_id) {
-        for order in user_orders.iter_mut() {
-            if order.order_id == order_id {
-                if order.status == "filled" || order.status == "canceled" {
-                    return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Order cannot be canceled"))).into_response();
-                }
-                order.status = "canceled".to_string();
-                order.updated_at = current_timestamp();
-                return Json(ApiResponse::success(order.clone())).into_response();
-            }
-        }
-    }
-    
-    (StatusCode::NOT_FOUND, Json(ApiResponse::<String>::error(404, "Order not found"))).into_response()
+    unavailable_business_api()
 }
 
 async fn handle_get_orders(
@@ -916,42 +826,14 @@ async fn handle_get_orders(
     Query(params): Query<PaginationParams>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let orders = state.orders.read().await;
-    let user_orders = orders.get(&user_id).cloned().unwrap_or_default();
-    
-    let offset = params.offset.unwrap_or(0) as usize;
-    let limit = params.limit.unwrap_or(100) as usize;
-    let symbol_filter = params.symbol.clone();
-    
-    let filtered: Vec<Order> = user_orders
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .filter(|o| {
-            if let Some(ref sym) = symbol_filter {
-                o.symbol == *sym
-            } else {
-                true
-            }
-        })
-        .collect();
-    
-    Json(ApiResponse::success(filtered))
+    unavailable_business_api()
 }
 
 async fn handle_get_open_orders(
     Path(user_id): Path<String>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let orders = state.orders.read().await;
-    let user_orders = orders.get(&user_id).cloned().unwrap_or_default();
-    
-    let open_orders: Vec<Order> = user_orders
-        .into_iter()
-        .filter(|o| o.status == "new" || o.status == "partially_filled")
-        .collect();
-    
-    Json(ApiResponse::success(open_orders))
+    unavailable_business_api()
 }
 
 async fn handle_get_all_orders(
@@ -959,211 +841,59 @@ async fn handle_get_all_orders(
     Query(params): Query<PaginationParams>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let orders = state.orders.read().await;
-    let user_orders = orders.get(&user_id).cloned().unwrap_or_default();
-    
-    let offset = params.offset.unwrap_or(0) as usize;
-    let limit = params.limit.unwrap_or(100) as usize;
-    
-    let filtered: Vec<Order> = user_orders
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect();
-    
-    Json(ApiResponse::success(filtered))
+    unavailable_business_api()
 }
 
 async fn handle_cancel_all_orders(
     Path(user_id): Path<String>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let mut orders = state.orders.write().await;
-    
-    if let Some(user_orders) = orders.get_mut(&user_id) {
-        let mut canceled = Vec::new();
-        for order in user_orders.iter_mut() {
-            if order.status == "new" {
-                order.status = "canceled".to_string();
-                order.updated_at = current_timestamp();
-                canceled.push(order.clone());
-            }
-        }
-        return Json(ApiResponse::success(canceled)).into_response();
-    }
-    
-    Json(ApiResponse::success(Vec::<Order>::new()))
+    unavailable_business_api()
 }
-
-// ============================================================================
-// API HANDLERS - Trades
-// ============================================================================
 
 async fn handle_get_trades(
     Path(user_id): Path<String>,
     Query(params): Query<PaginationParams>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let trades = state.trades.read().await;
-    let user_trades = trades.get(&user_id).cloned().unwrap_or_default();
-    
-    let offset = params.offset.unwrap_or(0) as usize;
-    let limit = params.limit.unwrap_or(100) as usize;
-    let symbol_filter = params.symbol.clone();
-    
-    let filtered: Vec<Trade> = user_trades
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .filter(|t| {
-            if let Some(ref sym) = symbol_filter {
-                t.symbol == *sym
-            } else {
-                true
-            }
-        })
-        .collect();
-    
-    Json(ApiResponse::success(filtered))
+    unavailable_business_api()
 }
-
-// ============================================================================
-// API HANDLERS - Positions (Futures/Margin)
-// ============================================================================
 
 async fn handle_get_positions(
     Path(user_id): Path<String>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let positions = state.positions.read().await;
-    let user_positions = positions.get(&user_id).cloned().unwrap_or_default();
-    
-    Json(ApiResponse::success(user_positions))
+    unavailable_business_api()
 }
 
 async fn handle_get_position(
     Path((user_id, symbol)): Path<(String, String)>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let positions = state.positions.read().await;
-    
-    if let Some(user_positions) = positions.get(&user_id) {
-        for pos in user_positions {
-            if pos.symbol == symbol.to_uppercase() {
-                return Json(ApiResponse::success(pos.clone())).into_response();
-            }
-        }
-    }
-    
-    (StatusCode::NOT_FOUND, Json(ApiResponse::<String>::error(404, "Position not found"))).into_response()
+    unavailable_business_api()
 }
-
-// ============================================================================
-// API HANDLERS - Wallet - Deposits
-// ============================================================================
 
 async fn handle_get_deposits(
     Path(user_id): Path<String>,
     Query(params): Query<PaginationParams>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let deposits = state.deposits.read().await;
-    let user_deposits = deposits.get(&user_id).cloned().unwrap_or_default();
-    
-    let offset = params.offset.unwrap_or(0) as usize;
-    let limit = params.limit.unwrap_or(100) as usize;
-    let symbol_filter = params.symbol.clone();
-    
-    let filtered: Vec<Deposit> = user_deposits
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .filter(|d| {
-            if let Some(ref sym) = symbol_filter {
-                d.currency == *sym
-            } else {
-                true
-            }
-        })
-        .collect();
-    
-    Json(ApiResponse::success(filtered))
+    unavailable_business_api()
 }
 
 async fn handle_generate_deposit_address(
     Path((user_id, currency)): Path<(String, String)>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let currency = currency.to_uppercase();
-    if !validate_currency(&currency) {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Invalid currency"))).into_response();
-    }
-    
-    let address = match currency.as_str() {
-        "BTC" => "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
-        "ETH" => "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
-        "USDT" => "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
-        "USDC" => "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
-        _ => "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1",
-    };
-    
-    let wallet = Wallet {
-        wallet_id: generate_order_id(),
-        user_id: user_id.clone(),
-        wallet_type: "deposit".to_string(),
-        currency: currency.clone(),
-        balance: "0".to_string(),
-        locked: "0".to_string(),
-        address: Some(address.to_string()),
-        memo: None,
-    };
-    
-    Json(ApiResponse::success(wallet))
+    unavailable_business_api()
 }
-
-// ============================================================================
-// API HANDLERS - Wallet - Withdrawals
-// ============================================================================
 
 async fn handle_create_withdrawal(
     Path(user_id): Path<String>,
     Json(payload): Json<CreateWithdrawalRequest>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let currency = payload.currency.to_uppercase();
-    if !validate_currency(&currency) {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Invalid currency"))).into_response();
-    }
-    
-    // Calculate fee
-    let fee = match currency.as_str() {
-        "BTC" => "0.0005",
-        "ETH" => "0.005",
-        "USDT" => "1.0",
-        "USDC" => "1.0",
-        _ => "0.0",
-    };
-    
-    let withdrawal = Withdrawal {
-        withdrawal_id: generate_order_id(),
-        user_id: user_id.clone(),
-        currency: currency.clone(),
-        amount: payload.amount.clone(),
-        fee: fee.to_string(),
-        address: payload.address.clone(),
-        memo: payload.memo.clone(),
-        status: "pending".to_string(),
-        tx_hash: None,
-        created_at: current_timestamp(),
-        updated_at: current_timestamp(),
-    };
-    
-    // Store the withdrawal
-    let mut withdrawals = state.withdrawals.write().await;
-    let user_withdrawals = withdrawals.entry(user_id.clone()).or_insert_with(Vec::new);
-    user_withdrawals.push(withdrawal.clone());
-    
-    Json(ApiResponse::success(withdrawal))
+    unavailable_business_api()
 }
 
 async fn handle_get_withdrawals(
@@ -1171,60 +901,20 @@ async fn handle_get_withdrawals(
     Query(params): Query<PaginationParams>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let withdrawals = state.withdrawals.read().await;
-    let user_withdrawals = withdrawals.get(&user_id).cloned().unwrap_or_default();
-    
-    let offset = params.offset.unwrap_or(0) as usize;
-    let limit = params.limit.unwrap_or(100) as usize;
-    let symbol_filter = params.symbol.clone();
-    
-    let filtered: Vec<Withdrawal> = user_withdrawals
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .filter(|w| {
-            if let Some(ref sym) = symbol_filter {
-                w.currency == *sym
-            } else {
-                true
-            }
-        })
-        .collect();
-    
-    Json(ApiResponse::success(filtered))
+    unavailable_business_api()
 }
 
 async fn handle_cancel_withdrawal(
     Path((user_id, withdrawal_id)): Path<(String, String)>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let mut withdrawals = state.withdrawals.write().await;
-    
-    if let Some(user_withdrawals) = withdrawals.get_mut(&user_id) {
-        for w in user_withdrawals.iter_mut() {
-            if w.withdrawal_id == withdrawal_id {
-                if w.status != "pending" {
-                    return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Withdrawal cannot be canceled"))).into_response();
-                }
-                w.status = "canceled".to_string();
-                w.updated_at = current_timestamp();
-                return Json(ApiResponse::success(w.clone())).into_response();
-            }
-        }
-    }
-    
-    (StatusCode::NOT_FOUND, Json(ApiResponse::<String>::error(404, "Withdrawal not found"))).into_response()
+    unavailable_business_api()
 }
-
-// ============================================================================
-// API HANDLERS - Staking
-// ============================================================================
 
 async fn handle_get_staking_products(
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let products = state.staking_products.read().await;
-    Json(ApiResponse::success(products.clone()))
+    unavailable_business_api()
 }
 
 async fn handle_create_staking(
@@ -1232,82 +922,27 @@ async fn handle_create_staking(
     Json(payload): Json<CreateStakingRequest>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let products = state.staking_products.read().await;
-    
-    // Find the product
-    let product = products.iter().find(|p| p.product_id == payload.product_id);
-    if product.is_none() {
-        return (StatusCode::NOT_FOUND, Json(ApiResponse::<String>::error(404, "Staking product not found"))).into_response();
-    }
-    
-    let product = product.unwrap();
-    
-    // Calculate end time
-    let end_time = if product.lock_period > 0 {
-        current_timestamp() + (product.lock_period as i64 * 86400000)
-    } else {
-        0
-    };
-    
-    let position = StakingPosition {
-        position_id: generate_order_id(),
-        user_id: user_id.clone(),
-        product_id: payload.product_id.clone(),
-        amount: payload.amount.clone(),
-        reward: "0".to_string(),
-        start_time: current_timestamp(),
-        end_time,
-        status: "active".to_string(),
-    };
-    
-    // Store the position
-    let mut positions = state.staking_positions.write().await;
-    let user_positions = positions.entry(user_id.clone()).or_insert_with(Vec::new);
-    user_positions.push(position.clone());
-    
-    Json(ApiResponse::success(position))
+    unavailable_business_api()
 }
 
 async fn handle_get_staking_positions(
     Path(user_id): Path<String>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let positions = state.staking_positions.read().await;
-    let user_positions = positions.get(&user_id).cloned().unwrap_or_default();
-    
-    Json(ApiResponse::success(user_positions))
+    unavailable_business_api()
 }
 
 async fn handle_cancel_staking(
     Path((user_id, position_id)): Path<(String, String)>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let mut positions = state.staking_positions.write().await;
-    
-    if let Some(user_positions) = positions.get_mut(&user_id) {
-        for p in user_positions.iter_mut() {
-            if p.position_id == position_id {
-                if p.status != "active" {
-                    return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Staking position cannot be canceled"))).into_response();
-                }
-                p.status = "unbonding".to_string();
-                return Json(ApiResponse::success(p.clone())).into_response();
-            }
-        }
-    }
-    
-    (StatusCode::NOT_FOUND, Json(ApiResponse::<String>::error(404, "Staking position not found"))).into_response()
+    unavailable_business_api()
 }
-
-// ============================================================================
-// API HANDLERS - Lending
-// ============================================================================
 
 async fn handle_get_lending_products(
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let products = state.lending_products.read().await;
-    Json(ApiResponse::success(products.clone()))
+    unavailable_business_api()
 }
 
 async fn handle_create_lending(
@@ -1315,265 +950,65 @@ async fn handle_create_lending(
     Json(payload): Json<CreateLendingRequest>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let products = state.lending_products.read().await;
-    
-    // Find the product
-    let product = products.iter().find(|p| p.product_id == payload.product_id);
-    if product.is_none() {
-        return (StatusCode::NOT_FOUND, Json(ApiResponse::<String>::error(404, "Lending product not found"))).into_response();
-    }
-    
-    let product = product.unwrap();
-    
-    // Calculate end time
-    let end_time = if product.term_days > 0 {
-        current_timestamp() + (product.term_days as i64 * 86400000)
-    } else {
-        0
-    };
-    
-    let position = LendingPosition {
-        position_id: generate_order_id(),
-        user_id: user_id.clone(),
-        product_id: payload.product_id.clone(),
-        amount: payload.amount.clone(),
-        interest: "0".to_string(),
-        start_time: current_timestamp(),
-        end_time,
-        status: "active".to_string(),
-    };
-    
-    // Store the position
-    let mut positions = state.lending_positions.write().await;
-    let user_positions = positions.entry(user_id.clone()).or_insert_with(Vec::new);
-    user_positions.push(position.clone());
-    
-    Json(ApiResponse::success(position))
+    unavailable_business_api()
 }
 
 async fn handle_get_lending_positions(
     Path(user_id): Path<String>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let positions = state.lending_positions.read().await;
-    let user_positions = positions.get(&user_id).cloned().unwrap_or_default();
-    
-    Json(ApiResponse::success(user_positions))
+    unavailable_business_api()
 }
-
-// ============================================================================
-// API HANDLERS - Borrowing
-// ============================================================================
 
 async fn handle_create_borrow(
     Path(user_id): Path<String>,
     Json(payload): Json<CreateBorrowRequest>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let currency = payload.currency.to_uppercase();
-    let collateral_currency = payload.collateral_currency.to_uppercase();
-    
-    if !validate_currency(&currency) || !validate_currency(&collateral_currency) {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Invalid currency"))).into_response();
-    }
-    
-    // Calculate LTV
-    let collateral_value: f64 = payload.collateral_amount.parse().unwrap_or(0.0);
-    let borrow_amount: f64 = payload.amount.parse().unwrap_or(0.0);
-    let ltv = if collateral_value > 0.0 {
-        (borrow_amount / collateral_value * 100.0).min(80.0)
-    } else {
-        0.0
-    };
-    
-    let borrow = BorrowPosition {
-        borrow_id: generate_order_id(),
-        user_id: user_id.clone(),
-        currency: currency.clone(),
-        amount: payload.amount.clone(),
-        collateral_currency: collateral_currency.clone(),
-        collateral_amount: payload.collateral_amount.clone(),
-        interest: "0".to_string(),
-        ltv: format!("{:.2}", ltv),
-        status: "active".to_string(),
-        start_time: current_timestamp(),
-        due_time: current_timestamp() + (30 * 86400000),
-    };
-    
-    // Store the borrow position
-    let mut positions = state.borrow_positions.write().await;
-    let user_positions = positions.entry(user_id.clone()).or_insert_with(Vec::new);
-    user_positions.push(borrow.clone());
-    
-    Json(ApiResponse::success(borrow))
+    unavailable_business_api()
 }
 
 async fn handle_get_borrow_positions(
     Path(user_id): Path<String>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let positions = state.borrow_positions.read().await;
-    let user_positions = positions.get(&user_id).cloned().unwrap_or_default();
-    
-    Json(ApiResponse::success(user_positions))
+    unavailable_business_api()
 }
 
 async fn handle_repay_borrow(
     Path((user_id, borrow_id)): Path<(String, String)>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let mut positions = state.borrow_positions.write().await;
-    
-    if let Some(user_positions) = positions.get_mut(&user_id) {
-        for p in user_positions.iter_mut() {
-            if p.borrow_id == borrow_id {
-                if p.status != "active" {
-                    return (StatusCode::BAD_REQUEST, Json(ApiResponse::<String>::error(400, "Borrow position cannot be repaid"))).into_response();
-                }
-                p.status = "repaid".to_string();
-                return Json(ApiResponse::success(p.clone())).into_response();
-            }
-        }
-    }
-    
-    (StatusCode::NOT_FOUND, Json(ApiResponse::<String>::error(404, "Borrow position not found"))).into_response()
+    unavailable_business_api()
 }
-
-// ============================================================================
-// API HANDLERS - API Keys
-// ============================================================================
 
 async fn handle_create_api_key(
     Path(user_id): Path<String>,
     Json(payload): Json<CreateApiKeyRequest>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let api_key = ApiKey {
-        key_id: generate_api_key(),
-        user_id: user_id.clone(),
-        label: payload.label.clone(),
-        public_key: generate_api_key(),
-        permissions: payload.permissions.clone(),
-        ip_whitelist: payload.ip_whitelist.clone(),
-        created_at: current_timestamp(),
-        expires_at: payload.expires_at,
-        last_used: None,
-        is_enabled: true,
-    };
-    
-    // Store the API key
-    let mut keys = state.api_keys.write().await;
-    let user_keys = keys.entry(user_id.clone()).or_insert_with(Vec::new);
-    user_keys.push(api_key.clone());
-    
-    Json(ApiResponse::success(api_key))
+    unavailable_business_api()
 }
 
 async fn handle_get_api_keys(
     Path(user_id): Path<String>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let keys = state.api_keys.read().await;
-    let user_keys = keys.get(&user_id).cloned().unwrap_or_default();
-    
-    Json(ApiResponse::success(user_keys))
+    unavailable_business_api()
 }
 
 async fn handle_delete_api_key(
     Path((user_id, key_id)): Path<(String, String)>,
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let mut keys = state.api_keys.write().await;
-    
-    if let Some(user_keys) = keys.get_mut(&user_id) {
-        user_keys.retain(|k| k.key_id != key_id);
-        return Json(ApiResponse::<String>::success("API key deleted".to_string())).into_response();
-    }
-    
-    (StatusCode::NOT_FOUND, Json(ApiResponse::<String>::error(404, "API key not found"))).into_response()
+    unavailable_business_api()
 }
-
-// ============================================================================
-// API HANDLERS - Leverage Tokens (Leveraged Tokens)
-// ============================================================================
 
 async fn handle_get_leveraged_tokens(
     state: AxumState<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let tokens = vec![
-        serde_json::json!({
-            "token_id": "BTCBULL",
-            "name": "3X Long Bitcoin",
-            "description": "3X leveraged long position in Bitcoin",
-            "underlying": "BTCUSDT",
-            "leverage": 3,
-            "direction": "long",
-            "nav": "15.50",
-            "nav_change": "2.5",
-            "nav_change_percent": "19.25",
-            "volume": "2500000",
-            "fee": "0.1"
-        }),
-        serde_json::json!({
-            "token_id": "BTCBEAR",
-            "name": "3X Short Bitcoin",
-            "description": "3X leveraged short position in Bitcoin",
-            "underlying": "BTCUSDT",
-            "leverage": 3,
-            "direction": "short",
-            "nav": "8.25",
-            "nav_change": "-1.2",
-            "nav_change_percent": "-12.70",
-            "volume": "1800000",
-            "fee": "0.1"
-        }),
-        serde_json::json!({
-            "token_id": "ETHBULL",
-            "name": "3X Long Ethereum",
-            "description": "3X leveraged long position in Ethereum",
-            "underlying": "ETHUSDT",
-            "leverage": 3,
-            "direction": "long",
-            "nav": "22.80",
-            "nav_change": "3.5",
-            "nav_change_percent": "18.10",
-            "volume": "1200000",
-            "fee": "0.1"
-        }),
-        serde_json::json!({
-            "token_id": "ETHBEAR",
-            "name": "3X Short Ethereum",
-            "description": "3X leveraged short position in Ethereum",
-            "underlying": "ETHUSDT",
-            "leverage": 3,
-            "direction": "short",
-            "nav": "5.40",
-            "nav_change": "-0.8",
-            "nav_change_percent": "-12.90",
-            "volume": "800000",
-            "fee": "0.1"
-        }),
-        serde_json::json!({
-            "token_id": "SOLBULL",
-            "name": "3X Long Solana",
-            "description": "3X leveraged long position in Solana",
-            "underlying": "SOLUSDT",
-            "leverage": 3,
-            "direction": "long",
-            "nav": "12.30",
-            "nav_change": "1.8",
-            "nav_change_percent": "17.14",
-            "volume": "600000",
-            "fee": "0.1"
-        }),
-    ];
-    
-    Json(ApiResponse::success(tokens))
+    unavailable_business_api()
 }
-
-// ============================================================================
-// BUILD ROUTER
-// ============================================================================
 
 fn create_router(state: Arc<AppState>) -> Router {
     let cors = CorsLayer::new()
