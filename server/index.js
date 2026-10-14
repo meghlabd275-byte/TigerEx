@@ -188,7 +188,7 @@ const AUTH_RATE_MAX_REQUESTS = 10;
 async function authRateLimit(req, res, next) {
   try {
     const ip = String(req.ip || "unknown").slice(0, 128);
-    const route = req.path === "/register" ? "register" : "login";
+    const route = req.path.endsWith("/register") ? "register" : "login";
     const key = `auth-rate:${route}:${ip}`;
     const count = Number(await redis.eval(
       "local n = redis.call('INCR', KEYS[1]); if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]); end; return n",
