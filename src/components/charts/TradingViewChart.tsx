@@ -648,15 +648,23 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
         if (indicatorData.length > 0) {
           const isHistogram = config.type === 'histogram';
-          const series = chartRef.current.addSeries(isHistogram ? 'Histogram' : 'Line', {
-            color: config.colors?.line || '#2962FF',
-            lineWidth: 2,
-            priceScaleId: indicatorName.includes('RSI') || indicatorName.includes('Stochastic') || indicatorName.includes('CCI') || indicatorName.includes('Williams') 
-              ? 'right' 
-              : 'overlay',
-            lastValueVisible: true,
-            priceLineVisible: true
-          });
+          const priceScaleId = indicatorName.includes('RSI') || indicatorName.includes('Stochastic') || indicatorName.includes('CCI') || indicatorName.includes('Williams')
+            ? 'right'
+            : 'overlay';
+          const series = isHistogram
+            ? chartRef.current.addHistogramSeries({
+                color: config.colors?.histogramUp || config.colors?.line || '#2962FF',
+                priceScaleId,
+                lastValueVisible: true,
+                priceLineVisible: true
+              })
+            : chartRef.current.addLineSeries({
+                color: config.colors?.line || '#2962FF',
+                lineWidth: 2,
+                priceScaleId,
+                lastValueVisible: true,
+                priceLineVisible: true
+              });
           
           series.setData(indicatorData);
           indicatorSeriesRef.current.set(indicatorName, series);
@@ -793,4 +801,3 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
 export default TradingViewChart;
 export { IndicatorCalculator, BUILT_IN_INDICATORS };
-export type { KlinesData, IndicatorConfig, DrawingTool, ChartConfig };
