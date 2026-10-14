@@ -328,13 +328,19 @@ func (h *AlgoExecutionHandler) CreateVWAPExecution(
 	if strings.TrimSpace(userID) == "" || strings.TrimSpace(symbol) == "" ||
 		(side != "buy" && side != "sell") || !isFinitePositive(quantity) ||
 		startTime <= 0 || endTime <= startTime || slices <= 0 ||
-		math.IsNaN(maxSlippage) || math.IsInf(maxSlippage, 0) || maxSlippage < 0 {
+		math.IsNaN(maxSlippage) || math.IsInf(maxSlippage, 0) || maxSlippage < 0 ||
+		len(volumeProfile) == 0 {
 		return nil
 	}
+	totalWeight := 0.0
 	for _, weight := range volumeProfile {
 		if math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 {
 			return nil
 		}
+		totalWeight += weight
+	}
+	if !isFinitePositive(totalWeight) {
+		return nil
 	}
 
 	exec := &AlgoExecution{
