@@ -9,10 +9,10 @@ import {
   ChevronDown, ChevronUp, RefreshCw, Maximize2, Moon, Sun,
   Activity, BarChart3, PieChart, LineChart, Clock, Filter,
   ArrowUpRight, ArrowDownRight, ExternalLink, Copy, Trash2,
-  Plus, Minus, AlertTriangle, Check, X, Info, Lock, 
+  Plus, Minus, AlertTriangle, Check, X, Info, Lock,
   Zap, Shield, Globe, Smartphone, Users, CreditCard,
   ArrowRightLeft, Eye, EyeOff, RefreshCcw, Pause, Play,
-  AlertCircle, CheckCircle, XCircle, InfoCircle, Warning
+  AlertCircle, CheckCircle, XCircle, Info, AlertTriangle
 } from 'lucide-react';
 
 // =============================================================================
