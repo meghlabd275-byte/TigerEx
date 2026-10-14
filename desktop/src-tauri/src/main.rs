@@ -440,59 +440,9 @@ fn get_deposit_address(_currency: String, _network: String) -> Result<DepositAdd
 
 /// Request withdrawal
 #[tauri::command]
-fn request_withdrawal(request: WithdrawalRequest, state: State<AppState>) -> Result<Transaction, String> {
-    // Check user is logged in
-    let current_user = state.current_user.lock().unwrap();
-    if current_user.is_none() {
-        return Err("Not logged in".to_string());
-    }
-    drop(current_user);
-    
-    // Validate
-    if request.amount <= 0.0 {
-        return Err("Amount must be positive".to_string());
-    }
-    
-    // Check balance
-    let mut balances = state.balances.lock().unwrap();
-    let balance = balances.get(&request.currency)
-        .ok_or("Currency not found")?;
-    
-    if balance.available < request.amount {
-        return Err("Insufficient balance".to_string());
-    }
-    
-    // Deduct balance
-    let fee = request.amount * 0.001; // 0.1% fee
-    let net_amount = request.amount - fee;
-    
-    if let Some(balance) = balances.get_mut(&request.currency) {
-        balance.available -= request.amount;
-        balance.balance -= request.amount;
-    }
-    drop(balances);
-    
-    // Create transaction
-    let now = current_timestamp();
-    let tx = Transaction {
-        tx_id: format!("withdraw_{}", now),
-        tx_type: "withdrawal".to_string(),
-        currency: request.currency,
-        amount: net_amount,
-        fee,
-        status: "pending".to_string(),
-        address: request.address,
-        tx_hash: None,
-        confirmations: 0,
-        created_at: now,
-        completed_at: None,
-    };
-    
-    // Add to transactions
-    let mut transactions = state.transactions.lock().unwrap();
-    transactions.push(tx.clone());
-    
-    Ok(tx)
+fn request_withdrawal(_request: WithdrawalRequest, _state: State<AppState>) -> Result<Transaction, String> {
+    Err("Withdrawal signing, policy checks, durable ledger reservation, and chain broadcast are not configured".to_string())
+}
 }
 
 /// Get transaction history
