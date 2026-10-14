@@ -1,7 +1,13 @@
 package admin
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -148,6 +154,11 @@ func (s *Service) CreateAdmin(admin *AdminUser) error {
 		return fmt.Errorf("admin email already exists")
 	}
 
+	hashedPassword, err := hashAdminPassword(candidate.Password)
+	if err != nil {
+		return fmt.Errorf("securely hash admin password: %w", err)
+	}
+	candidate.Password = hashedPassword
 	candidate.CreatedAt = time.Now()
 	candidate.IsActive = true
 	candidate.Permissions = append([]string(nil), candidate.Permissions...)
@@ -188,7 +199,7 @@ func (s *Service) VerifyAdmin(email, password string) (*AdminUser, error) {
 		return nil, fmt.Errorf("admin disabled")
 	}
 
-	if admin.Password != password {
+	if !verifyAdminPassword(admin.Password, password) {
 		return nil, fmt.Errorf("invalid credentials")
 	}
 
@@ -198,6 +209,8 @@ func (s *Service) VerifyAdmin(email, password string) (*AdminUser, error) {
 	// Return a detached value so callers cannot mutate the service's shared record
 	// without holding the service lock.
 	result := *admin
+	// Never return the stored password hash to callers.
+	result.Password = ""
 	result.Permissions = append([]string(nil), admin.Permissions...)
 	if admin.LastLogin != nil {
 		lastLogin := *admin.LastLogin
@@ -497,6 +510,70 @@ func cloneUserReport(report *UserReport) *UserReport {
 	copy := *report
 	copy.Flags = append([]string(nil), report.Flags...)
 	return &copy
+}
+
+const adminPasswordIterations = 600000
+
+// hashAdminPassword stores a salted PBKDF2-HMAC-SHA256 verifier, never a plaintext
+// admin password. The format is versioned so parameters can be upgraded later.
+func hashAdminPassword(password string) (string, error) {
+	if password == "" {
+		return "", fmt.Errorf("password is required")
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
+	}
+	hash := pbkdf2SHA256([]byte(password), salt, adminPasswordIterations, sha256.Size)
+	return "pbkdf2-sha256$" + strconv.Itoa(adminPasswordIterations) + "$" +
+		base64.RawStdEncoding.EncodeToString(salt) + "$" +
+		base64.RawStdEncoding.EncodeToString(hash), nil
+}
+
+func verifyAdminPassword(encoded, password string) bool {
+	parts := strings.Split(encoded, "$")
+	if len(parts) != 4 || parts[0] != "pbkdf2-sha256" || password == "" {
+		return false
+	}
+	iterations, err := strconv.Atoi(parts[1])
+	if err != nil || iterations < 100000 || iterations > 2000000 {
+		return false
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
+	if err != nil || len(salt) < 16 || len(salt) > 64 {
+		return false
+	}
+	want, err := base64.RawStdEncoding.DecodeString(parts[3])
+	if err != nil || len(want) != sha256.Size {
+		return false
+	}
+	got := pbkdf2SHA256([]byte(password), salt, iterations, len(want))
+	return subtle.ConstantTimeCompare(got, want) == 1
+}
+
+// pbkdf2SHA256 implements RFC 8018 PBKDF2 with HMAC-SHA256 using only the Go
+// standard library, avoiding a third-party runtime dependency for credential storage.
+func pbkdf2SHA256(password, salt []byte, iterations, keyLen int) []byte {
+	hLen := sha256.Size
+	blocks := (keyLen + hLen - 1) / hLen
+	out := make([]byte, 0, blocks*hLen)
+	for block := 1; block <= blocks; block++ {
+		mac := hmac.New(sha256.New, password)
+		_, _ = mac.Write(salt)
+		_, _ = mac.Write([]byte{byte(block >> 24), byte(block >> 16), byte(block >> 8), byte(block)})
+		u := mac.Sum(nil)
+		t := append([]byte(nil), u...)
+		for i := 1; i < iterations; i++ {
+			mac = hmac.New(sha256.New, password)
+			_, _ = mac.Write(u)
+			u = mac.Sum(nil)
+			for j := range t {
+				t[j] ^= u[j]
+			}
+		}
+		out = append(out, t...)
+	}
+	return out[:keyLen]
 }
 
 func generateAuditID() string {
