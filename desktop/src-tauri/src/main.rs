@@ -68,7 +68,6 @@ fn get_default_trading_pairs() -> Vec<TradingPair> {
     // Markets must be loaded from the canonical exchange registry.
     Vec::new()
 }
-}
 
 // ============================================================================
 // DATA STRUCTURES
@@ -282,7 +281,6 @@ pub struct DepositAddress {
 fn login(_email: String, _password: String, _state: State<AppState>) -> Result<User, String> {
     Err("Authenticated identity provider is not configured; login unavailable".to_string())
 }
-}
 
 /// Logout current user
 #[tauri::command]
@@ -308,7 +306,6 @@ fn get_current_user(state: State<AppState>) -> Result<Option<User>, String> {
 fn register(_email: String, _password: String, _username: String, _state: State<AppState>) -> Result<User, String> {
     Err("Persistent registration and credential service is not configured; registration unavailable".to_string())
 }
-}
 
 // ============================================================================
 // TAURI COMMANDS - MARKET DATA
@@ -318,7 +315,6 @@ fn register(_email: String, _password: String, _username: String, _state: State<
 #[tauri::command]
 fn get_ticker(_symbol: String) -> Result<Ticker, String> {
     Err("Live market-data provider is not configured; ticker unavailable".to_string())
-}
 }
 
 /// Get all tickers
@@ -341,13 +337,11 @@ fn get_all_tickers(state: State<AppState>) -> Result<Vec<Ticker>, String> {
 fn get_order_book(_symbol: String) -> Result<OrderBook, String> {
     Err("Live order-book provider is not configured; order book unavailable".to_string())
 }
-}
 
 /// Get klines/candlesticks
 #[tauri::command]
 fn get_klines(_symbol: String, _interval: String, _limit: u32) -> Result<Vec<Kline>, String> {
     Err("Live candle provider is not configured; klines unavailable".to_string())
-}
 }
 
 // ============================================================================
@@ -358,7 +352,6 @@ fn get_klines(_symbol: String, _interval: String, _limit: u32) -> Result<Vec<Kli
 #[tauri::command]
 fn get_balances(_state: State<AppState>) -> Result<Vec<WalletBalance>, String> {
     Err("Persistent account-ledger service is not configured; balances unavailable".to_string())
-}
 }
 
 /// Place an order
@@ -372,7 +365,6 @@ fn place_order(
     _state: State<AppState>,
 ) -> Result<Order, String> {
     Err("Authoritative trading service is not configured; order submission disabled".to_string())
-}
 }
 
 /// Cancel an order
@@ -436,13 +428,11 @@ fn get_order_history(state: State<AppState>) -> Result<Vec<Order>, String> {
 fn get_deposit_address(_currency: String, _network: String) -> Result<DepositAddress, String> {
     Err("Chain-specific address derivation and node/indexer service are not configured".to_string())
 }
-}
 
 /// Request withdrawal
 #[tauri::command]
 fn request_withdrawal(_request: WithdrawalRequest, _state: State<AppState>) -> Result<Transaction, String> {
     Err("Withdrawal signing, policy checks, durable ledger reservation, and chain broadcast are not configured".to_string())
-}
 }
 
 /// Get transaction history
