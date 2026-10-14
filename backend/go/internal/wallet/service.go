@@ -6,13 +6,11 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"fmt"
+	"io"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
-	"time"
-
-	"github.com/google/uuid"
 
 	"tigerex-api/internal/api"
 )
@@ -234,9 +232,13 @@ func (s *Service) InternalTransfer(ctx context.Context, req *TransferRequest) (*
 
 // Encrypt encrypts sensitive data
 func (s *Service) Encrypt(plaintext string) (string, error) {
+	if s == nil || s.cipher == nil {
+		return "", ErrCustodyUnavailable
+	}
 	nonce := make([]byte, s.cipher.NonceSize())
-	rand.Read(nonce)
-	
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("generate encryption nonce: %w", err)
+	}
 	ciphertext := s.cipher.Seal(nonce, nonce, []byte(plaintext), nil)
 	return hex.EncodeToString(ciphertext), nil
 }
