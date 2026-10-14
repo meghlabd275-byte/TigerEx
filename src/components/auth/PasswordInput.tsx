@@ -14,6 +14,7 @@ interface PasswordInputProps {
   id?: string;
   name?: string;
   required?: boolean;
+  autoFocus?: boolean;
 }
 
 export type PasswordStrength = 'weak' | 'medium' | 'strong';
@@ -37,6 +38,7 @@ export default function PasswordInput({
   id,
   name,
   required = false,
+  autoFocus = false,
 }: PasswordInputProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [touched, setTouched] = useState(false);
@@ -100,6 +102,7 @@ export default function PasswordInput({
           placeholder={placeholder}
           disabled={disabled}
           required={required}
+        autoFocus={autoFocus}
           className={`
             w-full px-4 py-3 pr-12 border-2 rounded-lg outline-none transition-all
             bg-white dark:bg-gray-800

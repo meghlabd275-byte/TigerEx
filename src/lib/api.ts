@@ -194,7 +194,7 @@ export class TigerExClient {
     referralCode?: string;
     termsAccepted: boolean;
   }): Promise<APIResponse<AuthTokens>> {
-    const response = await this.request('/auth/register', {
+    const response = await this.request<{ accessToken: string; refreshToken: string }>('/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -207,7 +207,7 @@ export class TigerExClient {
   }
 
   async login(email: string, password: string): Promise<APIResponse<AuthTokens>> {
-    const response = await this.request('/auth/login', {
+    const response = await this.request<{ accessToken: string; refreshToken: string }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
@@ -220,7 +220,7 @@ export class TigerExClient {
   }
 
   async logout(): Promise<APIResponse<void>> {
-    const response = await this.request('/auth/logout', {
+    const response = await this.request<void>('/auth/logout', {
       method: 'POST',
     });
     
@@ -231,7 +231,7 @@ export class TigerExClient {
   async refreshAccessToken(): Promise<boolean> {
     if (!this.refreshToken) return false;
     
-    const response = await this.request('/auth/refresh', {
+    const response = await this.request<{ accessToken: string; refreshToken: string }>('/auth/refresh', {
       method: 'POST',
       body: JSON.stringify({ refreshToken: this.refreshToken }),
     });
@@ -308,7 +308,7 @@ export class TigerExClient {
     currency: string;
     amount: number;
   }): Promise<APIResponse<void>> {
-    return this.request('/api/v1/account/transfer', {
+    return this.request<void>('/api/v1/account/transfer', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -389,7 +389,7 @@ export class TigerExClient {
     productId: string;
     amount: number;
   }): Promise<APIResponse<void>> {
-    return this.request('/api/v1/earn/subscribe', {
+    return this.request<void>('/api/v1/earn/subscribe', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -424,7 +424,7 @@ export class TigerExClient {
   }
 
   async revokeAPIKey(keyId: string): Promise<APIResponse<void>> {
-    return this.request(`/api/v1/api-keys/${keyId}`, {
+    return this.request<void>(`/api/v1/api-keys/${keyId}`, {
       method: 'DELETE',
     });
   }
