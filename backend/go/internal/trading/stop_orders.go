@@ -2,10 +2,10 @@
 package trading
 
 import (
-	"context"
 	"errors"
+	"strings"
 	"math"
-	"time"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -19,12 +19,15 @@ var (
 
 // StopOrderHandler handles stop orders
 type StopOrderHandler struct {
-	orders map[string]*api.Order
+	orders           map[string]*api.Order
+	mu               sync.Mutex
+	trailingExtremes map[string]float64
 }
 
 func NewStopOrderHandler() *StopOrderHandler {
 	return &StopOrderHandler{
-		orders: make(map[string]*api.Order),
+		orders:           make(map[string]*api.Order),
+		trailingExtremes: make(map[string]float64),
 	}
 }
 
@@ -61,22 +64,42 @@ func (h *StopOrderHandler) checkStopLossTrigger(order *api.Order, currentPrice f
 }
 
 func (h *StopOrderHandler) checkTrailingStopTrigger(order *api.Order, currentPrice float64) bool {
-	if order.TrailingDistance <= 0 {
+	if order == nil || strings.TrimSpace(order.ID) == "" ||
+		order.TrailingDistance <= 0 || math.IsNaN(order.TrailingDistance) ||
+		math.IsInf(order.TrailingDistance, 0) || currentPrice <= 0 ||
+		math.IsNaN(currentPrice) || math.IsInf(currentPrice, 0) {
 		return false
 	}
 
-	// For trailing stop, we need to track the highest/lowest price since order creation
-	// This is a simplified version
-	switch order.Side {
-	case "buy":
-		// Trigger when price drops by trailing distance from highest
-		// For now, just check if current price dropped from some reference
-		return true // Real implementation would track high price
-	case "sell":
-		// Trigger when price rises by trailing distance from lowest
-		return true // Real implementation would track low price
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.trailingExtremes == nil {
+		h.trailingExtremes = make(map[string]float64)
 	}
-	return false
+	extreme, exists := h.trailingExtremes[order.ID]
+	if !exists {
+		h.trailingExtremes[order.ID] = currentPrice
+		return false
+	}
+
+	switch order.Side {
+	case "sell":
+		// A sell trailing stop follows the peak and triggers on a reversal down.
+		if currentPrice > extreme {
+			h.trailingExtremes[order.ID] = currentPrice
+			return false
+		}
+		return currentPrice <= extreme-order.TrailingDistance
+	case "buy":
+		// A buy trailing stop follows the trough and triggers on a reversal up.
+		if currentPrice < extreme {
+			h.trailingExtremes[order.ID] = currentPrice
+			return false
+		}
+		return currentPrice >= extreme+order.TrailingDistance
+	default:
+		return false
+	}
 }
 
 // TriggerStopOrder converts a stop order to a limit/market order
@@ -96,11 +119,22 @@ func (h *StopOrderHandler) TriggerStopOrder(order *api.Order, currentPrice float
 		order.Price = order.StopPrice
 		order.Status = "triggered"
 	case "trailing_stop":
-		// Calculate actual stop price based on trailing distance
-		if order.Side == "buy" {
-			order.StopPrice = currentPrice - order.TrailingDistance
-		} else {
-			order.StopPrice = currentPrice + order.TrailingDistance
+		h.mu.Lock()
+		extreme, ok := h.trailingExtremes[order.ID]
+		if ok {
+			delete(h.trailingExtremes, order.ID)
+		}
+		h.mu.Unlock()
+		if !ok {
+			return nil
+		}
+		switch order.Side {
+		case "buy":
+			order.StopPrice = extreme + order.TrailingDistance
+		case "sell":
+			order.StopPrice = extreme - order.TrailingDistance
+		default:
+			return nil
 		}
 		order.Type = "market"
 		order.Status = "triggered"
