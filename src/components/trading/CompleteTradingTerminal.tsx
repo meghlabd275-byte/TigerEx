@@ -1083,34 +1083,8 @@ const TradingChart: React.FC<{ symbol: string }> = ({ symbol }) => {
     { label: '1W', value: '1w' },
   ];
 
-  // Generate mock chart data
-  const chartData = useMemo(() => {
-    const data: ChartDataPoint[] = [];
-    let basePrice = symbol.includes('BTC') ? 67000 : symbol.includes('ETH') ? 3500 : 100;
-    const now = Date.now();
-    
-    for (let i = 100; i >= 0; i--) {
-      const time = now - i * 3600000;
-      const volatility = basePrice * 0.02;
-      const open = basePrice + (Math.random() - 0.5) * volatility;
-      const close = open + (Math.random() - 0.5) * volatility;
-      const high = Math.max(open, close) + Math.random() * volatility * 0.5;
-      const low = Math.min(open, close) - Math.random() * volatility * 0.5;
-      
-      data.push({
-        time,
-        open,
-        high,
-        low,
-        close,
-        volume: Math.random() * 1000,
-      });
-      
-      basePrice = close;
-    }
-    
-    return data;
-  }, [symbol]);
+  // Charts remain empty until verified candle data is loaded from the exchange API.
+  const chartData: ChartDataPoint[] = [];
 
   return (
     <div className="flex flex-col h-full">
@@ -1676,111 +1650,37 @@ export function TradingTerminal() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [isConnected, setIsConnected] = useState(false);
 
-  // Mock data for demo
-  const [markets] = useState<Market[]>([
-    { symbol: 'BTC/USDT', baseAsset: 'BTC', quoteAsset: 'USDT', price: '67523.45', priceChange24h: '1234.56', priceChangePercent24h: '1.86', high24h: '68000.00', low24h: '66500.00', volume24h: '25000', quoteVolume24h: '1687000000', lastUpdate: Date.now() },
-    { symbol: 'ETH/USDT', baseAsset: 'ETH', quoteAsset: 'USDT', price: '3542.18', priceChange24h: '45.23', priceChangePercent24h: '1.29', high24h: '3600.00', low24h: '3500.00', volume24h: '150000', quoteVolume24h: '531327000', lastUpdate: Date.now() },
-    { symbol: 'BNB/USDT', baseAsset: 'BNB', quoteAsset: 'USDT', price: '598.32', priceChange24h: '-5.67', priceChangePercent24h: '-0.94', high24h: '605.00', low24h: '595.00', volume24h: '50000', quoteVolume24h: '29916000', lastUpdate: Date.now() },
-    { symbol: 'SOL/USDT', baseAsset: 'SOL', quoteAsset: 'USDT', price: '172.45', priceChange24h: '8.23', priceChangePercent24h: '5.01', high24h: '175.00', low24h: '165.00', volume24h: '80000', quoteVolume24h: '13796000', lastUpdate: Date.now() },
-    { symbol: 'XRP/USDT', baseAsset: 'XRP', quoteAsset: 'USDT', price: '0.5234', priceChange24h: '-0.0123', priceChangePercent24h: '-2.30', high24h: '0.5400', low24h: '0.5200', volume24h: '200000', quoteVolume24h: '104680', lastUpdate: Date.now() },
-  ]);
-
+  // No locally fabricated markets, order books, trades, tickers, balances, or positions.
+  const [markets] = useState<Market[]>([]);
   const [orderBook, setOrderBook] = useState<OrderBook>({
-    bids: [
-      { price: '67520.00', quantity: '2.5432', total: '171692.65', percentage: 80 },
-      { price: '67518.50', quantity: '1.2345', total: '83355.35', percentage: 40 },
-      { price: '67515.00', quantity: '3.2156', total: '217123.98', percentage: 100 },
-      { price: '67512.00', quantity: '0.8765', total: '59195.78', percentage: 27 },
-      { price: '67510.00', quantity: '2.1234', total: '143345.34', percentage: 66 },
-      { price: '67508.50', quantity: '1.5678', total: '105831.63', percentage: 49 },
-      { price: '67505.00', quantity: '4.2345', total: '285876.02', percentage: 100 },
-      { price: '67502.00', quantity: '0.9876', total: '66664.07', percentage: 31 },
-      { price: '67500.00', quantity: '2.3456', total: '158328.00', percentage: 73 },
-      { price: '67498.00', quantity: '1.4567', total: '98321.45', percentage: 45 },
-    ],
-    asks: [
-      { price: '67525.00', quantity: '1.8765', total: '126678.71', percentage: 58 },
-      { price: '67528.00', quantity: '2.3456', total: '158452.86', percentage: 73 },
-      { price: '67530.00', quantity: '3.5678', total: '241019.87', percentage: 100 },
-      { price: '67532.50', quantity: '1.1234', total: '75857.34', percentage: 35 },
-      { price: '67535.00', quantity: '2.8765', total: '194234.28', percentage: 89 },
-      { price: '67538.00', quantity: '0.7654', total: '51709.46', percentage: 24 },
-      { price: '67540.00', quantity: '3.2345', total: '218459.80', percentage: 100 },
-      { price: '67542.50', quantity: '1.6543', total: '111738.18', percentage: 51 },
-      { price: '67545.00', quantity: '2.1234', total: '143489.43', percentage: 66 },
-      { price: '67548.00', quantity: '1.0987', total: '74224.76', percentage: 34 },
-    ],
-    spread: '5.00',
-    spreadPercent: '0.0074',
-    midPrice: '67522.50',
+    bids: [],
+    asks: [],
+    spread: '',
+    spreadPercent: '',
+    midPrice: '',
   });
-
-  const [recentTrades] = useState<Trade[]>([
-    { id: '1', price: '67523.50', quantity: '0.5432', time: '12:34:56', side: 'buy', timestamp: Date.now() },
-    { id: '2', price: '67522.00', quantity: '1.2345', time: '12:34:55', side: 'sell', timestamp: Date.now() - 1000 },
-    { id: '3', price: '67525.00', quantity: '0.8765', time: '12:34:54', side: 'buy', timestamp: Date.now() - 2000 },
-    { id: '4', price: '67520.50', quantity: '2.3456', time: '12:34:53', side: 'sell', timestamp: Date.now() - 3000 },
-    { id: '5', price: '67522.50', quantity: '0.5432', time: '12:34:52', side: 'buy', timestamp: Date.now() - 4000 },
-  ]);
-
+  const [recentTrades] = useState<Trade[]>([]);
   const [ticker, setTicker] = useState<Ticker>({
-    lastPrice: '67523.45',
-    priceChange: '1234.56',
-    priceChangePercent: '1.86',
-    high24h: '68000.00',
-    low24h: '66500.00',
-    volume24h: '25000',
-    quoteVolume24h: '1687000000',
-    bidPrice: '67520.00',
-    askPrice: '67525.00',
-    openPrice: '66288.89',
+    lastPrice: '',
+    priceChange: '',
+    priceChangePercent: '',
+    high24h: '',
+    low24h: '',
+    volume24h: '',
+    quoteVolume24h: '',
+    bidPrice: '',
+    askPrice: '',
+    openPrice: '',
   });
 
   const [currentPrice, setCurrentPrice] = useState('');
 
-  // Initialize user and balances
+  // The exchange API is not configured; never impersonate a logged-in demo user.
   useEffect(() => {
-    setUser({
-      userId: 'demo-user-1',
-      email: 'demo@tigerex.com',
-      username: 'DemoTrader',
-      kycLevel: 'intermediate',
-      twoFactorEnabled: true,
-      marginEnabled: true,
-      futuresEnabled: true,
-      tradingExperience: 'advanced',
-    });
-
-    setBalances([
-      { currency: 'BTC', available: '0.5432', locked: '0.1', total: '0.6432', usdValue: '43,427', change24h: '2.5' },
-      { currency: 'ETH', available: '5.2341', locked: '0', total: '5.2341', usdValue: '18,545', change24h: '1.8' },
-      { currency: 'USDT', available: '10,000', locked: '500', total: '10,500', usdValue: '10,500', change24h: '0' },
-      { currency: 'BNB', available: '25.5', locked: '0', total: '25.5', usdValue: '15,257', change24h: '-0.5' },
-      { currency: 'SOL', available: '100', locked: '10', total: '110', usdValue: '18,969', change24h: '5.2' },
-      { currency: 'XRP', available: '5000', locked: '0', total: '5000', usdValue: '2,617', change24h: '-1.2' },
-      { currency: 'ADA', available: '10000', locked: '0', total: '10000', usdValue: '4,500', change24h: '0.8' },
-    ]);
-
-    setPositions([
-      {
-        id: 'pos-1',
-        symbol: 'BTC/USDT',
-        side: 'long',
-        size: '0.5',
-        entryPrice: '65000.00',
-        markPrice: '67523.45',
-        liquidationPrice: '58500.00',
-        unrealizedPnl: '1261.73',
-        unrealizedPnlPercent: '3.88',
-        leverage: '10',
-        margin: '3250.00',
-        marginRatio: '75.5',
-        mode: 'cross',
-      },
-    ]);
-
-    setSelectedMarket(markets[0]);
-    setIsConnected(true);
+    setUser(null);
+    setBalances([]);
+    setPositions([]);
+    setIsConnected(false);
   }, []);
 
   const handlePriceClick = (price: string) => {
