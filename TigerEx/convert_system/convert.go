@@ -82,16 +82,9 @@ func NewConvertService() *ConvertService {
 		conversions: make(map[string]*Conversion),
 		quotes:     make(map[string]*ConvertQuote),
 		rateCache:  make(map[string]decimal.Decimal),
-		feeConfig: &FeeConfig{
-			MakerFee: decimal.NewFromFloat(0.1),
-			TakerFee: decimal.NewFromFloat(0.1),
-			MinFee:   decimal.NewFromFloat(0.01),
-			DiscountTiers: []DiscountTier{
-				{VolumeThreshold: decimal.NewFromFloat(10000), DiscountRate: decimal.NewFromFloat(0.2)},
-				{VolumeThreshold: decimal.NewFromFloat(100000), DiscountRate: decimal.NewFromFloat(0.3)},
-				{VolumeThreshold: decimal.NewFromFloat(1000000), DiscountRate: decimal.NewFromFloat(0.5)},
-			},
-		},
+		// Fee schedules must be supplied by the audited admin configuration service.
+		// No unreviewed default fee or volume tier is assumed.
+		feeConfig: &FeeConfig{},
 	}
 }
 
