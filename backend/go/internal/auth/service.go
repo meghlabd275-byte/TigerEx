@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	"tigerex-api/internal/api"
+	"tigerex/backend/internal/api"
 )
 
 var (
