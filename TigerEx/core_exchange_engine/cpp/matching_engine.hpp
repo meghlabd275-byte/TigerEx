@@ -102,10 +102,10 @@ struct Order {
 };
 
 class MatchingEngine {
-    // Lock-free ring buffers for order flow
-    RingBuffer<Order, 1048576> order_pipe_;
-    RingBuffer<Order, 1048576> trade_pipe_;
-    
+    // Order ingress and trade publication are owned by the service boundary.
+    // Keeping megabyte-scale queues embedded here made each engine instance
+    // enormous and unsafe to allocate on ordinary thread stacks.
+
     // std::map provides deterministic price ordering. Orders within each price
     // level are kept in insertion order to preserve FIFO time priority.
     std::map<uint64_t, std::vector<Order>> bid_orders_;
