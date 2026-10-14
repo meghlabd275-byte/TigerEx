@@ -715,36 +715,13 @@ app.post("/api/v1/margin/deposit", authenticateRequest, async (_req, res) => {
   });
 });
 
-// Withdraw collateral from margin account
-app.post("/api/v1/margin/withdraw", authenticateRequest, async (req, res) => {
-  try {
-    const { currency, amount } = req.body;
-
-    if (!currency || !amount) {
-      return res.status(400).json({ success: false, error: "Missing currency or amount" });
-    }
-
-    // Check margin account balance
-    const marginAccount = (await pool.query(
-      "SELECT * FROM margin_accounts WHERE user_id = $1 AND currency = $2 LIMIT 1",
-      [req.userId, currency]
-    )).rows[0];
-
-    if (!marginAccount || marginAccount.balance < amount) {
-      return res.status(400).json({ success: false, error: "Insufficient margin balance" });
-    }
-
-    // Deduct from margin account balance
-    await pool.query(
-      `UPDATE margin_accounts SET balance = balance - $1, updated_at = NOW() WHERE user_id = $2 AND currency = $3`,
-      [amount, req.userId, currency]
-    );
-
-    res.json({ success: true, message: "Margin collateral withdrawn successfully" });
-  } catch (error) {
-    console.error("Margin withdrawal error:", error);
-    res.status(500).json({ success: false, error: "Internal server error" });
-  }
+// Margin withdrawals remain disabled until atomic ledger transfers and
+// collateral reconciliation are wired into the canonical accounting service.
+app.post("/api/v1/margin/withdraw", authenticateRequest, async (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    error: "Margin collateral transfers are unavailable until the ledger service is configured",
+  });
 });
 
 // Get margin account balance
@@ -797,41 +774,14 @@ app.post("/api/v1/wallet/deposit", authenticateRequest, async (req, res) => {
 });
 
 // Initiate a withdrawal
-app.post("/api/v1/wallet/withdrawal", authenticateRequest, async (req, res) => {
-  try {
-    const { currency, network, amount, address } = req.body;
-
-    if (!currency || !network || !amount || !address) {
-      return res.status(400).json({ success: false, error: "Missing required withdrawal fields" });
-    }
-
-    // Check user's available balance
-    const wallet = (await pool.query(
-      "SELECT * FROM wallets WHERE user_id = $1 AND currency = $2 LIMIT 1",
-      [req.userId, currency]
-    )).rows[0];
-
-    if (!wallet || wallet.balance < amount) {
-      return res.status(400).json({ success: false, error: "Insufficient balance" });
-    }
-
-    // Deduct from balance and create withdrawal record
-    const withdrawalId = uuidv4();
-    await pool.query(
-      `UPDATE wallets SET balance = balance - $1, updated_at = NOW() WHERE id = $2`,
-      [amount, wallet.id]
-    );
-    await pool.query(
-      `INSERT INTO withdrawals (id, user_id, currency, network, amount, address, status, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())`,
-      [withdrawalId, req.userId, currency, network, amount, address]
-    );
-
-    res.json({ success: true, message: "Withdrawal initiated successfully. Awaiting processing." });
-  } catch (error) {
-    console.error("Withdrawal error:", error);
-    res.status(500).json({ success: false, error: "Internal server error" });
-  }
+// Outbound transfers require an audited custody signer, idempotent request
+// handling, policy checks, and atomic ledger reservations. Fail closed until
+// that complete pipeline is configured.
+app.post("/api/v1/wallet/withdrawal", authenticateRequest, async (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    error: "Withdrawals are unavailable: the verified custody and ledger pipeline is not configured",
+  });
 });
 
 // Get all wallets
