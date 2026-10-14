@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"tigerEx/websocket_gateway/internal/config"
-	"tigerEx/websocket_gateway/internal/models"
-	"tigerEx/websocket_gateway/internal/services"
+	"tigerex/websocket_gateway/internal/config"
+	"tigerex/websocket_gateway/internal/models"
+	"tigerex/websocket_gateway/internal/services"
 )
 
 // ============================================================================
