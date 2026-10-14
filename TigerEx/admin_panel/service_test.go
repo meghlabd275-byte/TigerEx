@@ -56,3 +56,25 @@ func TestCloneUserReportCopiesFlags(t *testing.T) {
 		t.Fatal("cloneUserReport exposed the original flags slice")
 	}
 }
+
+func TestAuditLogsAreIndexedFilteredAndDetached(t *testing.T) {
+	s := NewService()
+	if err := s.FlagUser("admin-1", "user-1", "manual-review"); err != nil { t.Fatal(err) }
+	if err := s.FreezeUser("admin-1", "user-1", "policy"); err != nil { t.Fatal(err) }
+	if got := s.GetAuditLogs("USER", "user-1", 0); len(got) != 0 { t.Fatalf("zero limit should return no records, got %d", len(got)) }
+	logs := s.GetAuditLogs("USER", "user-1", 1)
+	if len(logs) != 1 || logs[0].Action != "FREEZE_USER" { t.Fatalf("expected newest user audit record, got %#v", logs) }
+	logs[0].Action = "TAMPERED"
+	logs[0].Details = "TAMPERED"
+	again := s.GetAuditLogs("USER", "user-1", 10)
+	if len(again) != 2 { t.Fatalf("expected both indexed user events, got %d", len(again)) }
+	for _, log := range again { if log.Action == "TAMPERED" || log.Details == "TAMPERED" { t.Fatal("caller mutation altered stored audit history") } }
+	if got := s.GetAuditLogs("ASSET", "user-1", 10); len(got) != 0 { t.Fatalf("target type filter returned mismatched records: %#v", got) }
+}
+
+func TestAssetAuditLogsAreIndexed(t *testing.T) {
+	s := NewService()
+	if err := s.ToggleAsset("admin-1", "BTC", "HALTED"); err != nil { t.Fatal(err) }
+	logs := s.GetAuditLogs("ASSET", "BTC", 10)
+	if len(logs) != 1 || logs[0].Action != "TOGGLE_ASSET" { t.Fatalf("expected indexed asset audit record, got %#v", logs) }
+}
