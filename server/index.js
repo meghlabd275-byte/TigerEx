@@ -52,7 +52,6 @@ const { Server } = require("socket.io");
 const { Pool } = require("pg");
 const Redis = require("ioredis");
 const path = require("path");
-const WebSocket = require("ws");
 
 // ============================================================================
 // INITIALIZATION
@@ -103,43 +102,9 @@ redis.on("error", (err) => console.error("❌ Redis client error", err));
 // ============================================================================
 // CONSTANTS & CONFIG
 
-const BINANCE_WS_URL = "wss://stream.binance.com:9443/ws";
+// Market data adapters are configured by the market-data service. No hard-coded
+// third-party feed is started by this API process.
 
-// Function to connect to Binance WebSocket and subscribe to aggTrade streams
-function connectBinanceWebSocket() {
-  const ws = new WebSocket(BINANCE_WS_URL);
-
-  ws.onopen = () => {
-    console.log("✅ Connected to Binance WebSocket");
-    const subscriptionPayload = {
-      method: "SUBSCRIBE",
-      params: TRADING_PAIRS.map(pair => `${pair.symbol.toLowerCase()}@aggTrade`),
-      id: 1
-    };
-    ws.send(JSON.stringify(subscriptionPayload));
-    console.log(`Subscribed to aggTrade streams for ${TRADING_PAIRS.length} pairs`);
-  };
-
-  ws.onmessage = (event) => {
-    const message = JSON.parse(event.data);
-    // Process the message, e.g., update Redis cache or emit to clients via Socket.IO
-    // For now, just log it
-    // console.log("Received from Binance WS:", message);
-    if (message.e === 'aggTrade') {
-      io.to(message.s).emit('aggTrade', message);
-      // Further processing to update database or Redis for historical data/analytics
-    }
-  };
-
-  ws.onerror = (error) => {
-    console.error("❌ Binance WebSocket error:", error);
-  };
-
-  ws.onclose = () => {
-    console.log("🔌 Disconnected from Binance WebSocket. Reconnecting...");
-    setTimeout(connectBinanceWebSocket, 5000); // Reconnect after 5 seconds
-  };
-}
 // ============================================================================
 
 // Secrets and port are validated before service initialization.
