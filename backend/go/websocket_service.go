@@ -605,7 +605,6 @@ func main() {
 	go ws.processMessages()
 	
 	// Start broadcast scheduler
-	go ws.startBroadcastScheduler()
 	
 	// HTTP handler
 	http.HandleFunc("/ws", ws.Handler())
