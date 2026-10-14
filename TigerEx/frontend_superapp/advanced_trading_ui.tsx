@@ -180,41 +180,14 @@ export const OrderBook: React.FC<OrderBookProps> = ({
   const [asks, setAsks] = useState<OrderBookLevel[]>([]);
   const [spread, setSpread] = useState({ value: 0, percent: 0 });
   
-  // Simulate real-time order book
+  // No generated order book: levels are shown only when received from a verified feed.
   useEffect(() => {
-    const generateLevels = (basePrice: number, isBid: boolean): OrderBookLevel[] => {
-      const levels: OrderBookLevel[] = [];
-      let cumulative = 0;
-      
-      for (let i = 0; i < depth; i++) {
-        const priceOffset = (Math.random() + 0.5) * (isBid ? -1 : 1) * (i + 1) * 0.5;
-        const price = basePrice + priceOffset;
-        const quantity = Math.random() * 10;
-        cumulative += quantity;
-        
-        levels.push({
-          price: Number(price.toFixed(2)),
-          quantity: Number(quantity.toFixed(4)),
-          total: Number(cumulative.toFixed(4))
-        });
-      }
-      
-      return isBid ? levels.reverse() : levels;
-    };
-    
-    const basePrice = 50000;
-    setBids(generateLevels(basePrice, true));
-    setAsks(generateLevels(basePrice, false));
-    
-    const bestAsk = asks[0]?.price || basePrice + 0.5;
-    const bestBid = bids[0]?.price || basePrice - 0.5;
-    setSpread({
-      value: bestAsk - bestBid,
-      percent: ((bestAsk - bestBid) / bestBid) * 100
-    });
+    setBids([]);
+    setAsks([]);
+    setSpread({ value: 0, percent: 0 });
   }, [symbol, depth]);
-  
-  const maxTotal = Math.max(
+
+    const maxTotal = Math.max(
     bids[bids.length - 1]?.total || 0,
     asks[asks.length - 1]?.total || 0
   );
@@ -534,8 +507,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({
   symbol,
   sidebar 
 }) => {
-  const [balance, setBalance] = useState(10000);
-  const [currentPrice, setCurrentPrice] = useState(50000);
+  const [balance] = useState(0);
+  const [currentPrice] = useState(0);
   
   return (
     <div className="trading-terminal">
@@ -543,11 +516,11 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({
       <div className="terminal-header">
         <div className="symbol-info">
           <h1>{symbol}</h1>
-          <span className="price">{currentPrice.toFixed(2)}</span>
-          <span className="change positive">+2.5% (24h)</span>
+          <span className="price">{currentPrice > 0 ? currentPrice.toFixed(2) : 'Unavailable'}</span>
+          <span className="change">Live market change unavailable</span>
         </div>
         <div className="account-info">
-          <span className="balance">Balance: {balance.toFixed(2)} USDT</span>
+          <span className="balance">Balance: {balance > 0 ? balance.toFixed(2) + ' USDT' : 'Unavailable'}</span>
         </div>
       </div>
       
@@ -562,7 +535,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({
             symbol={symbol}
             currentPrice={currentPrice}
             balance={balance}
-            onSubmit={(params) => console.log('Trade:', params)}
+            onSubmit={(_params) => alert('Order submission unavailable: the authenticated trading API is not configured.')}
           />
         </div>
         
