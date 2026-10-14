@@ -1211,14 +1211,32 @@ app.delete("/api/v1/order/:orderId", authenticateRequest, async (req, res) => {
 io.on("connection", (socket) => {
   console.log("⚡️ User connected:", socket.id);
 
+  // Room membership is restricted to configured, active markets. Never let a
+  // client create arbitrary rooms or use malformed symbols as room names.
+  const resolveActiveMarket = (value) => {
+    if (typeof value !== "string" || value.length > 32 ||
+        !/^[A-Z0-9]{2,20}_[A-Z0-9]{2,20}$/.test(value)) {
+      return null;
+    }
+    return TRADING_PAIRS.find((pair) => pair.symbol === value) || null;
+  };
+
   socket.on("joinMarket", (symbol) => {
-    socket.join(symbol);
-    console.log(`User ${socket.id} joined market ${symbol}`);
+    const market = resolveActiveMarket(symbol);
+    if (!market) {
+      socket.emit("marketError", { code: "INVALID_OR_INACTIVE_MARKET" });
+      return;
+    }
+    socket.join(market.symbol);
   });
 
   socket.on("leaveMarket", (symbol) => {
-    socket.leave(symbol);
-    console.log(`User ${socket.id} left market ${symbol}`);
+    const market = resolveActiveMarket(symbol);
+    if (!market) {
+      socket.emit("marketError", { code: "INVALID_OR_INACTIVE_MARKET" });
+      return;
+    }
+    socket.leave(market.symbol);
   });
 
   socket.on("disconnect", () => {
