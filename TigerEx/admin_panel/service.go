@@ -261,7 +261,7 @@ func (s *Service) FlagUser(adminID, userID, reason string) error {
 		CreatedAt: time.Now(),
 	}
 
-	s.auditLogs[log.ID] = log
+	s.appendAuditLog(log, userID)
 
 	if s.flaggedUsers[reason] == nil {
 		s.flaggedUsers[reason] = make([]string, 0)
@@ -286,7 +286,7 @@ func (s *Service) UnflagUser(adminID, userID, reason string) error {
 		CreatedAt: time.Now(),
 	}
 
-	s.auditLogs[log.ID] = log
+	s.appendAuditLog(log, userID)
 
 	if s.flaggedUsers[reason] == nil {
 		return nil
@@ -320,7 +320,7 @@ func (s *Service) ApproveUser(adminID, userID, level string) error {
 		CreatedAt: time.Now(),
 	}
 
-	s.auditLogs[log.ID] = log
+	s.appendAuditLog(log, userID)
 
 	return nil
 }
@@ -340,8 +340,7 @@ func (s *Service) FreezeUser(adminID, userID, reason string) error {
 		CreatedAt: time.Now(),
 	}
 
-	s.auditLogs[log.ID] = log
-	s.auditIndex[userID] = append(s.auditIndex[userID], log.ID)
+	s.appendAuditLog(log, userID)
 
 	return nil
 }
@@ -351,24 +350,39 @@ func (s *Service) GetAuditLogs(targetType, targetID string, limit int) []*AuditL
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	auditIDs := s.auditIndex[targetID]
-	if auditIDs == nil {
+	if limit <= 0 || strings.TrimSpace(targetID) == "" {
 		return nil
 	}
 
-	start := len(auditIDs) - limit
-	if start < 0 {
-		start = 0
+	auditIDs := s.auditIndex[targetID]
+	if len(auditIDs) == 0 {
+		return nil
 	}
 
-	var result []*AuditLog
-	for i := start; i < len(auditIDs); i++ {
-		if log, ok := s.auditLogs[auditIDs[i]]; ok {
-			result = append(result, log)
+	result := make([]*AuditLog, 0, limit)
+	// Iterate newest-first so a bounded query returns the most recent matching
+	// records. Return detached copies so API callers cannot mutate audit history.
+	for i := len(auditIDs) - 1; i >= 0 && len(result) < limit; i-- {
+		log, ok := s.auditLogs[auditIDs[i]]
+		if !ok || (targetType != "" && !strings.EqualFold(log.TargetType, targetType)) {
+			continue
 		}
+		copy := *log
+		result = append(result, &copy)
 	}
-
 	return result
+}
+
+// appendAuditLog records an event and indexes it by its target for audit queries.
+// The caller must hold s.mu for writing.
+func (s *Service) appendAuditLog(log *AuditLog, targetID string) {
+	if log == nil || log.ID == "" {
+		return
+	}
+	s.auditLogs[log.ID] = log
+	if targetID != "" {
+		s.auditIndex[targetID] = append(s.auditIndex[targetID], log.ID)
+	}
 }
 
 // GenerateReport generates daily report
@@ -424,7 +438,7 @@ func (s *Service) ToggleAsset(adminID, asset, status string) error {
 		CreatedAt: time.Now(),
 	}
 
-	s.auditLogs[log.ID] = log
+	s.appendAuditLog(log, asset)
 
 	return nil
 }
@@ -444,7 +458,7 @@ func (s *Service) AdjustFee(adminID, asset string, maker, taker float64) error {
 		CreatedAt: time.Now(),
 	}
 
-	s.auditLogs[log.ID] = log
+	s.appendAuditLog(log, asset)
 
 	return nil
 }
