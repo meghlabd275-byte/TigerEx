@@ -12,7 +12,7 @@ import (
 	"errors"
 	"strings"
 
-	"tigerex-api/internal/api"
+	"tigerex/backend/internal/api"
 )
 
 var (
