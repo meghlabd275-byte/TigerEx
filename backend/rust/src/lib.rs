@@ -104,8 +104,11 @@ pub mod crypto {
 }
 
 pub mod hsm {
-    //! Hardware Security Module simulation for cold storage
-    
+    //! Threshold secret sharing for cold-wallet key material.
+    //! This is not a hardware security module integration.
+
+    use rand::{rngs::OsRng, RngCore};
+
     pub struct ColdWallet {
         pub key_id: String,
         pub threshold: u8,
@@ -115,24 +118,131 @@ pub mod hsm {
     impl ColdWallet {
         pub fn new(threshold: u8, total: u8) -> Self {
             Self {
-                key_id: format!("HSM-{}", hex::encode(rand::random::<[u8; 8>())),
+                key_id: format!("HSM-{}", hex::encode(rand::random::<[u8; 8]>())),
                 threshold,
                 total_shares: total,
             }
         }
 
-        /// Generate shares using Shamir's Secret Sharing
-        pub fn generate_shares(&self, secret: &[u8], _n: u8) -> Vec<Vec<u8>> {
-            // Simplified - in production use proper SSS library
-            vec![secret.to_vec(); self.total_shares as usize]
+        /// Generate Shamir shares over GF(256). Empty output means invalid
+        /// parameters or a CSPRNG failure; callers must fail closed.
+        pub fn generate_shares(&self, secret: &[u8], n: u8) -> Vec<Vec<u8>> {
+            if secret.is_empty() || self.threshold == 0 || n < self.threshold || n == 0 || n > self.total_shares {
+                return Vec::new();
+            }
+            let degree = self.threshold as usize - 1;
+            let mut coefficients = vec![0u8; secret.len().saturating_mul(degree)];
+            if OsRng.try_fill_bytes(&mut coefficients).is_err() {
+                return Vec::new();
+            }
+
+            let mut shares = vec![vec![0u8; secret.len() + 1]; n as usize];
+            for (index, share) in shares.iter_mut().enumerate() {
+                let x = (index + 1) as u8;
+                share[0] = x;
+                for (byte_index, secret_byte) in secret.iter().enumerate() {
+                    let mut y = *secret_byte;
+                    let mut power = x;
+                    for coefficient_index in 0..degree {
+                        let coefficient = coefficients[byte_index * degree + coefficient_index];
+                        y ^= gf_mul(coefficient, power);
+                        power = gf_mul(power, x);
+                    }
+                    share[byte_index + 1] = y;
+                }
+            }
+            shares
         }
 
-        /// Reconstruct from threshold shares
+        /// Reconstruct from any threshold-sized set of distinct shares.
         pub fn reconstruct(&self, shares: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
-            if shares.len() < self.threshold as usize {
-                return Err("Not enough shares".to_string());
+            let threshold = self.threshold as usize;
+            if threshold == 0 || shares.len() < threshold {
+                return Err("Not enough shares for the configured threshold".to_string());
             }
-            Ok(shares.first().unwrap().clone())
+            let selected = &shares[..threshold];
+            let share_len = selected[0].len();
+            if share_len < 2 || selected.iter().any(|share| share.len() != share_len || share[0] == 0) {
+                return Err("Invalid share format".to_string());
+            }
+            for i in 0..selected.len() {
+                if selected[..i].iter().any(|previous| previous[0] == selected[i][0]) {
+                    return Err("Duplicate share coordinate".to_string());
+                }
+            }
+
+            let mut secret = vec![0u8; share_len - 1];
+            for byte_index in 0..secret.len() {
+                let mut value = 0u8;
+                for i in 0..threshold {
+                    let xi = selected[i][0];
+                    let mut basis = 1u8;
+                    for j in 0..threshold {
+                        if i != j {
+                            let xj = selected[j][0];
+                            basis = gf_mul(basis, gf_mul(xj, gf_inv(xi ^ xj)));
+                        }
+                    }
+                    value ^= gf_mul(selected[i][byte_index + 1], basis);
+                }
+                secret[byte_index] = value;
+            }
+            Ok(secret)
+        }
+    }
+
+    fn gf_mul(mut a: u8, mut b: u8) -> u8 {
+        let mut result = 0u8;
+        for _ in 0..8 {
+            if b & 1 != 0 { result ^= a; }
+            let high_bit = a & 0x80;
+            a <<= 1;
+            if high_bit != 0 { a ^= 0x1b; }
+            b >>= 1;
+        }
+        result
+    }
+
+    fn gf_pow(mut base: u8, mut exponent: u8) -> u8 {
+        let mut result = 1u8;
+        while exponent > 0 {
+            if exponent & 1 != 0 { result = gf_mul(result, base); }
+            base = gf_mul(base, base);
+            exponent >>= 1;
+        }
+        result
+    }
+
+    fn gf_inv(value: u8) -> u8 {
+        if value == 0 { 0 } else { gf_pow(value, 254) }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn threshold_shares_reconstruct_from_any_quorum() {
+            let wallet = ColdWallet::new(3, 5);
+            let secret = b"custody-key-material";
+            let shares = wallet.generate_shares(secret, 5);
+            assert_eq!(shares.len(), 5);
+            let recovered = wallet.reconstruct(vec![shares[0].clone(), shares[2].clone(), shares[4].clone()]).unwrap();
+            assert_eq!(recovered, secret);
+        }
+
+        #[test]
+        fn rejects_insufficient_and_duplicate_shares() {
+            let wallet = ColdWallet::new(2, 3);
+            let shares = wallet.generate_shares(b"secret", 3);
+            assert!(wallet.reconstruct(vec![shares[0].clone()]).is_err());
+            assert!(wallet.reconstruct(vec![shares[0].clone(), shares[0].clone()]).is_err());
+        }
+
+        #[test]
+        fn rejects_invalid_share_parameters() {
+            let wallet = ColdWallet::new(3, 5);
+            assert!(wallet.generate_shares(b"secret", 2).is_empty());
         }
     }
 }
