@@ -137,7 +137,7 @@ func (s *Server) registerClient(r *http.Request) *Client {
 
 	client := &Client{
 		ID:      clientID,
-		UserID:  r.URL.Query().Get("userId"),
+		UserID:  "", // Never trust a client-supplied userId for private event routing.
 		Streams: make(map[string]bool),
 		Send:    make(chan []byte, 256),
 		manager: s.manager,
@@ -148,6 +148,7 @@ func (s *Server) registerClient(r *http.Request) *Client {
 		ID:       clientID,
 		UserID:   client.UserID,
 		Streams: client.Streams,
+		Send:    client.Send,
 	})
 
 	log.Printf("Client connected: %s (user: %s)", clientID, client.UserID)
