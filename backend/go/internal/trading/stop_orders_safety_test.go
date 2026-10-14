@@ -9,7 +9,7 @@ import (
 
 func TestSellTrailingStopTracksPeakAndWaitsForReversal(t *testing.T) {
 	h := NewStopOrderHandler()
-	order := &api.Order{ID: "sell-trail", Type: "trailing_stop", Side: "sell", TrailingDistance: 5}
+	order := &api.Order{ID: "sell-trail", Type: "trailing_stop", Side: "sell", Status: "new", TrailingDistance: 5}
 
 	for _, sample := range []struct {
 		price float64
@@ -27,7 +27,7 @@ func TestSellTrailingStopTracksPeakAndWaitsForReversal(t *testing.T) {
 
 func TestBuyTrailingStopTracksTroughAndWaitsForReversal(t *testing.T) {
 	h := NewStopOrderHandler()
-	order := &api.Order{ID: "buy-trail", Type: "trailing_stop", Side: "buy", TrailingDistance: 5}
+	order := &api.Order{ID: "buy-trail", Type: "trailing_stop", Side: "buy", Status: "new", TrailingDistance: 5}
 
 	for _, sample := range []struct {
 		price float64
