@@ -629,32 +629,11 @@ export function AdminDashboard() {
   const [activeSection, setActiveSection] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // Mock data
-  const [alerts] = useState<ComplianceAlert[]>([
-    { id: '1', userId: 'u123', username: 'john_trader', type: 'large_withdrawal', severity: 'high', status: 'new', description: 'Large withdrawal request ($500K) to unverified address', transactionAmount: '$500,000', createdAt: '2026-06-02T10:30:00Z' },
-    { id: '2', userId: 'u456', username: 'crypto_king', type: 'kyc_pending', severity: 'medium', status: 'reviewing', description: 'KYC document verification pending for 48 hours', createdAt: '2026-06-02T08:15:00Z', assignedTo: 'admin1' },
-    { id: '3', userId: 'u789', username: 'whale_trader', type: 'suspicious_activity', severity: 'critical', status: 'new', description: 'Multiple rapid deposits and withdrawals detected', transactionAmount: '$2.3M', createdAt: '2026-06-02T06:45:00Z' },
-    { id: '4', userId: 'u234', username: 'new_user_2026', type: 'sanctions_screen', severity: 'low', status: 'pending', description: 'Address matches watchlist - needs review', createdAt: '2026-06-01T22:00:00Z' },
-  ]);
-
-  const [withdrawals] = useState<WithdrawalRequest[]>([
-    { id: 'w1', userId: 'u123', username: 'john_trader', currency: 'BTC', amount: '5.4321', address: 'bc1q...xyz', status: 'pending', riskScore: 75, createdAt: '2026-06-02T10:30:00Z' },
-    { id: 'w2', userId: 'u456', username: 'alice_in_crypto', currency: 'ETH', amount: '125.6789', address: '0x...abc', status: 'pending', riskScore: 25, createdAt: '2026-06-02T09:15:00Z' },
-    { id: 'w3', userId: 'u789', username: 'btc_maxi', currency: 'USDT', amount: '250,000', address: '0x...def', status: 'pending', riskScore: 45, createdAt: '2026-06-02T08:00:00Z' },
-  ]);
-
-  const [users] = useState<AdminUser[]>([
-    { id: 'u1', email: 'john@example.com', username: 'john_trader', kycLevel: 'advanced', status: 'active', riskLevel: 'low', balances: [{ currency: 'BTC', total: '1.5' }], createdAt: '2025-01-15', lastLogin: '2026-06-02', totalDeposits: '1,250,000', totalWithdrawals: '980,000', totalTrades: 1250, verificationStatus: 'verified' },
-    { id: 'u2', email: 'alice@example.com', username: 'alice_in_crypto', kycLevel: 'intermediate', status: 'active', riskLevel: 'medium', balances: [{ currency: 'ETH', total: '25.5' }], createdAt: '2025-06-20', lastLogin: '2026-06-02', totalDeposits: '250,000', totalWithdrawals: '180,000', totalTrades: 450, verificationStatus: 'verified' },
-    { id: 'u3', email: 'bob@example.com', username: 'btc_maxi', kycLevel: 'advanced', status: 'restricted', riskLevel: 'high', balances: [{ currency: 'USDT', total: '500,000' }], createdAt: '2024-11-10', lastLogin: '2026-06-01', totalDeposits: '5,000,000', totalWithdrawals: '4,500,000', totalTrades: 3200, verificationStatus: 'verified' },
-  ]);
-
-  const [auditLogs] = useState<AuditLog[]>([
-    { id: 'a1', action: 'User KYC Approved', userId: 'admin@admin.com', targetType: 'user', targetId: 'u123', ip: '192.168.1.1', userAgent: 'Chrome/120', details: 'KYC level upgraded to Advanced', createdAt: '2026-06-02T11:00:00Z' },
-    { id: 'a2', action: 'Withdrawal Approved', userId: 'admin@admin.com', targetType: 'withdrawal', targetId: 'w123', ip: '192.168.1.2', userAgent: 'Chrome/120', details: 'Withdrawal of 1.5 BTC approved', createdAt: '2026-06-02T10:45:00Z' },
-    { id: 'a3', action: 'Market Trading Disabled', userId: 'admin@admin.com', targetType: 'market', targetId: 'DOGE/USDT', ip: '192.168.1.3', userAgent: 'Chrome/120', details: 'Trading disabled for maintenance', createdAt: '2026-06-02T10:30:00Z' },
-    { id: 'a4', action: 'User Account Frozen', userId: 'admin@admin.com', targetType: 'user', targetId: 'u789', ip: '192.168.1.4', userAgent: 'Chrome/120', details: 'Account frozen due to suspicious activity', createdAt: '2026-06-02T10:15:00Z' },
-  ]);
+  // These lists stay empty until authoritative admin services supply live records.
+  const [alerts] = useState<ComplianceAlert[]>([]);
+  const [withdrawals] = useState<WithdrawalRequest[]>([]);
+  const [users] = useState<AdminUser[]>([]);
+  const [auditLogs] = useState<AuditLog[]>([]);
 
   const sections = [
     { id: 'dashboard', label: 'Dashboard', icon: <BarChart3 className="w-5 h-5" /> },
