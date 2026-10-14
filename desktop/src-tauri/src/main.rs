@@ -433,23 +433,9 @@ fn get_order_history(state: State<AppState>) -> Result<Vec<Order>, String> {
 
 /// Get deposit address
 #[tauri::command]
-fn get_deposit_address(currency: String, network: String) -> Result<DepositAddress, String> {
-    // Generate a mock deposit address based on currency
-    let address = match currency.as_str() {
-        "BTC" => "0x742d35Cc6634C0532925a3b844Bc9e7595f4e2E1",
-        "ETH" => "0x742d35Cc6634C0532925a3b844Bc9e7595f4e2E1",
-        "USDT" => "0x742d35Cc6634C0532925a3b844Bc9e7595f4e2E1",
-        "BNB" => "0x742d35Cc6634C0532925a3b844Bc9e7595f4e2E1",
-        _ => format!("0x{:0>40}", currency),
-    };
-    
-    Ok(DepositAddress {
-        currency: currency.clone(),
-        address,
-        network,
-        tag: None,
-        qr_code: None,
-    })
+fn get_deposit_address(_currency: String, _network: String) -> Result<DepositAddress, String> {
+    Err("Chain-specific address derivation and node/indexer service are not configured".to_string())
+}
 }
 
 /// Request withdrawal
