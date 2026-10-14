@@ -45,6 +45,9 @@ type Client struct {
 	socket   *websocket.Conn
 	owner    *Server
 	done     chan struct{}
+	rateMu sync.Mutex
+	rateTokens float64
+	rateLast time.Time
 }
 
 // NewServer creates a new WebSocket server
@@ -136,6 +139,8 @@ func (s *Server) registerClient(r *http.Request, conn *websocket.Conn) *Client {
 		Streams: make(map[string]bool),
 		Send:    make(chan []byte, 256),
 		done:    make(chan struct{}),
+		rateTokens: float64(s.config.RateLimit.BurstSize),
+		rateLast: time.Now(),
 		manager: s.manager,
 		socket: conn,
 		owner: s,
@@ -290,6 +295,23 @@ func (c *Client) handlePing(msg models.WSMessage) error {
 	select { case c.Send <- data: return nil; default: return fmt.Errorf("outbound queue is full") }
 }
 
+// allowMessage applies a per-connection token bucket before parsing or routing client input.
+func (c *Client) allowMessage(now time.Time) bool {
+	rate := c.owner.config.RateLimit.MessagesPerSecond
+	burst := c.owner.config.RateLimit.BurstSize
+	if rate <= 0 || burst <= 0 { return false }
+	c.rateMu.Lock()
+	defer c.rateMu.Unlock()
+	if c.rateLast.IsZero() { c.rateLast = now; c.rateTokens = float64(burst) }
+	if now.Before(c.rateLast) { now = c.rateLast }
+	elapsed := now.Sub(c.rateLast).Seconds()
+	c.rateTokens += elapsed * float64(rate)
+	if c.rateTokens > float64(burst) { c.rateTokens = float64(burst) }
+	c.rateLast = now
+	if c.rateTokens < 1 { return false }
+	c.rateTokens--
+	return true
+}
 func (c *Client) readPump() {
 	defer c.owner.unregisterClient(c)
 	c.socket.SetReadLimit(1 << 20)
@@ -297,6 +319,11 @@ func (c *Client) readPump() {
 	c.socket.SetPongHandler(func(string) error { return c.socket.SetReadDeadline(time.Now().Add(60 * time.Second)) })
 	for {
 		_, data, err := c.socket.ReadMessage(); if err != nil { return }
+		if !c.allowMessage(time.Now()) {
+			var request models.WSMessage; _ = json.Unmarshal(data, &request)
+			payload, marshalErr := models.NewWSError(request.ID, 429, "message rate limit exceeded").ToJSON(); if marshalErr != nil { return }
+			select { case c.Send <- payload: continue; default: return }
+		}
 		if err := c.handleMessage(data); err != nil {
 			var request models.WSMessage; _ = json.Unmarshal(data, &request)
 			payload, marshalErr := models.NewWSError(request.ID, 400, err.Error()).ToJSON(); if marshalErr != nil { return }
