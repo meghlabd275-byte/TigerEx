@@ -327,54 +327,44 @@ func (h *AlgoExecutionHandler) CreateVWAPExecution(
 ) *AlgoExecution {
 	if strings.TrimSpace(userID) == "" || strings.TrimSpace(symbol) == "" ||
 		(side != "buy" && side != "sell") || !isFinitePositive(quantity) ||
-		!isFinitePositive(price) || !isFinitePositive(displayQty) || displayQty > quantity {
+		startTime <= 0 || endTime <= startTime || slices <= 0 ||
+		math.IsNaN(maxSlippage) || math.IsInf(maxSlippage, 0) || maxSlippage < 0 {
 		return nil
+	}
+	for _, weight := range volumeProfile {
+		if math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 {
+			return nil
+		}
 	}
 
 	exec := &AlgoExecution{
-		OrderID:     uuid.New().String(),
-		UserID:      userID,
-		Symbol:      symbol,
-		Side:        side,
-		TotalQty:    quantity,
-		ExecutedQty: 0,
-		AvgPrice:    0,
-		SliceQty:    quantity / float64(slices),
-		StartTime:   startTime,
-		EndTime:     endTime,
-		Slices:      slices,
-		MaxSlippage: maxSlippage,
-		Status:      "active",
-		CreatedAt:   api.Now(),
+		OrderID: uuid.New().String(), UserID: userID, Symbol: symbol, Side: side,
+		TotalQty: quantity, ExecutedQty: 0, AvgPrice: 0,
+		SliceQty: quantity / float64(slices), StartTime: startTime, EndTime: endTime,
+		Slices: slices, MaxSlippage: maxSlippage, Status: "active", CreatedAt: api.Now(),
 	}
-
-	h.executions[exec.OrderID] = nil
+	h.executions[exec.OrderID] = exec
 	return exec
 }
-
 // CreateIcebergExecution creates an iceberg execution
 func (h *AlgoExecutionHandler) CreateIcebergExecution(
 	userID, symbol, side string,
 	quantity, price, displayQty float64,
 ) *AlgoExecution {
-
-	exec := &AlgoExecution{
-		OrderID:     uuid.New().String(),
-		UserID:      userID,
-		Symbol:      symbol,
-		Side:        side,
-		TotalQty:    quantity,
-		ExecutedQty: 0,
-		AvgPrice:    0,
-		SliceQty:    displayQty,
-		Status:      "active",
-		CreatedAt:   api.Now(),
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(symbol) == "" ||
+		(side != "buy" && side != "sell") || !isFinitePositive(quantity) ||
+		!isFinitePositive(price) || !isFinitePositive(displayQty) || displayQty > quantity {
+		return nil
 	}
 
-	h.executions[exec.OrderID] = nil
+	exec := &AlgoExecution{
+		OrderID: uuid.New().String(), UserID: userID, Symbol: symbol, Side: side,
+		TotalQty: quantity, ExecutedQty: 0, AvgPrice: 0, SliceQty: displayQty,
+		Status: "active", CreatedAt: api.Now(),
+	}
+	h.executions[exec.OrderID] = exec
 	return exec
 }
-
 // CheckSlice checks if a new slice should be executed
 func (h *AlgoExecutionHandler) CheckSlice(exec *AlgoExecution, currentPrice, vwap float64) bool {
 	if exec == nil || exec.Status != "active" || !isFinitePositive(currentPrice) ||
