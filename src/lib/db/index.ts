@@ -12,8 +12,14 @@ const DB_PATH = process.env.DB_PATH || './tigerex.db';
 
 let db: Database.Database | null = null;
 
-// Encryption key derivation (use environment variable in production)
-const ENCRYPTION_KEY = createHash('sha256').update(process.env.ENCRYPTION_KEY || 'tigerex-dev-key-change-in-production').digest();
+// Encryption key is required at the point of use. Never silently fall back to a public default.
+function getEncryptionKey(): Buffer {
+  const configuredKey = process.env.ENCRYPTION_KEY;
+  if (!configuredKey || configuredKey.length < 32) {
+    throw new Error('ENCRYPTION_KEY must be configured with at least 32 characters before encrypted data can be used');
+  }
+  return createHash('sha256').update(configuredKey, 'utf8').digest();
+}
 
 export function getDb(): Database.Database {
   if (!db) {
@@ -360,46 +366,25 @@ function initializeSchema() {
     CREATE INDEX IF NOT EXISTS idx_market_symbol ON market_data(symbol);
   `);
 
-  // Insert default trading pairs if not exist
-  const defaultPairs = [
-    { symbol: 'BTC/USDT', base: 'BTC', quote: 'USDT', price: 45000 },
-    { symbol: 'ETH/USDT', base: 'ETH', quote: 'USDT', price: 2500 },
-    { symbol: 'BNB/USDT', base: 'BNB', quote: 'USDT', price: 350 },
-    { symbol: 'XRP/USDT', base: 'XRP', quote: 'USDT', price: 0.6 },
-    { symbol: 'ADA/USDT', base: 'ADA', quote: 'USDT', price: 0.5 },
-    { symbol: 'DOGE/USDT', base: 'DOGE', quote: 'USDT', price: 0.08 },
-    { symbol: 'SOL/USDT', base: 'SOL', quote: 'USDT', price: 100 },
-    { symbol: 'DOT/USDT', base: 'DOT', quote: 'USDT', price: 7 },
-    { symbol: 'MATIC/USDT', base: 'MATIC', quote: 'USDT', price: 0.8 },
-    { symbol: 'LTC/USDT', base: 'LTC', quote: 'USDT', price: 70 },
-  ];
+  // Do not seed fabricated markets or prices. Market metadata and prices must come from the configured live market-data service.
 
-  const insertPair = database.prepare(`
-    INSERT OR IGNORE INTO trading_pairs (pair_id, base_currency, quote_currency, symbol, status)
-    VALUES (?, ?, ?, ?, 'active')
-  `);
-
-  const insertMarket = database.prepare(`
-    INSERT OR IGNORE INTO market_data (id, symbol, price, volume_24h, change_24h, change_percent_24h)
-    VALUES (?, ?, ?, 0, 0, 0)
-  `);
-
-  for (const pair of defaultPairs) {
-    const pairId = uuidv4();
-    insertPair.run(pairId, pair.base, pair.quote, pair.symbol);
-    insertMarket.run(uuidv4(), pair.symbol, pair.price);
-  }
-
-  // Create default admin if not exists
-  const adminExists = database.prepare('SELECT 1 FROM admin_users WHERE email = ?').get('admin@tigerex.com');
-  if (!adminExists) {
-    const bcrypt = require('bcryptjs');
-    const adminId = uuidv4();
-    const passwordHash = bcrypt.hashSync('admin123', 12);
-    database.prepare(`
-      INSERT INTO admin_users (admin_id, email, password_hash, role, permissions)
-      VALUES (?, ?, ?, 'super_admin', '["all"]')
-    `).run(adminId, 'admin@tigerex.com', passwordHash);
+  // Optional one-time bootstrap. No default admin account or password is ever created.
+  const bootstrapAdminEmail = process.env.TIGEREX_BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
+  const bootstrapAdminPassword = process.env.TIGEREX_BOOTSTRAP_ADMIN_PASSWORD;
+  if (bootstrapAdminEmail && bootstrapAdminPassword) {
+    if (bootstrapAdminPassword.length < 16) {
+      throw new Error('TIGEREX_BOOTSTRAP_ADMIN_PASSWORD must be at least 16 characters');
+    }
+    const adminExists = database.prepare('SELECT 1 FROM admin_users WHERE email = ?').get(bootstrapAdminEmail);
+    if (!adminExists) {
+      const bcrypt = require('bcryptjs');
+      const adminId = uuidv4();
+      const passwordHash = bcrypt.hashSync(bootstrapAdminPassword, 12);
+      database.prepare(`
+        INSERT INTO admin_users (admin_id, email, password_hash, role, permissions)
+        VALUES (?, ?, ?, 'super_admin', '["all"]')
+      `).run(adminId, bootstrapAdminEmail, passwordHash);
+    }
   }
 
   console.log('✅ Database schema initialized');
@@ -408,7 +393,7 @@ function initializeSchema() {
 // Encryption utilities
 export function encrypt(text: string): string {
   const iv = randomBytes(16);
-  const cipher = createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+  const cipher = createCipheriv('aes-256-gcm', getEncryptionKey(), iv);
   let encrypted = cipher.update(text, 'utf8', 'hex');
   encrypted += cipher.final('hex');
   const authTag = cipher.getAuthTag();
@@ -420,7 +405,7 @@ export function decrypt(text: string): string {
   const iv = Buffer.from(parts[0], 'hex');
   const authTag = Buffer.from(parts[1], 'hex');
   const encrypted = parts[2];
-  const decipher = createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+  const decipher = createDecipheriv('aes-256-gcm', getEncryptionKey(), iv);
   decipher.setAuthTag(authTag);
   let decrypted = decipher.update(encrypted, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
