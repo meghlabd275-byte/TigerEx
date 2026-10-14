@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -72,27 +73,42 @@ type visitor struct {
 }
 
 var visitors = make(map[string]*visitor)
+var visitorsMu sync.Mutex
 
 func RateLimiter() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
+		now := time.Now()
 
+		visitorsMu.Lock()
+		// Bound attacker-controlled IP cardinality; stale entries are evicted under the lock.
+		if len(visitors) >= 10000 {
+			for key, entry := range visitors {
+				if now.Sub(entry.lastSeen) > 2*time.Minute {
+					delete(visitors, key)
+				}
+			}
+		}
 		v, exists := visitors[ip]
 		if !exists {
-			visitors[ip] = &visitor{time.Now(), 1}
-		} else {
-			if time.Since(v.lastSeen) > time.Minute {
-				v.visits = 0
-			}
-			v.visits++
-			if v.visits > 100 {
-				c.JSON(http.StatusTooManyRequests, gin.H{"error": "Rate limit exceeded"})
-				c.Abort()
-				return
-			}
-			v.lastSeen = time.Now()
+			visitors[ip] = &visitor{lastSeen: now, visits: 1}
+			visitorsMu.Unlock()
+			c.Next()
+			return
 		}
+		if now.Sub(v.lastSeen) > time.Minute {
+			v.visits = 0
+		}
+		v.visits++
+		v.lastSeen = now
+		limited := v.visits > 100
+		visitorsMu.Unlock()
 
+		if limited {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Rate limit exceeded"})
+			c.Abort()
+			return
+		}
 		c.Next()
 	}
 }
