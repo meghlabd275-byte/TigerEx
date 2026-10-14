@@ -1178,33 +1178,58 @@ func ChangePassword(c *gin.Context) {
 // ============ FUTURES ============
 
 func GetFuturesContracts(c *gin.Context) {
-	// Return futures contract data
-	c.JSON(200, gin.H{"success": true, "data": []gin.H{
-		{"symbol": "BTC-USDT-PERP", "type": "perpetual", "maxLeverage": 125, "makerFee": 0.0001, "takerFee": 0.0004},
-		{"symbol": "ETH-USDT-PERP", "type": "perpetual", "maxLeverage": 100, "makerFee": 0.0001, "takerFee": 0.0004},
-	}})
-}
+	rows, err := models.Pool.Query(c.Request.Context(), \`
+		SELECT symbol, base_currency, quote_currency, contract_type, status
+		FROM futures_contracts
+		WHERE status = 'active'
+		ORDER BY symbol
+	\`)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Configured futures contracts are unavailable"}})
+		return
+	}
+	defer rows.Close()
 
+	contracts := []gin.H{}
+	for rows.Next() {
+		var symbol, baseCurrency, quoteCurrency, contractType, status string
+		if err := rows.Scan(&symbol, &baseCurrency, &quoteCurrency, &contractType, &status); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Futures contract metadata could not be read"}})
+			return
+		}
+		contracts = append(contracts, gin.H{
+			"symbol": symbol, "baseCurrency": baseCurrency, "quoteCurrency": quoteCurrency,
+			"type": contractType, "status": status,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Futures contract query failed"}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": contracts})
+}
 func OpenFuturesPosition(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Futures position opened"}})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error": gin.H{"code": 503, "message": "Futures execution is unavailable until the durable matching and risk engine is configured"},
+	})
 }
-
 func CloseFuturesPosition(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Position closed"}})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error": gin.H{"code": 503, "message": "Futures execution is unavailable until the durable matching and risk engine is configured"},
+	})
 }
-
 func GetFuturesPositions(c *gin.Context) {
 	c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
 }
 
 func QuoteFutures(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{
-		"price": 65000, "liqPrice": 64800, "marginRequired": 520,
-	}})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error": gin.H{"code": 503, "message": "Futures execution is unavailable until the durable matching and risk engine is configured"},
+	})
 }
-
-// ============ MARGIN ============
-
 func GetMarginAccount(c *gin.Context) {
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"borrowable": 0, "borrowed": 0, "interestRate": 0.0001}})
 }
