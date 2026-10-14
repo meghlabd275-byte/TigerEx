@@ -29,6 +29,12 @@ type AdminService struct {
 
 // GetAllUsers returns paginated user list
 func (as *AdminService) GetAllUsers(ctx context.Context, req *AdminUserListRequest) (*AdminUserListResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("user list request is required")
+	}
+	if req.Page < 1 || req.Page > 1000000 || req.PageSize < 1 || req.PageSize > 200 {
+		return nil, fmt.Errorf("page must be 1..1000000 and page size must be 1..200")
+	}
 	query := `SELECT user_id, email, username, account_status, kyc_level, 
 	 country_code, created_at, last_login_at, login_attempts
 	 FROM users WHERE deleted_at IS NULL`
@@ -74,14 +80,34 @@ func (as *AdminService) GetAllUsers(ctx context.Context, req *AdminUserListReque
 		return nil, err
 	}
 	
-	// Sorting
-	sortField := "created_at"
-	sortDir := "DESC"
-	if req.SortField != "" {
-		sortField = req.SortField
+	// SQL identifiers cannot be parameterized, so accept only explicit allowlisted
+	// column names and directions. Never interpolate caller-controlled SQL here.
+	sortFields := map[string]string{
+		"created_at": "created_at",
+		"email": "email",
+		"username": "username",
+		"account_status": "account_status",
+		"kyc_level": "kyc_level",
+		"last_login_at": "last_login_at",
 	}
+	sortField := "created_at"
+	if req.SortField != "" {
+		allowed, ok := sortFields[req.SortField]
+		if !ok {
+			return nil, fmt.Errorf("unsupported sort field")
+		}
+		sortField = allowed
+	}
+	sortDir := "DESC"
 	if req.SortDir != "" {
-		sortDir = req.SortDir
+		switch strings.ToUpper(req.SortDir) {
+		case "ASC":
+			sortDir = "ASC"
+		case "DESC":
+			sortDir = "DESC"
+		default:
+			return nil, fmt.Errorf("unsupported sort direction")
+		}
 	}
 	query += fmt.Sprintf(" ORDER BY %s %s", sortField, sortDir)
 	
