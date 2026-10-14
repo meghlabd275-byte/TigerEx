@@ -72,6 +72,13 @@ jobs:
       - name: Compile matching engine with warnings
         run: cmake --build build/matching-engine --parallel 2
 
+      - name: Compile and run C++ order-book regression tests
+        run: |
+          c++ -std=c++20 -O2 -Wall -Wextra -Werror \
+            TigerEx/core_exchange_engine/cpp/matching_engine_test.cpp \
+            -o build/matching-engine/order-book-tests
+          build/matching-engine/order-book-tests
+
   rust:
     runs-on: ubuntu-latest
     steps:
