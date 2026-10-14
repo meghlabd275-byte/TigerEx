@@ -2,10 +2,7 @@ package admin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"math/big"
 	"time"
 
@@ -18,6 +15,9 @@ var (
 	ErrAlreadyExists       = errors.New("resource already exists")
 	ErrInvalidParameter    = errors.New("invalid parameter")
 	ErrInsufficientFunds   = errors.New("insufficient funds")
+	// ErrAdminPersistenceUnavailable prevents admin operations from reporting success
+	// while this service has no durable database, audit log, or transaction signer.
+	ErrAdminPersistenceUnavailable = errors.New("admin persistence and transaction signer are not configured")
 )
 
 // AdminRole defines admin permission levels
@@ -152,338 +152,223 @@ func NewAdminService(masterWallet *MasterWallet) *AdminService {
 
 // AddBlockchain adds a new blockchain to the system
 func (s *AdminService) AddBlockchain(ctx context.Context, config *BlockchainConfig) error {
-	if config.Name == "" {
-		return ErrInvalidParameter
-	}
-	
-	config.ID = uuid.New()
-	config.CreatedAt = time.Now()
-	config.UpdatedAt = time.Now()
-	
-	// Store in database (implementation depends on database layer)
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // UpdateBlockchain updates blockchain configuration
-func (s *AdminService) UpdateBlockchain(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error {
-	// Update blockchain configuration
-	return nil
+func (s *AdminService) UpdateBlockchain(ctx context.Context, id uuid.UUID, updates map[string]interface{
+	return ErrAdminPersistenceUnavailable
 }
 
 // DeleteBlockchain removes a blockchain (soft delete)
 func (s *AdminService) DeleteBlockchain(ctx context.Context, id uuid.UUID) error {
-	// Soft delete blockchain
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // GetAllBlockchains returns all active blockchains
 func (s *AdminService) GetAllBlockchains(ctx context.Context) ([]BlockchainConfig, error) {
-	// Return list of blockchains
-	return []BlockchainConfig{}, nil
+	return nil, ErrAdminPersistenceUnavailable
 }
 
 // ============ Token Management ============
 
 // AddToken adds a new token to the system
 func (s *AdminService) AddToken(ctx context.Context, config *TokenConfig) error {
-	if config.Name == "" || config.Symbol == "" {
-		return ErrInvalidParameter
-	}
-	
-	config.ID = uuid.New()
-	config.CreatedAt = time.Now()
-	
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // UpdateToken updates token configuration
-func (s *AdminService) UpdateToken(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error {
-	return nil
+func (s *AdminService) UpdateToken(ctx context.Context, id uuid.UUID, updates map[string]interface{
+	return ErrAdminPersistenceUnavailable
 }
 
 // DeleteToken removes a token
 func (s *AdminService) DeleteToken(ctx context.Context, id uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // ============ Fee Management ============
 
 // SetWithdrawFee sets withdrawal fee for a network
 func (s *AdminService) SetWithdrawFee(ctx context.Context, network string, tokenID *uuid.UUID, fee *big.Int) error {
-	if fee == nil || fee.Sign() < 0 {
-		return ErrInvalidParameter
-	}
-	
-	feeConfig := &FeeConfig{
-		ID:        uuid.New(),
-		FeeType:   FeeTypeWithdraw,
-		TokenID:   tokenID,
-		Network:   network,
-		FeeAmount: fee,
-		IsActive: true,
-		UpdatedAt: time.Now(),
-	}
-	
-	// Store fee config
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // SetSwapFee sets swap fee
 func (s *AdminService) SetSwapFee(ctx context.Context, feePercent *big.Float) error {
-	if feePercent == nil || feePercent.Sign() < 0 {
-		return ErrInvalidParameter
-	}
-	
-	feeConfig := &FeeConfig{
-		ID:          uuid.New(),
-		FeeType:     FeeTypeSwap,
-		FeePercent:  feePercent,
-		IsActive:    true,
-		UpdatedAt:   time.Now(),
-	}
-	
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // GetFeeConfig returns current fee configuration
 func (s *AdminService) GetFeeConfig(ctx context.Context) ([]FeeConfig, error) {
-	return []FeeConfig{}, nil
+	return nil, ErrAdminPersistenceUnavailable
 }
 
 // ============ Launchpad Management ============
 
 // CreateLaunchpadProject creates a new launchpad project
 func (s *AdminService) CreateLaunchpadProject(ctx context.Context, project *LaunchpadProject) error {
-	if project.Name == "" || project.TokenSymbol == "" {
-		return ErrInvalidParameter
-	}
-	
-	if project.EndTime.Before(project.StartTime) {
-		return ErrInvalidParameter
-	}
-	
-	project.ID = uuid.New()
-	project.Status = "upcoming"
-	project.CreatedAt = time.Now()
-	project.UpdatedAt = time.Now()
-	
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // UpdateLaunchpadProject updates launchpad project
-func (s *AdminService) UpdateLaunchpadProject(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error {
-	return nil
+func (s *AdminService) UpdateLaunchpadProject(ctx context.Context, id uuid.UUID, updates map[string]interface{
+	return ErrAdminPersistenceUnavailable
 }
 
 // StartLaunchpadProject starts a launchpad project
 func (s *AdminService) StartLaunchpadProject(ctx context.Context, id uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // EndLaunchpadProject ends a launchpad project
 func (s *AdminService) EndLaunchpadProject(ctx context.Context, id uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // CancelLaunchpadProject cancels a launchpad project
 func (s *AdminService) CancelLaunchpadProject(ctx context.Context, id uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // DistributeTokens distributes tokens to participants
 func (s *AdminService) DistributeTokens(ctx context.Context, projectID uuid.UUID, recipients []string, amounts []*big.Int) (string, error) {
-	// Sign transaction with master wallet
-	// Broadcast to blockchain
-	txHash := sha256.Sum256([]byte(fmt.Sprintf("distribute-%s-%d", projectID.String(), time.Now().Unix())))
-	return hex.EncodeToString(txHash[:]), nil
+	return "", ErrAdminPersistenceUnavailable
 }
 
 // GetLaunchpadProjects returns all launchpad projects
 func (s *AdminService) GetLaunchpadProjects(ctx context.Context, status string) ([]LaunchpadProject, error) {
-	return []LaunchpadProject{}, nil
+	return nil, ErrAdminPersistenceUnavailable
 }
 
 // ============ Launchpool Management ============
 
 // CreateLaunchpool creates a new launchpool
 func (s *AdminService) CreateLaunchpool(ctx context.Context, project *LaunchpadProject) error {
-	project.ID = uuid.New()
-	project.Status = "upcoming"
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // StartLaunchpool starts a launchpool
 func (s *AdminService) StartLaunchpool(ctx context.Context, id uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // EndLaunchpool ends a launchpool
 func (s *AdminService) EndLaunchpool(ctx context.Context, id uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // DistributeRewards distributes rewards to stakers
 func (s *AdminService) DistributeRewards(ctx context.Context, poolID uuid.UUID) (string, error) {
-	txHash := sha256.Sum256([]byte(fmt.Sprintf("rewards-%s-%d", poolID.String(), time.Now().Unix())))
-	return hex.EncodeToString(txHash[:]), nil
+	return "", ErrAdminPersistenceUnavailable
 }
 
 // ============ IEO/IDO Management ============
 
 // CreateIEO creates a new IEO/IDO
 func (s *AdminService) CreateIEO(ctx context.Context, project *LaunchpadProject) error {
-	project.ID = uuid.New()
-	project.Status = "upcoming"
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // StartIEO starts an IEO
 func (s *AdminService) StartIEO(ctx context.Context, id uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // EndIEO ends an IEO
 func (s *AdminService) EndIEO(ctx context.Context, id uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // DistributeIEOTokens distributes IEO tokens
 func (s *AdminService) DistributeIEOTokens(ctx context.Context, ieoID uuid.UUID) (string, error) {
-	txHash := sha256.Sum256([]byte(fmt.Sprintf("ieo-%s-%d", ieoID.String(), time.Now().Unix())))
-	return hex.EncodeToString(txHash[:]), nil
+	return "", ErrAdminPersistenceUnavailable
 }
 
 // ============ Master Wallet Operations ============
 
 // GetMasterWalletBalance returns master wallet balance
 func (s *AdminService) GetMasterWalletBalance(ctx context.Context) (*big.Int, error) {
-	if s.masterWallet == nil {
-		return big.NewInt(0), nil
-	}
-	return s.masterWallet.Balance, nil
+	return nil, ErrAdminPersistenceUnavailable
 }
 
 // MasterWalletTransfer transfers from master wallet
 func (s *AdminService) MasterWalletTransfer(ctx context.Context, to string, amount *big.Int, token string) (string, error) {
-	if s.masterWallet == nil {
-		return "", ErrUnauthorized
-	}
-	
-	if amount.Sign() <= 0 {
-		return "", ErrInvalidParameter
-	}
-	
-	if s.masterWallet.Balance.Cmp(amount) < 0 {
-		return "", ErrInsufficientFunds
-	}
-	
-	// Sign and broadcast transaction
-	txHash := sha256.Sum256([]byte(fmt.Sprintf("master-%s-%s-%s", to, amount.String(), time.Now().String())))
-	
-	// Deduct from balance
-	s.masterWallet.Balance.Sub(s.masterWallet.Balance, amount)
-	
-	return hex.EncodeToString(txHash[:]), nil
+	return "", ErrAdminPersistenceUnavailable
 }
 
 // CollectFees collects fees to master wallet
 func (s *AdminService) CollectFees(ctx context.Context, fees map[string]*big.Int) error {
-	if s.masterWallet == nil {
-		return ErrUnauthorized
-	}
-	
-	for _, amount := range fees {
-		if amount.Sign() > 0 {
-			s.masterWallet.Balance.Add(s.masterWallet.Balance, amount)
-		}
-	}
-	
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // BackupMasterWallet generates backup of master wallet
 func (s *AdminService) BackupMasterWallet(ctx context.Context) (string, error) {
-	if s.masterWallet == nil {
-		return "", ErrUnauthorized
-	}
-	
-	// Generate encrypted backup
-	backup := fmt.Sprintf("%s:%s:%s", s.masterWallet.ID, s.masterWallet.Address, s.masterWallet.EncryptedSeed)
-	return backup, nil
+	return "", ErrAdminPersistenceUnavailable
 }
 
 // RestoreMasterWallet restores master wallet from backup
 func (s *AdminService) RestoreMasterWallet(ctx context.Context, backup string) error {
-	// Parse and restore backup
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // ============ User Management ============
 
 // SuspendUser suspends a user
 func (s *AdminService) SuspendUser(ctx context.Context, userID uuid.UUID, reason string) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // UnsuspendUser removes suspension
 func (s *AdminService) UnsuspendUser(ctx context.Context, userID uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // FreezeUserAssets freezes user assets
 func (s *AdminService) FreezeUserAssets(ctx context.Context, userID uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // UnfreezeUserAssets unfreezes user assets
 func (s *AdminService) UnfreezeUserAssets(ctx context.Context, userID uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // ============ Campaign/Airdrop ============
 
 // CreateCampaign creates a new airdrop campaign
 func (s *AdminService) CreateCampaign(ctx context.Context, campaign *LaunchpadProject) error {
-	campaign.ID = uuid.New()
-	campaign.Status = "upcoming"
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // StartCampaign starts a campaign
 func (s *AdminService) StartCampaign(ctx context.Context, campaignID uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // EndCampaign ends a campaign
 func (s *AdminService) EndCampaign(ctx context.Context, campaignID uuid.UUID) error {
-	return nil
+	return ErrAdminPersistenceUnavailable
 }
 
 // ClaimAirdrop processes airdrop claims
 func (s *AdminService) ClaimAirdrop(ctx context.Context, campaignID uuid.UUID, userID uuid.UUID) (string, error) {
-	txHash := sha256.Sum256([]byte(fmt.Sprintf("airdrop-%s-%s", campaignID.String(), userID.String())))
-	return hex.EncodeToString(txHash[:]), nil
+	return "", ErrAdminPersistenceUnavailable
 }
 
 // BatchClaimAirdrop processes batch airdrop claims
 func (s *AdminService) BatchClaimAirdrop(ctx context.Context, campaignID uuid.UUID, userIDs []uuid.UUID) (map[string]string, error) {
-	results := make(map[string]string)
-	for _, userID := range userIDs {
-		txHash := sha256.Sum256([]byte(fmt.Sprintf("airdrop-%s-%s", campaignID.String(), userID.String())))
-		results[userID.String()] = hex.EncodeToString(txHash[:])
-	}
-	return results, nil
+	return nil, ErrAdminPersistenceUnavailable
 }
 
 // ============ Audit Log ============
 
 // LogAction logs admin action
-func (s *AdminService) LogAction(ctx context.Context, adminID uuid.UUID, action, entityType, entityID string, oldValue, newValue interface{}) error {
-	// Create audit log entry
-	return nil
+func (s *AdminService) LogAction(ctx context.Context, adminID uuid.UUID, action, entityType, entityID string, oldValue, newValue interface{
+	return ErrAdminPersistenceUnavailable
 }
 
 // GetAuditLog returns audit logs
-func (s *AdminService) GetAuditLog(ctx context.Context, filters map[string]interface{}) ([]map[string]interface{}, error) {
-	return []map[string]interface{}{}, nil
+func (s *AdminService) GetAuditLog(ctx context.Context, filters map[string]interface{
+	return nil, ErrAdminPersistenceUnavailable
 }
