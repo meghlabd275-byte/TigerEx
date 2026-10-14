@@ -38,11 +38,17 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-          cache-dependency-path: TigerEx/rest_api_gateway/go.mod
+          cache-dependency-path: |
+            TigerEx/rest_api_gateway/go.mod
+            TigerEx/websocket_gateway/go.mod
 
       - name: Test REST gateway internal packages
         working-directory: TigerEx/rest_api_gateway
         run: go test ./internal/...
+
+      - name: Test WebSocket gateway packages
+        working-directory: TigerEx/websocket_gateway
+        run: go test ./...
 
       - name: Test admin service validation and isolation
         run: GO111MODULE=off go test ./TigerEx/admin_panel
