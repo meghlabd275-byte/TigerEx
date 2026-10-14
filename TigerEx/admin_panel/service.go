@@ -111,23 +111,63 @@ func NewService() *Service {
 
 // CreateAdmin creates admin user
 func (s *Service) CreateAdmin(admin *AdminUser) error {
+	if admin == nil {
+		return fmt.Errorf("admin is required")
+	}
+
+	// Normalize identifiers before checking uniqueness so differently-cased email
+	// addresses cannot create ambiguous login identities.
+	candidate := *admin
+	candidate.ID = strings.TrimSpace(candidate.ID)
+	candidate.Email = strings.ToLower(strings.TrimSpace(candidate.Email))
+	if candidate.ID == "" {
+		return fmt.Errorf("admin ID required")
+	}
+	if candidate.Email == "" || !strings.Contains(candidate.Email, "@") {
+		return fmt.Errorf("valid admin email required")
+	}
+	if candidate.Password == "" {
+		return fmt.Errorf("admin password required")
+	}
+	if candidate.Role == "" {
+		candidate.Role = "SUPPORT"
+	}
+	switch candidate.Role {
+	case "SUPER_ADMIN", "COMPLIANCE", "SUPPORT", "FINANCIAL":
+	default:
+		return fmt.Errorf("unsupported admin role")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if admin.ID == "" {
-		return fmt.Errorf("admin ID required")
+	if _, exists := s.admins[candidate.ID]; exists {
+		return fmt.Errorf("admin ID already exists")
+	}
+	if _, exists := s.emailToAdmin[candidate.Email]; exists {
+		return fmt.Errorf("admin email already exists")
 	}
 
-	if admin.Role == "" {
-		admin.Role = "SUPPORT"
+	candidate.CreatedAt = time.Now()
+	candidate.IsActive = true
+	candidate.Permissions = append([]string(nil), candidate.Permissions...)
+	if candidate.LastLogin != nil {
+		lastLogin := *candidate.LastLogin
+		candidate.LastLogin = &lastLogin
 	}
 
-	admin.CreatedAt = time.Now()
-	admin.IsActive = true
+	// Keep an internal copy; never retain caller-owned pointers or slices.
+	stored := candidate
+	s.admins[candidate.ID] = &stored
+	s.emailToAdmin[candidate.Email] = candidate.ID
 
-	s.admins[admin.ID] = admin
-	s.emailToAdmin[admin.Email] = admin.ID
-
+	// Reflect normalized server-controlled fields to the caller.
+	admin.ID = candidate.ID
+	admin.Email = candidate.Email
+	admin.Role = candidate.Role
+	admin.Permissions = append([]string(nil), candidate.Permissions...)
+	admin.CreatedAt = candidate.CreatedAt
+	admin.IsActive = candidate.IsActive
 	return nil
 }
 
@@ -137,6 +177,7 @@ func (s *Service) VerifyAdmin(email, password string) (*AdminUser, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	email = strings.ToLower(strings.TrimSpace(email))
 	adminID, ok := s.emailToAdmin[email]
 	if !ok {
 		return nil, fmt.Errorf("admin not found")
@@ -195,7 +236,7 @@ func (s *Service) GetUsersForApproval(limit int) []*UserReport {
 		if u.Flags == nil {
 			continue
 		}
-		result = append(result, u)
+		result = append(result, cloneUserReport(u))
 		i++
 		if limit > 0 && i >= limit {
 			break
@@ -422,7 +463,7 @@ func (s *Service) Search_users(query string, limit int) []*UserReport {
 			strings.Contains(strings.ToLower(u.Email), query)
 
 		if match {
-			results = append(results, u)
+			results = append(results, cloneUserReport(u))
 			count++
 			if limit > 0 && count >= limit {
 				break
@@ -431,6 +472,16 @@ func (s *Service) Search_users(query string, limit int) []*UserReport {
 	}
 
 	return results
+}
+
+// cloneUserReport prevents callers from mutating service-owned report state.
+func cloneUserReport(report *UserReport) *UserReport {
+	if report == nil {
+		return nil
+	}
+	copy := *report
+	copy.Flags = append([]string(nil), report.Flags...)
+	return &copy
 }
 
 func generateAuditID() string {
