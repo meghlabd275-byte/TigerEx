@@ -3,12 +3,9 @@
 //! With real market execution and portfolio management
 
 use std::collections::VecDeque;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
-use tokio::time::{interval, sleep};
 use serde::{Deserialize, Serialize};
-use rand::Rng;
 
 // ============================================================================
 // CORE TYPES
