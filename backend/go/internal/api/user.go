@@ -182,7 +182,7 @@ type LendingProduct struct {
 type APIKey struct {
 	ID          string   `json:"id"`
 	Key         string   `json:"key"`
-	Secret      string   `json:"secret"`
+	Secret      string   `json:"-"`
 	Label       string   `json:"label"`
 	Permissions []string `json:"permissions"`
 	ExpiresAt   int64    `json:"expiresAt,omitempty"`
