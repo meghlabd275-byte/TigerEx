@@ -132,14 +132,11 @@ impl FeedAggregator {
     }
 
     // Get leaderboard
-    pub fn get_leaderboard(&self, limit: usize) -> Vec<(&String, f64)> {
-        // Simplified - return mock data
-        // In production, aggregate from user stats
-        vec![
-            ("trader1".to_string(), 15000.0),
-            ("trader2".to_string(), 12000.0),
-        ]
+    pub fn get_leaderboard(&self, _limit: usize) -> Vec<(&String, f64)> {
+        // Leaderboard requires persisted, verified account/trade statistics.
+        Vec::new()
     }
+}
 }
 
 fn now_ms() -> i64 {
