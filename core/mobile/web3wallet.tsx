@@ -97,27 +97,18 @@ export const WalletProvider = ({ children }) => {
   const [balances, setBalances] = useState({});
   const [transactions, setTransactions] = useState([]);
   
-  // Generate mnemonic (24 words)
+  // Generate BIP-39 entropy using ethers' cryptographically secure wallet implementation.
   const generateMnemonic = () => {
-    const wordList = [
-      'abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract', 'absurd', 'abuse',
-      'access', 'accident', 'account', 'accuse', 'achieve', 'acid', 'acoustic', 'acquire', 'across', 'act',
-      'action', 'actor', 'actress', 'actual', 'adapt', 'add', 'addict', 'address', 'adjust', 'admit',
-      'adult', 'advance', 'advice', 'aerobic', 'affair', 'afford', 'afraid', 'again', 'age', 'agent',
-      'agree', 'ahead', 'aim', 'air', 'airport', 'aisle', 'alarm', 'album', 'alcohol', 'alert',
-      'alien', 'all', 'alley', 'allow', 'almost', 'alone', 'alpha', 'already', 'also', 'alter',
-    ];
-    let mnemonic = [];
-    for (let i = 0; i < 24; i++) {
-      mnemonic.push(wordList[Math.floor(Math.random() * wordList.length)]);
-    }
-    return mnemonic.join(' ');
+    const wallet = ethers.Wallet.createRandom();
+    const phrase = wallet.mnemonic?.phrase;
+    if (!phrase) throw new Error('Secure mnemonic generation failed');
+    return phrase;
   };
-  
-  // Create wallet from mnemonic
+
+    // Create wallet from mnemonic
   const createWallet = async (mnemonic, password, network = 'ethereum') => {
     try {
-      const wallet = ethers.Wallet.fromMnemonic(mnemonic);
+      const wallet = ethers.Wallet.fromPhrase(mnemonic);
       
       // Encrypt with password
       const encrypted = await wallet.encrypt(password);
@@ -149,7 +140,7 @@ export const WalletProvider = ({ children }) => {
   const importWallet = async (privateKey, password, network = 'ethereum') => {
     try {
       const wallet = new ethers.Wallet(privateKey);
-      const mnemonic = ethers.Wallet.createRandom().mnemonic.phrase;
+      const mnemonic = null; // A private-key import does not provide the wallet's original recovery phrase.
       
       const walletData = {
         address: wallet.address,
