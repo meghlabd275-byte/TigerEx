@@ -153,7 +153,7 @@ export function BalanceList({ compact = false }: BalanceListProps) {
             <div className="text-right">
               <div className="text-white">{formatBalance(balance.available, balance.currency)}</div>
               <div className="text-gray-500 text-xs">
-                ${formatUSD(balance.available * (prices[balance.currency] || 0))}
+                ${typeof balance.priceUsd === "number" ? formatUSD(balance.available * balance.priceUsd) : "Unavailable"}
               </div>
               {balance.locked > 0 && (
                 <div className="text-yellow-500 text-xs">

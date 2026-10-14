@@ -124,7 +124,7 @@ export function WalletHeader({ balances }: { balances?: WalletTokenBalance[] | n
       <div className="grid grid-cols-4 gap-2">
         <button className="flex flex-col items-center gap-1 p-3 bg-[#1e3a5f] rounded-xl hover:bg-[#2a4a70] transition">
           <ArrowDownToLine className="w-5 h-5 text-[#4A9EEB]" />
-          <span className="text-xs text-gray-300">ArrowDownToLine</span>
+          <span className="text-xs text-gray-300">Receive</span>
         </button>
         <button className="flex flex-col items-center gap-1 p-3 bg-[#3d1e5f] rounded-xl hover:bg-[#4a2870] transition">
           <Send className="w-5 h-5 text-[#9B51E0]" />
