@@ -2,10 +2,7 @@ package services
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"sync"
-	"time"
 
 	"tigerEx/websocket_gateway/internal/models"
 )
@@ -65,9 +62,6 @@ func (sm *StreamManager) initializeStreams() {
 		}
 	}
 
-	// Initialize mock prices
-	sm.prices["BTC/USDT"] = 50000.0
-	sm.prices["ETH/USDT"] = 3000.0
 }
 
 func getStreamType(stream string) string {
@@ -177,116 +171,32 @@ func (sm *StreamManager) UpdatePrice(symbol string, price float64) {
 
 // GenerateTrade generates a mock trade message
 func (sm *StreamManager) GenerateTrade(symbol string) []byte {
-	sm.mu.RLock()
-	price := sm.prices[symbol]
-	sm.mu.RUnlock()
-
-	trade := &models.WSAggTrade{
-		Event:       "aggTrade",
-		EventTime:  time.Now().UnixMilli(),
-		Symbol:     symbol,
-		TradeID:    time.Now().UnixNano(),
-		Price:      price + (float64(time.Now().UnixNano()%1000) - 500) * 0.001,
-		Quantity:   0.001 * float64(time.Now().UnixNano()%10 + 1),
-		BuyerOrderID: time.Now().UnixNano(),
-		TradeTime:  time.Now().UnixMilli(),
-		IsMaker:    time.Now().UnixNano()%2 == 0,
-		IsBestMatch: true,
-	}
-
-	data, _ := json.Marshal(trade)
-	return data
+	// Trade events must come from a verified matching-engine event stream.
+	// No synthetic trades are emitted by this gateway.
+	_ = symbol
+	return nil
 }
 
 // GenerateKline generates a mock kline message
 func (sm *StreamManager) GenerateKline(symbol, interval string) []byte {
-	sm.mu.RLock()
-	price := sm.prices[symbol]
-	sm.mu.RUnlock()
-
-	now := time.Now()
-	openTime := now.Add(-1 * time.Minute).UnixMilli()
-
-	kline := &models.WSKline{
-		Event:     "kline",
-		EventTime: now.UnixMilli(),
-		Symbol:   symbol,
-		Kline: &models.Kline{
-			OpenTime:     openTime,
-			Open:       price - 10,
-			High:       price + 5,
-			Low:        price - 15,
-			Close:      price,
-			Volume:    100,
-			CloseTime: now.UnixMilli(),
-			QuoteVolume: 100 * price,
-			NumTrades:  100,
-			TakerBaseVol: 80,
-		},
-	}
-
-	data, _ := json.Marshal(kline)
-	return data
+	// Candles must be built from persisted/verified trades by the market-data service.
+	_ = symbol
+	_ = interval
+	return nil
 }
 
 // GenerateDepth generates a mock depth message
 func (sm *StreamManager) GenerateDepth(symbol string) []byte {
-	sm.mu.RLock()
-	price := sm.prices[symbol]
-	sm.mu.RUnlock()
-
-	depth := &models.WSDepth{
-		Event:         "depthUpdate",
-		EventTime:    time.Now().UnixMilli(),
-		Symbol:      symbol,
-		FirstUpdateID: time.Now().UnixMilli(),
-		Bids:         [][]string{},
-		Asks:         [][]string{},
-	}
-
-	spread := price * 0.001
-	for i := 0; i < 10; i++ {
-		bidPrice := price - spread - float64(i)*price*0.0001
-		bidQty := float64(10-i) * 0.5
-		depth.Bids = append(depth.Bids, []string{
-			fmt.Sprintf("%.8f", bidPrice),
-			fmt.Sprintf("%.8f", bidQty),
-		})
-
-		askPrice := price + spread + float64(i)*price*0.0001
-		askQty := float64(10-i) * 0.5
-		depth.Asks = append(depth.Asks, []string{
-			fmt.Sprintf("%.8f", askPrice),
-			fmt.Sprintf("%.8f", askQty),
-		})
-	}
-
-	data, _ := json.Marshal(depth)
-	return data
+	// Order-book snapshots must be supplied by the authoritative matching engine.
+	_ = symbol
+	return nil
 }
 
 // GenerateTicker generates a mock ticker message
 func (sm *StreamManager) GenerateTicker(symbol string) []byte {
-	sm.mu.RLock()
-	price := sm.prices[symbol]
-	sm.mu.RUnlock()
-
-	ticker := &models.WSTicker{
-		Event:               "24hrTicker",
-		EventTime:          time.Now().UnixMilli(),
-		Symbol:            symbol,
-		PriceChange:        price * 0.02,
-		PriceChangePercent: 2.0,
-		LastPrice:         price,
-		OpenPrice:         price * 0.98,
-		HighPrice:         price * 1.05,
-		LowPrice:          price * 0.95,
-		TotalTradedBaseVolume: 1000000,
-		NumTrades:        100000,
-	}
-
-	data, _ := json.Marshal(ticker)
-	return data
+	// Tickers must be derived from verified market-data events, never generated.
+	_ = symbol
+	return nil
 }
 
 // ============================================================================
