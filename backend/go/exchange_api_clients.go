@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -10,6 +12,8 @@ import (
 // TIGGEREX v3.0 - EXCHANGE API CLIENTS
 // Complete API clients for all major cryptocurrency exchanges
 // =============================================================================
+
+var ErrExchangeClientNotImplemented = errors.New("exchange API operation is not implemented; refusing to return fabricated data")
 
 // =============================================================================
 // BINANCE API CLIENT
@@ -87,122 +91,113 @@ func NewBinanceClient(apiKey, secretKey string, testMode bool) *BinanceClient {
 
 // Spot Trading Methods
 func (c *BinanceSpotClient) NewOrder(params *PlaceOrderParams) (*OrderResponse, error) {
-	// Implement place order
-	return &OrderResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) NewOrderTest(params *PlaceOrderParams) error {
-	// Test order without execution
-	return nil
+	return ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetOrder(params *QueryOrderParams) (*OrderResponse, error) {
-	return &OrderResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) CancelOrder(params *CancelOrderParams) (*CancelOrderResponse, error) {
-	return &CancelOrderResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetOpenOrders(params *QueryOpenOrdersParams) ([]*OrderResponse, error) {
-	return []*OrderResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetAllOrders(params *QueryAllOrdersParams) ([]*OrderResponse, error) {
-	return []*OrderResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetAccount(params *AccountParams) (*AccountResponse, error) {
-	return &AccountResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetBalance(asset string) (*BalanceResponse, error) {
-	return &BalanceResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetMyTrades(params *QueryTradesParams) ([]*TradeResponse, error) {
-	return []*TradeResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 // Market Data Methods
 func (c *BinanceSpotClient) Ping() error {
-	return nil
+	return ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetServerTime() (int64, error) {
-	return time.Now().UnixMilli(), nil
+	return 0, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetExchangeInfo() (*ExchangeInfoResponse, error) {
-	return &ExchangeInfoResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetDepth(symbol, limit string) (*DepthResponse, error) {
-	return &DepthResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetTrades(symbol string) ([]*TradeResponse, error) {
-	return []*TradeResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetHistoricalTrades(symbol string) ([]*TradeResponse, error) {
-	return []*TradeResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetAggTrades(symbol string) ([]*AggTradeResponse, error) {
-	return []*AggTradeResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetKlines(symbol, interval string, limit int) ([]*KlineResponse, error) {
-	return []*KlineResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetTicker24HR(symbol string) (*TickerResponse, error) {
-	return &TickerResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetPrice(symbol string) (*PriceResponse, error) {
-	return &PriceResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) GetBookTicker(symbol string) (*BookTickerResponse, error) {
-	return &BookTickerResponse{}, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 // WebSocket Methods
 func (c *BinanceSpotClient) WSAggTrades(params *WsAggTradesParams) (<-chan *WsAggTradeResponse, error) {
-	ch := make(chan *WsAggTradeResponse)
-	return ch, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) WSTrade(params *WsTradeParams) (<-chan *WsTradeResponse, error) {
-	ch := make(chan *WsTradeResponse)
-	return ch, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) WSKline(params *WsKlineParams) (<-chan *WsKlineResponse, error) {
-	ch := make(chan *WsKlineResponse)
-	return ch, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) WSDepth(params *WsDepthParams) (<-chan *WsDepthResponse, error) {
-	ch := make(chan *WsDepthResponse)
-	return ch, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) WSTicker(params *WsTickerParams) (<-chan *WsTickerResponse, error) {
-	ch := make(chan *WsTickerResponse)
-	return ch, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) WSAllMiniTicker(params *WsAllMiniTickerParams) (<-chan *WsAllMiniTickerResponse, error) {
-	ch := make(chan *WsAllMiniTickerResponse)
-	return ch, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 func (c *BinanceSpotClient) WSAllMarketTickers(params *WsAllMarketTickersParams) (<-chan *WsAllMarketTickersResponse, error) {
-	ch := make(chan *WsAllMarketTickersResponse)
-	return ch, nil
+	return nil, ErrExchangeClientNotImplemented
 }
 
 // =============================================================================
@@ -572,25 +567,44 @@ func NewCryptoComClient(apiKey, secretKey string) *CryptoComClient {
 // =============================================================================
 
 type RateLimiter struct {
-	requestsPerSecond int
+	mu sync.Mutex
+	requestsPerMinute int
 	burst int
-	// Implementation would use token bucket algorithm
+	tokens float64
+	lastRefill time.Time
 }
 
 func NewRateLimiter(rps, burst int) *RateLimiter {
 	return &RateLimiter{
-		requestsPerSecond: rps,
+		requestsPerMinute: rps,
 		burst: burst,
+		tokens: float64(burst),
+		lastRefill: time.Now(),
 	}
 }
 
 func (r *RateLimiter) Allow() bool {
-	// Token bucket implementation
+	if r == nil || r.requestsPerMinute <= 0 || r.burst <= 0 { return false }
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	elapsed := now.Sub(r.lastRefill).Seconds()
+	if elapsed > 0 {
+		r.tokens += elapsed * float64(r.requestsPerMinute) / 60.0
+		if r.tokens > float64(r.burst) { r.tokens = float64(r.burst) }
+		r.lastRefill = now
+	}
+	if r.tokens < 1 { return false }
+	r.tokens--
 	return true
 }
 
 func (r *RateLimiter) Wait() {
-	// Block until request is allowed
+	for {
+		if r.Allow() { return }
+		if r == nil || r.requestsPerMinute <= 0 { time.Sleep(time.Second); continue }
+		time.Sleep(time.Duration(60.0 / float64(r.requestsPerMinute) * float64(time.Second)))
+	}
 }
 
 // =============================================================================
