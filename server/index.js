@@ -684,31 +684,15 @@ app.post("/api/v1/futures/position/open", authenticateRequest, async (_req, res)
   });
 });
 
-// // Close a futures position
-app.post("/api/v1/futures/position/close", authenticateRequest, async (req, res) => {
-  try {
-    const { positionId, closeQuantity } = req.body;
-
-    if (!positionId || !closeQuantity) {
-      return res.status(400).json({ success: false, error: "Missing required fields for closing position" });
-    }
-
-    // Placeholder for closing futures position logic
-    // This would involve placing an opposing order on the futures exchange and updating margin.
-
-    await pool.query(
-      `UPDATE futures_positions SET quantity = quantity - $1, status = CASE WHEN quantity - $1 <= 0 THEN 'closed' ELSE status END, updated_at = NOW() WHERE id = $2 AND user_id = $3`,
-      [closeQuantity, positionId, req.userId]
-    );
-
-    res.json({ success: true, message: "Futures position closed successfully" });
-  } catch (error) {
-    console.error("Close futures position error:", error);
-    res.status(500).json({ success: false, error: "Internal server error" });
-  }
+// // Futures closing is disabled until canonical margin, risk, matching, and settlement services exist.
+app.post("/api/v1/futures/position/close", authenticateRequest, async (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    error: "Futures closing unavailable: canonical risk and execution services are not configured",
+  });
 });
 
-// Get all open futures positions for a user
+// // Get all open futures positions for a user
 app.get("/api/v1/futures/positions", authenticateRequest, async (req, res) => {
   try {
     const positions = (await pool.query("SELECT * FROM futures_positions WHERE user_id = $1 AND status = 'open'", [req.userId])).rows;
