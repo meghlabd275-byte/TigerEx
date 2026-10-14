@@ -568,7 +568,7 @@ func NewCryptoComClient(apiKey, secretKey string) *CryptoComClient {
 
 type RateLimiter struct {
 	mu sync.Mutex
-	requestsPerMinute int
+	requestsPerSecond int
 	burst int
 	tokens float64
 	lastRefill time.Time
@@ -576,7 +576,7 @@ type RateLimiter struct {
 
 func NewRateLimiter(rps, burst int) *RateLimiter {
 	return &RateLimiter{
-		requestsPerMinute: rps,
+		requestsPerSecond: rps,
 		burst: burst,
 		tokens: float64(burst),
 		lastRefill: time.Now(),
@@ -584,13 +584,13 @@ func NewRateLimiter(rps, burst int) *RateLimiter {
 }
 
 func (r *RateLimiter) Allow() bool {
-	if r == nil || r.requestsPerMinute <= 0 || r.burst <= 0 { return false }
+	if r == nil || r.requestsPerSecond <= 0 || r.burst <= 0 { return false }
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
 	elapsed := now.Sub(r.lastRefill).Seconds()
 	if elapsed > 0 {
-		r.tokens += elapsed * float64(r.requestsPerMinute) / 60.0
+		r.tokens += elapsed * float64(r.requestsPerSecond)
 		if r.tokens > float64(r.burst) { r.tokens = float64(r.burst) }
 		r.lastRefill = now
 	}
@@ -602,8 +602,10 @@ func (r *RateLimiter) Allow() bool {
 func (r *RateLimiter) Wait() {
 	for {
 		if r.Allow() { return }
-		if r == nil || r.requestsPerMinute <= 0 { time.Sleep(time.Second); continue }
-		time.Sleep(time.Duration(60.0 / float64(r.requestsPerMinute) * float64(time.Second)))
+		if r == nil || r.requestsPerSecond <= 0 || r.burst <= 0 { return }
+		interval := time.Second / time.Duration(r.requestsPerSecond)
+		if interval <= 0 { interval = time.Nanosecond }
+		time.Sleep(interval)
 	}
 }
 
