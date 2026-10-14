@@ -1,8 +1,8 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -223,17 +223,9 @@ func (c *Client) handleMessage(data []byte) error {
 
 // handleSubscribe handles subscription
 func (c *Client) handleSubscribe(msg models.WSMessage) error {
-	params, ok := msg.Params.([]string)
-	if !ok {
-		return fmt.Errorf("invalid params")
-	}
-
-	streams := make([]string, 0)
-	for _, stream := range params {
-		// Validate stream format
-		if strings.Contains(stream, "@") {
-			streams = append(streams, stream)
-		}
+	streams, err := parseStreamParams(msg.Params)
+	if err != nil {
+		return err
 	}
 
 	return c.manager.Subscribe(&models.Client{
@@ -245,14 +237,9 @@ func (c *Client) handleSubscribe(msg models.WSMessage) error {
 
 // handleUnsubscribe handles unsubscription
 func (c *Client) handleUnsubscribe(msg models.WSMessage) error {
-	params, ok := msg.Params.([]string)
-	if !ok {
-		return fmt.Errorf("invalid params")
-	}
-
-	streams := make([]string, 0)
-	for _, stream := range params {
-		streams = append(streams, stream)
+	streams, err := parseStreamParams(msg.Params)
+	if err != nil {
+		return err
 	}
 
 	return c.manager.Unsubscribe(&models.Client{
@@ -260,6 +247,41 @@ func (c *Client) handleUnsubscribe(msg models.WSMessage) error {
 		UserID:  c.UserID,
 		Streams: c.Streams,
 	}, streams)
+}
+
+// parseStreamParams accepts JSON-decoded arrays while rejecting malformed or
+// empty subscription names instead of silently ignoring invalid entries.
+func parseStreamParams(value interface{}) ([]string, error) {
+	var raw []interface{}
+	switch params := value.(type) {
+	case []string:
+		streams := make([]string, 0, len(params))
+		for _, stream := range params {
+			stream = strings.TrimSpace(stream)
+			if stream == "" || !strings.Contains(stream, "@") {
+				return nil, fmt.Errorf("invalid stream name")
+			}
+			streams = append(streams, stream)
+		}
+		return streams, nil
+	case []interface{}:
+		raw = params
+	default:
+		return nil, fmt.Errorf("invalid params: expected array of stream names")
+	}
+	streams := make([]string, 0, len(raw))
+	for _, item := range raw {
+		stream, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid params: stream names must be strings")
+		}
+		stream = strings.TrimSpace(stream)
+		if stream == "" || !strings.Contains(stream, "@") {
+			return nil, fmt.Errorf("invalid stream name")
+		}
+		streams = append(streams, stream)
+	}
+	return streams, nil
 }
 
 // handlePing handles ping
@@ -296,9 +318,6 @@ const (
 // CONTEXT
 // ============================================================================
 
-import (
-	"errors"
-)
 
 var (
 	ErrNotAuthenticated = errors.New("not authenticated")
