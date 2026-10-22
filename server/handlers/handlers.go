@@ -451,329 +451,44 @@ func GetBalances(c *gin.Context) {
 func GetTotalAssets(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	if userID == "" {
-		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
 		return
 	}
-
-	prices := map[string]float64{"BTC": 65000, "ETH": 3500, "USDT": 1, "BNB": 600, "SOL": 150, "XRP": 0.6}
-
-	rows, err := models.Pool.Query(c.Request.Context(), `
-		SELECT currency, SUM(balance) FROM wallets WHERE user_id = $1 GROUP BY currency
-	`, userID)
-
-	if err != nil {
-		c.JSON(500, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Database error"}})
-		return
-	}
-	defer rows.Close()
-
-	var totalUSD float64
-	assets := []gin.H{}
-	for rows.Next() {
-		var currency string
-		var balance float64
-		rows.Scan(&currency, &balance)
-		price := prices[currency]
-		value := balance * price
-		totalUSD += value
-		assets = append(assets, gin.H{"currency": currency, "amount": balance, "usdValue": value})
-	}
-
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"totalUSD": totalUSD, "assets": assets}})
+	// Portfolio valuation must use a configured, timestamped market-data source.
+	// Hard-coded prices are intentionally not presented as live account values.
+	c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Portfolio price oracle is not configured; valuation is unavailable"}})
 }
 
 func GetDepositAddress(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	if userID == "" {
-		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
 		return
 	}
-
-	currency := c.Query("currency")
-	network := c.Query("network")
-	if network == "" {
-		network = "MAINNET"
-	}
-
-	var address string
-	err := models.Pool.QueryRow(c.Request.Context(), `
-		SELECT address FROM wallet_addresses 
-		WHERE user_id = $1 AND currency = $2 AND network = $3 AND is_default = true
-	`, userID, currency, network).Scan(&address)
-
-	if err != nil {
-		// Generate new address
-		address = generateAddress(currency, network)
-		_, _ = models.Pool.Exec(c.Request.Context(), `
-			INSERT INTO wallet_addresses (id, user_id, currency, network, address, is_default)
-			VALUES ($1, $2, $3, $4, $5, true)
-		`, uuid.New(), userID, currency, network, address)
-	}
-
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"address": address, "currency": currency, "network": network, "memo": getMemo(currency)}})
+	// Do not invent deposit addresses. Address derivation must be provided by a
+	// chain-specific wallet/key-management service before this endpoint is enabled.
+	c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Deposit address service is not configured; no address was generated"}})
 }
 
 func GenerateDepositAddress(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-	if userID == "" {
-		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+	if middleware.GetUserID(c) == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
 		return
 	}
-
-	var req struct {
-		Currency string `json:"currency" binding:"required"`
-		Network  string `json:"network"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Currency required"}})
-		return
-	}
-
-	if req.Network == "" {
-		req.Network = "MAINNET"
-	}
-
-	address := generateAddress(req.Currency, req.Network)
-	_, _ = models.Pool.Exec(c.Request.Context(), `
-		INSERT INTO wallet_addresses (id, user_id, currency, network, address, is_default)
-		VALUES ($1, $2, $3, $4, $5, true)
-	`, uuid.New(), userID, req.Currency, req.Network, address)
-
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"address": address, "currency": req.Currency, "network": req.Network, "memo": getMemo(req.Currency)}})
-
-}
-
-func GetAddresses(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-	if userID == "" {
-		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
-		return
-	}
-
-	currency := c.Query("currency")
-	query := "SELECT currency, network, address, is_default FROM wallet_addresses WHERE user_id = $1"
-	args := []interface{}{userID}
-	if currency != "" {
-		query += " AND currency = $2"
-		args = append(args, currency)
-	}
-	query += " ORDER BY is_default DESC"
-
-	rows, err := models.Pool.Query(c.Request.Context(), query, args...)
-	if err != nil {
-		c.JSON(500, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Database error"}})
-		return
-	}
-	defer rows.Close()
-
-	addresses := []gin.H{}
-	for rows.Next() {
-		var currency, network, address string
-		var isDefault bool
-		rows.Scan(&currency, &network, &address, &isDefault)
-		addresses = append(addresses, gin.H{"currency": currency, "network": network, "address": address, "isDefault": isDefault})
-	}
-
-	c.JSON(200, gin.H{"success": true, "data": addresses})
-}
-
-type WithdrawRequest struct {
-	Currency  string  `json:"currency" binding:"required"`
-	Amount    float64 `json:"amount" binding:"required,gt=0"`
-	ToAddress string  `json:"toAddress" binding:"required"`
-	Network   string  `json:"network"`
-	Memo      string  `json:"memo"`
-}
-
-func Withdraw(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-	if userID == "" {
-		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
-		return
-	}
-
-	var req WithdrawRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
-		return
-	}
-
-	// Check KYC
-	var kycLevel int
-	err := models.Pool.QueryRow(c.Request.Context(), "SELECT kyc_level FROM users WHERE id = $1", userID).Scan(&kycLevel)
-	if err != nil || kycLevel < 2 {
-		c.JSON(403, gin.H{"success": false, "error": gin.H{"code": 403, "message": "Complete KYC Level 2 to withdraw"}})
-		return
-	}
-
-	// Check balance
-	var available float64
-	err = models.Pool.QueryRow(c.Request.Context(), `
-		SELECT available FROM wallets WHERE user_id = $1 AND currency = $2 AND wallet_type = 'spot'
-	`, userID, req.Currency).Scan(&available)
-
-	if err != nil || available < req.Amount {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Insufficient balance"}})
-		return
-	}
-
-	ctx := c.Request.Context()
-	tx, _ := models.Pool.Begin(ctx)
-	defer tx.Rollback(ctx)
-
-	// Deduct balance
-	_, _ = tx.Exec(ctx, `
-		UPDATE wallets SET balance = balance - $1, available = available - $1, updated_at = NOW()
-		WHERE user_id = $2 AND currency = $3 AND wallet_type = 'spot'
-	`, req.Amount, userID, req.Currency)
-
-	// Create withdrawal record
-	txID := uuid.New()
-	network := req.Network
-	if network == "" {
-		network = "MAINNET"
-	}
-
-	_, _ = tx.Exec(ctx, `
-		INSERT INTO transactions (id, user_id, type, currency, amount, status, to_address, network, memo)
-		VALUES ($1, $2, 'withdraw', $3, $4, $5, $6, $7, $8)
-	`, txID, userID, req.Currency, req.Amount, "completed", req.ToAddress, network, req.Memo)
-
-	tx.Commit(ctx)
-
-	c.JSON(200, gin.H{
-		"success": true,
-		"data": gin.H{
-			"id":       txID,
-			"currency": req.Currency,
-			"amount":   req.Amount,
-			"status":   "completed",
-		},
-	})
-}
-
-type TransferRequest struct {
-	ToUsername string  `json:"toUsername" binding:"required"`
-	Currency   string  `json:"currency" binding:"required"`
-	Amount     float64 `json:"amount" binding:"required,gt=0"`
-}
-
-func Transfer(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-	if userID == "" {
-		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
-		return
-	}
-
-	var req TransferRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
-		return
-	}
-
-	// Find recipient
-	var recipientID string
-	err := models.Pool.QueryRow(c.Request.Context(), `
-		SELECT id FROM users WHERE username = $1 OR email = $1
-	`, req.ToUsername).Scan(&recipientID)
-
-	if err != nil || recipientID == "" {
-		c.JSON(404, gin.H{"success": false, "error": gin.H{"code": 404, "message": "User not found"}})
-		return
-	}
-
-	if recipientID == userID {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Cannot transfer to yourself"}})
-		return
-	}
-
-	// Check balance
-	var available float64
-	err = models.Pool.QueryRow(c.Request.Context(), `
-		SELECT available FROM wallets WHERE user_id = $1 AND currency = $2 AND wallet_type = 'spot'
-	`, userID, req.Currency).Scan(&available)
-
-	if err != nil || available < req.Amount {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Insufficient balance"}})
-		return
-	}
-
-	ctx := c.Request.Context()
-	tx, _ := models.Pool.Begin(ctx)
-	defer tx.Rollback(ctx)
-
-	// Deduct from sender
-	_, _ = tx.Exec(ctx, `
-		UPDATE wallets SET balance = balance - $1, available = available - $1, updated_at = NOW()
-		WHERE user_id = $2 AND currency = $3 AND wallet_type = 'spot'
-	`, req.Amount, userID, req.Currency)
-
-	// Add to recipient
-	_, _ = tx.Exec(ctx, `
-		INSERT INTO wallets (id, user_id, currency, network, wallet_type, balance, locked, available)
-		VALUES ($1, $2, $3, 'MAINNET', 'spot', $4, 0, $4)
-		ON CONFLICT (user_id, currency, network, wallet_type) 
-		DO UPDATE SET balance = balance + $4, available = available + $4
-	`, uuid.New(), recipientID, req.Currency, req.Amount)
-
-	tx.Commit(ctx)
-
-	c.JSON(200, gin.H{
-		"success": true,
-		"data": gin.H{
-			"to":       req.ToUsername,
-			"currency": req.Currency,
-			"amount":   req.Amount,
-			"status":   "completed",
-		},
-	})
+	// Fail closed until chain-specific address derivation, custody controls, and
+	// address persistence are backed by the production wallet service.
+	c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Deposit address service is not configured; no address was generated"}})
 }
 
 func Deposit(c *gin.Context) {
-	userID := middleware.GetUserID(c)
-	if userID == "" {
-		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+	if middleware.GetUserID(c) == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
 		return
 	}
-
-	var req struct {
-		Currency string  `json:"currency" binding:"required"`
-		Amount   float64 `json:"amount" binding:"required,gt=0"`
-		Network  string  `json:"network"`
-		TxHash   string  `json:"txHash"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
-		return
-	}
-
-	network := req.Network
-	if network == "" {
-		network = "MAINNET"
-	}
-
-	ctx := c.Request.Context()
-	tx, _ := models.Pool.Begin(ctx)
-	defer tx.Rollback(ctx)
-
-	// Add to wallet
-	_, _ = tx.Exec(ctx, `
-		INSERT INTO wallets (id, user_id, currency, network, wallet_type, balance, locked, available)
-		VALUES ($1, $2, $3, $4, 'spot', $5, 0, $5)
-		ON CONFLICT (user_id, currency, network, wallet_type) 
-		DO UPDATE SET balance = balance + $5, available = available + $5
-	`, uuid.New(), userID, req.Currency, network, req.Amount)
-
-	// Record transaction
-	txID := uuid.New()
-	_, _ = tx.Exec(ctx, `
-		INSERT INTO transactions (id, user_id, type, currency, amount, status, tx_hash, network)
-		VALUES ($1, $2, 'deposit', $3, $4, $5, $6, $7)
-	`, txID, userID, req.Currency, req.Amount, "completed", req.TxHash, network)
-
-	tx.Commit(ctx)
-
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"id": txID, "currency": req.Currency, "amount": req.Amount, "status": "completed"}})
+	// Client-supplied amount/currency/transaction hash are not proof of an on-chain
+	// deposit. Never credit funds before a chain adapter verifies asset contract,
+	// destination, amount, confirmations/finality, and replay/idempotency.
+	c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Deposit verification is not configured; no funds were credited"}})
 }
 
 func GetTransactionHistory(c *gin.Context) {
@@ -1476,10 +1191,13 @@ func Convert(c *gin.Context) {
 }
 
 func InternalTransfer(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Transferred"}})
+	if middleware.GetUserID(c) == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+	// Never report a successful transfer without an atomic ledger transaction.
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Internal transfer ledger is not implemented"}})
 }
-
-// ============ REWARDS ============
 
 func GetCoupons(c *gin.Context) {
 	c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
