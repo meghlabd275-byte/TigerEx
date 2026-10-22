@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"math/rand"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -1218,7 +1219,19 @@ func OpenRedPacket(c *gin.Context) {
 // ============ WEBSOCKET ============
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return false
+		}
+		for _, candidate := range strings.Split(os.Getenv("TIGEREX_CORS_ORIGINS"), ",") {
+			candidate = strings.TrimSpace(candidate)
+			if candidate != "" && candidate != "*" && candidate == origin {
+				return true
+			}
+		}
+		return false
+	},
 }
 
 var hub *WebSocketHub
