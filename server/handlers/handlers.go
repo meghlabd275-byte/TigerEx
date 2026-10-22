@@ -481,6 +481,78 @@ func GenerateDepositAddress(c *gin.Context) {
 	c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Deposit address service is not configured; no address was generated"}})
 }
 
+func GetAddresses(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+	currency := strings.TrimSpace(c.Query("currency"))
+	query := "SELECT currency, network, address, is_default FROM wallet_addresses WHERE user_id = $1"
+	args := []interface{}{userID}
+	if currency != "" {
+		query += " AND currency = $2"
+		args = append(args, currency)
+	}
+	query += " ORDER BY is_default DESC"
+	rows, err := models.Pool.Query(c.Request.Context(), query, args...)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Wallet address records are unavailable"}})
+		return
+	}
+	defer rows.Close()
+	addresses := []gin.H{}
+	for rows.Next() {
+		var currency, network, address string
+		var isDefault bool
+		if err := rows.Scan(&currency, &network, &address, &isDefault); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Wallet address records could not be read"}})
+			return
+		}
+		addresses = append(addresses, gin.H{"currency": currency, "network": network, "address": address, "isDefault": isDefault})
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Wallet address query failed"}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": addresses})
+}
+
+type WithdrawRequest struct {
+	Currency  string  `json:"currency" binding:"required"`
+	Amount    float64 `json:"amount" binding:"required,gt=0"`
+	ToAddress string  `json:"toAddress" binding:"required"`
+	Network   string  `json:"network"`
+	Memo      string  `json:"memo"`
+}
+
+func Withdraw(c *gin.Context) {
+	if middleware.GetUserID(c) == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+	// Withdrawals require a durable ledger, KYC/risk policy, destination validation,
+	// approval controls, and a signed chain transaction. Do not debit or claim success
+	// until those components are integrated and tested.
+	c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Withdrawal execution is not configured; no funds were debited"}})
+}
+
+type TransferRequest struct {
+	ToUsername string  `json:"toUsername" binding:"required"`
+	Currency   string  `json:"currency" binding:"required"`
+	Amount     float64 `json:"amount" binding:"required,gt=0"`
+}
+
+func Transfer(c *gin.Context) {
+	if middleware.GetUserID(c) == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+	// Transfers must be implemented as one atomic ledger transaction with row locks,
+	// idempotency, decimal-safe amounts, and audit entries. Fail closed until then.
+	c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Internal transfer ledger is not configured; no funds were moved"}})
+}
+
 func Deposit(c *gin.Context) {
 	if middleware.GetUserID(c) == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
