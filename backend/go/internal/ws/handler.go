@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -19,7 +22,17 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return false
+		}
+		allowed := strings.Split(os.Getenv("TIGEREX_CORS_ORIGINS"), ",")
+		for _, candidate := range allowed {
+			if strings.TrimSpace(candidate) != "" && strings.TrimSpace(candidate) != "*" && origin == strings.TrimSpace(candidate) {
+				return true
+			}
+		}
+		return false
 	},
 }
 
@@ -215,12 +228,37 @@ func (c *Client) handleMessage(data []byte, hub *Hub) {
 }
 
 func (c *Client) handleAuth(msg map[string]interface{}) {
-	token, ok := msg["token"].(string)
-	if !ok || token == "" {
+	rawToken, ok := msg["token"].(string)
+	if !ok || strings.TrimSpace(rawToken) == "" {
 		c.sendError("Missing auth token")
 		return
 	}
-	c.UserID = "verified-user"
+	secret := os.Getenv("TIGEREX_JWT_SECRET")
+	if len(secret) < 32 {
+		c.sendError("Authentication service is not configured")
+		return
+	}
+	token, err := jwt.Parse(rawToken, func(token *jwt.Token) (interface{}, error) {
+		if token.Method != jwt.SigningMethodHS256 {
+			return nil, errors.New("unexpected JWT signing method")
+		}
+		return []byte(secret), nil
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired())
+	if err != nil || token == nil || !token.Valid {
+		c.sendError("Invalid auth token")
+		return
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		c.sendError("Invalid auth token claims")
+		return
+	}
+	userID, ok := claims["user_id"].(string)
+	if !ok || strings.TrimSpace(userID) == "" || claims["type"] == "refresh" {
+		c.sendError("Invalid auth token claims")
+		return
+	}
+	c.UserID = userID
 	c.Authed = true
 	c.sendMessage(map[string]interface{}{"type": "auth", "status": "success"})
 }
@@ -300,26 +338,10 @@ func (p *MarketDataProvider) BroadcastTrade(symbol string, trade interface{}) {
 	p.hub.BroadcastToSymbol(symbol, data)
 }
 
+// StartDataFeeds intentionally does not synthesize prices or trades. A real feed
+// adapter must call MarketDataProvider with validated exchange/chain data before
+// market data is broadcast. Until then this function remains idle and cancellable.
 func StartDataFeeds(ctx context.Context, hub *Hub) {
-	provider := NewMarketDataProvider(hub)
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	price := 45000.0
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			price += (float64(time.Now().UnixNano()%1000) - 500) / 100.0
-			tickerData := map[string]interface{}{
-				"symbol": "BTCUSDT", "price": price, "priceChange": 100, "priceChangePct": 0.22,
-				"volume": 1000000000, "quoteVolume": 45000000000, "high": 46000, "low": 44000, "timestamp": time.Now().Unix(),
-			}
-			provider.BroadcastTicker("BTCUSDT", tickerData)
-			tradeData := map[string]interface{}{
-				"id": uuid.New().String(), "price": price, "quantity": 0.001, "timestamp": time.Now().Unix(),
-			}
-			provider.BroadcastTrade("BTCUSDT", tradeData)
-		}
-	}
+	_ = hub
+	<-ctx.Done()
 }
