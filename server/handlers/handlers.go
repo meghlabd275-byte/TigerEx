@@ -90,15 +90,22 @@ func Register(c *gin.Context) {
 	err := models.Pool.QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM users WHERE email = $1 OR username = $2",
 		strings.ToLower(req.Email), strings.ToLower(req.Username)).Scan(&count)
-
-	if err == nil && count > 0 {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "User already exists"}})
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Registration is temporarily unavailable"}})
+		return
+	}
+	if count > 0 {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": gin.H{"code": 409, "message": "User already exists"}})
 		return
 	}
 
-	// Hash password
+	// Hash password. Never continue registration if password hashing fails.
 	salt := models.GenerateSalt()
-	hash, _ := bcrypt.GenerateFromPassword([]byte(req.Password+salt), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password+salt), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Registration could not be completed"}})
+		return
+	}
 
 	userID := uuid.New()
 	refCode := "TIGER" + strings.ToUpper(hex.EncodeToString([]byte(userID.String()[:8]))[:6])
@@ -122,10 +129,13 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	// Create profile
-	_, _ = tx.Exec(ctx, `INSERT INTO user_profiles (id, user_id) VALUES ($1, $2)`, uuid.New(), userID)
+	// Every registration write must succeed; otherwise roll back the whole transaction.
+	if _, err = tx.Exec(ctx, `INSERT INTO user_profiles (id, user_id) VALUES ($1, $2)`, uuid.New(), userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Registration could not be completed"}})
+		return
+	}
 
-	// Create default wallets
+	// Create only ledger accounts; these are not blockchain deposit addresses.
 	defaultCurrencies := []string{"USDT", "BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE"}
 	for _, currency := range defaultCurrencies {
 		network := "MAINNET"
@@ -134,14 +144,20 @@ func Register(c *gin.Context) {
 		} else if currency == "BNB" {
 			network = "BEP20"
 		}
-		_, _ = tx.Exec(ctx, `
+		if _, err = tx.Exec(ctx, `
 			INSERT INTO wallets (id, user_id, currency, network, wallet_type, balance, locked, available)
 			VALUES ($1, $2, $3, $4, 'spot', 0, 0, 0)
 			ON CONFLICT (user_id, currency, network, wallet_type) DO NOTHING
-		`, uuid.New(), userID, currency, network)
+		`, uuid.New(), userID, currency, network); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Registration could not be completed"}})
+			return
+		}
 	}
 
-	tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Registration could not be completed"}})
+		return
+	}
 
 	// Generate tokens
 	accessToken, refreshToken := generateTokens(userID.String())
