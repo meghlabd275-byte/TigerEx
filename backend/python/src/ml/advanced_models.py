@@ -152,7 +152,7 @@ class SentimentAnalyzer:
     def analyze_batch(self, texts: List[str]) -> Dict:
         results = [self.analyze_text(t) for t in texts]
         
-        avg_score = np.mean([r['score'] for r in results)
+        avg_score = np.mean([r['score'] for r in results])
         
         return {
             'overall_sentiment': avg_score,

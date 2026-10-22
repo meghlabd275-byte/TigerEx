@@ -2,27 +2,17 @@ package models
 
 import (
 	"time"
-)
 
-// User represents a user account
-type User struct {
-	ID           string    `json:"id"`
-	Email        string    `json:"email"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"-"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	IsActive     bool      `json:"is_active"`
-	Tier         string    `json:"tier"`
-	KYCStatus     string    `json:"kyc_status"`
-}
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+)
 
 // UserResponse is the public user info
 type UserResponse struct {
-	ID       string `json:"id"`
-	Email   string `json:"email"`
-	Username string `json:"username"`
-	Tier    string `json:"tier"`
+	ID       uuid.UUID `json:"id"`
+	Email    string    `json:"email"`
+	Username string    `json:"username"`
+	KYCLevel KYCLevel  `json:"kyc_level"`
 }
 
 // RegisterRequest is the registration request

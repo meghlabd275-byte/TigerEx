@@ -28,7 +28,7 @@ type PrometheusExporter struct {
 	Counters   map[string][]MetricValue
 	Gauges     map[string][]MetricValue
 	Histograms map[string][]MetricValue
-.mu       sync.RWMutex
+        mu       sync.RWMutex
 }
 
 // New creates exporter

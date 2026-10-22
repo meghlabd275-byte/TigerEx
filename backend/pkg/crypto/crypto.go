@@ -1,8 +1,10 @@
 package crypto
 
 import (
+	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -291,8 +293,3 @@ func splitEncoded(s, sep string) []string {
 	parts = append(parts, current)
 	return parts
 }
-
-import (
-	"crypto"
-	"crypto/hmac"
-)

@@ -385,7 +385,7 @@ type SecurityContext struct {
 	IPAddress    string
 	AntiPhishing string
 	IsVerified   bool
-	2FAEnabled   bool
+	TwoFactorEnabled   bool
 }
 
 func (s *SecurityLayer) GetSecurityContext(r *http.Request) *SecurityContext {

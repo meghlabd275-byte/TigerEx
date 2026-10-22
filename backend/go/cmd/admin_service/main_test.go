@@ -32,7 +32,13 @@ func TestAdminServiceBootstrapRequiresStrongExplicitPassword(t *testing.T) {
 	t.Setenv("TIGEREX_BOOTSTRAP_ADMIN_PASSWORD", "strong bootstrap password 2026")
 	service = NewAdminService()
 	admin, token, err := service.Login("operator@example.com", "strong bootstrap password 2026", "127.0.0.1")
-	if err != nil { t.Fatalf("configured bootstrap admin could not log in: %v", err) }
-	if admin.ID == "" || token == "" { t.Fatal("login did not create an authenticated session") }
-	if _, err := service.ValidateSession(token); err != nil { t.Fatalf("session did not validate: %v", err) }
+	if err != nil {
+		t.Fatalf("configured bootstrap admin could not log in: %v", err)
+	}
+	if admin.ID == "" || token == "" {
+		t.Fatal("login did not create an authenticated session")
+	}
+	if _, err := service.ValidateSession(token); err != nil {
+		t.Fatalf("session did not validate: %v", err)
+	}
 }

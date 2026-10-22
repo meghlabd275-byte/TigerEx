@@ -119,10 +119,10 @@ func (km *KYCManager) CreateProfile(userID string) (*KYCProfile, error) {
 	}
 
 	profile := &KYCProfile{
-		UserID:    userID,
-		Level:     LevelUnverified,
-		Status:    StatusPending,
-		CreatedAt: time.Now(),
+		UserID:      userID,
+		Level:       LevelUnverified,
+		Status:      StatusPending,
+		SubmittedAt: time.Now(),
 	}
 
 	km.profiles[userID] = profile

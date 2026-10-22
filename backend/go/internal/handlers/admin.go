@@ -2,17 +2,18 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
 	"tigerex/backend/internal/admin"
 )
 
 // AdminHandler handles admin API requests
 type AdminHandler struct {
-	service *admin.Service
+	service *admin.AdminService
 }
 
 // NewAdminHandler creates new admin handler
-func NewAdminHandler(svc *admin.Service) *AdminHandler {
+func NewAdminHandler(svc *admin.AdminService) *AdminHandler {
 	return &AdminHandler{service: svc}
 }
 
@@ -29,14 +30,14 @@ type AddBlockchainRequest struct {
 
 // AddTokenRequest represents add token request
 type AddTokenRequest struct {
-	BlockchainID     string `json:"blockchain_id"`
-	Name             string `json:"name"`
-	Symbol           string `json:"symbol"`
-	ContractAddress  string `json:"contract_address"`
-	Decimals         int    `json:"decimals"`
-	MinDeposit       string `json:"min_deposit"`
-	MinWithdraw      string `json:"min_withdraw"`
-	WithdrawFee      string `json:"withdraw_fee"`
+	BlockchainID    string `json:"blockchain_id"`
+	Name            string `json:"name"`
+	Symbol          string `json:"symbol"`
+	ContractAddress string `json:"contract_address"`
+	Decimals        int    `json:"decimals"`
+	MinDeposit      string `json:"min_deposit"`
+	MinWithdraw     string `json:"min_withdraw"`
+	WithdrawFee     string `json:"withdraw_fee"`
 }
 
 // SetFeeRequest represents set fee request
@@ -50,17 +51,17 @@ type SetFeeRequest struct {
 
 // CreateLaunchpadRequest represents create launchpad request
 type CreateLaunchpadRequest struct {
-	Name             string `json:"name"`
-	TokenName        string `json:"token_name"`
-	TokenSymbol      string `json:"token_symbol"`
-	TokenAddress     string `json:"token_address"`
-	BlockchainID     string `json:"blockchain_id"`
+	Name            string `json:"name"`
+	TokenName       string `json:"token_name"`
+	TokenSymbol     string `json:"token_symbol"`
+	TokenAddress    string `json:"token_address"`
+	BlockchainID    string `json:"blockchain_id"`
 	TotalSupply     string `json:"total_supply"`
 	SaleAllocation  string `json:"sale_allocation"`
 	PricePerToken   string `json:"price_per_token"`
 	AcceptedTokenID string `json:"accepted_token_id"`
 	MinPurchase     string `json:"min_purchase"`
-	MaxPurchase    string `json:"max_purchase"`
+	MaxPurchase     string `json:"max_purchase"`
 	StartTime       int64  `json:"start_time"`
 	EndTime         int64  `json:"end_time"`
 	Description     string `json:"description"`
@@ -87,14 +88,14 @@ func (h *AdminHandler) AddBlockchain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	config := &admin.BlockchainConfig{
-		Name:             req.Name,
-		Symbol:           req.Symbol,
-		ChainID:          req.ChainID,
-		ChainType:        req.ChainType,
-		RPCURL:            req.RPCURL,
-		ExplorerURL:       req.ExplorerURL,
-		MinWithdraw:       nil,
-		WithdrawFee:       nil,
+		Name:                 req.Name,
+		Symbol:               req.Symbol,
+		ChainID:              req.ChainID,
+		ChainType:            req.ChainType,
+		RPCURL:               req.RPCURL,
+		ExplorerURL:          req.ExplorerURL,
+		MinWithdraw:          nil,
+		WithdrawFee:          nil,
 		DepositConfirmations: 6,
 	}
 
@@ -155,7 +156,7 @@ func (h *AdminHandler) GetAllBlockchains(w http.ResponseWriter, r *http.Request)
 
 	WriteSuccess(w, map[string]interface{}{
 		"blockchains": blockchains,
-		"count":      len(blockchains),
+		"count":       len(blockchains),
 	})
 }
 
@@ -256,17 +257,17 @@ func (h *AdminHandler) CreateLaunchpad(w http.ResponseWriter, r *http.Request) {
 	}
 
 	project := &admin.LaunchpadProject{
-		Name:            req.Name,
-		TokenName:       req.TokenName,
-		TokenSymbol:     req.TokenSymbol,
-		TokenAddress:    req.TokenAddress,
-		TotalSupply:     nil,
+		Name:           req.Name,
+		TokenName:      req.TokenName,
+		TokenSymbol:    req.TokenSymbol,
+		TokenAddress:   req.TokenAddress,
+		TotalSupply:    nil,
 		SaleAllocation: nil,
 		PricePerToken:  nil,
 		MinPurchase:    nil,
 		MaxPurchase:    nil,
-		StartTime:      0,
-		EndTime:        0,
+		StartTime:      time.Unix(req.StartTime, 0).UTC(),
+		EndTime:        time.Unix(req.EndTime, 0).UTC(),
 		Status:         "upcoming",
 		Description:    req.Description,
 		WebsiteURL:     req.WebsiteURL,

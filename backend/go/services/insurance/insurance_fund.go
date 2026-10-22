@@ -175,7 +175,7 @@ func (im *InsuranceManager) Withdraw(amount float64, currency string, adminID st
 	return nil
 }
 
-func (im *InsuranceManager) SubmitClaim(userID, orderID, amount, currency, cause, description string, evidence []string) (*Claim, error) {
+func (im *InsuranceManager) SubmitClaim(userID, orderID string, amount float64, currency, cause, description string, evidence []string) (*Claim, error) {
 	im.mu.Lock()
 	defer im.mu.Unlock()
 
@@ -209,7 +209,7 @@ func (im *InsuranceManager) SubmitClaim(userID, orderID, amount, currency, cause
 	claim := &Claim{
 		ID:           fmt.Sprintf("CLM%d%d", now.Unix(), now.Nanosecond()),
 		UserID:       userID,
-		OrderID:     orderID,
+		OrderID:      orderID,
 		Amount:       amount,
 		Currency:     currency,
 		Cause:       cause,

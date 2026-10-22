@@ -255,8 +255,9 @@ func (u *User) ResetFailedAttempts() {
     u.LockedUntil = time.Time{}
 }
 
-func (u *User) LastLoginAt time.Time { return time.Time{} }
-func (u *User) LastLoginIP string     { return "" }
+func (u *User) LastLogin() (time.Time, string) {
+    return u.LastLoginAt, u.LastLoginIP
+}
 
 func (s *Session) IsExpired() bool {
     return time.Now().After(s.ExpiresAt)

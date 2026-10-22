@@ -13,7 +13,7 @@ import (
 type Response struct {
 	Success bool        `json:"success"`
 	Data    interface{} `json:"data,omitempty"`
-	Error   *Error     `json:"error,omitempty"`
+	Error   *Error      `json:"error,omitempty"`
 }
 
 // Error represents API error
@@ -24,9 +24,9 @@ type Error struct {
 
 // Pagination represents pagination params
 type Pagination struct {
-	Page    int `json:"page"`
-	Limit   int `json:"limit"`
-	Total   int `json:"total"`
+	Page  int `json:"page"`
+	Limit int `json:"limit"`
+	Total int `json:"total"`
 }
 
 // WriteJSON writes JSON response
@@ -61,8 +61,8 @@ var WriteJSONError = WriteError
 // Request represents incoming request
 type Request struct {
 	// Common fields
-	Page    int `json:"page"`
-	Limit   int `json:"limit"`
+	Page  int `json:"page"`
+	Limit int `json:"limit"`
 }
 
 // ParseJSON parses JSON body
@@ -74,19 +74,19 @@ func ParseJSON(r *http.Request, dest interface{}) error {
 func GetPagination(r *http.Request) Pagination {
 	page := 1
 	limit := 20
-	
+
 	if p := r.URL.Query().Get("page"); p != "" {
 		if parsed := parseInt(p); parsed > 0 {
 			page = parsed
 		}
 	}
-	
+
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if parsed := parseInt(l); parsed > 0 && parsed <= 100 {
 			limit = parsed
 		}
 	}
-	
+
 	return Pagination{
 		Page:  page,
 		Limit: limit,

@@ -1,4 +1,4 @@
-package main
+package legacy
 
 import (
 	"errors"
@@ -24,18 +24,18 @@ type BinanceClient struct {
 	SecretKey string
 	BaseURL   string
 	TestMode  bool
-	
+
 	// HTTP Client
 	httpClient interface{}
-	
+
 	// WebSocket
 	wsEnabled bool
 	wsURL     string
 	wsClient  interface{}
-	
+
 	// Rate Limiter
 	rateLimiter *RateLimiter
-	
+
 	// Config
 	config BinanceConfig
 }
@@ -80,12 +80,12 @@ func NewBinanceClient(apiKey, secretKey string, testMode bool) *BinanceClient {
 		},
 		rateLimiter: NewRateLimiter(1200, 200), // 1200 requests per minute, burst 200
 	}
-	
+
 	if testMode {
 		client.BaseURL = "https://testnet.binance.vision"
 		client.wsURL = "wss://testnet.binance.vision/ws"
 	}
-	
+
 	return client
 }
 
@@ -205,13 +205,13 @@ func (c *BinanceSpotClient) WSAllMarketTickers(params *WsAllMarketTickersParams)
 // =============================================================================
 
 type CoinbaseClient struct {
-	APIKey    string
-	SecretKey string
+	APIKey     string
+	SecretKey  string
 	Passphrase string
-	BaseURL   string
-	
+	BaseURL    string
+
 	httpClient interface{}
-	
+
 	rateLimiter *RateLimiter
 }
 
@@ -225,7 +225,7 @@ type CoinbasePrimeClient struct {
 
 func NewCoinbaseClient(apiKey, secretKey, passphrase string) *CoinbaseClient {
 	return &CoinbaseClient{
-		APIKey:     apiKey,
+		APIKey:      apiKey,
 		SecretKey:   secretKey,
 		Passphrase:  passphrase,
 		BaseURL:     "https://api.coinbase.com",
@@ -248,14 +248,14 @@ type BybitClient struct {
 	SecretKey string
 	BaseURL   string
 	TestNet   bool
-	
+
 	httpClient interface{}
-	
-	spotClient   *BybitSpotClient
-	linearClient *BybitLinearClient
+
+	spotClient    *BybitSpotClient
+	linearClient  *BybitLinearClient
 	inverseClient *BybitInverseClient
 	optionsClient *BybitOptionsClient
-	
+
 	rateLimiter *RateLimiter
 }
 
@@ -280,12 +280,12 @@ func NewBybitClient(apiKey, secretKey string, testNet bool) *BybitClient {
 	if testNet {
 		baseURL = "https://api-testnet.bybit.com"
 	}
-	
+
 	return &BybitClient{
-		APIKey:    apiKey,
-		SecretKey: secretKey,
-		BaseURL:   baseURL,
-		TestNet:   testNet,
+		APIKey:      apiKey,
+		SecretKey:   secretKey,
+		BaseURL:     baseURL,
+		TestNet:     testNet,
 		rateLimiter: NewRateLimiter(600, 10),
 	}
 }
@@ -311,17 +311,17 @@ func (c *BybitClient) Options() *BybitOptionsClient {
 // =============================================================================
 
 type OKXClient struct {
-	APIKey    string
-	SecretKey string
+	APIKey     string
+	SecretKey  string
 	Passphrase string
-	BaseURL   string
-	
+	BaseURL    string
+
 	httpClient interface{}
-	
-	tradeClient *OKXTradeClient
-	marketClient *OKXMarketClient
+
+	tradeClient   *OKXTradeClient
+	marketClient  *OKXMarketClient
 	accountClient *OKXAccountClient
-	
+
 	rateLimiter *RateLimiter
 }
 
@@ -339,10 +339,10 @@ type OKXAccountClient struct {
 
 func NewOKXClient(apiKey, secretKey, passphrase string) *OKXClient {
 	return &OKXClient{
-		APIKey:     apiKey,
-		SecretKey:  secretKey,
-		Passphrase: passphrase,
-		BaseURL:    "https://www.okx.com",
+		APIKey:      apiKey,
+		SecretKey:   secretKey,
+		Passphrase:  passphrase,
+		BaseURL:     "https://www.okx.com",
 		rateLimiter: NewRateLimiter(6000, 20), // 6000 requests per minute
 	}
 }
@@ -367,17 +367,17 @@ type KrakenClient struct {
 	APIKey    string
 	SecretKey string
 	BaseURL   string
-	
+
 	httpClient interface{}
-	
+
 	rateLimiter *RateLimiter
 }
 
 func NewKrakenClient(apiKey, secretKey string) *KrakenClient {
 	return &KrakenClient{
-		APIKey:    apiKey,
-		SecretKey: secretKey,
-		BaseURL:   "https://api.kraken.com",
+		APIKey:      apiKey,
+		SecretKey:   secretKey,
+		BaseURL:     "https://api.kraken.com",
 		rateLimiter: NewRateLimiter(60, 15), // Kraken has low rate limits
 	}
 }
@@ -387,16 +387,16 @@ func NewKrakenClient(apiKey, secretKey string) *KrakenClient {
 // =============================================================================
 
 type KuCoinClient struct {
-	APIKey    string
-	SecretKey string
+	APIKey     string
+	SecretKey  string
 	Passphrase string
-	BaseURL   string
-	
+	BaseURL    string
+
 	httpClient interface{}
-	
-	tradeClient *KuCoinTradeClient
+
+	tradeClient  *KuCoinTradeClient
 	marketClient *KuCoinMarketClient
-	
+
 	rateLimiter *RateLimiter
 }
 
@@ -410,10 +410,10 @@ type KuCoinMarketClient struct {
 
 func NewKuCoinClient(apiKey, secretKey, passphrase string) *KuCoinClient {
 	return &KuCoinClient{
-		APIKey:     apiKey,
-		SecretKey:  secretKey,
-		Passphrase: passphrase,
-		BaseURL:    "https://api.kucoin.com",
+		APIKey:      apiKey,
+		SecretKey:   secretKey,
+		Passphrase:  passphrase,
+		BaseURL:     "https://api.kucoin.com",
 		rateLimiter: NewRateLimiter(1800, 20),
 	}
 }
@@ -426,13 +426,13 @@ type GateIOClient struct {
 	APIKey    string
 	SecretKey string
 	BaseURL   string
-	
+
 	httpClient interface{}
-	
-	spotClient *GateIOSpotClient
-	futuresClient *GateIOFuturesClient
+
+	spotClient     *GateIOSpotClient
+	futuresClient  *GateIOFuturesClient
 	deliveryClient *GateIODeliveryClient
-	
+
 	rateLimiter *RateLimiter
 }
 
@@ -450,9 +450,9 @@ type GateIODeliveryClient struct {
 
 func NewGateIOClient(apiKey, secretKey string) *GateIOClient {
 	return &GateIOClient{
-		APIKey:    apiKey,
-		SecretKey: secretKey,
-		BaseURL:   "https://api.gateio.ws",
+		APIKey:      apiKey,
+		SecretKey:   secretKey,
+		BaseURL:     "https://api.gateio.ws",
 		rateLimiter: NewRateLimiter(6000, 20),
 	}
 }
@@ -462,16 +462,16 @@ func NewGateIOClient(apiKey, secretKey string) *GateIOClient {
 // =============================================================================
 
 type BitgetClient struct {
-	APIKey    string
-	SecretKey string
+	APIKey     string
+	SecretKey  string
 	Passphrase string
-	BaseURL   string
-	
+	BaseURL    string
+
 	httpClient interface{}
-	
+
 	spotClient *BitgetSpotClient
-	mixClient *BitgetMixClient
-	
+	mixClient  *BitgetMixClient
+
 	rateLimiter *RateLimiter
 }
 
@@ -485,10 +485,10 @@ type BitgetMixClient struct {
 
 func NewBitgetClient(apiKey, secretKey, passphrase string) *BitgetClient {
 	return &BitgetClient{
-		APIKey:     apiKey,
-		SecretKey:  secretKey,
-		Passphrase: passphrase,
-		BaseURL:    "https://api.bitget.com",
+		APIKey:      apiKey,
+		SecretKey:   secretKey,
+		Passphrase:  passphrase,
+		BaseURL:     "https://api.bitget.com",
 		rateLimiter: NewRateLimiter(1800, 20),
 	}
 }
@@ -501,17 +501,17 @@ type MEXCClient struct {
 	APIKey    string
 	SecretKey string
 	BaseURL   string
-	
+
 	httpClient interface{}
-	
+
 	rateLimiter *RateLimiter
 }
 
 func NewMEXCClient(apiKey, secretKey string) *MEXCClient {
 	return &MEXCClient{
-		APIKey:    apiKey,
-		SecretKey: secretKey,
-		BaseURL:   "https://api.mexc.com",
+		APIKey:      apiKey,
+		SecretKey:   secretKey,
+		BaseURL:     "https://api.mexc.com",
 		rateLimiter: NewRateLimiter(2000, 20),
 	}
 }
@@ -524,17 +524,17 @@ type HuobiClient struct {
 	APIKey    string
 	SecretKey string
 	BaseURL   string
-	
+
 	httpClient interface{}
-	
+
 	rateLimiter *RateLimiter
 }
 
 func NewHuobiClient(apiKey, secretKey string) *HuobiClient {
 	return &HuobiClient{
-		APIKey:    apiKey,
-		SecretKey: secretKey,
-		BaseURL:   "https://api.huobi.pro",
+		APIKey:      apiKey,
+		SecretKey:   secretKey,
+		BaseURL:     "https://api.huobi.pro",
 		rateLimiter: NewRateLimiter(2000, 20),
 	}
 }
@@ -547,17 +547,17 @@ type CryptoComClient struct {
 	APIKey    string
 	SecretKey string
 	BaseURL   string
-	
+
 	httpClient interface{}
-	
+
 	rateLimiter *RateLimiter
 }
 
 func NewCryptoComClient(apiKey, secretKey string) *CryptoComClient {
 	return &CryptoComClient{
-		APIKey:    apiKey,
-		SecretKey: secretKey,
-		BaseURL:   "https://api.crypto.com",
+		APIKey:      apiKey,
+		SecretKey:   secretKey,
+		BaseURL:     "https://api.crypto.com",
 		rateLimiter: NewRateLimiter(1000, 20),
 	}
 }
@@ -567,44 +567,56 @@ func NewCryptoComClient(apiKey, secretKey string) *CryptoComClient {
 // =============================================================================
 
 type RateLimiter struct {
-	mu sync.Mutex
+	mu                sync.Mutex
 	requestsPerSecond int
-	burst int
-	tokens float64
-	lastRefill time.Time
+	burst             int
+	tokens            float64
+	lastRefill        time.Time
 }
 
 func NewRateLimiter(rps, burst int) *RateLimiter {
 	return &RateLimiter{
 		requestsPerSecond: rps,
-		burst: burst,
-		tokens: float64(burst),
-		lastRefill: time.Now(),
+		burst:             burst,
+		tokens:            float64(burst),
+		lastRefill:        time.Now(),
 	}
 }
 
 func (r *RateLimiter) Allow() bool {
-	if r == nil || r.requestsPerSecond <= 0 || r.burst <= 0 { return false }
+	if r == nil || r.requestsPerSecond <= 0 || r.burst <= 0 {
+		return false
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
 	elapsed := now.Sub(r.lastRefill).Seconds()
 	if elapsed > 0 {
 		r.tokens += elapsed * float64(r.requestsPerSecond)
-		if r.tokens > float64(r.burst) { r.tokens = float64(r.burst) }
+		if r.tokens > float64(r.burst) {
+			r.tokens = float64(r.burst)
+		}
 		r.lastRefill = now
 	}
-	if r.tokens < 1 { return false }
+	if r.tokens < 1 {
+		return false
+	}
 	r.tokens--
 	return true
 }
 
 func (r *RateLimiter) Wait() {
 	for {
-		if r.Allow() { return }
-		if r == nil || r.requestsPerSecond <= 0 || r.burst <= 0 { return }
+		if r.Allow() {
+			return
+		}
+		if r == nil || r.requestsPerSecond <= 0 || r.burst <= 0 {
+			return
+		}
 		interval := time.Second / time.Duration(r.requestsPerSecond)
-		if interval <= 0 { interval = time.Nanosecond }
+		if interval <= 0 {
+			interval = time.Nanosecond
+		}
 		time.Sleep(interval)
 	}
 }
@@ -615,28 +627,28 @@ func (r *RateLimiter) Wait() {
 
 // Order Parameters
 type PlaceOrderParams struct {
-	Symbol           string
-	Side             string // BUY, SELL
-	Type             string // LIMIT, MARKET, STOP_LOSS, STOP_LIMIT, TAKE_PROFIT
-	TimeInForce      string // GTC, IOC, FOK
-	Quantity         float64
-	Price            float64
-	StopPrice        float64
-	ClientOrderID    string
-	ReduceOnly       bool
-	ClosePosition    bool
+	Symbol        string
+	Side          string // BUY, SELL
+	Type          string // LIMIT, MARKET, STOP_LOSS, STOP_LIMIT, TAKE_PROFIT
+	TimeInForce   string // GTC, IOC, FOK
+	Quantity      float64
+	Price         float64
+	StopPrice     float64
+	ClientOrderID string
+	ReduceOnly    bool
+	ClosePosition bool
 }
 
 // Query Parameters
 type QueryOrderParams struct {
-	Symbol      string
-	OrderID     string
+	Symbol            string
+	OrderID           string
 	OrigClientOrderID string
 }
 
 type CancelOrderParams struct {
-	Symbol      string
-	OrderID     string
+	Symbol        string
+	OrderID       string
 	ClientOrderID string
 }
 
@@ -645,7 +657,7 @@ type QueryOpenOrdersParams struct {
 }
 
 type QueryAllOrdersParams struct {
-	Symbol   string
+	Symbol    string
 	StartTime int64
 	EndTime   int64
 	Limit     int
@@ -665,59 +677,59 @@ type AccountParams struct {
 
 // Response Types
 type OrderResponse struct {
-	OrderID            int64
-	ClientOrderID      string
-	Symbol             string
-	Price              float64
-	OrigQty            float64
-	ExecutedQty        float64
-	Status             string
-	Type               string
-	Side               string
-	Time               int64
-	UpdateTime         int64
-	IsWorking          bool
+	OrderID       int64
+	ClientOrderID string
+	Symbol        string
+	Price         float64
+	OrigQty       float64
+	ExecutedQty   float64
+	Status        string
+	Type          string
+	Side          string
+	Time          int64
+	UpdateTime    int64
+	IsWorking     bool
 }
 
 type CancelOrderResponse struct {
-	OrderID            int64
-	ClientOrderID      string
-	Status             string
+	OrderID       int64
+	ClientOrderID string
+	Status        string
 }
 
 type AccountResponse struct {
-	MakerCommission    int
-	TakerCommission    int
-	BuyerCommission    int
-	SellerCommission   int
-	CanTrade           bool
-	CanWithdraw        bool
-	CanDeposit         bool
-	Balances           []Balance
+	MakerCommission  int
+	TakerCommission  int
+	BuyerCommission  int
+	SellerCommission int
+	CanTrade         bool
+	CanWithdraw      bool
+	CanDeposit       bool
+	Balances         []Balance
 }
 
 type Balance struct {
-	Asset   string
-	Free    float64
-	Locked  float64
+	Asset  string
+	Free   float64
+	Locked float64
 }
 
 type BalanceResponse struct {
-	Asset   string
-	Free    float64
-	Locked  float64
+	Asset  string
+	Free   float64
+	Locked float64
 }
 
 type TradeResponse struct {
-	ID            int64
-	Symbol        string
-	Price         float64
-	Qty           float64
-	Commission    float64
+	ID              int64
+	Symbol          string
+	Price           float64
+	Qty             float64
+	Commission      float64
 	CommissionAsset string
-	Time          int64
-	IsBuyer       bool
-	IsMaker       bool
+	Time            int64
+	IsBuyer         bool
+	IsMaker         bool
 }
 
 type DepthResponse struct {
@@ -727,35 +739,35 @@ type DepthResponse struct {
 }
 
 type AggTradeResponse struct {
-	AggTradeID    int64
-	Price         float64
-	Quantity      float64
-	FirstTradeID  int64
-	LastTradeID   int64
-	Timestamp     int64
-	IsBuyerMaker  bool
+	AggTradeID   int64
+	Price        float64
+	Quantity     float64
+	FirstTradeID int64
+	LastTradeID  int64
+	Timestamp    int64
+	IsBuyerMaker bool
 }
 
 type KlineResponse struct {
-	OpenTime     int64
-	Open         float64
-	High         float64
-	Low          float64
-	Close        float64
-	Volume        float64
-	CloseTime    int64
-	QuoteVolume  float64
+	OpenTime    int64
+	Open        float64
+	High        float64
+	Low         float64
+	Close       float64
+	Volume      float64
+	CloseTime   int64
+	QuoteVolume float64
 }
 
 type TickerResponse struct {
-	Symbol         string
-	PriceChange    float64
+	Symbol             string
+	PriceChange        float64
 	PriceChangePercent float64
-	LastPrice      float64
-	HighPrice      float64
-	LowPrice       float64
-	Volume          float64
-	QuoteVolume     float64
+	LastPrice          float64
+	HighPrice          float64
+	LowPrice           float64
+	Volume             float64
+	QuoteVolume        float64
 }
 
 type PriceResponse struct {
@@ -763,27 +775,27 @@ type PriceResponse struct {
 }
 
 type BookTickerResponse struct {
-	Symbol       string
-	BidPrice     float64
-	BidQty       float64
-	AskPrice     float64
-	AskQty       float64
+	Symbol   string
+	BidPrice float64
+	BidQty   float64
+	AskPrice float64
+	AskQty   float64
 }
 
 type ExchangeInfoResponse struct {
-	Timezone     string
-	ServerTime   int64
-	Symbols      []SymbolInfo
+	Timezone   string
+	ServerTime int64
+	Symbols    []SymbolInfo
 }
 
 type SymbolInfo struct {
-	Symbol            string
-	Status            string
-	BaseAsset         string
-	QuoteAsset        string
-	BaseAssetPrecision int
+	Symbol              string
+	Status              string
+	BaseAsset           string
+	QuoteAsset          string
+	BaseAssetPrecision  int
 	QuoteAssetPrecision int
-	OrderTypes        []string
+	OrderTypes          []string
 }
 
 // WebSocket Types
@@ -792,12 +804,12 @@ type WsAggTradesParams struct {
 }
 
 type WsAggTradeResponse struct {
-	AggTradeID    int64
-	Price         float64
-	Quantity      float64
-	FirstTradeID  int64
-	Time          int64
-	IsBuyerMaker  bool
+	AggTradeID   int64
+	Price        float64
+	Quantity     float64
+	FirstTradeID int64
+	Time         int64
+	IsBuyerMaker bool
 }
 
 type WsTradeParams struct {
@@ -813,13 +825,13 @@ type WsTradeResponse struct {
 }
 
 type WsKlineParams struct {
-	Symbol string
+	Symbol   string
 	Interval string
 }
 
 type WsKlineResponse struct {
 	Symbol string
-	 Kline   []interface{}
+	Kline  []interface{}
 }
 
 type WsDepthParams struct {
@@ -829,8 +841,8 @@ type WsDepthParams struct {
 
 type WsDepthResponse struct {
 	LastUpdateID int64
-	Bids        [][]string
-	Asks        [][]string
+	Bids         [][]string
+	Asks         [][]string
 }
 
 type WsTickerParams struct {
@@ -852,13 +864,13 @@ type WsAllMiniTickerParams struct {
 }
 
 type WsAllMiniTickerResponse struct {
-	Symbol       string
-	ClosePrice   float64
-	OpenPrice    float64
-	HighPrice    float64
-	LowPrice     float64
-	Volume       float64
-	QuoteVolume  float64
+	Symbol      string
+	ClosePrice  float64
+	OpenPrice   float64
+	HighPrice   float64
+	LowPrice    float64
+	Volume      float64
+	QuoteVolume float64
 }
 
 type WsAllMarketTickersParams struct{}
@@ -880,18 +892,18 @@ type WsAllMarketTickersResponse struct {
 
 type ExchangeAggregator struct {
 	clients map[string]interface{}
-	
+
 	// Cached data
-	tickers map[string]map[string]*AggregatedTicker
+	tickers    map[string]map[string]*AggregatedTicker
 	orderBooks map[string]map[string]*AggregatedOrderBook
-	
+
 	mu sync.RWMutex
 }
 
 type AggregatedTicker struct {
-	Exchange string
-	Symbol   string
-	Price    float64
+	Exchange  string
+	Symbol    string
+	Price     float64
 	Volume24h float64
 	Timestamp int64
 }
@@ -910,8 +922,8 @@ type OrderBookLevel struct {
 
 func NewExchangeAggregator() *ExchangeAggregator {
 	return &ExchangeAggregator{
-		clients: make(map[string]interface{}),
-		tickers: make(map[string]map[string]*AggregatedTicker),
+		clients:    make(map[string]interface{}),
+		tickers:    make(map[string]map[string]*AggregatedTicker),
 		orderBooks: make(map[string]map[string]*AggregatedOrderBook),
 	}
 }
@@ -923,7 +935,7 @@ func (a *ExchangeAggregator) AddExchange(name string, client interface{}) {
 func (a *ExchangeAggregator) GetBestPrice(symbol string) (*BestPrice, error) {
 	bestBid := &OrderBookLevel{}
 	bestAsk := &OrderBookLevel{}
-	
+
 	for exchange, books := range a.orderBooks {
 		if book, ok := books[symbol]; ok {
 			if len(book.Bids) > 0 && book.Bids[0].Price > bestBid.Price {
@@ -934,25 +946,25 @@ func (a *ExchangeAggregator) GetBestPrice(symbol string) (*BestPrice, error) {
 			}
 		}
 	}
-	
+
 	return &BestPrice{
-		Symbol: symbol,
+		Symbol:  symbol,
 		BestBid: bestBid,
 		BestAsk: bestAsk,
-		Spread: bestAsk.Price - bestBid.Price,
+		Spread:  bestAsk.Price - bestBid.Price,
 	}, nil
 }
 
 type BestPrice struct {
-	Symbol   string
-	BestBid  *OrderBookLevel
-	BestAsk  *OrderBookLevel
-	Spread   float64
+	Symbol  string
+	BestBid *OrderBookLevel
+	BestAsk *OrderBookLevel
+	Spread  float64
 }
 
 func main() {
 	log.Println("TigerEx Exchange API Clients v3.0 initialized")
-	
+
 	// Initialize clients
 	binance := NewBinanceClient("key", "secret", false)
 	coinbase := NewCoinbaseClient("key", "secret", "passphrase")
@@ -965,7 +977,7 @@ func main() {
 	huobi := NewHuobiClient("key", "secret")
 	cryptocom := NewCryptoComClient("key", "secret")
 	kraken := NewKrakenClient("key", "secret")
-	
+
 	// Create aggregator
 	aggregator := NewExchangeAggregator()
 	aggregator.AddExchange("binance", binance)
@@ -979,7 +991,7 @@ func main() {
 	aggregator.AddExchange("huobi", huobi)
 	aggregator.AddExchange("cryptocom", cryptocom)
 	aggregator.AddExchange("kraken", kraken)
-	
+
 	fmt.Println("Exchange API Clients:")
 	fmt.Println("- Binance:", binance.BaseURL)
 	fmt.Println("- Coinbase:", coinbase.BaseURL)

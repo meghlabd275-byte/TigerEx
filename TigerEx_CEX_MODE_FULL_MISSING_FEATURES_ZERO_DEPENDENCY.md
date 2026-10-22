@@ -22,6 +22,25 @@ This section grounds the roadmap in the repository as it stands. Directory prese
 - Partial implementations exist for matching engine, copy trading, grid trading, earn, options, P2P, referral, launchpad, dual investment, and TradFi stock trading. Each is **unverified** against the acceptance gates in Section C.
 - The repository is a shallow clone; historical/CI evidence for individual modules is not available from this checkout alone.
 
+### Build status (2026-10-21)
+
+The Go module `backend/go` previously did not compile. It now builds, vets clean, and
+passes `go test ./...`; the three Go jobs in `.github/workflows/ci.yml` pass.
+
+- An earlier, unreferenced generation of the Go backend (19 files) was moved to
+  `backend/go/_legacy/` and excluded from the build. It had 16 competing `main()`
+  functions, duplicate type declarations, simulated KYC/AML paths, and clients for
+  Binance/OKX/Bybit — which contradicts the no-external-exchange-dependency rule.
+  The matching engine is not lost: it lives in Rust (`backend/rust/matching-engine`).
+- The dead duplicate entrypoint in the second Go module was moved to
+  `TigerEx/rest_api_gateway/_legacy/`. It returned fabricated data (for example a
+  hardcoded withdrawal record) and was not referenced by the real `cmd/server.go`.
+- The two gateways named in Section C.9 are the `cmd/API` service in `backend/go`
+  and `cmd/server.go` in `TigerEx/rest_api_gateway`.
+
+Building is not evidence that a feature is correct, safe, or production-ready; the
+acceptance gates in Section C still apply to every item.
+
 ---
 
 ## A. User and trader features

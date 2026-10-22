@@ -30,11 +30,11 @@ type Config struct {
 	RedisDB       int
 
 	// JWT
-	JWTSecret          string
-	JWTExpireTime      time.Duration
+	JWTSecret            string
+	JWTExpireTime        time.Duration
 	JWTRefreshExpireTime time.Duration
-	JWTIssuer          string
-	JWTAudience        string
+	JWTIssuer            string
+	JWTAudience          string
 
 	// Security
 	BCryptCost             int
@@ -54,7 +54,7 @@ type Config struct {
 	// Rate Limiting
 	RateLimitEnabled           bool
 	RateLimitRequestsPerMinute int
-	RateLimitBurst            int
+	RateLimitBurst             int
 
 	// Logging
 	LogLevel      string
@@ -91,18 +91,18 @@ func Load() *Config {
 		JWTExpireTime:        getEnvAsDuration("JWT_EXPIRE_TIME", 15*time.Minute),
 		JWTRefreshExpireTime: getEnvAsDuration("JWT_REFRESH_EXPIRE_TIME", 7*24*time.Hour),
 		JWTIssuer:            getEnv("JWT_ISSUER", "tigerex"),
-		JWTAudience:         getEnv("JWT_AUDIENCE", "tigerex"),
+		JWTAudience:          getEnv("JWT_AUDIENCE", "tigerex"),
 
 		// Security
-		BCryptCost:            getEnvAsInt("BCRYPT_COST", 12),
-		PasswordMinLength:     getEnvAsInt("PASSWORD_MIN_LENGTH", 8),
-		PasswordRequireUpper:  getEnvAsBool("PASSWORD_REQUIRE_UPPER", true),
-		PasswordRequireLower:  getEnvAsBool("PASSWORD_REQUIRE_LOWER", true),
-		PasswordRequireNumber: getEnvAsBool("PASSWORD_REQUIRE_NUMBER", true),
+		BCryptCost:             getEnvAsInt("BCRYPT_COST", 12),
+		PasswordMinLength:      getEnvAsInt("PASSWORD_MIN_LENGTH", 8),
+		PasswordRequireUpper:   getEnvAsBool("PASSWORD_REQUIRE_UPPER", true),
+		PasswordRequireLower:   getEnvAsBool("PASSWORD_REQUIRE_LOWER", true),
+		PasswordRequireNumber:  getEnvAsBool("PASSWORD_REQUIRE_NUMBER", true),
 		PasswordRequireSpecial: getEnvAsBool("PASSWORD_REQUIRE_SPECIAL", false),
-		MaxLoginAttempts:      getEnvAsInt("MAX_LOGIN_ATTEMPTS", 5),
-		LockoutDuration:       getEnvAsDuration("LOCKOUT_DURATION", 15*time.Minute),
-		SessionExpireTime:     getEnvAsDuration("SESSION_EXPIRE_TIME", 24*time.Hour),
+		MaxLoginAttempts:       getEnvAsInt("MAX_LOGIN_ATTEMPTS", 5),
+		LockoutDuration:        getEnvAsDuration("LOCKOUT_DURATION", 15*time.Minute),
+		SessionExpireTime:      getEnvAsDuration("SESSION_EXPIRE_TIME", 24*time.Hour),
 
 		// 2FA
 		TOTPIssuer:     getEnv("TOTP_ISSUER", "TigerEx"),
@@ -111,7 +111,7 @@ func Load() *Config {
 		// Rate Limiting
 		RateLimitEnabled:           getEnvAsBool("RATE_LIMIT_ENABLED", true),
 		RateLimitRequestsPerMinute: getEnvAsInt("RATE_LIMIT_REQUESTS_PER_MINUTE", 60),
-		RateLimitBurst:            getEnvAsInt("RATE_LIMIT_BURST", 10),
+		RateLimitBurst:             getEnvAsInt("RATE_LIMIT_BURST", 10),
 
 		// Logging
 		LogLevel:      getEnv("LOG_LEVEL", "info"),

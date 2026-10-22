@@ -303,7 +303,7 @@ func (pfs *PriceFeedService) updatePrices() {
 		// Keep price history (last 24 hours at 100ms intervals = 864000 entries max)
 		pfs.priceHistory[symbol] = append(pfs.priceHistory[symbol], *currentPrice)
 		if len(pfs.priceHistory[symbol]) > 864000 {
-			pfs.priceHistory[symbol] = pfs.priceHistory[symbol][-864000:]
+			pfs.priceHistory[symbol] = pfs.priceHistory[symbol][len(pfs.priceHistory[symbol])-864000:]
 		}
 	}
 }

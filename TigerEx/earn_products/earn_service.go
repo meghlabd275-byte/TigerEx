@@ -528,7 +528,7 @@ func (e *EarnService) Subscribe(userID, productID string, amount float64) (*Earn
 	}
 
 	e.subscriptions[subscription.SubscriptionID] = subscription
-	e.userSubs[userID] = append(e.userSubs[userSubscription)
+	e.userSubs[userID] = append(e.userSubs[userID], subscription)
 
 	// Update product capacity
 	product.CurrentSubscribed += amount

@@ -1,15 +1,10 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"math"
-	"math/big"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -37,8 +32,8 @@ func (e APIError) Error() string {
 type ProductType string
 
 const (
-	ProductTypeFlexible    ProductType = "flexible"
-	ProductTypeFixed       ProductType = "fixed"
+	ProductTypeFlexible   ProductType = "flexible"
+	ProductTypeFixed      ProductType = "fixed"
 	ProductTypeLaunchpool ProductType = "launchpool"
 	ProductTypeDual       ProductType = "dual"
 	ProductTypeRange      ProductType = "range"
@@ -52,114 +47,114 @@ type EarnProduct struct {
 	Asset           string      `json:"asset"`
 	Network         string      `json:"network"`
 	ProductType     ProductType `json:"product_type"`
-	APY            float64     `json:"apy"`
+	APY             float64     `json:"apy"`
 	MinAmount       float64     `json:"min_amount"`
 	MaxAmount       float64     `json:"max_amount"`
 	Duration        int         `json:"duration"` // days, 0 for flexible
 	LockPeriod      int         `json:"lock_period"`
 	TotalDeposited  float64     `json:"total_deposited"`
-	TotalRewards   float64     `json:"total_rewards"`
-	MaxRewards     float64     `json:"max_rewards"`
-	Participants   int         `json:"participants"`
-	Status         string      `json:"status"` // "active", "upcoming", "completed", "cancelled"
-	StartTime      time.Time   `json:"start_time"`
-	EndTime        time.Time   `json:"end_time"`
-	EarlyRedemption bool       `json:"early_redemption"`
-	AutoRenew      bool        `json:"auto_renew"`
+	TotalRewards    float64     `json:"total_rewards"`
+	MaxRewards      float64     `json:"max_rewards"`
+	Participants    int         `json:"participants"`
+	Status          string      `json:"status"` // "active", "upcoming", "completed", "cancelled"
+	StartTime       time.Time   `json:"start_time"`
+	EndTime         time.Time   `json:"end_time"`
+	EarlyRedemption bool        `json:"early_redemption"`
+	AutoRenew       bool        `json:"auto_renew"`
 	CreatedAt       time.Time   `json:"created_at"`
 }
 
 type EarnSubscription struct {
-	ID             string    `json:"id"`
-	UserID         string    `json:"user_id"`
-	ProductID      string    `json:"product_id"`
-	Asset         string    `json:"asset"`
-	ProductType   ProductType `json:"product_type"`
-	Amount        float64   `json:"amount"`
-	APY           float64   `json:"apy"`
-	RewardAmount  float64   `json:"reward_amount"`
-	StartTime     time.Time `json:"start_time"`
-	EndTime       time.Time `json:"end_time"`
-	Status        string    `json:"status"` // "active", "matured", "redeemed", "cancelled"
-	RedeemedAt    *time.Time `json:"redeemed_at"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID           string      `json:"id"`
+	UserID       string      `json:"user_id"`
+	ProductID    string      `json:"product_id"`
+	Asset        string      `json:"asset"`
+	ProductType  ProductType `json:"product_type"`
+	Amount       float64     `json:"amount"`
+	APY          float64     `json:"apy"`
+	RewardAmount float64     `json:"reward_amount"`
+	StartTime    time.Time   `json:"start_time"`
+	EndTime      time.Time   `json:"end_time"`
+	Status       string      `json:"status"` // "active", "matured", "redeemed", "cancelled"
+	RedeemedAt   *time.Time  `json:"redeemed_at"`
+	CreatedAt    time.Time   `json:"created_at"`
 }
 
 type EarnReward struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"user_id"`
-	ProductID   string    `json:"product_id"`
-	Asset       string    `json:"asset"`
-	Amount      float64   `json:"amount"`
-	Type        string    `json:"type"` // "interest", "bonus", "reward"
-	TxHash      string    `json:"tx_hash"`
-	Status      string    `json:"status"` // "pending", "completed", "failed"
-	CreatedAt   time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	ProductID string    `json:"product_id"`
+	Asset     string    `json:"asset"`
+	Amount    float64   `json:"amount"`
+	Type      string    `json:"type"` // "interest", "bonus", "reward"
+	TxHash    string    `json:"tx_hash"`
+	Status    string    `json:"status"` // "pending", "completed", "failed"
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type LaunchpoolProject struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Description    string    `json:"description"`
-	RewardToken    string    `json:"reward_token"`
-	StakeToken     string    `json:"stake_token"`
-	TotalRewards  float64   `json:"total_rewards"`
-	Duration      int       `json:"duration"`
-	MinStake      float64   `json:"min_stake"`
-	APY           float64   `json:"apy"`
-	Status        string    `json:"status"` // "upcoming", "active", "completed"
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Description  string    `json:"description"`
+	RewardToken  string    `json:"reward_token"`
+	StakeToken   string    `json:"stake_token"`
+	TotalRewards float64   `json:"total_rewards"`
+	Duration     int       `json:"duration"`
+	MinStake     float64   `json:"min_stake"`
+	APY          float64   `json:"apy"`
+	Status       string    `json:"status"` // "upcoming", "active", "completed"
 	StartTime    time.Time `json:"start_time"`
 	EndTime      time.Time `json:"end_time"`
-	Participants   int     `json:"participants"`
+	Participants int       `json:"participants"`
 	TotalStaked  float64   `json:"total_staked"`
 }
 
 type LaunchpoolStake struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"user_id"`
-	ProjectID   string    `json:"project_id"`
-	StakeAmount float64   `json:"stake_amount"`
-	RewardAmount float64  `json:"reward_amount"`
-	Claimed     bool     `json:"claimed"`
-	ClaimedAt   *time.Time `json:"claimed_at"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID           string     `json:"id"`
+	UserID       string     `json:"user_id"`
+	ProjectID    string     `json:"project_id"`
+	StakeAmount  float64    `json:"stake_amount"`
+	RewardAmount float64    `json:"reward_amount"`
+	Claimed      bool       `json:"claimed"`
+	ClaimedAt    *time.Time `json:"claimed_at"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 type Coupon struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"user_id"`
-	Code        string    `json:"code"`
-	Type        string    `json:"type"` // "deposit", "trading", "staking"
-	Amount      float64   `json:"amount"`
-	Currency    string    `json:"currency"`
-	MinRequirement float64 `json:"min_requirement"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	UsedAt     *time.Time `json:"used_at"`
-	Status      string    `json:"status"` // "active", "used", "expired"
-	CreatedAt   time.Time `json:"created_at"`
+	ID             string     `json:"id"`
+	UserID         string     `json:"user_id"`
+	Code           string     `json:"code"`
+	Type           string     `json:"type"` // "deposit", "trading", "staking"
+	Amount         float64    `json:"amount"`
+	Currency       string     `json:"currency"`
+	MinRequirement float64    `json:"min_requirement"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	UsedAt         *time.Time `json:"used_at"`
+	Status         string     `json:"status"` // "active", "used", "expired"
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 type RedPacket struct {
-	ID          string    `json:"id"`
-	CreatorID   string    `json:"creator_id"`
-	Asset       string    `json:"asset"`
-	Amount      float64   `json:"amount"`
-	Quantity    int       `json:"quantity"`
-	Type        string    `json:"type"` // "random", "average"
-	Claimed     int       `json:"claimed"`
-	Remaining  float64   `json:"remaining"`
-	Status      string    `json:"status"` // "active", "completed"
-	Message     string    `json:"message"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+	CreatorID string    `json:"creator_id"`
+	Asset     string    `json:"asset"`
+	Amount    float64   `json:"amount"`
+	Quantity  int       `json:"quantity"`
+	Type      string    `json:"type"` // "random", "average"
+	Claimed   int       `json:"claimed"`
+	Remaining float64   `json:"remaining"`
+	Status    string    `json:"status"` // "active", "completed"
+	Message   string    `json:"message"`
+	ExpiresAt time.Time `json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type RedPacketClaim struct {
-	ID          string    `json:"id"`
-	PacketID    string    `json:"packet_id"`
-	UserID      string    `json:"user_id"`
-	Amount      float64   `json:"amount"`
-	ClaimedAt   time.Time `json:"claimed_at"`
+	ID        string    `json:"id"`
+	PacketID  string    `json:"packet_id"`
+	UserID    string    `json:"user_id"`
+	Amount    float64   `json:"amount"`
+	ClaimedAt time.Time `json:"claimed_at"`
 }
 
 // =============================================================================
@@ -167,27 +162,27 @@ type RedPacketClaim struct {
 // =============================================================================
 
 type EarnService struct {
-	products       map[string]*EarnProduct
-	subscriptions  map[string]*EarnSubscription
-	rewards        map[string]*EarnReward
-	launchpools    map[string]*LaunchpoolProject
+	products         map[string]*EarnProduct
+	subscriptions    map[string]*EarnSubscription
+	rewards          map[string]*EarnReward
+	launchpools      map[string]*LaunchpoolProject
 	launchpoolStakes map[string]*LaunchpoolStake
-	coupons       map[string]*Coupon
-	redPackets    map[string]*RedPacket
-	redPacketClaims map[string]*RedPacketClaim
-	mu            sync.RWMutex
+	coupons          map[string]*Coupon
+	redPackets       map[string]*RedPacket
+	redPacketClaims  map[string]*RedPacketClaim
+	mu               sync.RWMutex
 }
 
 func NewEarnService() *EarnService {
 	svc := &EarnService{
-		products:       make(map[string]*EarnProduct),
-		subscriptions:  make(map[string]*EarnSubscription),
-		rewards:       make(map[string]*EarnReward),
-		launchpools:   make(map[string]*LaunchpoolProject),
+		products:         make(map[string]*EarnProduct),
+		subscriptions:    make(map[string]*EarnSubscription),
+		rewards:          make(map[string]*EarnReward),
+		launchpools:      make(map[string]*LaunchpoolProject),
 		launchpoolStakes: make(map[string]*LaunchpoolStake),
-		coupons:       make(map[string]*Coupon),
-		redPackets:    make(map[string]*RedPacket),
-		redPacketClaims: make(map[string]*RedPacketClaim),
+		coupons:          make(map[string]*Coupon),
+		redPackets:       make(map[string]*RedPacket),
+		redPacketClaims:  make(map[string]*RedPacketClaim),
 	}
 
 	svc.initProducts()
@@ -400,11 +395,11 @@ func (s *EarnService) Redeem(userID, subscriptionID string) (*EarnReward, error)
 		ID:        uuid.New().String(),
 		UserID:    userID,
 		ProductID: sub.ProductID,
-		Asset:    sub.Asset,
-		Amount:   sub.RewardAmount,
-		Type:     "interest",
-		TxHash:   generateTxHash(),
-		Status:   "completed",
+		Asset:     sub.Asset,
+		Amount:    sub.RewardAmount,
+		Type:      "interest",
+		TxHash:    generateTxHash(),
+		Status:    "completed",
 		CreatedAt: time.Now(),
 	}
 
@@ -480,8 +475,8 @@ func (s *EarnService) StakeLaunchpool(userID, projectID string, amount float64) 
 		ProjectID:    projectID,
 		StakeAmount:  amount,
 		RewardAmount: reward,
-		Claimed:     false,
-		CreatedAt:   time.Now(),
+		Claimed:      false,
+		CreatedAt:    time.Now(),
 	}
 
 	// Update project
@@ -515,11 +510,11 @@ func (s *EarnService) ClaimLaunchpoolReward(userID, stakeID string) (*EarnReward
 		ID:        uuid.New().String(),
 		UserID:    userID,
 		ProductID: stake.ProjectID,
-		Asset:    "NEW",
-		Amount:   stake.RewardAmount,
-		Type:     "reward",
-		TxHash:   generateTxHash(),
-		Status:   "completed",
+		Asset:     "NEW",
+		Amount:    stake.RewardAmount,
+		Type:      "reward",
+		TxHash:    generateTxHash(),
+		Status:    "completed",
 		CreatedAt: time.Now(),
 	}
 
@@ -558,14 +553,14 @@ func (s *EarnService) CreateCoupon(userID, couponType string, amount, minRequire
 	coupon := &Coupon{
 		ID:             uuid.New().String(),
 		UserID:         userID,
-		Code:          code,
-		Type:          couponType,
-		Amount:        amount,
+		Code:           code,
+		Type:           couponType,
+		Amount:         amount,
 		Currency:       "USDT",
 		MinRequirement: minRequirement,
-		ExpiresAt:     time.Now().AddDate(0, 1, 0),
-		Status:        "active",
-		CreatedAt:     time.Now(),
+		ExpiresAt:      time.Now().AddDate(0, 1, 0),
+		Status:         "active",
+		CreatedAt:      time.Now(),
 	}
 
 	s.coupons[coupon.ID] = coupon
@@ -636,14 +631,14 @@ func (s *EarnService) CreateRedPacket(creatorID, asset, packetType, message stri
 	packet := &RedPacket{
 		ID:        uuid.New().String(),
 		CreatorID: creatorID,
-		Asset:    asset,
-		Amount:   amount,
-		Quantity: quantity,
-		Type:     packetType,
-		Claimed:  0,
+		Asset:     asset,
+		Amount:    amount,
+		Quantity:  quantity,
+		Type:      packetType,
+		Claimed:   0,
 		Remaining: amount,
-		Status:   "active",
-		Message:  message,
+		Status:    "active",
+		Message:   message,
 		ExpiresAt: time.Now().AddDate(0, 1, 0),
 		CreatedAt: time.Now(),
 	}
@@ -681,9 +676,9 @@ func (s *EarnService) ClaimRedPacket(userID, packetID string) (*RedPacketClaim, 
 
 	claim := &RedPacketClaim{
 		ID:        uuid.New().String(),
-		PacketID: packetID,
-		UserID:   userID,
-		Amount:   claimAmount,
+		PacketID:  packetID,
+		UserID:    userID,
+		Amount:    claimAmount,
 		ClaimedAt: time.Now(),
 	}
 
@@ -776,9 +771,9 @@ func (s *EarnService) GetLaunchpoolsHandler(c *gin.Context) {
 
 func (s *EarnService) StakeLaunchpoolHandler(c *gin.Context) {
 	var req struct {
-		UserID   string  `json:"user_id" binding:"required"`
-		ProjectID string `json:"project_id" binding:"required"`
-		Amount   float64 `json:"amount" binding:"required,gt=0"`
+		UserID    string  `json:"user_id" binding:"required"`
+		ProjectID string  `json:"project_id" binding:"required"`
+		Amount    float64 `json:"amount" binding:"required,gt=0"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {

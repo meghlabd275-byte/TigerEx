@@ -35,24 +35,24 @@ func (e APIError) Error() string {
 type AdminRole string
 
 const (
-	RoleSuperAdmin     AdminRole = "super_admin"
+	RoleSuperAdmin      AdminRole = "super_admin"
 	RoleWhiteLabelAdmin AdminRole = "white_label_admin"
-	RoleKYCAdmin      AdminRole = "kyc_admin"
-	RoleTradingAdmin  AdminRole = "trading_admin"
-	RoleFinanceAdmin  AdminRole = "finance_admin"
-	RoleSupportAdmin  AdminRole = "support_admin"
-	RoleViewer       AdminRole = "viewer"
+	RoleKYCAdmin        AdminRole = "kyc_admin"
+	RoleTradingAdmin    AdminRole = "trading_admin"
+	RoleFinanceAdmin    AdminRole = "finance_admin"
+	RoleSupportAdmin    AdminRole = "support_admin"
+	RoleViewer          AdminRole = "viewer"
 )
 
 type Admin struct {
-	ID            string      `json:"id"`
-	Email         string      `json:"email"`
-	Username      string      `json:"username"`
-	PasswordHash  string      `json:"-"`
-	Role         AdminRole   `json:"role"`
-	Permissions  []string    `json:"permissions"`
-	WhiteLabelID *string     `json:"white_label_id,omitempty"`
-	Status       string      `json:"status"` // "active", "suspended", "inactive"
+	ID           string     `json:"id"`
+	Email        string     `json:"email"`
+	Username     string     `json:"username"`
+	PasswordHash string     `json:"-"`
+	Role         AdminRole  `json:"role"`
+	Permissions  []string   `json:"permissions"`
+	WhiteLabelID *string    `json:"white_label_id,omitempty"`
+	Status       string     `json:"status"` // "active", "suspended", "inactive"
 	LastLoginAt  *time.Time `json:"last_login_at"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
@@ -68,7 +68,7 @@ type AdminSession struct {
 }
 
 type AuditLog struct {
-	ID          string    `json:"id"`
+	ID         string    `json:"id"`
 	AdminID    string    `json:"admin_id"`
 	Action     string    `json:"action"`
 	Resource   string    `json:"resource"`
@@ -79,53 +79,53 @@ type AuditLog struct {
 }
 
 type WhiteLabelClient struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Domain     string    `json:"domain"`
-	Branding   string    `json:"branding"`
-	Status     string    `json:"status"` // "active", "suspended", "pending"
-	Features   []string  `json:"features"`
-	Settings   string    `json:"settings"`
-	AdminID    string    `json:"admin_id"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Domain    string    `json:"domain"`
+	Branding  string    `json:"branding"`
+	Status    string    `json:"status"` // "active", "suspended", "pending"
+	Features  []string  `json:"features"`
+	Settings  string    `json:"settings"`
+	AdminID   string    `json:"admin_id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type TradingPairConfig struct {
-	ID              string  `json:"id"`
-	Symbol          string  `json:"symbol"`
-	BaseAsset      string  `json:"base_asset"`
-	QuoteAsset     string  `json:"quote_asset"`
-	MinPrice       float64 `json:"min_price"`
-	MaxPrice       float64 `json:"max_price"`
-	TickSize        float64 `json:"tick_size"`
-	MinQuantity    float64 `json:"min_quantity"`
-	MaxQuantity    float64 `json:"max_quantity"`
-	StepSize       float64 `json:"step_size"`
-	MakerFee       float64 `json:"maker_fee"`
-	TakerFee       float64 `json:"taker_fee"`
-	Status         string  `json:"status"` // "trading", "halted", "maintenance"
+	ID          string  `json:"id"`
+	Symbol      string  `json:"symbol"`
+	BaseAsset   string  `json:"base_asset"`
+	QuoteAsset  string  `json:"quote_asset"`
+	MinPrice    float64 `json:"min_price"`
+	MaxPrice    float64 `json:"max_price"`
+	TickSize    float64 `json:"tick_size"`
+	MinQuantity float64 `json:"min_quantity"`
+	MaxQuantity float64 `json:"max_quantity"`
+	StepSize    float64 `json:"step_size"`
+	MakerFee    float64 `json:"maker_fee"`
+	TakerFee    float64 `json:"taker_fee"`
+	Status      string  `json:"status"` // "trading", "halted", "maintenance"
 }
 
 type FeeConfig struct {
-	ID          string  `json:"id"`
-	Type        string  `json:"type"` // "withdraw", "deposit", "trade", "transfer"
-	Asset       string  `json:"asset"`
-	Network     string  `json:"network"`
-	FeeType     string  `json:"fee_type"` // "fixed", "percentage"
-	FeeAmount   float64 `json:"fee_amount"`
-	MinFee      float64 `json:"min_fee"`
-	MaxFee      float64 `json:"max_fee"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	UpdatedBy   string    `json:"updated_by"`
+	ID        string    `json:"id"`
+	Type      string    `json:"type"` // "withdraw", "deposit", "trade", "transfer"
+	Asset     string    `json:"asset"`
+	Network   string    `json:"network"`
+	FeeType   string    `json:"fee_type"` // "fixed", "percentage"
+	FeeAmount float64   `json:"fee_amount"`
+	MinFee    float64   `json:"min_fee"`
+	MaxFee    float64   `json:"max_fee"`
+	UpdatedAt time.Time `json:"updated_at"`
+	UpdatedBy string    `json:"updated_by"`
 }
 
 type SystemSetting struct {
-	Key         string    `json:"key"`
-	Value      string    `json:"value"`
-	Category   string    `json:"category"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	UpdatedBy  string    `json:"updated_by"`
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	Category  string    `json:"category"`
+	UpdatedAt time.Time `json:"updated_at"`
+	UpdatedBy string    `json:"updated_by"`
 }
 
 // =============================================================================
@@ -136,18 +136,18 @@ type AdminService struct {
 	admins       map[string]*Admin
 	sessions     map[string]*AdminSession
 	auditLogs    map[string]*AuditLog
-	whiteLabels map[string]*WhiteLabelClient
+	whiteLabels  map[string]*WhiteLabelClient
 	tradingPairs map[string]*TradingPairConfig
 	feeConfigs   map[string]*FeeConfig
-	settings    map[string]*SystemSetting
-	config      *AdminConfig
-	mu          sync.RWMutex
+	settings     map[string]*SystemSetting
+	config       *AdminConfig
+	mu           sync.RWMutex
 }
 
 type AdminConfig struct {
-	SessionDuration time.Duration
+	SessionDuration  time.Duration
 	MaxLoginAttempts int
-	LockoutDuration time.Duration
+	LockoutDuration  time.Duration
 }
 
 func NewAdminService() *AdminService {
@@ -155,14 +155,14 @@ func NewAdminService() *AdminService {
 		admins:       make(map[string]*Admin),
 		sessions:     make(map[string]*AdminSession),
 		auditLogs:    make(map[string]*AuditLog),
-		whiteLabels: make(map[string]*WhiteLabelClient),
+		whiteLabels:  make(map[string]*WhiteLabelClient),
 		tradingPairs: make(map[string]*TradingPairConfig),
 		feeConfigs:   make(map[string]*FeeConfig),
-		settings:    make(map[string]*SystemSetting),
+		settings:     make(map[string]*SystemSetting),
 		config: &AdminConfig{
-			SessionDuration: 24 * time.Hour,
+			SessionDuration:  24 * time.Hour,
 			MaxLoginAttempts: 5,
-			LockoutDuration: 30 * time.Minute,
+			LockoutDuration:  30 * time.Minute,
 		},
 	}
 
@@ -245,11 +245,13 @@ func (s *AdminService) Login(email, password, ipAddress string) (*Admin, string,
 
 	// Generate session
 	token := generateToken()
-	if token == "" { return nil, "", APIError{Code: 500, Message: "Could not create secure session token"} }
+	if token == "" {
+		return nil, "", APIError{Code: 500, Message: "Could not create secure session token"}
+	}
 	session := &AdminSession{
 		ID:        uuid.New().String(),
 		AdminID:   admin.ID,
-		Token:    token,
+		Token:     token,
 		ExpiresAt: time.Now().Add(s.config.SessionDuration),
 		IPAddress: ipAddress,
 		CreatedAt: time.Now(),
@@ -300,7 +302,9 @@ func (s *AdminService) ValidateSession(token string) (*Admin, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session, ok := s.sessions[token]
-	if !ok { return nil, APIError{Code: 401, Message: "Invalid session"} }
+	if !ok {
+		return nil, APIError{Code: 401, Message: "Invalid session"}
+	}
 	if !session.ExpiresAt.After(time.Now()) {
 		delete(s.sessions, token)
 		return nil, APIError{Code: 401, Message: "Session expired"}
@@ -327,12 +331,12 @@ func (s *AdminService) CreateWhiteLabel(adminID, name, domain string) (*WhiteLab
 	client := &WhiteLabelClient{
 		ID:        uuid.New().String(),
 		Name:      name,
-		Domain:   domain,
-		Branding: "{}",
+		Domain:    domain,
+		Branding:  "{}",
 		Status:    "pending",
-		Features: []string{"trading", "wallet", "p2p"},
-		Settings: "{}",
-		AdminID:  adminID,
+		Features:  []string{"trading", "wallet", "p2p"},
+		Settings:  "{}",
+		AdminID:   adminID,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -498,13 +502,13 @@ func (s *AdminService) UpdateSetting(adminID, key, value string) error {
 func (s *AdminService) logAction(adminID, action, resource, resourceID, details, ipAddress string) {
 	log := &AuditLog{
 		ID:         uuid.New().String(),
-		AdminID:   adminID,
-		Action:    action,
-		Resource:  resource,
+		AdminID:    adminID,
+		Action:     action,
+		Resource:   resource,
 		ResourceID: resourceID,
-		Details:   details,
-		IPAddress: ipAddress,
-		CreatedAt: time.Now(),
+		Details:    details,
+		IPAddress:  ipAddress,
+		CreatedAt:  time.Now(),
 	}
 	s.auditLogs[log.ID] = log
 }
@@ -588,13 +592,13 @@ func (s *AdminService) GetDashboardStatsHandler(c *gin.Context) {
 	defer s.mu.RUnlock()
 
 	stats := gin.H{
-		"total_admins":        len(s.admins),
-		"active_sessions":    len(s.sessions),
-		"white_labels":       len(s.whiteLabels),
-		"trading_pairs":      len(s.tradingPairs),
-		"fee_configs":        len(s.feeConfigs),
-		"system_settings":    len(s.settings),
-		"audit_logs":         len(s.auditLogs),
+		"total_admins":    len(s.admins),
+		"active_sessions": len(s.sessions),
+		"white_labels":    len(s.whiteLabels),
+		"trading_pairs":   len(s.tradingPairs),
+		"fee_configs":     len(s.feeConfigs),
+		"system_settings": len(s.settings),
+		"audit_logs":      len(s.auditLogs),
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": stats})
@@ -607,7 +611,7 @@ func (s *AdminService) GetWhiteLabelsHandler(c *gin.Context) {
 
 func (s *AdminService) CreateWhiteLabelHandler(c *gin.Context) {
 	var req struct {
-		Name    string `json:"name" binding:"required"`
+		Name   string `json:"name" binding:"required"`
 		Domain string `json:"domain" binding:"required"`
 	}
 
@@ -682,8 +686,8 @@ func (s *AdminService) GetSettingsHandler(c *gin.Context) {
 
 func (s *AdminService) UpdateSettingHandler(c *gin.Context) {
 	var req struct {
-		Key     string `json:"key" binding:"required"`
-		Value   string `json:"value" binding:"required"`
+		Key   string `json:"key" binding:"required"`
+		Value string `json:"value" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -723,7 +727,9 @@ func (s *AdminService) HealthCheck(c *gin.Context) {
 
 func generateToken() string {
 	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil { return "" }
+	if _, err := rand.Read(bytes); err != nil {
+		return ""
+	}
 	return hex.EncodeToString(bytes)
 }
 
@@ -756,7 +762,10 @@ func main() {
 		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		if c.Request.Method == "OPTIONS" { c.AbortWithStatus(http.StatusNoContent); return }
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
 		c.Next()
 	})
 

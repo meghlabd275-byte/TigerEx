@@ -159,5 +159,5 @@ func Truncate(text string, length int) string {
 
 // Delay helper
 func Delay(ms int) {
-	time.Sleep(time.Duration(ms) * time.Millisecond
+	time.Sleep(time.Duration(ms) * time.Millisecond)
 }

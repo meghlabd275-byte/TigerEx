@@ -6,7 +6,6 @@ package pricefeed
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -384,15 +383,6 @@ func (h *Handler) ExchangeInfoHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	pairs := h.service.GetTradingPairs()
-
-	rates := map[string]interface{}{
-		"symbol":           "USDT",
-		"pid":              1,
-		"bidPrice":         "1.00000000",
-		"bidQty":           "10000.00000000",
-		"askPrice":         "1.00000000",
-		"askQty":           "10000.00000000",
-	}
 
 	var symbols []map[string]interface{}
 	for _, pair := range pairs {

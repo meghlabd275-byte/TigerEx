@@ -1,4 +1,4 @@
-package main
+package legacy
 
 import (
 	"context"
@@ -11,17 +11,17 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
-	"syscall"
-	"math"
-	"math/big"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,53 +36,53 @@ import (
 
 const (
 	EngineVersion = "3.0.0"
-	
+
 	// Order Types
-	OrderTypeMarket OrderType = "market"
-	OrderTypeLimit OrderType = "limit"
-	OrderTypeStopLoss OrderType = "stop_loss"
-	OrderTypeStopLimit OrderType = "stop_limit"
-	OrderTypeTakeProfit OrderType = "take_profit"
-	OrderTypeStopMarket OrderType = "stop_market"
+	OrderTypeMarket       OrderType = "market"
+	OrderTypeLimit        OrderType = "limit"
+	OrderTypeStopLoss     OrderType = "stop_loss"
+	OrderTypeStopLimit    OrderType = "stop_limit"
+	OrderTypeTakeProfit   OrderType = "take_profit"
+	OrderTypeStopMarket   OrderType = "stop_market"
 	OrderTypeTrailingStop OrderType = "trailing_stop"
-	OrderTypeOCO OrderType = "oco"
-	OrderTypeOTO OrderType = "oto"
-	OrderTypeIceberg OrderType = "iceberg"
-	OrderTypeTWAP OrderType = "twap"
-	OrderTypePO OrderType = "post_only"
-	OrderTypeFOK OrderType = "fok"
-	OrderTypeIOC OrderType = "ioc"
-	
+	OrderTypeOCO          OrderType = "oco"
+	OrderTypeOTO          OrderType = "oto"
+	OrderTypeIceberg      OrderType = "iceberg"
+	OrderTypeTWAP         OrderType = "twap"
+	OrderTypePO           OrderType = "post_only"
+	OrderTypeFOK          OrderType = "fok"
+	OrderTypeIOC          OrderType = "ioc"
+
 	// Order Sides
-	OrderSideBuy OrderSide = "buy"
+	OrderSideBuy  OrderSide = "buy"
 	OrderSideSell OrderSide = "sell"
-	
+
 	// Time in Force
 	TIFGTC TimeInForce = "GTC" // Good Till Cancel
 	TIFIOC TimeInForce = "IOC" // Immediate Or Cancel
-	TIFFOK TimeInForce = "FOK"  // Fill Or Kill
+	TIFFOK TimeInForce = "FOK" // Fill Or Kill
 	TIFGTX TimeInForce = "GTX" // Good Till Cross
 	TIFGTT TimeInForce = "GTT" // Good Till Time
-	
+
 	// Order Status
-	StatusPendingNew OrderStatus = "pending_new"
-	StatusNew OrderStatus = "new"
+	StatusPendingNew      OrderStatus = "pending_new"
+	StatusNew             OrderStatus = "new"
 	StatusPartiallyFilled OrderStatus = "partially_filled"
-	StatusFilled OrderStatus = "filled"
-	StatusCanceled OrderStatus = "canceled"
-	StatusRejected OrderStatus = "rejected"
-	StatusExpired OrderStatus = "expired"
-	StatusPendingCancel OrderStatus = "pending_cancel"
-	StatusPendingModify OrderStatus = "pending_modify"
-	
+	StatusFilled          OrderStatus = "filled"
+	StatusCanceled        OrderStatus = "canceled"
+	StatusRejected        OrderStatus = "rejected"
+	StatusExpired         OrderStatus = "expired"
+	StatusPendingCancel   OrderStatus = "pending_cancel"
+	StatusPendingModify   OrderStatus = "pending_modify"
+
 	// Position Mode
 	PositionModeIsolated = "isolated"
-	PositionModeCross = "cross"
+	PositionModeCross    = "cross"
 	PositionModeLeverage = "leverage"
-	
+
 	// Liquidation Status
-	LiquidationModeFull = "full"
-	LiquidationModePartial = "partial"
+	LiquidationModeFull           = "full"
+	LiquidationModePartial        = "partial"
 	LiquidationModeAutoDeleverage = "auto_deleverage"
 )
 
@@ -98,252 +98,253 @@ type OrderStatus string
 // Order represents a trading order
 type Order struct {
 	// Identification
-	OrderID string `json:"orderId"`
+	OrderID       string `json:"orderId"`
 	ClientOrderID string `json:"clientOrderId,omitempty"`
-	UserID string `json:"userId"`
-	Symbol string `json:"symbol"`
-	
+	UserID        string `json:"userId"`
+	Symbol        string `json:"symbol"`
+
 	// Order Details
 	Side OrderSide `json:"side"`
 	Type OrderType `json:"type"`
-	
+
 	// Pricing
-	Price float64 `json:"price"`
-	StopPrice float64 `json:"stopPrice,omitempty"`
-	TriggerPrice float64 `json:"triggerPrice,omitempty"`
-	TrailingDelta float64 `json:"trailingDelta,omitempty"`
+	Price           float64 `json:"price"`
+	StopPrice       float64 `json:"stopPrice,omitempty"`
+	TriggerPrice    float64 `json:"triggerPrice,omitempty"`
+	TrailingDelta   float64 `json:"trailingDelta,omitempty"`
 	TrailingPercent float64 `json:"trailingPercent,omitempty"`
-	
+
 	// Quantity
-	Quantity float64 `json:"quantity"`
-	FilledQuantity float64 `json:"filledQuantity"`
+	Quantity          float64 `json:"quantity"`
+	FilledQuantity    float64 `json:"filledQuantity"`
 	RemainingQuantity float64 `json:"remainingQuantity"`
-	DisplayQuantity float64 `json:"displayQuantity,omitempty"` // For iceberg orders
-	
+	DisplayQuantity   float64 `json:"displayQuantity,omitempty"` // For iceberg orders
+
 	// Fees
 	MakerFeeRate float64 `json:"makerFeeRate"`
 	TakerFeeRate float64 `json:"takerFeeRate"`
-	FeeCurrency string `json:"feeCurrency,omitempty"`
-	
+	FeeCurrency  string  `json:"feeCurrency,omitempty"`
+
 	// Time
 	TimeInForce TimeInForce `json:"timeInForce"`
-	ExpireTime time.Time `json:"expireTime,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	FilledAt *time.Time `json:"filledAt,omitempty"`
-	
+	ExpireTime  time.Time   `json:"expireTime,omitempty"`
+	CreatedAt   time.Time   `json:"createdAt"`
+	UpdatedAt   time.Time   `json:"updatedAt"`
+	FilledAt    *time.Time  `json:"filledAt,omitempty"`
+
 	// Status
-	Status OrderStatus `json:"status"`
-	IsMaker bool `json:"isMaker"`
-	IsPostOnly bool `json:"isPostOnly,omitempty"`
-	IsReduceOnly bool `json:"isReduceOnly,omitempty"`
-	IsCloseOnly bool `json:"isCloseOnly,omitempty"`
-	
+	Status       OrderStatus `json:"status"`
+	IsMaker      bool        `json:"isMaker"`
+	IsPostOnly   bool        `json:"isPostOnly,omitempty"`
+	IsReduceOnly bool        `json:"isReduceOnly,omitempty"`
+	IsCloseOnly  bool        `json:"isCloseOnly,omitempty"`
+
 	// Position
-	PositionMode string `json:"positionMode,omitempty"`
-	PositionID string `json:"positionId,omitempty"`
-	Leverage float64 `json:"leverage,omitempty"`
-	
+	PositionMode string  `json:"positionMode,omitempty"`
+	PositionID   string  `json:"positionId,omitempty"`
+	Leverage     float64 `json:"leverage,omitempty"`
+
 	// Self-Trade Prevention
 	SelfTradePrevention string `json:"selfTradePrevention,omitempty"` // decrement_cancel, cancel_oldest, cancel_newest, cancel_both
-	
+
 	// Iceberg
-	IsIceberg bool `json:"isIceberg,omitempty"`
+	IsIceberg             bool    `json:"isIceberg,omitempty"`
 	IcebergHiddenQuantity float64 `json:"icebergHiddenQty,omitempty"`
-	
+
 	// Average fill price
 	AverageFillPrice float64 `json:"avgFillPrice"`
-	
+
 	// Contingent orders (OCO)
 	ContingentOrderID string `json:"contingentOrderId,omitempty"`
-	
+
 	mu sync.RWMutex
 }
 
 // Trade represents an executed trade
 type Trade struct {
-	TradeID string `json:"tradeId"`
-	OrderID string `json:"orderId"`
+	TradeID        string `json:"tradeId"`
+	OrderID        string `json:"orderId"`
 	CounterOrderID string `json:"counterOrderId"`
-	Symbol string `json:"symbol"`
-	
-	UserID string `json:"userId"`
+	Symbol         string `json:"symbol"`
+
+	UserID        string `json:"userId"`
 	CounterUserID string `json:"counterUserId"`
-	
+
 	Side OrderSide `json:"side"`
-	Role string `json:"role"` // maker, taker
-	
-	Price float64 `json:"price"`
-	Quantity float64 `json:"quantity"`
+	Role string    `json:"role"` // maker, taker
+
+	Price         float64 `json:"price"`
+	Quantity      float64 `json:"quantity"`
 	QuoteQuantity float64 `json:"quoteQuantity"`
-	
-	Fee float64 `json:"fee"`
-	FeeCurrency string `json:"feeCurrency"`
-	FeeMakerTaker string `json:"feeMakerTaker"`
-	
+
+	Fee           float64 `json:"fee"`
+	FeeCurrency   string  `json:"feeCurrency"`
+	FeeMakerTaker string  `json:"feeMakerTaker"`
+
 	// PnL (for positions)
-	RealizedPNL float64 `json:"realizedPnl,omitempty"`
+	RealizedPNL   float64 `json:"realizedPnl,omitempty"`
 	UnrealizedPNL float64 `json:"unrealizedPnl,omitempty"`
-	
-	IsTaker bool `json:"isTaker"`
-	IsMaker bool `json:"isMaker"`
+
+	IsTaker     bool `json:"isTaker"`
+	IsMaker     bool `json:"isMaker"`
 	IsSelfTrade bool `json:"isSelfTrade"`
-	
-	TradeType string `json:"tradeType"` // normal, liquidation, adl
-	LiquidationOrder bool `json:"liquidationOrder"`
-	
+
+	TradeType        string `json:"tradeType"` // normal, liquidation, adl
+	LiquidationOrder bool   `json:"liquidationOrder"`
+
 	Timestamp time.Time `json:"timestamp"`
 }
 
 // Position represents a trading position
 type Position struct {
 	PositionID string `json:"positionId"`
-	UserID string `json:"userId"`
-	Symbol string `json:"symbol"`
-	
+	UserID     string `json:"userId"`
+	Symbol     string `json:"symbol"`
+
 	Side OrderSide `json:"side"` // long or short
-	Size float64 `json:"size"` // position size
-	
+	Size float64   `json:"size"` // position size
+
 	// Entry
-	EntryPrice float64 `json:"entryPrice"`
+	EntryPrice   float64 `json:"entryPrice"`
 	OpenQuantity float64 `json:"openQuantity"`
-	
+
 	// Margin
-	Margin float64 `json:"margin"`
-	IsolatedMargin float64 `json:"isolatedMargin,omitempty"`
+	Margin          float64 `json:"margin"`
+	IsolatedMargin  float64 `json:"isolatedMargin,omitempty"`
 	CrossMarginUsed float64 `json:"crossMarginUsed,omitempty"`
-	Leverage float64 `json:"leverage"`
-	
+	Leverage        float64 `json:"leverage"`
+
 	// Liquidation
-	LiquidationPrice float64 `json:"liquidationPrice"`
-	BankruptcyPrice float64 `json:"bankruptcyPrice"`
-	MarginRatio float64 `json:"marginRatio"`
+	LiquidationPrice  float64 `json:"liquidationPrice"`
+	BankruptcyPrice   float64 `json:"bankruptcyPrice"`
+	MarginRatio       float64 `json:"marginRatio"`
 	MaintenanceMargin float64 `json:"maintenanceMargin"`
-	
+
 	// Unrealized PnL
-	UnrealizedPNL float64 `json:"unrealizedPnl"`
+	UnrealizedPNL        float64 `json:"unrealizedPnl"`
 	UnrealizedPNLPercent float64 `json:"unrealizedPnlPercent"`
-	
+
 	// Realized PnL
 	TotalRealizedPNL float64 `json:"totalRealizedPnl"`
-	
+
 	// Funding
-	FundingFee float64 `json:"fundingFee"`
+	FundingFee      float64   `json:"fundingFee"`
 	LastFundingTime time.Time `json:"lastFundingTime"`
-	FundingRate float64 `json:"fundingRate"`
-	
+	FundingRate     float64   `json:"fundingRate"`
+
 	// Position Mode
-	PositionMode string `json:"positionMode"`
-	AutoAddMargin bool `json:"autoAddMargin"`
-	
+	PositionMode  string `json:"positionMode"`
+	AutoAddMargin bool   `json:"autoAddMargin"`
+
 	// Risk
-	RiskLevel string `json:"riskLevel"`
-	 liquidationProgress float64
-	
+	RiskLevel           string `json:"riskLevel"`
+	liquidationProgress float64
+
 	// Timestamps
-	OpenedAt time.Time `json:"openedAt"`
+	OpenedAt  time.Time `json:"openedAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
-	
+
 	mu sync.RWMutex
 }
 
 // OrderBook represents the order book for a market
 type OrderBook struct {
 	mu sync.RWMutex
-	
+
 	Symbol string `json:"symbol"`
-	
+
 	// Price levels
 	Bids PriceLevels `json:"bids"` // Sorted by price descending
 	Asks PriceLevels `json:"asks"` // Sorted by price ascending
-	
+
 	// Book depth
 	LastUpdateID int64 `json:"lastUpdateId"`
-	LastTradeID int64 `json:"lastTradeId"`
-	Version int64
-	
+	LastTradeID  int64 `json:"lastTradeId"`
+	Version      int64
+
 	// Market info
-	BaseAsset string `json:"baseAsset"`
+	BaseAsset  string `json:"baseAsset"`
 	QuoteAsset string `json:"quoteAsset"`
-	
+
 	// Price filters
 	MinPrice float64 `json:"minPrice"`
 	MaxPrice float64 `json:"maxPrice"`
 	TickSize float64 `json:"tickSize"`
-	
+
 	// Quantity filters
 	MinQuantity float64 `json:"minQuantity"`
 	MaxQuantity float64 `json:"maxQuantity"`
-	StepSize float64 `json:"stepSize"`
-	
+	StepSize    float64 `json:"stepSize"`
+
 	// Market state
-	TradingEnabled bool `json:"tradingEnabled"`
-	CancelOnly bool `json:"cancelOnly"`
+	TradingEnabled   bool `json:"tradingEnabled"`
+	CancelOnly       bool `json:"cancelOnly"`
 	FastMatchEnabled bool `json:"fastMatchEnabled"`
-	PostOnlyEnabled bool `json:"postOnlyEnabled"`
-	PriceLocked bool `json:"priceLocked"`
-	
+	PostOnlyEnabled  bool `json:"postOnlyEnabled"`
+	PriceLocked      bool `json:"priceLocked"`
+
 	// Statistics
-	HighPrice float64 `json:"highPrice"`
-	LowPrice float64 `json:"lowPrice"`
-	Volume float64 `json:"volume"`
+	HighPrice   float64 `json:"highPrice"`
+	LowPrice    float64 `json:"lowPrice"`
+	Volume      float64 `json:"volume"`
 	QuoteVolume float64 `json:"quoteVolume"`
-	Count int64 `json:"count"`
-	
+	Count       int64   `json:"count"`
+
 	// Auction mode
-	AuctionMode bool `json:"auctionMode"`
+	AuctionMode    bool       `json:"auctionMode"`
 	AuctionEndTime *time.Time `json:"auctionEndTime,omitempty"`
 }
 
 // PriceLevel represents a price level in the order book
 type PriceLevel struct {
-	Price float64 `json:"price"`
-	Quantity float64 `json:"quantity"`
-	Orders []*Order `json:"-"` // Internal FIFO queue; never expose individual orders in public depth.
-	OrderCount int `json:"orders"`
-	
+	Price      float64  `json:"price"`
+	Quantity   float64  `json:"quantity"`
+	Orders     []*Order `json:"-"` // Internal FIFO queue; never expose individual orders in public depth.
+	OrderCount int      `json:"orders"`
+
 	// For iceberg orders
 	VisibleQuantity float64 `json:"visibleQty,omitempty"`
-	HiddenQuantity float64 `json:"hiddenQty,omitempty"`
+	HiddenQuantity  float64 `json:"hiddenQty,omitempty"`
 }
 
 type PriceLevels []*PriceLevel
 
-func (pl PriceLevels) Len() int { return len(pl) }
+func (pl PriceLevels) Len() int           { return len(pl) }
 func (pl PriceLevels) Less(i, j int) bool { return pl[i].Price > pl[j].Price }
-func (pl PriceLevels) Swap(i, j int) { pl[i], pl[j] = pl[j], pl[i] }
+func (pl PriceLevels) Swap(i, j int)      { pl[i], pl[j] = pl[j], pl[i] }
 
 type AskPriceLevels []*PriceLevel
-func (al AskPriceLevels) Len() int { return len(al) }
+
+func (al AskPriceLevels) Len() int           { return len(al) }
 func (al AskPriceLevels) Less(i, j int) bool { return al[i].Price < al[j].Price }
-func (al AskPriceLevels) Swap(i, j int) { al[i], al[j] = al[j], al[i] }
+func (al AskPriceLevels) Swap(i, j int)      { al[i], al[j] = al[j], al[i] }
 
 // Ticker represents market ticker data
 type Ticker struct {
 	Symbol string `json:"symbol"`
-	
+
 	// Price
-	LastPrice float64 `json:"lastPrice"`
-	OpenPrice float64 `json:"openPrice"`
-	HighPrice float64 `json:"highPrice"`
-	LowPrice float64 `json:"lowPrice"`
+	LastPrice  float64 `json:"lastPrice"`
+	OpenPrice  float64 `json:"openPrice"`
+	HighPrice  float64 `json:"highPrice"`
+	LowPrice   float64 `json:"lowPrice"`
 	ClosePrice float64 `json:"closePrice"`
-	
+
 	// Volume
-	Volume float64 `json:"volume"`
+	Volume      float64 `json:"volume"`
 	QuoteVolume float64 `json:"quoteVolume"`
-	BaseVolume float64 `json:"baseVolume"`
-	
+	BaseVolume  float64 `json:"baseVolume"`
+
 	// Change
-	PriceChange float64 `json:"priceChange"`
+	PriceChange        float64 `json:"priceChange"`
 	PriceChangePercent float64 `json:"priceChangePercent"`
-	
+
 	// Order book
-	BidPrice float64 `json:"bidPrice"`
-	AskPrice float64 `json:"askPrice"`
+	BidPrice    float64 `json:"bidPrice"`
+	AskPrice    float64 `json:"askPrice"`
 	BidQuantity float64 `json:"bidQty"`
 	AskQuantity float64 `json:"askQty"`
-	
+
 	// Timestamp
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -355,128 +356,128 @@ type Ticker struct {
 type MatchingEngine struct {
 	// Configuration
 	config EngineConfig
-	
+
 	// State
-	mu sync.RWMutex
-	markets map[string]*MarketState
-	orders map[string]*Order
+	mu        sync.RWMutex
+	markets   map[string]*MarketState
+	orders    map[string]*Order
 	positions map[string]*Position
-	
+
 	// User data
-	userOrders map[string]map[string]*Order // userID -> symbol -> orders
+	userOrders    map[string]map[string]*Order    // userID -> symbol -> orders
 	userPositions map[string]map[string]*Position // userID -> symbol -> position
-	
+
 	// Fee structure
 	makerFeeRate float64
 	takerFeeRate float64
-	
+
 	// Risk management
 	riskManager *RiskManager
-	
+
 	// Callbacks
-	onOrderUpdate func(*Order)
-	onTrade func(*Trade)
+	onOrderUpdate    func(*Order)
+	onTrade          func(*Trade)
 	onPositionUpdate func(*Position)
-	onTickerUpdate func(*Ticker)
-	
+	onTickerUpdate   func(*Ticker)
+
 	// Statistics
 	stats EngineStats
-	
+
 	// Database
 	db *pgxpool.Pool
-	
+
 	// Redis for caching
 	redis *RedisClient
-	
+
 	// Context
-	ctx context.Context
+	ctx    context.Context
 	cancel context.CancelFunc
-	
+
 	wg sync.WaitGroup
 }
 
 // MarketState holds state for a trading pair
 type MarketState struct {
-	Symbol string
+	Symbol    string
 	OrderBook *OrderBook
-	Ticker *Ticker
-	
+	Ticker    *Ticker
+
 	// Matching
 	bidTree *PriceTree
 	askTree *PriceTree
-	
+
 	// Pending orders
 	pendingOrders []*Order
-	stopOrders []*Order
-	
+	stopOrders    []*Order
+
 	// Liquidation queue
 	liquidationQueue []*Position
-	
+
 	// Funding
-	fundingRate float64
+	fundingRate     float64
 	nextFundingTime time.Time
-	
+
 	// Trading rules
-	minOrderSize float64
-	maxOrderSize float64
-	pricePrecision int
+	minOrderSize      float64
+	maxOrderSize      float64
+	pricePrecision    int
 	quantityPrecision int
-	
+
 	mu sync.RWMutex
 }
 
 type PriceTree struct {
 	levels map[float64]*OrderLevel
-	mu sync.RWMutex
+	mu     sync.RWMutex
 }
 
 type OrderLevel struct {
-	Price float64
-	Orders []*Order
+	Price         float64
+	Orders        []*Order
 	TotalQuantity float64
-	Count int
+	Count         int
 }
 
 type EngineConfig struct {
 	Name string
 	Mode string // production, test, development
-	
+
 	// Performance
-	MaxOrdersPerMarket int
-	MaxPositionsPerUser int
+	MaxOrdersPerMarket    int
+	MaxPositionsPerUser   int
 	OrderProcessBatchSize int
-	
+
 	// Fees
 	DefaultMakerFee float64
 	DefaultTakerFee float64
-	
+
 	// Risk
-	MaxPositionSize float64
-	MaxOrderValue float64
+	MaxPositionSize   float64
+	MaxOrderValue     float64
 	LiquidationBuffer float64
-	
+
 	// Matching
 	MatchingLatencyTarget time.Duration
-	
+
 	// Persistence
 	SnapshotInterval time.Duration
 }
 
 // EngineStats holds engine statistics
 type EngineStats struct {
-	TotalOrders int64
+	TotalOrders     int64
 	OrdersProcessed int64
-	TradesExecuted int64
-	OrdersCanceled int64
-	OrdersRejected int64
-	
+	TradesExecuted  int64
+	OrdersCanceled  int64
+	OrdersRejected  int64
+
 	AvgLatencyUs int64
 	MaxLatencyUs int64
 	MinLatencyUs int64
-	
-	TotalVolume float64
+
+	TotalVolume      float64
 	TotalQuoteVolume float64
-	
+
 	mu sync.RWMutex
 }
 
@@ -500,34 +501,34 @@ func NewMatchingEngine(config EngineConfig) *MatchingEngine {
 	if config.DefaultTakerFee == 0 {
 		config.DefaultTakerFee = 0.002
 	}
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	me := &MatchingEngine{
-		config: config,
-		markets: make(map[string]*MarketState),
-		orders: make(map[string]*Order),
-		positions: make(map[string]*Position),
-		userOrders: make(map[string]map[string]*Order),
+		config:        config,
+		markets:       make(map[string]*MarketState),
+		orders:        make(map[string]*Order),
+		positions:     make(map[string]*Position),
+		userOrders:    make(map[string]map[string]*Order),
 		userPositions: make(map[string]map[string]*Position),
-		makerFeeRate: config.DefaultMakerFee,
-		takerFeeRate: config.DefaultTakerFee,
-		ctx: ctx,
-		cancel: cancel,
+		makerFeeRate:  config.DefaultMakerFee,
+		takerFeeRate:  config.DefaultTakerFee,
+		ctx:           ctx,
+		cancel:        cancel,
 	}
-	
+
 	me.riskManager = NewRiskManager(me)
-	
+
 	// Start background workers
 	me.wg.Add(1)
 	go me.orderExpirationWorker()
-	
+
 	me.wg.Add(1)
 	go me.fundingWorker()
-	
+
 	me.wg.Add(1)
 	go me.statsWorker()
-	
+
 	return me
 }
 
@@ -559,57 +560,57 @@ func (me *MatchingEngine) InitializeMarket(symbol, base, quote string, pricePrec
 
 	me.mu.Lock()
 	defer me.mu.Unlock()
-	
+
 	if _, exists := me.markets[symbol]; exists {
 		return fmt.Errorf("market %s already exists", symbol)
 	}
-	
+
 	state := &MarketState{
 		Symbol: symbol,
 		OrderBook: &OrderBook{
-			Symbol: symbol,
-			Bids: make(PriceLevels, 0),
-			Asks: make(PriceLevels, 0),
+			Symbol:       symbol,
+			Bids:         make(PriceLevels, 0),
+			Asks:         make(PriceLevels, 0),
 			LastUpdateID: time.Now().UnixNano(),
-			
-			BaseAsset: base,
+
+			BaseAsset:  base,
 			QuoteAsset: quote,
-			
+
 			MinPrice: minPrice,
 			MaxPrice: maxPrice,
 			TickSize: tickSize,
-			
+
 			MinQuantity: lotSize,
-			StepSize: lotSize,
-			
+			StepSize:    lotSize,
+
 			TradingEnabled: true,
-			CancelOnly: false,
-			
+			CancelOnly:     false,
+
 			HighPrice: 0,
-			LowPrice: math.MaxFloat64,
+			LowPrice:  math.MaxFloat64,
 		},
 		Ticker: &Ticker{
-			Symbol: symbol,
+			Symbol:    symbol,
 			HighPrice: 0,
-			LowPrice: math.MaxFloat64,
+			LowPrice:  math.MaxFloat64,
 		},
-		bidTree: &PriceTree{levels: make(map[float64]*OrderLevel)},
-		askTree: &PriceTree{levels: make(map[float64]*OrderLevel)},
-		pendingOrders: make([]*Order, 0),
-		stopOrders: make([]*Order, 0),
-		fundingRate: 0.0001, // 0.01% default
-		nextFundingTime: time.Now().Add(8 * time.Hour),
-		minOrderSize: lotSize,
-		maxOrderSize: 1000000000,
-		pricePrecision: pricePrec,
+		bidTree:           &PriceTree{levels: make(map[float64]*OrderLevel)},
+		askTree:           &PriceTree{levels: make(map[float64]*OrderLevel)},
+		pendingOrders:     make([]*Order, 0),
+		stopOrders:        make([]*Order, 0),
+		fundingRate:       0.0001, // 0.01% default
+		nextFundingTime:   time.Now().Add(8 * time.Hour),
+		minOrderSize:      lotSize,
+		maxOrderSize:      1000000000,
+		pricePrecision:    pricePrec,
 		quantityPrecision: qtyPrec,
 	}
-	
+
 	me.markets[symbol] = state
-	
-	log.Printf("[ENGINE] Market initialized: %s (base=%s, quote=%s, tick=%f, lot=%f)", 
+
+	log.Printf("[ENGINE] Market initialized: %s (base=%s, quote=%s, tick=%f, lot=%f)",
 		symbol, base, quote, tickSize, lotSize)
-	
+
 	return nil
 }
 
@@ -641,7 +642,7 @@ func (me *MatchingEngine) SubmitOrder(order *Order) (*OrderResult, error) {
 		atomic.AddInt64(&me.stats.OrdersRejected, 1)
 		return &OrderResult{Order: order, Error: err.Error()}, err
 	}
-	
+
 	// Generate order ID
 	if order.OrderID == "" {
 		order.OrderID = me.generateOrderID()
@@ -649,7 +650,7 @@ func (me *MatchingEngine) SubmitOrder(order *Order) (*OrderResult, error) {
 	if order.ClientOrderID == "" {
 		order.ClientOrderID = order.OrderID
 	}
-	
+
 	// Client-supplied execution state is never trusted for a new order.
 	order.FilledQuantity = 0
 	order.RemainingQuantity = order.Quantity
@@ -676,15 +677,15 @@ func (me *MatchingEngine) SubmitOrder(order *Order) (*OrderResult, error) {
 	}
 	me.userOrders[order.UserID][order.OrderID] = order
 	me.mu.Unlock()
-	
+
 	// The market was resolved and validated before order registration.
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	
+
 	// Handle different order types
 	var trades []*Trade
 	var err error
-	
+
 	switch order.Type {
 	case OrderTypeMarket:
 		trades, err = me.executeMarketOrder(state, order)
@@ -711,32 +712,32 @@ func (me *MatchingEngine) SubmitOrder(order *Order) (*OrderResult, error) {
 	default:
 		trades, err = me.executeLimitOrder(state, order)
 	}
-	
+
 	// Update statistics
 	atomic.AddInt64(&me.stats.TotalOrders, 1)
 	atomic.AddInt64(&me.stats.OrdersProcessed, 1)
-	
+
 	latency := time.Since(startTime).Microseconds()
 	me.updateLatencyStats(latency)
-	
+
 	// Trigger callbacks
 	if me.onOrderUpdate != nil {
 		me.onOrderUpdate(order)
 	}
-	
+
 	for _, trade := range trades {
 		if me.onTrade != nil {
 			me.onTrade(trade)
 		}
 	}
-	
+
 	result := &OrderResult{
-		Order: order,
-		Trades: trades,
+		Order:            order,
+		Trades:           trades,
 		ExecutedQuantity: order.FilledQuantity,
-		ExecutedQuote: order.FilledQuantity * order.AverageFillPrice,
+		ExecutedQuote:    order.FilledQuantity * order.AverageFillPrice,
 	}
-	
+
 	return result, nil
 }
 
@@ -771,9 +772,9 @@ func (me *MatchingEngine) validateOrder(order *Order) error {
 		return errors.New("unsupported order type")
 	}
 	for name, value := range map[string]float64{
-		"stop price": order.StopPrice,
-		"trigger price": order.TriggerPrice,
-		"trailing delta": order.TrailingDelta,
+		"stop price":       order.StopPrice,
+		"trigger price":    order.TriggerPrice,
+		"trailing delta":   order.TrailingDelta,
 		"trailing percent": order.TrailingPercent,
 		"display quantity": order.DisplayQuantity,
 	} {
@@ -798,7 +799,7 @@ func (me *MatchingEngine) validateOrder(order *Order) error {
 // executeMarketOrder executes a market order
 func (me *MatchingEngine) executeMarketOrder(state *MarketState, order *Order) ([]*Trade, error) {
 	book := state.OrderBook
-	
+
 	if order.Side == OrderSideBuy && len(book.Asks) == 0 {
 		order.Status = StatusRejected
 		return nil, errors.New("no asks available")
@@ -807,44 +808,44 @@ func (me *MatchingEngine) executeMarketOrder(state *MarketState, order *Order) (
 		order.Status = StatusRejected
 		return nil, errors.New("no bids available")
 	}
-	
+
 	var trades []*Trade
 	remainingQty := order.Quantity
-	
+
 	if order.Side == OrderSideBuy {
 		// Buy against asks (lowest price first)
 		for _, level := range book.Asks {
 			if remainingQty <= 0 {
 				break
 			}
-			
+
 			for _, makerOrder := range level.Orders {
 				if remainingQty <= 0 {
 					break
 				}
-				
+
 				execQty := math.Min(remainingQty, makerOrder.RemainingQuantity)
 				if execQty <= 0 {
 					continue
 				}
-				
+
 				// Create trade
 				trade := me.createTrade(state, order, makerOrder, level.Price, execQty)
 				trades = append(trades, trade)
-				
+
 				// Update quantities
 				remainingQty -= execQty
 				order.FilledQuantity += execQty
 				order.RemainingQuantity -= execQty
 				makerOrder.FilledQuantity += execQty
 				makerOrder.RemainingQuantity -= execQty
-				
+
 				// Update balances
 				me.updateBalancesForTrade(trade)
-				
+
 				// Update order book
 				level.Quantity -= execQty
-				
+
 				// Update taker price for average
 				order.AverageFillPrice = (order.AverageFillPrice*float64(order.FilledQuantity-execQty) + level.Price*execQty) / float64(order.FilledQuantity)
 			}
@@ -855,40 +856,40 @@ func (me *MatchingEngine) executeMarketOrder(state *MarketState, order *Order) (
 			if remainingQty <= 0 {
 				break
 			}
-			
+
 			for _, makerOrder := range level.Orders {
 				if remainingQty <= 0 {
 					break
 				}
-				
+
 				execQty := math.Min(remainingQty, makerOrder.RemainingQuantity)
 				if execQty <= 0 {
 					continue
 				}
-				
+
 				// Create trade
 				trade := me.createTrade(state, order, makerOrder, level.Price, execQty)
 				trades = append(trades, trade)
-				
+
 				// Update quantities
 				remainingQty -= execQty
 				order.FilledQuantity += execQty
 				order.RemainingQuantity -= execQty
 				makerOrder.FilledQuantity += execQty
 				makerOrder.RemainingQuantity -= execQty
-				
+
 				// Update balances
 				me.updateBalancesForTrade(trade)
-				
+
 				// Update order book
 				level.Quantity -= execQty
-				
+
 				// Update average price
 				order.AverageFillPrice = (order.AverageFillPrice*float64(order.FilledQuantity-execQty) + level.Price*execQty) / float64(order.FilledQuantity)
 			}
 		}
 	}
-	
+
 	// Update order status
 	if remainingQty <= 0 {
 		order.Status = StatusFilled
@@ -898,25 +899,25 @@ func (me *MatchingEngine) executeMarketOrder(state *MarketState, order *Order) (
 	} else {
 		order.Status = StatusRejected
 	}
-	
+
 	order.UpdatedAt = time.Now()
-	
+
 	// Update market statistics
 	if len(trades) > 0 {
 		me.updateMarketStats(state, trades)
 	}
-	
+
 	return trades, nil
 }
 
 // executeLimitOrder executes a limit order
 func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([]*Trade, error) {
 	book := state.OrderBook
-	
+
 	// First, check for immediate matches
 	var trades []*Trade
 	remainingQty := order.Quantity
-	
+
 	// Try to match against opposite side
 	var oppositeSide PriceLevels
 	if order.Side == OrderSideBuy {
@@ -924,7 +925,7 @@ func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([
 	} else {
 		oppositeSide = book.Bids
 	}
-	
+
 	// Check for crossing
 	shouldMatch := false
 	if order.Side == OrderSideBuy && len(oppositeSide) > 0 && order.Price >= oppositeSide[0].Price {
@@ -933,7 +934,7 @@ func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([
 	if order.Side == OrderSideSell && len(oppositeSide) > 0 && order.Price <= oppositeSide[0].Price {
 		shouldMatch = true
 	}
-	
+
 	// Post-only: don't match, only add to book
 	if order.IsPostOnly || order.TimeInForce == TIFGTX {
 		if shouldMatch {
@@ -944,7 +945,7 @@ func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([
 		me.addToBook(state, order)
 		return nil, nil
 	}
-	
+
 	// Execute matches
 	if shouldMatch && !order.IsReduceOnly {
 		if order.Side == OrderSideBuy {
@@ -955,7 +956,7 @@ func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([
 				if order.Price < level.Price {
 					break
 				}
-				
+
 				for _, makerOrder := range level.Orders {
 					if remainingQty <= 0 {
 						break
@@ -963,26 +964,26 @@ func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([
 					if order.Price < level.Price {
 						break
 					}
-					
+
 					execQty := math.Min(remainingQty, makerOrder.RemainingQuantity)
 					if execQty <= 0 {
 						continue
 					}
-					
+
 					trade := me.createTrade(state, order, makerOrder, level.Price, execQty)
 					trades = append(trades, trade)
-					
+
 					remainingQty -= execQty
 					order.FilledQuantity += execQty
 					order.RemainingQuantity -= execQty
 					makerOrder.FilledQuantity += execQty
 					makerOrder.RemainingQuantity -= execQty
-					
+
 					me.updateBalancesForTrade(trade)
 					level.Quantity -= execQty
-					
+
 					order.AverageFillPrice = (order.AverageFillPrice*float64(order.FilledQuantity-execQty) + level.Price*execQty) / float64(order.FilledQuantity)
-					
+
 					// Remove filled orders
 					if makerOrder.RemainingQuantity <= 0 {
 						makerOrder.Status = StatusFilled
@@ -992,7 +993,7 @@ func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([
 						}
 					}
 				}
-				
+
 				// Remove empty levels
 				if level.Quantity <= 0 {
 					me.removePriceLevel(book, order.Side, level.Price)
@@ -1006,7 +1007,7 @@ func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([
 				if order.Price > level.Price {
 					break
 				}
-				
+
 				for _, makerOrder := range level.Orders {
 					if remainingQty <= 0 {
 						break
@@ -1014,26 +1015,26 @@ func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([
 					if order.Price > level.Price {
 						break
 					}
-					
+
 					execQty := math.Min(remainingQty, makerOrder.RemainingQuantity)
 					if execQty <= 0 {
 						continue
 					}
-					
+
 					trade := me.createTrade(state, order, makerOrder, level.Price, execQty)
 					trades = append(trades, trade)
-					
+
 					remainingQty -= execQty
 					order.FilledQuantity += execQty
 					order.RemainingQuantity -= execQty
 					makerOrder.FilledQuantity += execQty
 					makerOrder.RemainingQuantity -= execQty
-					
+
 					me.updateBalancesForTrade(trade)
 					level.Quantity -= execQty
-					
+
 					order.AverageFillPrice = (order.AverageFillPrice*float64(order.FilledQuantity-execQty) + level.Price*execQty) / float64(order.FilledQuantity)
-					
+
 					if makerOrder.RemainingQuantity <= 0 {
 						makerOrder.Status = StatusFilled
 						makerOrder.FilledAt = &makerOrder.UpdatedAt
@@ -1042,17 +1043,17 @@ func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([
 						}
 					}
 				}
-				
+
 				if level.Quantity <= 0 {
 					me.removePriceLevel(book, order.Side, level.Price)
 				}
 			}
 		}
 	}
-	
+
 	// Update order status and add remaining to book
 	order.RemainingQuantity = remainingQty
-	
+
 	if remainingQty <= 0 {
 		order.Status = StatusFilled
 		order.FilledAt = &order.UpdatedAt
@@ -1081,13 +1082,13 @@ func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([
 			}
 		}
 	}
-	
+
 	order.UpdatedAt = time.Now()
-	
+
 	if len(trades) > 0 {
 		me.updateMarketStats(state, trades)
 	}
-	
+
 	return trades, nil
 }
 
@@ -1095,11 +1096,11 @@ func (me *MatchingEngine) executeLimitOrder(state *MarketState, order *Order) ([
 func (me *MatchingEngine) addStopOrder(state *MarketState, order *Order) ([]*Trade, error) {
 	order.Status = StatusNew
 	state.stopOrders = append(state.stopOrders, order)
-	
+
 	// Check if stop should trigger immediately
 	book := state.OrderBook
 	shouldTrigger := false
-	
+
 	switch order.Type {
 	case OrderTypeStopLoss:
 		if order.Side == OrderSideSell && book.LastPrice <= order.StopPrice {
@@ -1116,11 +1117,11 @@ func (me *MatchingEngine) addStopOrder(state *MarketState, order *Order) ([]*Tra
 			shouldTrigger = true
 		}
 	}
-	
+
 	if shouldTrigger {
 		return me.triggerStopOrder(state, order)
 	}
-	
+
 	return nil, nil
 }
 
@@ -1136,7 +1137,7 @@ func (me *MatchingEngine) addOCOOrder(state *MarketState, order *Order) ([]*Trad
 	if order.ContingentOrderID == "" {
 		return nil, errors.New("oco order requires contingent order")
 	}
-	
+
 	order.Status = StatusNew
 	state.stopOrders = append(state.stopOrders, order)
 	return nil, nil
@@ -1147,7 +1148,7 @@ func (me *MatchingEngine) addIcebergOrder(state *MarketState, order *Order) ([]*
 	order.IsIceberg = true
 	order.DisplayQuantity = order.Quantity * 0.1 // 10% visible by default
 	order.IcebergHiddenQuantity = order.Quantity - order.DisplayQuantity
-	
+
 	order.Status = StatusNew
 	me.addToBook(state, order)
 	return nil, nil
@@ -1156,36 +1157,36 @@ func (me *MatchingEngine) addIcebergOrder(state *MarketState, order *Order) ([]*
 // addTWAPOrder adds a time-weighted average price order
 func (me *MatchingEngine) addTWAPOrder(state *MarketState, order *Order) ([]*Trade, error) {
 	order.Status = StatusNew
-	
+
 	// Split into smaller orders
 	sliceCount := 10
 	sliceQty := order.Quantity / float64(sliceCount)
-	
+
 	for i := 0; i < sliceCount; i++ {
 		sliceOrder := &Order{
-			OrderID: me.generateOrderID(),
-			UserID: order.UserID,
-			Symbol: order.Symbol,
-			Side: order.Side,
-			Type: OrderTypeLimit,
-			Price: order.Price,
-			Quantity: sliceQty,
-			FilledQuantity: 0,
+			OrderID:           me.generateOrderID(),
+			UserID:            order.UserID,
+			Symbol:            order.Symbol,
+			Side:              order.Side,
+			Type:              OrderTypeLimit,
+			Price:             order.Price,
+			Quantity:          sliceQty,
+			FilledQuantity:    0,
 			RemainingQuantity: sliceQty,
-			Status: StatusNew,
-			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
-			UpdatedAt: time.Now(),
+			Status:            StatusNew,
+			CreatedAt:         time.Now().Add(time.Duration(i) * time.Minute),
+			UpdatedAt:         time.Now(),
 		}
 		me.addToBook(state, sliceOrder)
 	}
-	
+
 	return nil, nil
 }
 
 // executeFOKOrder executes a fill-or-kill order
 func (me *MatchingEngine) executeFOKOrder(state *MarketState, order *Order) ([]*Trade, error) {
 	book := state.OrderBook
-	
+
 	// Check if entire quantity can be filled at limit price
 	var oppositeSide PriceLevels
 	if order.Side == OrderSideBuy {
@@ -1193,7 +1194,7 @@ func (me *MatchingEngine) executeFOKOrder(state *MarketState, order *Order) ([]*
 	} else {
 		oppositeSide = book.Bids
 	}
-	
+
 	totalAvailable := float64(0)
 	for _, level := range oppositeSide {
 		if order.Side == OrderSideBuy && level.Price > order.Price {
@@ -1204,12 +1205,12 @@ func (me *MatchingEngine) executeFOKOrder(state *MarketState, order *Order) ([]*
 		}
 		totalAvailable += level.Quantity
 	}
-	
+
 	if totalAvailable < order.Quantity {
 		order.Status = StatusRejected
 		return nil, errors.New("fok order could not be fully filled")
 	}
-	
+
 	// Execute as market order
 	return me.executeMarketOrder(state, order)
 }
@@ -1228,11 +1229,11 @@ func (me *MatchingEngine) executeIOCOrder(state *MarketState, order *Order) ([]*
 // addToBook adds an order to the order book
 func (me *MatchingEngine) addToBook(state *MarketState, order *Order) {
 	book := state.OrderBook
-	
+
 	// Lock order for updates
 	order.Status = StatusNew
 	order.UpdatedAt = time.Now()
-	
+
 	if order.Side == OrderSideBuy {
 		book.Bids = me.insertPriceLevel(book.Bids, order)
 		sort.Sort(book.Bids)
@@ -1240,9 +1241,9 @@ func (me *MatchingEngine) addToBook(state *MarketState, order *Order) {
 		book.Asks = me.insertPriceLevel(book.Asks, order)
 		sort.Sort(AskPriceLevels(book.Asks))
 	}
-	
+
 	book.LastUpdateID++
-	
+
 	// Update market ticker
 	me.updateTickerFromBook(state)
 }
@@ -1257,15 +1258,15 @@ func (me *MatchingEngine) insertPriceLevel(levels PriceLevels, order *Order) Pri
 			return levels
 		}
 	}
-	
+
 	// New price level
 	newLevel := &PriceLevel{
-		Price: order.Price,
-		Quantity: order.RemainingQuantity,
-		Orders: []*Order{order},
+		Price:      order.Price,
+		Quantity:   order.RemainingQuantity,
+		Orders:     []*Order{order},
 		OrderCount: 1,
 	}
-	
+
 	return append(levels, newLevel)
 }
 
@@ -1291,20 +1292,20 @@ func (me *MatchingEngine) removePriceLevel(book *OrderBook, side OrderSide, pric
 // createTrade creates a new trade
 func (me *MatchingEngine) createTrade(state *MarketState, takerOrder, makerOrder *Order, price, quantity float64) *Trade {
 	tradeID := me.generateTradeID()
-	
+
 	// Determine roles
 	isTaker := takerOrder.OrderID != makerOrder.OrderID
 	takerUserID := takerOrder.UserID
 	makerUserID := makerOrder.UserID
-	
+
 	// Calculate fees
 	var takerFee, makerFee float64
 	takerIsUser := takerOrder.UserID
-	
+
 	if isTaker {
 		takerFee = quantity * price * me.takerFeeRate
 		makerFee = quantity * price * me.makerFeeRate
-		
+
 		// Fees are charged in quote currency
 		// Maker gets rebate, taker pays
 	} else {
@@ -1312,31 +1313,31 @@ func (me *MatchingEngine) createTrade(state *MarketState, takerOrder, makerOrder
 		takerFee = quantity * price * me.takerFeeRate
 		makerFee = 0
 	}
-	
+
 	trade := &Trade{
-		TradeID: tradeID,
-		OrderID: takerOrder.OrderID,
+		TradeID:        tradeID,
+		OrderID:        takerOrder.OrderID,
 		CounterOrderID: makerOrder.OrderID,
-		Symbol: state.Symbol,
-		UserID: takerUserID,
-		CounterUserID: makerUserID,
-		Side: takerOrder.Side,
-		Price: price,
-		Quantity: quantity,
-		QuoteQuantity: quantity * price,
-		Fee: takerFee,
-		FeeCurrency: state.OrderBook.QuoteAsset,
-		FeeMakerTaker: "taker",
-		IsTaker: isTaker,
-		IsMaker: !isTaker,
-		IsSelfTrade: takerUserID == makerUserID,
-		Timestamp: time.Now(),
+		Symbol:         state.Symbol,
+		UserID:         takerUserID,
+		CounterUserID:  makerUserID,
+		Side:           takerOrder.Side,
+		Price:          price,
+		Quantity:       quantity,
+		QuoteQuantity:  quantity * price,
+		Fee:            takerFee,
+		FeeCurrency:    state.OrderBook.QuoteAsset,
+		FeeMakerTaker:  "taker",
+		IsTaker:        isTaker,
+		IsMaker:        !isTaker,
+		IsSelfTrade:    takerUserID == makerUserID,
+		Timestamp:      time.Now(),
 	}
-	
+
 	atomic.AddInt64(&me.stats.TradesExecuted, 1)
 	atomic.AddInt64(&me.stats.TotalVolume, int64(quantity))
 	atomic.AddInt64(&me.stats.TotalQuoteVolume, int64(quantity*price))
-	
+
 	return trade
 }
 
@@ -1351,19 +1352,19 @@ func (me *MatchingEngine) updateMarketStats(state *MarketState, trades []*Trade)
 	if len(trades) == 0 {
 		return
 	}
-	
+
 	book := state.OrderBook
 	lastPrice := trades[len(trades)-1].Price
-	
+
 	book.LastTradeID++
 	book.Count += int64(len(trades))
-	
+
 	// Update volume
 	for _, trade := range trades {
 		book.Volume += trade.Quantity
 		book.QuoteVolume += trade.QuoteQuantity
 	}
-	
+
 	// Update high/low
 	if lastPrice > book.HighPrice {
 		book.HighPrice = lastPrice
@@ -1371,7 +1372,7 @@ func (me *MatchingEngine) updateMarketStats(state *MarketState, trades []*Trade)
 	if lastPrice < book.LowPrice || book.LowPrice == 0 {
 		book.LowPrice = lastPrice
 	}
-	
+
 	// Update ticker
 	state.Ticker.LastPrice = lastPrice
 	state.Ticker.Volume = book.Volume
@@ -1379,7 +1380,7 @@ func (me *MatchingEngine) updateMarketStats(state *MarketState, trades []*Trade)
 	state.Ticker.HighPrice = book.HighPrice
 	state.Ticker.LowPrice = book.LowPrice
 	state.Ticker.Timestamp = time.Now()
-	
+
 	// Update order book last price
 	book.LastUpdateID++
 }
@@ -1387,19 +1388,19 @@ func (me *MatchingEngine) updateMarketStats(state *MarketState, trades []*Trade)
 // updateTickerFromBook updates ticker from order book
 func (me *MatchingEngine) updateTickerFromBook(state *MarketState) {
 	book := state.OrderBook
-	
+
 	if len(book.Bids) > 0 {
 		bid := book.Bids[0]
 		state.Ticker.BidPrice = bid.Price
 		state.Ticker.BidQuantity = bid.Quantity
 	}
-	
+
 	if len(book.Asks) > 0 {
 		ask := book.Asks[0]
 		state.Ticker.AskPrice = ask.Price
 		state.Ticker.AskQuantity = ask.Quantity
 	}
-	
+
 	// Spread
 	if len(book.Bids) > 0 && len(book.Asks) > 0 {
 		spread := book.Asks[0].Price - book.Bids[0].Price
@@ -1412,42 +1413,42 @@ func (me *MatchingEngine) updateTickerFromBook(state *MarketState) {
 func (me *MatchingEngine) CancelOrder(orderID, userID string) error {
 	me.mu.Lock()
 	defer me.mu.Unlock()
-	
+
 	order, exists := me.orders[orderID]
 	if !exists {
 		return errors.New("order not found")
 	}
-	
+
 	if order.UserID != userID {
 		return errors.New("unauthorized")
 	}
-	
+
 	if order.Status == StatusFilled || order.Status == StatusCanceled {
 		return errors.New("order already settled")
 	}
-	
+
 	order.Status = StatusCanceled
 	order.UpdatedAt = time.Now()
-	
+
 	atomic.AddInt64(&me.stats.OrdersCanceled, 1)
-	
+
 	// Remove from order book
 	state := me.markets[order.Symbol]
 	if state != nil {
 		state.mu.Lock()
 		defer state.mu.Unlock()
-		
+
 		if order.Side == OrderSideBuy {
 			me.removeOrderFromLevel(state.OrderBook.Bids, order)
 		} else {
 			me.removeOrderFromLevel(state.OrderBook.Asks, order)
 		}
 	}
-	
+
 	if me.onOrderUpdate != nil {
 		me.onOrderUpdate(order)
 	}
-	
+
 	return nil
 }
 
@@ -1469,20 +1470,20 @@ func (me *MatchingEngine) removeOrderFromLevel(levels PriceLevels, order *Order)
 func (me *MatchingEngine) ModifyOrder(orderID, userID string, newPrice, newQuantity float64) (*Order, error) {
 	me.mu.Lock()
 	defer me.mu.Unlock()
-	
+
 	order, exists := me.orders[orderID]
 	if !exists {
 		return nil, errors.New("order not found")
 	}
-	
+
 	if order.UserID != userID {
 		return nil, errors.New("unauthorized")
 	}
-	
+
 	if order.Status != StatusNew && order.Status != StatusPartiallyFilled {
 		return nil, errors.New("can only modify active orders")
 	}
-	
+
 	// Cancel old order
 	oldQty := order.RemainingQuantity
 	if order.Side == OrderSideBuy {
@@ -1490,14 +1491,14 @@ func (me *MatchingEngine) ModifyOrder(orderID, userID string, newPrice, newQuant
 	} else {
 		me.removeOrderFromLevel(me.markets[order.Symbol].OrderBook.Asks, order)
 	}
-	
+
 	// Update order
 	order.Price = newPrice
 	order.Quantity = newQuantity
 	order.FilledQuantity = oldQty - order.RemainingQuantity + order.FilledQuantity
 	order.RemainingQuantity = order.Quantity - order.FilledQuantity
 	order.UpdatedAt = time.Now()
-	
+
 	// Add back to book
 	state := me.markets[order.Symbol]
 	state.mu.Lock()
@@ -1507,11 +1508,11 @@ func (me *MatchingEngine) ModifyOrder(orderID, userID string, newPrice, newQuant
 		me.addToBook(state, order)
 	}
 	state.mu.Unlock()
-	
+
 	if me.onOrderUpdate != nil {
 		me.onOrderUpdate(order)
 	}
-	
+
 	return order, nil
 }
 
@@ -1519,12 +1520,12 @@ func (me *MatchingEngine) ModifyOrder(orderID, userID string, newPrice, newQuant
 func (me *MatchingEngine) GetOrder(orderID string) (*Order, error) {
 	me.mu.RLock()
 	defer me.mu.RUnlock()
-	
+
 	order, exists := me.orders[orderID]
 	if !exists {
 		return nil, errors.New("order not found")
 	}
-	
+
 	return order, nil
 }
 
@@ -1532,7 +1533,7 @@ func (me *MatchingEngine) GetOrder(orderID string) (*Order, error) {
 func (me *MatchingEngine) GetOpenOrders(userID, symbol string) ([]*Order, error) {
 	me.mu.RLock()
 	defer me.mu.RUnlock()
-	
+
 	var orders []*Order
 	for _, order := range me.orders {
 		if order.UserID == userID {
@@ -1543,7 +1544,7 @@ func (me *MatchingEngine) GetOpenOrders(userID, symbol string) ([]*Order, error)
 			}
 		}
 	}
-	
+
 	return orders, nil
 }
 
@@ -1553,29 +1554,29 @@ func (me *MatchingEngine) GetOrderBook(symbol string, limit int) (*OrderBook, er
 	if state == nil {
 		return nil, errors.New("market not found")
 	}
-	
+
 	state.mu.RLock()
 	defer state.mu.RUnlock()
-	
+
 	book := state.OrderBook
-	
+
 	result := &OrderBook{
-		Symbol: symbol,
+		Symbol:       symbol,
 		LastUpdateID: book.LastUpdateID,
-		Bids: make(PriceLevels, 0),
-		Asks: make(PriceLevels, 0),
+		Bids:         make(PriceLevels, 0),
+		Asks:         make(PriceLevels, 0),
 	}
-	
+
 	// Limit bids
 	for i := 0; i < len(book.Bids) && i < limit; i++ {
 		result.Bids = append(result.Bids, book.Bids[i])
 	}
-	
+
 	// Limit asks
 	for i := 0; i < len(book.Asks) && i < limit; i++ {
 		result.Asks = append(result.Asks, book.Asks[i])
 	}
-	
+
 	return result, nil
 }
 
@@ -1585,10 +1586,10 @@ func (me *MatchingEngine) GetTicker(symbol string) (*Ticker, error) {
 	if state == nil {
 		return nil, errors.New("market not found")
 	}
-	
+
 	state.mu.RLock()
 	defer state.mu.RUnlock()
-	
+
 	return state.Ticker, nil
 }
 
@@ -1612,29 +1613,29 @@ func (me *MatchingEngine) GetTradeHistory(symbol string, limit int) ([]*Trade, e
 func (me *MatchingEngine) triggerStopOrder(state *MarketState, order *Order) ([]*Trade, error) {
 	// Convert stop to market order
 	marketOrder := &Order{
-		OrderID: me.generateOrderID(),
-		UserID: order.UserID,
-		Symbol: order.Symbol,
-		Side: order.Side,
-		Type: OrderTypeMarket,
-		Quantity: order.Quantity,
-		Status: StatusPendingNew,
+		OrderID:   me.generateOrderID(),
+		UserID:    order.UserID,
+		Symbol:    order.Symbol,
+		Side:      order.Side,
+		Type:      OrderTypeMarket,
+		Quantity:  order.Quantity,
+		Status:    StatusPendingNew,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	
+
 	me.mu.Lock()
 	me.orders[marketOrder.OrderID] = marketOrder
 	me.mu.Unlock()
-	
+
 	trades, err := me.executeMarketOrder(state, marketOrder)
-	
+
 	// Update original order
 	order.FilledQuantity = marketOrder.FilledQuantity
 	order.RemainingQuantity = marketOrder.RemainingQuantity
 	order.AverageFillPrice = marketOrder.AverageFillPrice
 	order.Status = marketOrder.Status
-	
+
 	return trades, err
 }
 
@@ -1642,12 +1643,12 @@ func (me *MatchingEngine) triggerStopOrder(state *MarketState, order *Order) ([]
 func (me *MatchingEngine) checkStopOrders(state *MarketState) {
 	book := state.OrderBook
 	currentPrice := book.LastPrice
-	
+
 	for i := len(state.stopOrders) - 1; i >= 0; i-- {
 		order := state.stopOrders[i]
-		
+
 		shouldTrigger := false
-		
+
 		switch order.Type {
 		case OrderTypeStopLoss:
 			if order.Side == OrderSideSell && currentPrice <= order.StopPrice {
@@ -1664,7 +1665,7 @@ func (me *MatchingEngine) checkStopOrders(state *MarketState) {
 				shouldTrigger = true
 			}
 		}
-		
+
 		if shouldTrigger {
 			me.triggerStopOrder(state, order)
 			state.stopOrders = append(state.stopOrders[:i], state.stopOrders[i+1:]...)
@@ -1680,31 +1681,31 @@ func (me *MatchingEngine) checkStopOrders(state *MarketState) {
 func (me *MatchingEngine) OpenPosition(userID, symbol string, side OrderSide, quantity, leverage float64, positionMode string) (*Position, error) {
 	me.mu.Lock()
 	defer me.mu.Unlock()
-	
+
 	positionID := fmt.Sprintf("POS_%s", uuid.New().String()[:8])
-	
+
 	position := &Position{
-		PositionID: positionID,
-		UserID: userID,
-		Symbol: symbol,
-		Side: side,
-		Size: quantity,
-		OpenQuantity: quantity,
-		EntryPrice: 0, // Set from first trade
-		Leverage: leverage,
-		PositionMode: positionMode,
+		PositionID:    positionID,
+		UserID:        userID,
+		Symbol:        symbol,
+		Side:          side,
+		Size:          quantity,
+		OpenQuantity:  quantity,
+		EntryPrice:    0, // Set from first trade
+		Leverage:      leverage,
+		PositionMode:  positionMode,
 		AutoAddMargin: false,
-		OpenedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		OpenedAt:      time.Now(),
+		UpdatedAt:     time.Now(),
 	}
-	
+
 	me.positions[positionID] = position
-	
+
 	if me.userPositions[userID] == nil {
 		me.userPositions[userID] = make(map[string]*Position)
 	}
 	me.userPositions[userID][positionID] = position
-	
+
 	return position, nil
 }
 
@@ -1712,7 +1713,7 @@ func (me *MatchingEngine) OpenPosition(userID, symbol string, side OrderSide, qu
 func (me *MatchingEngine) UpdatePosition(position *Position, trade *Trade) {
 	position.mu.Lock()
 	defer position.mu.Unlock()
-	
+
 	if position.Size == 0 {
 		position.EntryPrice = trade.Price
 	} else {
@@ -1723,9 +1724,9 @@ func (me *MatchingEngine) UpdatePosition(position *Position, trade *Trade) {
 			position.EntryPrice = totalCost / position.Size
 		}
 	}
-	
+
 	position.UpdatedAt = time.Now()
-	
+
 	if me.onPositionUpdate != nil {
 		me.onPositionUpdate(position)
 	}
@@ -1735,13 +1736,13 @@ func (me *MatchingEngine) UpdatePosition(position *Position, trade *Trade) {
 func (me *MatchingEngine) GetPosition(userID, symbol string) (*Position, error) {
 	me.mu.RLock()
 	defer me.mu.RUnlock()
-	
+
 	for _, pos := range me.positions {
 		if pos.UserID == userID && pos.Symbol == symbol {
 			return pos, nil
 		}
 	}
-	
+
 	return nil, errors.New("position not found")
 }
 
@@ -1751,29 +1752,29 @@ func (me *MatchingEngine) CalculateLiquidationPrice(position *Position, markPric
 	if leverage <= 0 {
 		leverage = 1
 	}
-	
+
 	maintenanceMarginRate := 0.005 // 0.5% default
-	
+
 	if position.Side == OrderSideBuy {
 		// Long position
-		return position.EntryPrice * (1 - (1/leverage) + maintenanceMarginRate)
+		return position.EntryPrice * (1 - (1 / leverage) + maintenanceMarginRate)
 	} else {
 		// Short position
-		return position.EntryPrice * (1 + (1/leverage) - maintenanceMarginRate)
+		return position.EntryPrice * (1 + (1 / leverage) - maintenanceMarginRate)
 	}
 }
 
 // CheckLiquidation checks if position should be liquidated
 func (me *MatchingEngine) CheckLiquidation(position *Position, markPrice float64) (bool, string) {
 	liquidationPrice := me.CalculateLiquidationPrice(position, markPrice)
-	
+
 	if position.Side == OrderSideBuy && markPrice <= liquidationPrice {
 		return true, "long liquidation"
 	}
 	if position.Side == OrderSideSell && markPrice >= liquidationPrice {
 		return true, "short liquidation"
 	}
-	
+
 	return false, ""
 }
 
@@ -1781,37 +1782,37 @@ func (me *MatchingEngine) CheckLiquidation(position *Position, markPrice float64
 func (me *MatchingEngine) LiquidatePosition(position *Position) error {
 	me.mu.Lock()
 	defer me.mu.Unlock()
-	
+
 	// Create liquidation order
 	order := &Order{
-		OrderID: me.generateOrderID(),
-		UserID: position.UserID,
-		Symbol: position.Symbol,
-		Side: OrderSideSell,
-		Type: OrderTypeMarket,
-		Quantity: position.Size,
-		Status: StatusPendingNew,
+		OrderID:   me.generateOrderID(),
+		UserID:    position.UserID,
+		Symbol:    position.Symbol,
+		Side:      OrderSideSell,
+		Type:      OrderTypeMarket,
+		Quantity:  position.Size,
+		Status:    StatusPendingNew,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	
+
 	me.orders[order.OrderID] = order
-	
+
 	state := me.markets[position.Symbol]
 	if state == nil {
 		return errors.New("market not found")
 	}
-	
+
 	state.mu.Lock()
 	_, err := me.executeMarketOrder(state, order)
 	state.mu.Unlock()
-	
+
 	if err == nil {
 		position.Size = 0
 		position.Status = StatusCanceled
 		position.UpdatedAt = time.Now()
 	}
-	
+
 	return err
 }
 
@@ -1821,27 +1822,27 @@ func (me *MatchingEngine) LiquidatePosition(position *Position) error {
 
 type RiskManager struct {
 	engine *MatchingEngine
-	
+
 	// Risk limits
-	maxPositionPerUser float64
-	maxOrderValue float64
+	maxPositionPerUser    float64
+	maxOrderValue         float64
 	maxDailyTradingVolume float64
-	maxLeverage float64
-	
+	maxLeverage           float64
+
 	// Circuit breakers
 	priceFluctuationLimit float64
-	volumeSpikeThreshold float64
+	volumeSpikeThreshold  float64
 }
 
 func NewRiskManager(engine *MatchingEngine) *RiskManager {
 	return &RiskManager{
-		engine: engine,
-		maxPositionPerUser: 10000000, // $10M
-		maxOrderValue: 1000000, // $1M
+		engine:                engine,
+		maxPositionPerUser:    10000000,  // $10M
+		maxOrderValue:         1000000,   // $1M
 		maxDailyTradingVolume: 100000000, // $100M
-		maxLeverage: 125, // Max 125x leverage
-		priceFluctuationLimit: 0.1, // 10% price move triggers circuit breaker
-		volumeSpikeThreshold: 5.0, // 5x average volume
+		maxLeverage:           125,       // Max 125x leverage
+		priceFluctuationLimit: 0.1,       // 10% price move triggers circuit breaker
+		volumeSpikeThreshold:  5.0,       // 5x average volume
 	}
 }
 
@@ -1934,13 +1935,13 @@ func (rm *RiskManager) checkOrderRisk(order *Order) error {
 // =============================================================================
 
 type OrderResult struct {
-	Order *Order
+	Order  *Order
 	Trades []*Trade
-	Error string
-	
+	Error  string
+
 	ExecutedQuantity float64
-	ExecutedQuote float64
-	
+	ExecutedQuote    float64
+
 	NewOrderID string
 }
 
@@ -1965,10 +1966,10 @@ func (me *MatchingEngine) generateTradeID() string {
 func (me *MatchingEngine) updateLatencyStats(latencyUs int64) {
 	me.stats.mu.Lock()
 	defer me.stats.mu.Unlock()
-	
+
 	count := atomic.LoadInt64(&me.stats.OrdersProcessed)
 	me.stats.AvgLatencyUs = (me.stats.AvgLatencyUs*(count-1) + latencyUs) / count
-	
+
 	if latencyUs > me.stats.MaxLatencyUs {
 		me.stats.MaxLatencyUs = latencyUs
 	}
@@ -1983,10 +1984,10 @@ func (me *MatchingEngine) updateLatencyStats(latencyUs int64) {
 
 func (me *MatchingEngine) orderExpirationWorker() {
 	defer me.wg.Done()
-	
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-me.ctx.Done():
@@ -2000,15 +2001,15 @@ func (me *MatchingEngine) orderExpirationWorker() {
 func (me *MatchingEngine) checkExpiredOrders() {
 	me.mu.Lock()
 	defer me.mu.Unlock()
-	
+
 	now := time.Now()
-	
+
 	for _, order := range me.orders {
 		if order.Status == StatusNew || order.Status == StatusPartiallyFilled {
 			if !order.ExpireTime.IsZero() && now.After(order.ExpireTime) {
 				order.Status = StatusExpired
 				order.UpdatedAt = now
-				
+
 				// Remove from book
 				if state, ok := me.markets[order.Symbol]; ok {
 					state.mu.Lock()
@@ -2019,7 +2020,7 @@ func (me *MatchingEngine) checkExpiredOrders() {
 					}
 					state.mu.Unlock()
 				}
-				
+
 				if me.onOrderUpdate != nil {
 					me.onOrderUpdate(order)
 				}
@@ -2030,10 +2031,10 @@ func (me *MatchingEngine) checkExpiredOrders() {
 
 func (me *MatchingEngine) fundingWorker() {
 	defer me.wg.Done()
-	
+
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-me.ctx.Done():
@@ -2047,9 +2048,9 @@ func (me *MatchingEngine) fundingWorker() {
 func (me *MatchingEngine) processFunding() {
 	me.mu.Lock()
 	defer me.mu.Unlock()
-	
+
 	now := time.Now()
-	
+
 	for _, state := range me.markets {
 		if now.After(state.nextFundingTime) {
 			// Process funding payments for all positions
@@ -2058,12 +2059,12 @@ func (me *MatchingEngine) processFunding() {
 					// Calculate and apply funding fee
 					fundingRate := state.fundingRate
 					fundingFee := pos.Size * fundingRate
-					
+
 					pos.FundingFee += fundingFee
 					pos.LastFundingTime = now
 				}
 			}
-			
+
 			state.nextFundingTime = now.Add(8 * time.Hour)
 		}
 	}
@@ -2071,10 +2072,10 @@ func (me *MatchingEngine) processFunding() {
 
 func (me *MatchingEngine) statsWorker() {
 	defer me.wg.Done()
-	
+
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-me.ctx.Done():
@@ -2089,7 +2090,7 @@ func (me *MatchingEngine) logStats() {
 	me.stats.mu.RLock()
 	stats := me.stats
 	me.stats.mu.RUnlock()
-	
+
 	log.Printf("[ENGINE] Stats - Orders: processed=%d, trades=%d, rejected=%d, avg_latency=%dμs",
 		stats.OrdersProcessed, stats.TradesExecuted, stats.OrdersRejected, stats.AvgLatencyUs)
 }
@@ -2150,38 +2151,38 @@ func (h *OrderHandler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	
+
 	order := &Order{
-		UserID: req.UserID,
-		Symbol: req.Symbol,
-		Side: OrderSide(req.Side),
-		Type: OrderType(req.Type),
-		Price: req.Price,
-		Quantity: req.Quantity,
-		StopPrice: req.StopPrice,
-		Leverage: req.Leverage,
+		UserID:      req.UserID,
+		Symbol:      req.Symbol,
+		Side:        OrderSide(req.Side),
+		Type:        OrderType(req.Type),
+		Price:       req.Price,
+		Quantity:    req.Quantity,
+		StopPrice:   req.StopPrice,
+		Leverage:    req.Leverage,
 		TimeInForce: TimeInForce(req.TimeInForce),
 	}
-	
+
 	result, err := h.engine.SubmitOrder(order)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	
+
 	json.NewEncoder(w).Encode(result)
 }
 
 type PlaceOrderRequest struct {
-	UserID string `json:"userId"`
-	Symbol string `json:"symbol"`
-	Side string `json:"side"`
-	Type string `json:"type"`
-	Price float64 `json:"price"`
-	Quantity float64 `json:"quantity"`
-	StopPrice float64 `json:"stopPrice"`
-	Leverage float64 `json:"leverage"`
-	TimeInForce string `json:"timeInForce"`
+	UserID      string  `json:"userId"`
+	Symbol      string  `json:"symbol"`
+	Side        string  `json:"side"`
+	Type        string  `json:"type"`
+	Price       float64 `json:"price"`
+	Quantity    float64 `json:"quantity"`
+	StopPrice   float64 `json:"stopPrice"`
+	Leverage    float64 `json:"leverage"`
+	TimeInForce string  `json:"timeInForce"`
 }
 
 // =============================================================================
@@ -2190,29 +2191,29 @@ type PlaceOrderRequest struct {
 
 func main() {
 	log.Printf("TigerEx Trading Engine v%s starting...", EngineVersion)
-	
+
 	config := EngineConfig{
-		Name: "TigerEx",
-		Mode: "production",
-		MaxOrdersPerMarket: 100000,
-		MaxPositionsPerUser: 100,
+		Name:                  "TigerEx",
+		Mode:                  "production",
+		MaxOrdersPerMarket:    100000,
+		MaxPositionsPerUser:   100,
 		OrderProcessBatchSize: 1000,
-		DefaultMakerFee: 0.001,
-		DefaultTakerFee: 0.002,
-		MaxPositionSize: 10000000,
-		MaxOrderValue: 1000000,
-		LiquidationBuffer: 0.005,
+		DefaultMakerFee:       0.001,
+		DefaultTakerFee:       0.002,
+		MaxPositionSize:       10000000,
+		MaxOrderValue:         1000000,
+		LiquidationBuffer:     0.005,
 	}
-	
+
 	engine := NewMatchingEngine(config)
-	
+
 	// Initialize markets
 	markets := []struct {
-		Symbol string
-		Base, Quote string
+		Symbol             string
+		Base, Quote        string
 		PricePrec, QtyPrec int
 		MinPrice, MaxPrice float64
-		TickSize, LotSize float64
+		TickSize, LotSize  float64
 	}{
 		{"BTC/USDT", "BTC", "USDT", 8, 8, 1000, 1000000, 0.01, 0.00001},
 		{"ETH/USDT", "ETH", "USDT", 8, 8, 100, 10000, 0.01, 0.0001},
@@ -2225,7 +2226,7 @@ func main() {
 		{"MATIC/USDT", "MATIC", "USDT", 8, 8, 0.01, 10, 0.0001, 1},
 		{"LINK/USDT", "LINK", "USDT", 8, 8, 1, 100, 0.001, 0.1},
 	}
-	
+
 	for _, m := range markets {
 		err := engine.InitializeMarket(m.Symbol, m.Base, m.Quote, m.PricePrec, m.QtyPrec, m.MinPrice, m.MaxPrice, m.TickSize, m.LotSize)
 		if err != nil {
@@ -2234,15 +2235,15 @@ func main() {
 			log.Printf("[INFO] Market initialized: %s", m.Symbol)
 		}
 	}
-	
+
 	log.Printf("[INFO] Trading engine ready with %d markets", len(markets))
-	
+
 	// Setup signal handling
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	
+
 	<-sigCh
-	
+
 	log.Println("[INFO] Shutting down trading engine...")
 	engine.Stop()
 }

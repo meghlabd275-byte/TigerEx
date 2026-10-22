@@ -24,7 +24,7 @@ var FeeTiers = []FeeTier{
 	{MinVolume: 200000, MakerFee: 0.0006, TakerFee: 0.0007, RoboturnRate: 0.3},   // Silver
 	{MinVolume: 1000000, MakerFee: 0.0005, TakerFee: 0.0006, RoboturnRate: 0.4},  // Gold
 	{MinVolume: 5000000, MakerFee: 0.0004, TakerFee: 0.0005, RoboturnRate: 0.5},  // Platinum
-	{MinVolume: 20000000, MakerFee: 0.0002, TakerFee: 0.0003, RoboturnRate: 0.7}, VIP Diamond
+	{MinVolume: 20000000, MakerFee: 0.0002, TakerFee: 0.0003, RoboturnRate: 0.7},  // VIP Diamond
 	{MinVolume: 100000000, MakerFee: 0.0, TakerFee: 0.0001, RoboturnRate: 0.9},   // SVIP
 }
 

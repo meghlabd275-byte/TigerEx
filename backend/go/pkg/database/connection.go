@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
 )
 
 var (
@@ -33,8 +34,8 @@ func DefaultConfig() *Config {
 		User:     getEnv("DB_USER", "tigerex"),
 		Password: getEnv("DB_PASSWORD", ""),
 		Database: getEnv("DB_NAME", "tigerex"),
-		MaxConns: getEnvInt("DB_MAX_CONNS", 50),
-		MinConns: getEnvInt("DB_MIN_CONNS", 10),
+		MaxConns: int32(getEnvInt("DB_MAX_CONNS", 50)),
+		MinConns: int32(getEnvInt("DB_MIN_CONNS", 10)),
 	}
 }
 
@@ -63,10 +64,6 @@ func Connect(cfg *Config) (*pgxpool.Pool, error) {
 	config.MinConns = cfg.MinConns
 	config.MaxConnLifetime = time.Hour
 	config.MaxConnIdleTime = 30 * time.Minute
-
-	if err := config.CheckConn(ctx); err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
-	}
 
 	Pool, err = pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -99,11 +96,11 @@ func CreateDatabase(cfg *Config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	conn, err := pgxpool.Parse(connStr)
+	conn, err := pgx.Connect(ctx, connStr)
 	if err != nil {
 		return fmt.Errorf("failed to connect to postgres: %w", err)
 	}
-	defer conn.Close()
+	defer conn.Close(ctx)
 
 	var exists bool
 	err = conn.QueryRow(ctx, "SELECT EXISTS(SELECT FROM pg_database WHERE datname = $1)", cfg.Database).Scan(&exists)
@@ -112,15 +109,18 @@ func CreateDatabase(cfg *Config) error {
 	}
 
 	if !exists {
-		conn, err := pgxpool.Parse(connStr)
+		conn, err := pgx.Connect(ctx, connStr)
 		if err != nil {
 			return err
 		}
-		_, err = conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", cfg.Database))
+		// Database names cannot be passed as bind parameters, so quote the
+		// identifier explicitly instead of interpolating it raw.
+		quoted := `"` + strings.ReplaceAll(cfg.Database, `"`, `""`) + `"`
+		_, err = conn.Exec(ctx, "CREATE DATABASE "+quoted)
 		if err != nil {
 			return fmt.Errorf("failed to create database: %w", err)
 		}
-		fmt.Printf("✅ Database '%s' created\n", cfg.Database)
+		fmt.Printf("Database '%s' created\n", cfg.Database)
 	}
 
 	return nil
@@ -228,11 +228,5 @@ func getEnvInt(key string, defaultValue int) int {
 			return intVal
 		}
 	}
-	return defaultValue
+			return defaultValue
 }
-
-// Import for pgxpool
-import (
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-)

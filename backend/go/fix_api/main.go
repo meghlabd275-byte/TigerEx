@@ -4,14 +4,8 @@
 package main
 
 import (
-	"context"
-	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/xml"
 	"fmt"
-	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -28,66 +22,66 @@ import (
 
 const (
 	// FIX Versions
-	FIX44 = "FIX.4.4"
-	FIX50 = "FIX.5.0"
+	FIX44    = "FIX.4.4"
+	FIX50    = "FIX.5.0"
 	FIX50SP1 = "FIX.5.0 SP1"
 	FIX50SP2 = "FIX.5.0 SP2"
 
 	// MsgTypes
-	MsgTypeHeartbeat        = "0"
-	MsgTypeTestRequest      = "1"
-	MsgTypeResendRequest    = "2"
-	MsgTypeReject           = "3"
-	MsgTypeSequenceReset    = "4"
-	MsgTypeLogout           = "5"
-	MsgTypeIOI             = "6"
-	MsgTypeAdvertisement    = "7"
-	MsgTypeExecutionReport  = "8"
-	MsgTypeOrderCancelReject = "9"
-	MsgTypeLogon            = "A"
-	MsgTypeNewOrderSingle   = "D"
-	MsgTypeOrderCancelRequest = "F"
+	MsgTypeHeartbeat                 = "0"
+	MsgTypeTestRequest               = "1"
+	MsgTypeResendRequest             = "2"
+	MsgTypeReject                    = "3"
+	MsgTypeSequenceReset             = "4"
+	MsgTypeLogout                    = "5"
+	MsgTypeIOI                       = "6"
+	MsgTypeAdvertisement             = "7"
+	MsgTypeExecutionReport           = "8"
+	MsgTypeOrderCancelReject         = "9"
+	MsgTypeLogon                     = "A"
+	MsgTypeNewOrderSingle            = "D"
+	MsgTypeOrderCancelRequest        = "F"
 	MsgTypeOrderCancelReplaceRequest = "G"
-	MsgTypeOrderStatusRequest = "H"
+	MsgTypeOrderStatusRequest        = "H"
 	MsgTypeTradeCaptureReportRequest = "AD"
-	MsgTypeTradeCaptureReport = "AE"
+	MsgTypeTradeCaptureReport        = "AE"
 
 	// Tags
-	TagBeginString        = 8
-	TagBodyLength        = 9
-	TagMsgType           = 35
-	TagSenderCompID       = 49
-	TagTargetCompID       = 56
-	TagOnBehalfOfCompID  = 115
-	TagDeliverToCompID   = 128
-	TagSecureDataLen     = 90
-	TagSecureData        = 91
-	TagMsgSeqNum         = 34
-	TagPossDupFlag       = 43
-	TagSendingTime       = 52
-	TagOrigSendingTime   = 122
+	TagBeginString            = 8
+	TagBodyLength             = 9
+	TagMsgType                = 35
+	TagSenderCompID           = 49
+	TagTargetCompID           = 56
+	TagOnBehalfOfCompID       = 115
+	TagDeliverToCompID        = 128
+	TagSecureDataLen          = 90
+	TagSecureData             = 91
+	TagMsgSeqNum              = 34
+	TagPossDupFlag            = 43
+	TagSendingTime            = 52
+	TagOrigSendingTime        = 122
 	TagLastMsgSeqNumProcessed = 369
 
 	// Order Side
 	SideBuy    = "1"
 	SideSell   = "2"
-	SideBuyEx   = "3"
-	SideSellEx  = "4"
+	SideBuyEx  = "3"
+	SideSellEx = "4"
 
 	// Order Type
-	OrderTypeMarket      = "1"
-	OrderTypeLimit       = "2"
-	OrderTypeStop        = "3"
-	OrderTypeStopLimit   = "4"
+	OrderTypeMarket        = "1"
+	OrderTypeLimit         = "2"
+	OrderTypeStop          = "3"
+	OrderTypeStopLimit     = "4"
 	OrderTypeMarketOnClose = "5"
-	OrderTypeLimitOnClose = "6"
+	OrderTypeLimitOnClose  = "6"
 
 	// TimeInForce
-	TimeInForceDay         = "0"
-	TimeInForceGTC          = "1"
-	TimeInForceIOC          = "3"
-	TimeInForceFOK          = "4"
-	TimeInForceGTX          = "5"
+	TimeInForceDay = "0"
+	TimeInForceGTC = "1"
+	TimeInForceIOC = "3"
+	TimeInForceFOK = "4"
+	TimeInForceGTX = "5"
 
 	// OrdStatus
 	OrdStatusNew           = "0"
@@ -95,28 +89,28 @@ const (
 	OrdStatusFilled        = "2"
 	OrdStatusDoneForDay    = "3"
 	OrdStatusCancelled     = "4"
-	OrdStatusPendingCancel  = "6"
+	OrdStatusPendingCancel = "6"
 	OrdStatusRejected      = "8"
 	OrdStatusPendingNew    = "A"
 	OrdStatusAccepted      = "B"
 
 	// ExecType
-	ExecTypeNew             = "0"
-	ExecTypePartialFill     = "1"
-	ExecTypeFilled          = "2"
-	ExecTypeDoneForDay      = "3"
-	ExecTypeCanceled        = "4"
-	ExecTypeReplace         = "5"
-	ExecTypeRejected        = "8"
-	ExecTypePendingNew      = "A"
+	ExecTypeNew         = "0"
+	ExecTypePartialFill = "1"
+	ExecTypeFilled      = "2"
+	ExecTypeDoneForDay  = "3"
+	ExecTypeCanceled    = "4"
+	ExecTypeReplace     = "5"
+	ExecTypeRejected    = "8"
+	ExecTypePendingNew  = "A"
 
 	// ExecRestatementReason
-	RestateGov              = "0"
-	RestateCorpAct          = "1"
-	RestatePrice            = "2"
-	RestateQty              = "3"
-	RestateStp             = "4"
-	RestateYelden          = "5"
+	RestateGov     = "0"
+	RestateCorpAct = "1"
+	RestatePrice   = "2"
+	RestateQty     = "3"
+	RestateStp     = "4"
+	RestateYelden  = "5"
 )
 
 // ============================================================================
@@ -124,89 +118,90 @@ const (
 // ============================================================================
 
 type FIXMessage struct {
-	BeginString    string            `fix:"8"`
-	BodyLength     int               `fix:"9"`
-	MsgType        string            `fix:"35"`
-	SenderCompID   string            `fix:"49"`
-	TargetCompID   string            `fix:"56"`
-	MsgSeqNum      int               `fix:"34"`
-	SendingTime    time.Time         `fix:"52"`
-	RawDataLength int               `fix:"95"`
-	RawData       string            `fix:"96"`
-	CheckSum      string            `fix:"10"`
+	BeginString   string    `fix:"8"`
+	BodyLength    int       `fix:"9"`
+	MsgType       string    `fix:"35"`
+	SenderCompID  string    `fix:"49"`
+	TargetCompID  string    `fix:"56"`
+	MsgSeqNum     int       `fix:"34"`
+	SendingTime   time.Time `fix:"52"`
+	RawDataLength int       `fix:"95"`
+	RawData       string    `fix:"96"`
+	CheckSum      string    `fix:"10"`
 
 	// Standard fields
-	ClOrdID         string  `fix:"11"`
-	OrderID        string  `fix:"37"`
-	OrigClOrdID     string  `fix:"41"`
-	ExecID         string  `fix:"17"`
-	ExecRefID      string  `fix:"19"`
-	ExecTransType   string  `fix:"20"`
-	ExecType       string  `fix:"150"`
-	OrdStatus      string  `fix:"39"`
-	Side           string  `fix:"54"`
-	OrderQty       float64 `fix:"38"`
-	Price          float64 `fix:"44"`
-	StopPrice      float64 `fix:"99"`
-	LeavesQty      float64 `fix:"151"`
-	CumQty         float64 `fix:"14"`
-	AvgPx          float64 `fix:"6"`
-	LastQty        float64 `fix:"32"`
-	LastPx         float64 `fix:"31"`
-	Symbol         string  `fix:"55"`
-	SecurityID     string  `fix:"48"`
-	TimeInForce    string  `fix:"59"`
-	OrdType        string  `fix:"40"`
-	OrdRejReason   string  `fix:"103"`
-	Text           string  `fix:"58"`
-	
+	ClOrdID       string  `fix:"11"`
+	OrderID       string  `fix:"37"`
+	OrigClOrdID   string  `fix:"41"`
+	ExecID        string  `fix:"17"`
+	ExecRefID     string  `fix:"19"`
+	ExecTransType string  `fix:"20"`
+	ExecType      string  `fix:"150"`
+	OrdStatus     string  `fix:"39"`
+	Side          string  `fix:"54"`
+	OrderQty      float64 `fix:"38"`
+	Price         float64 `fix:"44"`
+	StopPrice     float64 `fix:"99"`
+	LeavesQty     float64 `fix:"151"`
+	CumQty        float64 `fix:"14"`
+	AvgPx         float64 `fix:"6"`
+	LastQty       float64 `fix:"32"`
+	LastPx        float64 `fix:"31"`
+	Symbol        string  `fix:"55"`
+	SecurityID    string  `fix:"48"`
+	TimeInForce   string  `fix:"59"`
+	OrdType       string  `fix:"40"`
+	OrdRejReason  string  `fix:"103"`
+	RefSeqNum     int     `fix:"373"`
+	Text          string  `fix:"58"`
+
 	// Additional fields
-	TransactTime time.Time `fix:"60"`
-	TradeDate    string  `fix:"75"`
-	TradeTime    string  `fix:"165"`
-	MaturityMonth string `fix:"200"`
-	MaturityDay   string `fix:"205"`
-	PutOrCall    string `fix:"201"`
-	StrikePrice  float64 `fix:"202"`
-	OptAttribute string `fix:"206"`
-	
+	TransactTime  time.Time `fix:"60"`
+	TradeDate     string    `fix:"75"`
+	TradeTime     string    `fix:"165"`
+	MaturityMonth string    `fix:"200"`
+	MaturityDay   string    `fix:"205"`
+	PutOrCall     string    `fix:"201"`
+	StrikePrice   float64   `fix:"202"`
+	OptAttribute  string    `fix:"206"`
+
 	// Margin
-	MarginRatio  float64 `fix:"230"`
-	MarginAmt    float64 `fix:"231"`
-	
+	MarginRatio float64 `fix:"230"`
+	MarginAmt   float64 `fix:"231"`
+
 	// Position
-	PosReqID     string  `fix:"710"`
-	PosMaintRptID string `fix:"721"`
-	PositionQty  float64 `fix:"702"`
-	PositionAmt  float64 `fix:"753"`
-	
+	PosReqID      string  `fix:"710"`
+	PosMaintRptID string  `fix:"721"`
+	PositionQty   float64 `fix:"702"`
+	PositionAmt   float64 `fix:"753"`
+
 	// Account
 	Account      string `fix:"1"`
 	AcctIDSource string `fix:"660"`
-	
+
 	// Commission
-	Commission   float64 `fix:"12"`
-	CommType     string `fix:"13"`
-	ExecBroker   string `fix:"76"`
-	
+	Commission float64 `fix:"12"`
+	CommType   string  `fix:"13"`
+	ExecBroker string  `fix:"76"`
+
 	// Fields for routing
-	RoutingID    string `fix:"216"`
+	RoutingID   string `fix:"216"`
 	RoutingInst string `fix:"217"`
-	
+
 	// Custom fields (for extension)
 	CustomFields map[string]string
 }
 
 // FIX Session
 type FIXSession struct {
-	SessionID         string
-	FIXVersion        string
+	SessionID          string
+	FIXVersion         string
 	SenderCompID       string
-	TargetCompID      string
+	TargetCompID       string
 	HeartBtInt         int
 	NextMsgSeqNum      int
 	NextExpectedSeqNum int
-	LastReceivedSeqNum  int
+	LastReceivedSeqNum int
 	IsLoggedOn         bool
 	Username           string
 	Password           string
@@ -222,8 +217,8 @@ type FIXSession struct {
 
 // FIX Server
 type FIXServer struct {
-	Sessions    map[string]*FIXSession
-	SessionsMu  sync.RWMutex
+	Sessions   map[string]*FIXSession
+	SessionsMu sync.RWMutex
 	MsgCounter uint64
 	StartTime  time.Time
 }
@@ -236,7 +231,7 @@ type FIXServer struct {
 func ParseFIXMessage(data string) (*FIXMessage, error) {
 	// Remove SOH characters and split
 	fields := strings.Split(data, "\x01")
-	
+
 	msg := &FIXMessage{
 		CustomFields: make(map[string]string),
 	}
@@ -248,7 +243,7 @@ func ParseFIXMessage(data string) (*FIXMessage, error) {
 
 		tagStr := field[:strings.Index(field, "=")]
 		value := field[strings.Index(field, "=")+1:]
-		
+
 		tag, err := strconv.Atoi(tagStr)
 		if err != nil {
 			continue
@@ -312,7 +307,7 @@ func (msg *FIXMessage) ToString() string {
 		fields = append(fields, fmt.Sprintf("8=%s", msg.BeginString))
 	}
 	fields = append(fields, fmt.Sprintf("9=%d", 0)) // Body length placeholder
-	
+
 	fields = append(fields, fmt.Sprintf("35=%s", msg.MsgType))
 	fields = append(fields, fmt.Sprintf("49=%s", msg.SenderCompID))
 	fields = append(fields, fmt.Sprintf("56=%s", msg.TargetCompID))
@@ -402,24 +397,24 @@ func calculateChecksum(data string) string {
 
 func NewFIXServer() *FIXServer {
 	return &FIXServer{
-		Sessions: make(map[string]*FIXSession),
+		Sessions:  make(map[string]*FIXSession),
 		StartTime: time.Now(),
 	}
 }
 
 func (s *FIXServer) CreateSession(fixVersion, sender, target, username, password string, heartBtInt int) *FIXSession {
 	session := &FIXSession{
-		SessionID:       fmt.Sprintf("%s->%s", sender, target),
-		FIXVersion:      fixVersion,
-		SenderCompID:    sender,
-		TargetCompID:    target,
-		HeartBtInt:     heartBtInt,
-		NextMsgSeqNum:  1,
-		Username:        username,
-		Password:        password,
-		IsInitiator:     true,
-		Timestamps:      time.Now(),
-		StartTime:      time.Now(),
+		SessionID:     fmt.Sprintf("%s->%s", sender, target),
+		FIXVersion:    fixVersion,
+		SenderCompID:  sender,
+		TargetCompID:  target,
+		HeartBtInt:    heartBtInt,
+		NextMsgSeqNum: 1,
+		Username:      username,
+		Password:      password,
+		IsInitiator:   true,
+		Timestamps:    time.Now(),
+		StartTime:     time.Now(),
 	}
 
 	s.SessionsMu.Lock()
@@ -441,12 +436,12 @@ func (s *FIXServer) HandleLogon(session *FIXSession, msg *FIXMessage) (*FIXMessa
 
 	// Create logon response
 	resp := &FIXMessage{
-		BeginString:   session.FIXVersion,
-		MsgType:       MsgTypeLogon,
-		SenderCompID:  session.TargetCompID,
-		TargetCompID:  session.SenderCompID,
+		BeginString:  session.FIXVersion,
+		MsgType:      MsgTypeLogon,
+		SenderCompID: session.TargetCompID,
+		TargetCompID: session.SenderCompID,
 		MsgSeqNum:    1,
-		SendingTime:   time.Now(),
+		SendingTime:  time.Now(),
 	}
 
 	return resp, nil
@@ -474,26 +469,26 @@ func (s *FIXServer) HandleNewOrder(session *FIXSession, msg *FIXMessage) (*FIXMe
 
 	// Create execution report (New)
 	execReport := &FIXMessage{
-		BeginString:   session.FIXVersion,
-		MsgType:       MsgTypeExecutionReport,
-		SenderCompID:  session.TargetCompID,
-		TargetCompID:  session.SenderCompID,
-		MsgSeqNum:     atomic.AddUint64(&s.MsgCounter, 1),
-		SendingTime:    time.Now(),
-		OrderID:       orderID,
-		ClOrdID:       msg.ClOrdID,
-		ExecID:        fmt.Sprintf("EXEC-%d", time.Now().UnixNano()),
-		ExecType:       ExecTypeNew,
-		OrdStatus:      OrdStatusNew,
-		Side:          msg.Side,
-		OrderQty:       msg.OrderQty,
-		Price:         msg.Price,
-		Symbol:        msg.Symbol,
-		TimeInForce:    msg.TimeInForce,
-		OrdType:        msg.OrdType,
-		LeavesQty:      msg.OrderQty,
-		CumQty:         0,
-		AvgPx:          0,
+		BeginString:  session.FIXVersion,
+		MsgType:      MsgTypeExecutionReport,
+		SenderCompID: session.TargetCompID,
+		TargetCompID: session.SenderCompID,
+		MsgSeqNum:    int(atomic.AddUint64(&s.MsgCounter, 1)),
+		SendingTime:  time.Now(),
+		OrderID:      orderID,
+		ClOrdID:      msg.ClOrdID,
+		ExecID:       fmt.Sprintf("EXEC-%d", time.Now().UnixNano()),
+		ExecType:     ExecTypeNew,
+		OrdStatus:    OrdStatusNew,
+		Side:         msg.Side,
+		OrderQty:     msg.OrderQty,
+		Price:        msg.Price,
+		Symbol:       msg.Symbol,
+		TimeInForce:  msg.TimeInForce,
+		OrdType:      msg.OrdType,
+		LeavesQty:    msg.OrderQty,
+		CumQty:       0,
+		AvgPx:        0,
 	}
 
 	return execReport, nil
@@ -507,16 +502,16 @@ func (s *FIXServer) HandleOrderCancel(session *FIXSession, msg *FIXMessage) (*FI
 
 	// Create cancel reject (assuming success for demo)
 	cancelReject := &FIXMessage{
-		BeginString:   session.FIXVersion,
-		MsgType:       MsgTypeOrderCancelReject,
-		SenderCompID:  session.TargetCompID,
-		TargetCompID:  session.SenderCompID,
-		MsgSeqNum:     atomic.AddUint64(&s.MsgCounter, 1),
-		SendingTime:    time.Now(),
-		OrderID:       msg.CustomFields["37"],
-		ClOrdID:       msg.CustomFields["41"],
-		OrigClOrdID:   msg.ClOrdID,
-		OrdStatus:     OrdStatusCanceled,
+		BeginString:  session.FIXVersion,
+		MsgType:      MsgTypeOrderCancelReject,
+		SenderCompID: session.TargetCompID,
+		TargetCompID: session.SenderCompID,
+		MsgSeqNum:    int(atomic.AddUint64(&s.MsgCounter, 1)),
+		SendingTime:  time.Now(),
+		OrderID:      msg.CustomFields["37"],
+		ClOrdID:      msg.CustomFields["41"],
+		OrigClOrdID:  msg.ClOrdID,
+		OrdStatus:    OrdStatusCancelled,
 	}
 
 	return cancelReject, nil
@@ -530,22 +525,22 @@ func (s *FIXServer) HandleOrderStatus(session *FIXSession, msg *FIXMessage) (*FI
 
 	// Create execution report with current status
 	execReport := &FIXMessage{
-		BeginString:   session.FIXVersion,
-		MsgType:       MsgTypeExecutionReport,
-		SenderCompID:  session.TargetCompID,
-		TargetCompID:  session.SenderCompID,
-		MsgSeqNum:     atomic.AddUint64(&s.MsgCounter, 1),
-		SendingTime:    time.Now(),
-		OrderID:       msg.CustomFields["37"],
-		ClOrdID:       msg.ClOrdID,
-		ExecID:        fmt.Sprintf("EXEC-%d", time.Now().UnixNano()),
-		ExecType:       ExecTypeNew,
-		OrdStatus:      OrdStatusNew,
-		Side:           msg.Side,
-		OrderQty:       1.0,
-		LeavesQty:      1.0,
-		CumQty:         0,
-		AvgPx:          0,
+		BeginString:  session.FIXVersion,
+		MsgType:      MsgTypeExecutionReport,
+		SenderCompID: session.TargetCompID,
+		TargetCompID: session.SenderCompID,
+		MsgSeqNum:    int(atomic.AddUint64(&s.MsgCounter, 1)),
+		SendingTime:  time.Now(),
+		OrderID:      msg.CustomFields["37"],
+		ClOrdID:      msg.ClOrdID,
+		ExecID:       fmt.Sprintf("EXEC-%d", time.Now().UnixNano()),
+		ExecType:     ExecTypeNew,
+		OrdStatus:    OrdStatusNew,
+		Side:         msg.Side,
+		OrderQty:     1.0,
+		LeavesQty:    1.0,
+		CumQty:       0,
+		AvgPx:        0,
 	}
 
 	return execReport, nil
@@ -555,9 +550,9 @@ func (s *FIXServer) HandleOrderStatus(session *FIXSession, msg *FIXMessage) (*FI
 func (s *FIXServer) CreateReject(msg *FIXMessage, text string, code int) *FIXMessage {
 	return &FIXMessage{
 		BeginString: FIX44,
-		MsgType:    MsgTypeReject,
-		Text:      fmt.Sprintf("%s (Code: %d)", text, code),
-		RefSeqNum: int64(msg.MsgSeqNum),
+		MsgType:     MsgTypeReject,
+		Text:        fmt.Sprintf("%s (Code: %d)", text, code),
+		RefSeqNum:   msg.MsgSeqNum,
 	}
 }
 
@@ -566,25 +561,25 @@ func (s *FIXServer) CreateReject(msg *FIXMessage, text string, code int) *FIXMes
 // ============================================================================
 
 type FIXTCPHandler struct {
-	Server     *FIXServer
-	Session    *FIXSession
-	Conn       net.Conn
-	ReadChan   chan []byte
-	WriteChan  chan string
-	DoneChan   chan bool
+	Server    *FIXServer
+	Session   *FIXSession
+	Conn      net.Conn
+	ReadChan  chan []byte
+	WriteChan chan string
+	DoneChan  chan bool
 }
 
 func (h *FIXTCPHandler) Start() {
 	go h.readLoop()
 	go h.writeLoop()
 	go h.heartbeatLoop()
-	
+
 	<-h.DoneChan
 }
 
 func (h *FIXTCPHandler) readLoop() {
 	buf := make([]byte, 8192)
-	
+
 	for {
 		n, err := h.Conn.Read(buf)
 		if err != nil {
@@ -614,17 +609,17 @@ func (h *FIXTCPHandler) writeLoop() {
 func (h *FIXTCPHandler) heartbeatLoop() {
 	ticker := time.NewTicker(time.Duration(h.Session.HeartBtInt) * time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ticker.C:
 			heartbeat := &FIXMessage{
-				BeginString:   h.Session.FIXVersion,
-				MsgType:       MsgTypeHeartbeat,
-				SenderCompID:  h.Session.TargetCompID,
-				TargetCompID:  h.Session.SenderCompID,
-				MsgSeqNum:     atomic.AddUint64(&h.Server.MsgCounter, 1),
-				SendingTime:   time.Now(),
+				BeginString:  h.Session.FIXVersion,
+				MsgType:      MsgTypeHeartbeat,
+				SenderCompID: h.Session.TargetCompID,
+				TargetCompID: h.Session.SenderCompID,
+				MsgSeqNum:    int(atomic.AddUint64(&h.Server.MsgCounter, 1)),
+				SendingTime:  time.Now(),
 			}
 			h.WriteChan <- heartbeat.ToString()
 		case msg := <-h.ReadChan:
@@ -653,21 +648,21 @@ func (h *FIXTCPHandler) handleMessage(data string) {
 	case MsgTypeHeartbeat:
 		// Respond to heartbeat
 		response = &FIXMessage{
-			BeginString:   h.Session.FIXVersion,
-			MsgType:       MsgTypeHeartbeat,
-			SenderCompID:  h.Session.TargetCompID,
-			TargetCompID:  h.Session.SenderCompID,
-			MsgSeqNum:     atomic.AddUint64(&h.Server.MsgCounter, 1),
-			SendingTime:   time.Now(),
+			BeginString:  h.Session.FIXVersion,
+			MsgType:      MsgTypeHeartbeat,
+			SenderCompID: h.Session.TargetCompID,
+			TargetCompID: h.Session.SenderCompID,
+			MsgSeqNum:    int(atomic.AddUint64(&h.Server.MsgCounter, 1)),
+			SendingTime:  time.Now(),
 		}
 	case MsgTypeTestRequest:
 		response = &FIXMessage{
-			BeginString:   h.Session.FIXVersion,
-			MsgType:       MsgTypeHeartbeat,
-			SenderCompID:  h.Session.TargetCompID,
-			TargetCompID:  h.Session.SenderCompID,
-			MsgSeqNum:     atomic.AddUint64(&h.Server.MsgCounter, 1),
-			SendingTime:   time.Now(),
+			BeginString:  h.Session.FIXVersion,
+			MsgType:      MsgTypeHeartbeat,
+			SenderCompID: h.Session.TargetCompID,
+			TargetCompID: h.Session.SenderCompID,
+			MsgSeqNum:    int(atomic.AddUint64(&h.Server.MsgCounter, 1)),
+			SendingTime:  time.Now(),
 		}
 	}
 
@@ -688,12 +683,12 @@ func setupFIXAPIRoutes(r *gin.Engine, server *FIXServer) {
 			var req struct {
 				FIXVersion string `json:"fixVersion"`
 				Sender     string `json:"senderCompID"`
-				Target    string `json:"targetCompID"`
-				Username  string `json:"username"`
-				Password  string `json:"password"`
+				Target     string `json:"targetCompID"`
+				Username   string `json:"username"`
+				Password   string `json:"password"`
 				HeartBtInt int    `json:"heartBtInt"`
 			}
-			
+
 			if err := c.ShouldBindJSON(&req); err != nil {
 				c.JSON(400, gin.H{"error": "Invalid request"})
 				return
@@ -709,16 +704,16 @@ func setupFIXAPIRoutes(r *gin.Engine, server *FIXServer) {
 			)
 
 			c.JSON(200, gin.H{
-				"sessionID":    session.SessionID,
-				"fixVersion":   session.FIXVersion,
-				"heartBtInt":   session.HeartBtInt,
+				"sessionID":  session.SessionID,
+				"fixVersion": session.FIXVersion,
+				"heartBtInt": session.HeartBtInt,
 			})
 		})
 
 		// Get session info
 		fix.GET("/session/:id", func(c *gin.Context) {
 			id := c.Param("id")
-			
+
 			server.SessionsMu.RLock()
 			session, exists := server.Sessions[id]
 			server.SessionsMu.RUnlock()
@@ -729,12 +724,12 @@ func setupFIXAPIRoutes(r *gin.Engine, server *FIXServer) {
 			}
 
 			c.JSON(200, gin.H{
-				"sessionID":       session.SessionID,
-				"fixVersion":     session.FIXVersion,
-				"isLoggedOn":     session.IsLoggedOn,
-				"msgSeqNum":      session.NextMsgSeqNum,
-				"inMsgs":         session.InMsgs,
-				"outMsgs":        session.OutMsgs,
+				"sessionID":  session.SessionID,
+				"fixVersion": session.FIXVersion,
+				"isLoggedOn": session.IsLoggedOn,
+				"msgSeqNum":  session.NextMsgSeqNum,
+				"inMsgs":     session.InMsgs,
+				"outMsgs":    session.OutMsgs,
 			})
 		})
 
@@ -765,13 +760,13 @@ func setupFIXAPIRoutes(r *gin.Engine, server *FIXServer) {
 
 func main() {
 	fmt.Println("TigerEx FIX API Gateway v1.0.0")
-	
+
 	server := NewFIXServer()
-	
+
 	// Setup HTTP server with Gin
 	r := gin.Default()
 	setupFIXAPIRoutes(r, server)
-	
+
 	// Start TCP FIX server on port 8900
 	go func() {
 		ln, err := net.Listen("tcp", ":8900")
@@ -779,18 +774,18 @@ func main() {
 			fmt.Printf("FIX TCP server error: %v\n", err)
 			return
 		}
-		
+
 		fmt.Println("FIX TCP server listening on :8900")
-		
+
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				continue
 			}
-			
+
 			// Create default session for demo
 			session := server.CreateSession(FIX44, "TIGEREX", "CLIENT1", "demo", "demo", 30)
-			
+
 			handler := &FIXTCPHandler{
 				Server:    server,
 				Session:   session,
@@ -799,11 +794,11 @@ func main() {
 				WriteChan: make(chan string, 100),
 				DoneChan:  make(chan bool),
 			}
-			
+
 			go handler.Start()
 		}
 	}()
-	
+
 	// Start HTTP server
 	fmt.Println("REST API listening on :8445")
 	r.Run(":8445")

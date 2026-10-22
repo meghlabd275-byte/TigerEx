@@ -12,3 +12,10 @@ tmp/
 temp/
 build/
 server/tigerex.db
+__pycache__/
+*.pyc
+
+# Go build artifacts
+/backend/go/admin_service
+/backend/go/auth_service
+/backend/go/tigerex-api

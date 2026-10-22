@@ -1,4 +1,4 @@
-package main
+package legacy
 
 import (
 	"strings"
@@ -10,16 +10,16 @@ func newRiskTestEngine(asks, bids PriceLevels) *MatchingEngine {
 		Symbol: "BTCUSDT",
 		OrderBook: &OrderBook{
 			Symbol: "BTCUSDT",
-			Asks: asks,
-			Bids: bids,
+			Asks:   asks,
+			Bids:   bids,
 		},
 	}
 	engine := &MatchingEngine{
-		markets: map[string]*MarketState{"BTCUSDT": state},
-		orders: make(map[string]*Order),
-		userOrders: make(map[string]map[string]*Order),
+		markets:       map[string]*MarketState{"BTCUSDT": state},
+		orders:        make(map[string]*Order),
+		userOrders:    make(map[string]map[string]*Order),
 		userPositions: make(map[string]map[string]*Position),
-		positions: make(map[string]*Position),
+		positions:     make(map[string]*Position),
 	}
 	engine.riskManager = NewRiskManager(engine)
 	return engine
@@ -35,11 +35,11 @@ func TestMarketOrderRiskUsesExecutableDepthNotClientPrice(t *testing.T) {
 		},
 	)
 	order := &Order{
-		UserID: "user-1",
-		Symbol: "BTCUSDT",
-		Side: OrderSideBuy,
-		Type: OrderTypeMarket,
-		Price: 0, // Market orders have no trusted client-supplied price.
+		UserID:   "user-1",
+		Symbol:   "BTCUSDT",
+		Side:     OrderSideBuy,
+		Type:     OrderTypeMarket,
+		Price:    0, // Market orders have no trusted client-supplied price.
 		Quantity: 1000,
 	}
 	err := engine.riskManager.checkOrderRisk(order)
@@ -56,10 +56,10 @@ func TestMarketOrderRiskFailsClosedWhenDepthIsInsufficient(t *testing.T) {
 		nil,
 	)
 	order := &Order{
-		UserID: "user-1",
-		Symbol: "BTCUSDT",
-		Side: OrderSideBuy,
-		Type: OrderTypeMarket,
+		UserID:   "user-1",
+		Symbol:   "BTCUSDT",
+		Side:     OrderSideBuy,
+		Type:     OrderTypeMarket,
 		Quantity: 3,
 	}
 	err := engine.riskManager.checkOrderRisk(order)
@@ -78,10 +78,10 @@ func TestMarketOrderRiskAcceptsWithinNotionalLimit(t *testing.T) {
 		},
 	)
 	order := &Order{
-		UserID: "user-1",
-		Symbol: "BTCUSDT",
-		Side: OrderSideBuy,
-		Type: OrderTypeMarket,
+		UserID:   "user-1",
+		Symbol:   "BTCUSDT",
+		Side:     OrderSideBuy,
+		Type:     OrderTypeMarket,
 		Quantity: 10,
 	}
 	if err := engine.riskManager.checkOrderRisk(order); err != nil {

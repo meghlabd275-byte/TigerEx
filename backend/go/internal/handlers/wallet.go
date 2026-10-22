@@ -1,9 +1,8 @@
 package handlers
 
 import (
-	"encoding/json"
+	"errors"
 	"net/http"
-	"strings"
 
 	"tigerex/backend/internal/wallet"
 )
@@ -20,9 +19,9 @@ func NewWalletHandler(svc *wallet.Service) *WalletHandler {
 
 // GenerateWalletRequest represents generate wallet request
 type GenerateWalletRequest struct {
-	Password    string `json:"password"`
-	Blockchain  string `json:"blockchain"`
-	Name        string `json:"name"`
+	Password   string `json:"password"`
+	Blockchain string `json:"blockchain"`
+	Name       string `json:"name"`
 }
 
 // ImportWalletRequest represents import wallet request
@@ -35,231 +34,126 @@ type ImportWalletRequest struct {
 
 // TransferRequest represents transfer request
 type TransferRequest struct {
-	ToAddress string `json:"to_address"`
-	Amount    string `json:"amount"`
-	Token     string `json:"token"`
+	ToAddress  string `json:"to_address"`
+	Amount     string `json:"amount"`
+	Token      string `json:"token"`
 	Blockchain string `json:"blockchain"`
 }
 
 // SwapRequest represents swap request
 type SwapRequest struct {
-	FromToken   string `json:"from_token"`
-	ToToken     string `json:"to_token"`
-	FromAmount  string `json:"from_amount"`
-	MinOutAmount string `json:"min_out_amount"`
-	Blockchain  string `json:"blockchain"`
-	Slippage    float64 `json:"slippage"`
+	FromToken    string  `json:"from_token"`
+	ToToken      string  `json:"to_token"`
+	FromAmount   string  `json:"from_amount"`
+	MinOutAmount string  `json:"min_out_amount"`
+	Blockchain   string  `json:"blockchain"`
+	Slippage     float64 `json:"slippage"`
 }
 
-// GenerateWallet generates new wallet
+// writeCustodyUnavailable reports that an operation needs the durable custody
+// stack (HD derivation, signing, policy checks) that is not yet configured.
+func writeCustodyUnavailable(w http.ResponseWriter) {
+	WriteError(w, http.StatusServiceUnavailable, "CUSTODY_NOT_CONFIGURED",
+		"This operation is unavailable until authenticated custody signing and policy controls are configured")
+}
+
+// GenerateWallet is disabled: a custody key must be derived by the wallet service
+// and never returned to a caller over the API.
 func (h *WalletHandler) GenerateWallet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
 		return
 	}
-
-	var req GenerateWalletRequest
-	if err := ParseJSON(r, &req); err != nil {
-		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "Invalid request body")
-		return
-	}
-
-	if req.Password == "" {
-		WriteError(w, http.StatusBadRequest, "PASSWORD_REQUIRED", "Password is required")
-		return
-	}
-
-	// Generate 24-word seed phrase
-	gen := wallet.NewSeedPhraseGenerator()
-	seedPhrase, err := gen.Generate24WordSeed()
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "GENERATION_FAILED", "Failed to generate wallet")
-		return
-	}
-
-	// Encrypt seed phrase
-	encryptedSeed, err := h.service.EncryptSeedPhrase(seedPhrase, req.Password)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "ENCRYPTION_FAILED", "Failed to encrypt wallet")
-		return
-	}
-
-	// Generate address
-	address, _, err := h.service.GenerateAddress(seedPhrase, req.Blockchain)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "ADDRESS_GENERATION_FAILED", "Failed to generate address")
-		return
-	}
-
-	// Hash seed for verification
-	seedHash := h.service.HashSeedPhrase(seedPhrase)
-
-	WriteSuccess(w, map[string]interface{}{
-		"seed_phrase":   seedPhrase, // Only returned once!
-		"encrypted_key": encryptedSeed,
-		"address":       address,
-		"blockchain":    req.Blockchain,
-		"derivation_path": "m/44'/60'/0'/0/0",
-	})
+	writeCustodyUnavailable(w)
 }
 
-// ImportWallet imports existing wallet
+// ImportWallet is disabled: importing a seed phrase must not echo key material back.
 func (h *WalletHandler) ImportWallet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
 		return
 	}
-
-	var req ImportWalletRequest
-	if err := ParseJSON(r, &req); err != nil {
-		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "Invalid request body")
-		return
-	}
-
-	if req.SeedPhrase == "" || req.Password == "" {
-		WriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "Seed phrase and password required")
-		return
-	}
-
-	// Validate seed phrase (check word count)
-	words := strings.Fields(req.SeedPhrase)
-	if len(words) != 12 && len(words) != 24 {
-		WriteError(w, http.StatusBadRequest, "INVALID_SEED", "Invalid seed phrase length")
-		return
-	}
-
-	// Encrypt seed phrase
-	encryptedSeed, err := h.service.EncryptSeedPhrase(req.SeedPhrase, req.Password)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "ENCRYPTION_FAILED", "Failed to encrypt wallet")
-		return
-	}
-
-	// Generate address
-	address, _, err := h.service.GenerateAddress(req.SeedPhrase, req.Blockchain)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "ADDRESS_GENERATION_FAILED", "Failed to generate address")
-		return
-	}
-
-	seedHash := h.service.HashSeedPhrase(req.SeedPhrase)
-
-	WriteSuccess(w, map[string]interface{}{
-		"encrypted_key":   encryptedSeed,
-		"address":         address,
-		"blockchain":      req.Blockchain,
-		"seed_phrase_hash": seedHash,
-	})
+	writeCustodyUnavailable(w)
 }
 
-// GetBalance returns wallet balance
+// GetBalance returns a balance from the authoritative ledger, or fails closed.
 func (h *WalletHandler) GetBalance(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
 		return
 	}
 
-	address := r.URL.Query().Get("address")
-	token := r.URL.Query().Get("token")
-	blockchain := r.URL.Query().Get("blockchain")
-
-	if address == "" || token == "" {
-		WriteError(w, http.StatusBadRequest, "MISSING_PARAMS", "Address and token required")
+	userID, asset := r.URL.Query().Get("user_id"), r.URL.Query().Get("token")
+	if userID == "" || asset == "" {
+		WriteError(w, http.StatusBadRequest, "MISSING_PARAMS", "user_id and token are required")
 		return
 	}
 
-	balance, err := h.service.GetBalance(address, blockchain, token)
+	bal, err := h.service.GetBalance(r.Context(), userID, asset)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "BALANCE_ERROR", "Failed to get balance")
+		if errors.Is(err, wallet.ErrCustodyUnavailable) {
+			writeCustodyUnavailable(w)
+			return
+		}
+		WriteError(w, http.StatusBadRequest, "BALANCE_ERROR", err.Error())
 		return
 	}
 
-	WriteSuccess(w, map[string]interface{}{
-		"address":   address,
-		"token":     token,
-		"balance":   balance.String(),
-		"blockchain": blockchain,
-	})
+	WriteSuccess(w, bal)
 }
 
-// GetAllBalances returns all balances
+// GetAllBalances returns every wallet for a user, or fails closed.
 func (h *WalletHandler) GetAllBalances(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
 		return
 	}
 
-	address := r.URL.Query().Get("address")
-	blockchain := r.URL.Query().Get("blockchain")
-
-	// Get all supported blockchains and their balances
-	blockchains := h.service.GetSupportedBlockchains()
-	balances := make([]map[string]interface{}, 0)
-
-	for _, chain := range blockchains {
-		// Get native token balance
-		balance, _ := h.service.GetBalance(address, chain, "")
-		balances = append(balances, map[string]interface{}{
-			"blockchain": chain,
-			"balance":    balance.String(),
-		})
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		WriteError(w, http.StatusBadRequest, "MISSING_PARAMS", "user_id is required")
+		return
 	}
 
-	WriteSuccess(w, map[string]interface{}{
-		"address":  address,
-		"balances": balances,
-	})
+	wallets, err := h.service.GetWallets(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, wallet.ErrCustodyUnavailable) {
+			writeCustodyUnavailable(w)
+			return
+		}
+		WriteError(w, http.StatusBadRequest, "BALANCE_ERROR", err.Error())
+		return
+	}
+
+	WriteSuccess(w, map[string]interface{}{"wallets": wallets})
 }
 
-// Transfer handles transfer request
+// Transfer requests an internal transfer, which the ledger service settles atomically.
 func (h *WalletHandler) Transfer(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
 		return
 	}
-	var req TransferRequest
-	if err := ParseJSON(r, &req); err != nil {
-		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "Invalid request body")
-		return
-	}
-	if req.ToAddress == "" || req.Amount == "" || req.Token == "" || req.Blockchain == "" {
-		WriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "Missing required fields")
-		return
-	}
 	// Never sign with a source-code seed or report a transfer without a
-	// user-scoped custody key, policy checks, and verified broadcast lifecycle.
-	WriteError(w, http.StatusServiceUnavailable, "CUSTODY_NOT_CONFIGURED", "Transfers are unavailable until authenticated custody signing and policy controls are configured")
+	// user-scoped custody key, policy checks, and a verified broadcast lifecycle.
+	writeCustodyUnavailable(w)
 }
 
-// Swap handles swap request
+// Swap requests a swap, which requires authenticated signing and settlement.
 func (h *WalletHandler) Swap(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
 		return
 	}
-	var req SwapRequest
-	if err := ParseJSON(r, &req); err != nil {
-		WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "Invalid request body")
-		return
-	}
-	if req.FromToken == "" || req.ToToken == "" || req.FromAmount == "" || req.Blockchain == "" {
-		WriteError(w, http.StatusBadRequest, "MISSING_FIELDS", "Missing required fields")
-		return
-	}
 	// Never fabricate a swap transaction using a source-code seed phrase.
-	WriteError(w, http.StatusServiceUnavailable, "CUSTODY_NOT_CONFIGURED", "Swaps are unavailable until authenticated custody signing, a verified quote, and settlement controls are configured")
+	writeCustodyUnavailable(w)
 }
 
-// GetSupportedNetworks returns supported networks
+// GetSupportedNetworks lists the networks a deposit address can be issued on.
 func (h *WalletHandler) GetSupportedNetworks(w http.ResponseWriter, r *http.Request) {
-	blockchains := h.service.GetSupportedBlockchains()
-	WriteSuccess(w, map[string]interface{}{
-		"networks": blockchains,
-		"count":    len(blockchains),
-	})
+	WriteSuccess(w, map[string]interface{}{"networks": supportedNetworks})
 }
 
-func stringToBigInt(s string) interface{} {
-	// Simplified - in production use big.Int
-	return s
-}
+// supportedNetworks enumerates the chain families the wallet service validates
+// addresses for. It is configuration, not chain connectivity.
+var supportedNetworks = []string{"BTC", "ETH", "USDT", "BNB", "MATIC", "AVAX"}

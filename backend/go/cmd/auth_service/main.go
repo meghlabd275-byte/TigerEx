@@ -6,8 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	dbPool    *pgxpool.Pool
-	authSvc   *AuthService
+	dbPool  *pgxpool.Pool
+	authSvc *AuthService
 )
 
 // AuthService wraps authentication logic
@@ -38,7 +38,7 @@ func NewAuthService(jwtSecret, jwtRefreshSecret string) *AuthService {
 type APIResponse struct {
 	Success bool        `json:"success"`
 	Data    interface{} `json:"data,omitempty"`
-	Error   *APIError  `json:"error,omitempty"`
+	Error   *APIError   `json:"error,omitempty"`
 }
 
 // APIError standard error
@@ -68,10 +68,10 @@ type LoginResponse struct {
 
 // UserResponse user info for response
 type UserResponse struct {
-	ID        string `json:"id"`
-	Email     string `json:"email"`
-	Username  string `json:"username"`
-	KYCLevel  int    `json:"kyc_level"`
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	Username string `json:"username"`
+	KYCLevel int    `json:"kyc_level"`
 	Status   string `json:"status"`
 }
 

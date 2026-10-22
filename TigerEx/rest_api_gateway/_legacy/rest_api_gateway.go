@@ -1,8 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -26,25 +26,25 @@ type APIError struct {
 
 // Order representation
 type Order struct {
-	OrderID    string `json:"orderId"`
-	UserID    string `json:"userId"`
-	Symbol    string `json:"symbol"`
-	Side      string `json:"side"`
-	Type      string `json:"type"`
-	Quantity float64 `json:"quantity"`
-	Price     float64 `json:"price,omitempty"`
-	Status    string `json:"status"`
-	CreatedAt int64  `json:"createdAt"`
-}
-
-// Trade representation  
-type Trade struct {
-	ID        string  `json:"id"`
+	OrderID   string  `json:"orderId"`
+	UserID    string  `json:"userId"`
 	Symbol    string  `json:"symbol"`
 	Side      string  `json:"side"`
-	Price     float64 `json:"price"`
+	Type      string  `json:"type"`
+	Quantity  float64 `json:"quantity"`
+	Price     float64 `json:"price,omitempty"`
+	Status    string  `json:"status"`
+	CreatedAt int64   `json:"createdAt"`
+}
+
+// Trade representation
+type Trade struct {
+	ID       string  `json:"id"`
+	Symbol   string  `json:"symbol"`
+	Side     string  `json:"side"`
+	Price    float64 `json:"price"`
 	Quantity float64 `json:"quantity"`
-	Time      int64   `json:"time"`
+	Time     int64   `json:"time"`
 }
 
 // Deposit representation
@@ -67,26 +67,26 @@ type Withdrawal struct {
 
 // Wallet info
 type WalletInfo struct {
-	TotalMargin      float64 `json:"totalMargin"`
+	TotalMargin     float64 `json:"totalMargin"`
 	AvailableMargin float64 `json:"availableMargin"`
 }
 
 // Position info
 type Position struct {
 	PositionAmt float64 `json:"positionAmt"`
-	EntryPrice float64 `json:"entryPrice"`
-	LiqPrice   float64 `json:"liqPrice"`
-	Margin     float64 `json:"margin"`
+	EntryPrice  float64 `json:"entryPrice"`
+	LiqPrice    float64 `json:"liqPrice"`
+	Margin      float64 `json:"margin"`
 }
 
 // Ticker data
 type Ticker struct {
-	PriceChange  float64 `json:"priceChange"`
+	PriceChange        float64 `json:"priceChange"`
 	PriceChangePercent float64 `json:"priceChangePercent"`
-	LastPrice  float64 `json:"lastPrice"`
-	Volume    float64 `json:"volume"`
-	HighPrice float64 `json:"highPrice"`
-	LowPrice  float64 `json:"lowPrice"`
+	LastPrice          float64 `json:"lastPrice"`
+	Volume             float64 `json:"volume"`
+	HighPrice          float64 `json:"highPrice"`
+	LowPrice           float64 `json:"lowPrice"`
 }
 
 // Book ticker
@@ -112,7 +112,7 @@ type RESTAPIGateway struct {
 	orders      map[string]Order
 	deposits    map[string]Deposit
 	withdrawals map[string]Withdrawal
-	counter    int64
+	counter     int64
 }
 
 func NewRESTAPIGateway() *RESTAPIGateway {
@@ -120,7 +120,7 @@ func NewRESTAPIGateway() *RESTAPIGateway {
 		orders:      make(map[string]Order),
 		deposits:    make(map[string]Deposit),
 		withdrawals: make(map[string]Withdrawal),
-		counter:    0,
+		counter:     0,
 	}
 }
 
@@ -197,7 +197,7 @@ func (g *RESTAPIGateway) Withdraw(userID, asset, amount float64, address, networ
 	}
 	return APIResponse{
 		Success: true,
-		Data: map[string]interface{}{"id": id, "status": "processing"},
+		Data:    map[string]interface{}{"id": id, "status": "processing"},
 	}
 }
 
@@ -221,7 +221,7 @@ func (g *RESTAPIGateway) CreateOrder(userID, symbol, side, orderType string, qua
 	g.orders[id] = order
 	return APIResponse{
 		Success: true,
-		Data: map[string]interface{}{"orderId": id, "status": "FILLED"},
+		Data:    map[string]interface{}{"orderId": id, "status": "FILLED"},
 	}
 }
 
@@ -244,7 +244,7 @@ func (g *RESTAPIGateway) GetMyTrades(orderID string) APIResponse {
 func (g *RESTAPIGateway) GetAvgPrice(symbol string) APIResponse {
 	return APIResponse{
 		Success: true,
-		Data: AvgPrice{Mins: 5, Price: 50000},
+		Data:    AvgPrice{Mins: 5, Price: 50000},
 	}
 }
 
@@ -252,7 +252,7 @@ func (g *RESTAPIGateway) GetAvgPrice(symbol string) APIResponse {
 func (g *RESTAPIGateway) GetMarginAccount(userID string) APIResponse {
 	return APIResponse{
 		Success: true,
-		Data: WalletInfo{TotalMargin: 0, AvailableMargin: 0},
+		Data:    WalletInfo{TotalMargin: 0, AvailableMargin: 0},
 	}
 }
 
@@ -260,7 +260,7 @@ func (g *RESTAPIGateway) GetMarginAccount(userID string) APIResponse {
 func (g *RESTAPIGateway) GetPosition(symbol string) APIResponse {
 	return APIResponse{
 		Success: true,
-		Data: Position{PositionAmt: 0},
+		Data:    Position{PositionAmt: 0},
 	}
 }
 
@@ -268,7 +268,7 @@ func (g *RESTAPIGateway) GetPosition(symbol string) APIResponse {
 func (g *RESTAPIGateway) GetFuturesAccount(userID string) APIResponse {
 	return APIResponse{
 		Success: true,
-		Data: map[string]float64{"equity": 0, "availableBalance": 0},
+		Data:    map[string]float64{"equity": 0, "availableBalance": 0},
 	}
 }
 
@@ -276,7 +276,7 @@ func (g *RESTAPIGateway) GetFuturesAccount(userID string) APIResponse {
 func (g *RESTAPIGateway) GetPrice(symbol string) APIResponse {
 	return APIResponse{
 		Success: true,
-		Data: map[string]float64{"price": 50000},
+		Data:    map[string]float64{"price": 50000},
 	}
 }
 
@@ -284,7 +284,7 @@ func (g *RESTAPIGateway) GetPrice(symbol string) APIResponse {
 func (g *RESTAPIGateway) GetBookTicker(symbol string) APIResponse {
 	return APIResponse{
 		Success: true,
-		Data: BookTicker{Bid: 49990, Ask: 50010},
+		Data:    BookTicker{Bid: 49990, Ask: 50010},
 	}
 }
 
@@ -292,7 +292,7 @@ func (g *RESTAPIGateway) GetBookTicker(symbol string) APIResponse {
 func (g *RESTAPIGateway) Get24hrTicker(symbol string) APIResponse {
 	return APIResponse{
 		Success: true,
-		Data: Ticker{PriceChange: 0, Volume: 1000000},
+		Data:    Ticker{PriceChange: 0, Volume: 1000000},
 	}
 }
 
@@ -300,7 +300,7 @@ func (g *RESTAPIGateway) Get24hrTicker(symbol string) APIResponse {
 func (g *RESTAPIGateway) GetDepth(symbol string, limit int) APIResponse {
 	return APIResponse{
 		Success: true,
-		Data: Depth{Bids: [][]string{}, Asks: [][]string{}},
+		Data:    Depth{Bids: [][]string{}, Asks: [][]string{}},
 	}
 }
 
@@ -318,7 +318,7 @@ func (g *RESTAPIGateway) GetKlines(symbol, interval string) APIResponse {
 func (g *RESTAPIGateway) GetExchangeInfo() APIResponse {
 	return APIResponse{
 		Success: true,
-		Data: map[string][]string{"symbols": {}},
+		Data:    map[string][]string{"symbols": {}},
 	}
 }
 
@@ -341,7 +341,7 @@ func NewWebSocketStream() *WebSocketStream {
 func (ws *WebSocketStream) Subscribe(streams []string) APIResponse {
 	return APIResponse{
 		Success: true,
-		Data: map[string]string{"subscribed": strings.Join(streams, ",")},
+		Data:    map[string]string{"subscribed": strings.Join(streams, ",")},
 	}
 }
 
@@ -362,14 +362,14 @@ func (rl *RateLimiter) Check(apiKey string) APIResponse {
 	Remaining := 1000 - rl.limits[apiKey]
 	return APIResponse{
 		Success: true,
-		Data: map[string]interface{}{"allowed": true, "remaining": Remaining},
+		Data:    map[string]interface{}{"allowed": true, "remaining": Remaining},
 	}
 }
 
 func (rl *RateLimiter) GetStatus(apiKey string) APIResponse {
 	return APIResponse{
 		Success: true,
-		Data: map[string]int64{"requests": rl.limits[apiKey], "remaining": 1000 - rl.limits[apiKey]},
+		Data:    map[string]int64{"requests": rl.limits[apiKey], "remaining": 1000 - rl.limits[apiKey]},
 	}
 }
 
@@ -389,7 +389,7 @@ func accountHandler(w http.ResponseWriter, r *http.Request) {
 
 func orderHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	if r.Method == "GET" {
 		orderID := r.URL.Query().Get("orderId")
 		json.NewEncoder(w).Encode(gateway.GetOrder(orderID))
@@ -437,16 +437,16 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	
+
 	// Register routes
 	http.HandleFunc("/api/v1/commission", commisionsHandler)
 	http.HandleFunc("/api/v1/account", accountHandler)
 	http.HandleFunc("/api/v1/order", orderHandler)
 	http.HandleFunc("/api/v1/ticker/24hr", tickerHandler)
 	http.HandleFunc("/api/v1/depth", depthHandler)
-	
+
 	fmt.Printf("REST API Gateway starting on port %s\n", port)
-	
+
 	err := http.ListenAndServe(":"+port, nil)
 	if err != nil {
 		fmt.Printf("Server error: %v\n", err)

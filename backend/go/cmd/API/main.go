@@ -2,21 +2,20 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"golang.org/x/crypto/bcrypt"
 
 	"tigerex/backend/internal/models"
 	"tigerex/backend/internal/services"
@@ -41,13 +40,13 @@ type DatabaseConfig struct {
 	Host         string
 	Port         int
 	User         string
-	Password    string
+	Password     string
 	DBName       string
 	MaxOpenConns int
 	MaxIdleConns int
 }
 
-type RedisConfig struct struct {
+type RedisConfig struct {
 	Host     string
 	Port     int
 	Password string
@@ -55,18 +54,18 @@ type RedisConfig struct struct {
 }
 
 type JWTConfig struct {
-	Secret          string
+	Secret         string
 	ExpirationHour int
 }
 
 // Global variables
 var (
-	cfg          Config
-	db           *services.Database
+	cfg         Config
+	db          *services.Database
 	redisClient *redis.Client
 	authService *services.AuthService
 	orderSvc    *services.OrderService
-	marketSvc  *services.MarketService
+	marketSvc   *services.MarketService
 )
 
 // Helper function for env vars
@@ -104,7 +103,7 @@ func main() {
 			DB:       0,
 		},
 		JWT: JWTConfig{
-			Secret:          getEnv("JWT_SECRET", "tigerex-secret-key"),
+			Secret:         getEnv("JWT_SECRET", ""), // required; validated at startup
 			ExpirationHour: 24,
 		},
 	}
@@ -123,21 +122,28 @@ func main() {
 	})
 	log.Println("Redis client connected")
 
-	// Initialize database (may fail but we continue)
+	// Initialize database. The API refuses to start without a reachable ledger.
 	ctx := context.Background()
-	database, _ := services.NewDatabase(ctx, services.DatabaseConfig{
+	database, err := services.NewDatabase(ctx, services.DatabaseConfig{
 		Host:         cfg.Database.Host,
 		Port:         cfg.Database.Port,
 		User:         cfg.Database.User,
-		Password:    cfg.Database.Password,
+		Password:     cfg.Database.Password,
 		DBName:       cfg.Database.DBName,
 		MaxOpenConns: 25,
 		MaxIdleConns: 25,
 	})
+	if err != nil {
+		log.Fatalf("Database connection failed: %v", err)
+	}
 	db = database
+	defer db.Close()
 
 	// Initialize services
-	authService = services.NewAuthService(cfg.JWT.Secret, cfg.JWT.ExpirationHour)
+	authService, err = services.NewAuthService(db, cfg.JWT.Secret, cfg.JWT.ExpirationHour)
+	if err != nil {
+		log.Fatalf("Authentication service configuration invalid: %v", err)
+	}
 	orderSvc = services.NewOrderService(db, redisClient)
 	marketSvc = services.NewMarketService(db, redisClient)
 
@@ -250,29 +256,22 @@ func registerHandler(c *gin.Context) {
 		return
 	}
 
-	if len(req.Password) < 8 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "password must be at least 8 characters"})
-		return
-	}
-
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	userID, err := authService.Register(c.Request.Context(), req.Email, req.Username, req.Password)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, services.ErrEmailTaken):
+			status = http.StatusConflict
+		case errors.Is(err, services.ErrInvalidInput):
+			status = http.StatusBadRequest
+		case errors.Is(err, services.ErrStorageUnavailable):
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
-	user := &models.User{
-		ID:           uuid.New().String(),
-		Email:        req.Email,
-		Username:     req.Username,
-		PasswordHash: string(hashedPassword),
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
-		IsActive:     true,
-		Tier:         "standard",
-	}
-
-	token, err := authService.GenerateToken(user)
+	token, err := authService.GenerateToken(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
 		return
@@ -281,10 +280,10 @@ func registerHandler(c *gin.Context) {
 	c.JSON(http.StatusCreated, models.AuthResponse{
 		Token: token,
 		User: models.UserResponse{
-			ID:       user.ID,
-			Email:    user.Email,
-			Username: user.Username,
-			Tier:     user.Tier,
+			ID:       userID,
+			Email:    req.Email,
+			Username: req.Username,
+			KYCLevel: models.KYCLevelNone,
 		},
 	})
 }
@@ -301,28 +300,26 @@ func loginHandler(c *gin.Context) {
 		return
 	}
 
-	user := &models.User{
-		ID:       "demo-user",
-		Email:   req.Email,
-		Username: "demo",
-		PasswordHash: string(hashedPassword),
+	userID, err := authService.Authenticate(c.Request.Context(), req.Email, req.Password)
+	if err != nil {
+		status := http.StatusUnauthorized
+		switch {
+		case errors.Is(err, services.ErrStorageUnavailable):
+			status = http.StatusServiceUnavailable
+		case errors.Is(err, services.ErrAccountDisabled):
+			status = http.StatusForbidden
+		}
+		c.JSON(status, gin.H{"error": "invalid email or password"})
+		return
 	}
 
-	token, err := authService.GenerateToken(user)
+	token, err := authService.GenerateToken(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
 		return
 	}
 
-	c.JSON(http.StatusOK, models.AuthResponse{
-		Token: token,
-		User: models.UserResponse{
-			ID:       user.ID,
-			Email:    user.Email,
-			Username: user.Username,
-			Tier:     user.Tier,
-		},
-	})
+	c.JSON(http.StatusOK, gin.H{"token": token, "user_id": userID})
 }
 
 func createOrderHandler(c *gin.Context) {
@@ -332,13 +329,19 @@ func createOrderHandler(c *gin.Context) {
 		return
 	}
 
-	var req models.CreateOrderRequest
+	var req services.OrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	order, err := orderSvc.CreateOrder(c.Request.Context(), userID.(string), &req)
+	uid, err := uuid.Parse(userID.(string))
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token subject"})
+		return
+	}
+
+	order, err := orderSvc.CreateOrder(c.Request.Context(), uid, &req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -433,14 +436,14 @@ func authMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		claims, err := authService.ValidateToken(tokenString)
+		userID, err := authService.ValidateToken(tokenString)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			c.Abort()
 			return
 		}
 
-		c.Set("userID", (*claims)["user_id"])
+		c.Set("userID", userID.String())
 		c.Next()
 	}
 }

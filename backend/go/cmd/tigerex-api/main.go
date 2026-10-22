@@ -36,10 +36,10 @@ import (
 // Config holds all configuration
 type Config struct {
 	Server struct {
-		Port             string
-		ReadTimeout      int
-		WriteTimeout    int
-		MaxHeaderBytes  int
+		Port           string
+		ReadTimeout    int
+		WriteTimeout   int
+		MaxHeaderBytes int
 		TLSEnabled     bool
 		CertFile       string
 		KeyFile        string
@@ -53,9 +53,9 @@ type Config struct {
 		SSLMode  string
 	}
 	JWT struct {
-		Secret          string
-		AccessExpiry    int  // minutes
-		RefreshExpiry   int  // days
+		Secret        string
+		AccessExpiry  int // minutes
+		RefreshExpiry int // days
 	}
 	RateLimit struct {
 		RequestsPerMinute int
@@ -72,14 +72,14 @@ type Config struct {
 }
 
 var (
-	config       *Config
-	jwtSecret    []byte
-	masterKey    [32]byte
+	config      *Config
+	jwtSecret   []byte
+	masterKey   [32]byte
 	authService *auth.Service
-	kycService   *kyc.Service
+	kycService  *kyc.Service
 	walletSvc   *wallet.Service
-	tradingSvc   *trading.Service
-	securitySvc  *security.Service
+	tradingSvc  *trading.Service
+	securitySvc *security.Service
 )
 
 // Initialize loads configuration
@@ -154,16 +154,16 @@ func init() {
 		JWT: auth.JWTConfig{
 			Secret:        jwtSecret,
 			AccessExpiry:  time.Duration(config.JWT.AccessExpiry) * time.Minute,
-			RefreshExpiry:  time.Duration(config.JWT.RefreshExpiry) * 24 * time.Hour,
+			RefreshExpiry: time.Duration(config.JWT.RefreshExpiry) * 24 * time.Hour,
 		},
 		MaxLoginAttempts: config.Security.MaxLoginAttempts,
-		LockoutDuration: time.Duration(config.Security.LockoutDuration) * time.Minute,
-		SessionExpiry:  time.Duration(config.Security.SessionExpiry) * time.Hour,
+		LockoutDuration:  time.Duration(config.Security.LockoutDuration) * time.Minute,
+		SessionExpiry:    time.Duration(config.Security.SessionExpiry) * time.Hour,
 	})
 
 	kycService = kyc.NewService(kyc.Config{
 		MaxLoginAttempts: config.Security.MaxLoginAttempts,
-		LockoutDuration: time.Duration(config.Security.LockoutDuration) * time.Minute,
+		LockoutDuration:  time.Duration(config.Security.LockoutDuration) * time.Minute,
 	})
 
 	walletSvc = wallet.NewService(wallet.Config{
@@ -219,7 +219,7 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{
 			"status":    "healthy",
 			"timestamp": time.Now().Unix(),
-			"version":  "1.0.0",
+			"version":   "1.0.0",
 		})
 	})
 
@@ -346,13 +346,13 @@ func main() {
 	// Start server
 	go func() {
 		log.Printf("TigerEx API Server starting on port %s", config.Server.Port)
-		
+
 		if config.Server.TLSEnabled {
 			// TLS mode
 			srv.TLSConfig = &tls.Config{
 				MinVersion:               tls.VersionTLS12,
 				CurvePreferences:         []tls.CurveID{tls.CurveP256, tls.X25519},
-				PreferServerCipherSuites:  true,
+				PreferServerCipherSuites: true,
 				CipherSuites: []uint16{
 					tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
 					tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
@@ -398,10 +398,10 @@ type RegisterRequest struct {
 }
 
 type RegisterResponse struct {
-	User         api.User   `json:"user"`
-	AccessToken  string    `json:"accessToken"`
-	RefreshToken string    `json:"refreshToken"`
-	ExpiresAt    int64     `json:"expiresAt"`
+	User         api.User `json:"user"`
+	AccessToken  string   `json:"accessToken"`
+	RefreshToken string   `json:"refreshToken"`
+	ExpiresAt    int64    `json:"expiresAt"`
 }
 
 func handleRegister(c *gin.Context) {
@@ -440,13 +440,13 @@ func handleRegister(c *gin.Context) {
 	user := api.User{
 		ID:        uuid.New().String(),
 		Email:     req.Email,
-		Username: req.Username,
-		Password: string(hashedPassword),
-		Phone:    req.Phone,
-		RefCode:  req.RefCode,
+		Username:  req.Username,
+		Password:  string(hashedPassword),
+		Phone:     req.Phone,
+		RefCode:   req.RefCode,
 		CreatedAt: time.Now().Unix(),
 		UpdatedAt: time.Now().Unix(),
-		KYCLevel: kyc.LevelNone,
+		KYCLevel:  kyc.LevelNone,
 	}
 
 	if err := authService.CreateUser(c.Request.Context(), &user); err != nil {
@@ -480,11 +480,11 @@ type LoginRequest struct {
 }
 
 type LoginResponse struct {
-	User         api.User   `json:"user"`
-	AccessToken  string    `json:"accessToken"`
-	RefreshToken string    `json:"refreshToken"`
-	ExpiresAt    int64     `json:"expiresAt"`
-	Requires2FA bool      `json:"requires2FA"`
+	User         api.User `json:"user"`
+	AccessToken  string   `json:"accessToken"`
+	RefreshToken string   `json:"refreshToken"`
+	ExpiresAt    int64    `json:"expiresAt"`
+	Requires2FA  bool     `json:"requires2FA"`
 }
 
 func handleLogin(c *gin.Context) {
@@ -519,7 +519,7 @@ func handleLogin(c *gin.Context) {
 	if user.TwoFactorEnabled {
 		// Return partial auth - requires 2FA
 		c.JSON(http.StatusOK, LoginResponse{
-			User:         *user,
+			User:        *user,
 			Requires2FA: true,
 		})
 		return
@@ -596,7 +596,7 @@ func handleRefreshToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"accessToken":  accessToken,
 		"refreshToken": refreshToken,
-		"expiresAt":   expiresAt,
+		"expiresAt":    expiresAt,
 	})
 }
 
@@ -766,7 +766,7 @@ func handleGetAccount(c *gin.Context) {
 
 func handleUpdateAccount(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	var req struct {
 		Username string `json:"username"`
 		Phone    string `json:"phone"`
@@ -800,18 +800,18 @@ type CreateOrderRequest struct {
 	Symbol           string  `json:"symbol" binding:"required"`
 	Side             string  `json:"side" binding:"required,oneof=buy sell"`
 	Type             string  `json:"type" binding:"required,oneof=market limit stop_loss stop_limit trailing_stop"`
-	Quantity        float64 `json:"quantity" binding:"required,gt=0"`
-	Price           float64 `json:"price"`
-	StopPrice       float64 `json:"stopPrice"`
-	TimeInForce     string  `json:"timeInForce" binding:"oneof=GTC IOC FOK GTD"`
-	ClientOrderID   string  `json:"clientOrderId"`
+	Quantity         float64 `json:"quantity" binding:"required,gt=0"`
+	Price            float64 `json:"price"`
+	StopPrice        float64 `json:"stopPrice"`
+	TimeInForce      string  `json:"timeInForce" binding:"oneof=GTC IOC FOK GTD"`
+	ClientOrderID    string  `json:"clientOrderId"`
 	TrailingDistance float64 `json:"trailingDistance"`
-	ReduceOnly      bool    `json:"reduceOnly"`
+	ReduceOnly       bool    `json:"reduceOnly"`
 }
 
 func handleCreateOrder(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	var req CreateOrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -820,17 +820,17 @@ func handleCreateOrder(c *gin.Context) {
 
 	// Create order
 	order, err := tradingSvc.CreateOrder(c.Request.Context(), &trading.OrderRequest{
-		UserID:            user.ID,
+		UserID:           user.ID,
 		Symbol:           req.Symbol,
 		Side:             req.Side,
 		Type:             req.Type,
-		Quantity:        req.Quantity,
-		Price:           req.Price,
-		StopPrice:       req.StopPrice,
-		TimeInForce:     req.TimeInForce,
-		ClientOrderID:   req.ClientOrderID,
+		Quantity:         req.Quantity,
+		Price:            req.Price,
+		StopPrice:        req.StopPrice,
+		TimeInForce:      req.TimeInForce,
+		ClientOrderID:    req.ClientOrderID,
 		TrailingDistance: req.TrailingDistance,
-		ReduceOnly:      req.ReduceOnly,
+		ReduceOnly:       req.ReduceOnly,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -842,7 +842,7 @@ func handleCreateOrder(c *gin.Context) {
 
 func handleGetOrders(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	symbol := c.Query("symbol")
 	side := c.Query("side")
 	status := c.Query("status")
@@ -899,7 +899,7 @@ func handleCancelAllOrders(c *gin.Context) {
 
 func handleGetMyTrades(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	symbol := c.Query("symbol")
 	limit := getQueryInt(c, "limit", 100)
 	fromID := getQueryInt64(c, "fromId", 0)
@@ -919,7 +919,7 @@ func handleGetMyTrades(c *gin.Context) {
 
 func handleGetWallets(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	wallets, err := walletSvc.GetWallets(c.Request.Context(), user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get wallets"})
@@ -936,7 +936,7 @@ type DepositAddressRequest struct {
 
 func handleGetDepositAddress(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	var req DepositAddressRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -953,17 +953,17 @@ func handleGetDepositAddress(c *gin.Context) {
 }
 
 type WithdrawRequest struct {
-	Asset     string  `json:"asset" binding:"required"`
-	Amount    float64 `json:"amount" binding:"required,gt=0"`
-	Address   string  `json:"address" binding:"required"`
-	Memo      string  `json:"memo"`
-	Network   string  `json:"network"`
-	FeeLevel  string  `json:"feeLevel"`
+	Asset    string  `json:"asset" binding:"required"`
+	Amount   float64 `json:"amount" binding:"required,gt=0"`
+	Address  string  `json:"address" binding:"required"`
+	Memo     string  `json:"memo"`
+	Network  string  `json:"network"`
+	FeeLevel string  `json:"feeLevel"`
 }
 
 func handleWithdraw(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	var req WithdrawRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -984,11 +984,11 @@ func handleWithdraw(c *gin.Context) {
 
 	withdrawal, err := walletSvc.RequestWithdrawal(c.Request.Context(), &wallet.WithdrawalRequest{
 		UserID:   user.ID,
-		Asset:   req.Asset,
-		Amount:  req.Amount,
-		Address: req.Address,
-		Memo:    req.Memo,
-		Network: req.Network,
+		Asset:    req.Asset,
+		Amount:   req.Amount,
+		Address:  req.Address,
+		Memo:     req.Memo,
+		Network:  req.Network,
 		FeeLevel: req.FeeLevel,
 	})
 	if err != nil {
@@ -1013,15 +1013,15 @@ func handleGetBalance(c *gin.Context) {
 }
 
 type TransferRequest struct {
-	Asset     string  `json:"asset" binding:"required"`
-	Amount    float64 `json:"amount" binding:"required,gt=0"`
-	ToUserID  string  `json:"toUserId" binding:"required"`
+	Asset    string  `json:"asset" binding:"required"`
+	Amount   float64 `json:"amount" binding:"required,gt=0"`
+	ToUserID string  `json:"toUserId" binding:"required"`
 	Memo     string  `json:"memo"`
 }
 
 func handleTransfer(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	var req TransferRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1030,10 +1030,10 @@ func handleTransfer(c *gin.Context) {
 
 	transfer, err := walletSvc.InternalTransfer(c.Request.Context(), &wallet.TransferRequest{
 		FromUserID: user.ID,
-		ToUserID:  req.ToUserID,
-		Asset:    req.Asset,
-		Amount:   req.Amount,
-		Memo:     req.Memo,
+		ToUserID:   req.ToUserID,
+		Asset:      req.Asset,
+		Amount:     req.Amount,
+		Memo:       req.Memo,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1053,15 +1053,15 @@ func handleGetStakingProducts(c *gin.Context) {
 }
 
 type StakeRequest struct {
-	Asset      string  `json:"asset" binding:"required"`
-	Amount     float64 `json:"amount" binding:"required,gt=0"`
-	ProductID  string  `json:"productId" binding:"required"`
+	Asset     string  `json:"asset" binding:"required"`
+	Amount    float64 `json:"amount" binding:"required,gt=0"`
+	ProductID string  `json:"productId" binding:"required"`
 	Compound  bool    `json:"compound"`
 }
 
 func handleStake(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	var req StakeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1069,7 +1069,7 @@ func handleStake(c *gin.Context) {
 	}
 
 	position, err := tradingSvc.Stake(c.Request.Context(), &trading.StakeRequest{
-		UserID:     user.ID,
+		UserID:    user.ID,
 		Asset:     req.Asset,
 		Amount:    req.Amount,
 		ProductID: req.ProductID,
@@ -1085,12 +1085,12 @@ func handleStake(c *gin.Context) {
 
 type UnstakeRequest struct {
 	PositionID string  `json:"positionId" binding:"required"`
-	Amount    float64 `json:"amount"`
+	Amount     float64 `json:"amount"`
 }
 
 func handleUnstake(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	var req UnstakeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1100,7 +1100,7 @@ func handleUnstake(c *gin.Context) {
 	position, err := tradingSvc.Unstake(c.Request.Context(), &trading.UnstakeRequest{
 		UserID:     user.ID,
 		PositionID: req.PositionID,
-		Amount:    req.Amount,
+		Amount:     req.Amount,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1112,7 +1112,7 @@ func handleUnstake(c *gin.Context) {
 
 func handleGetStakingPositions(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	positions, err := tradingSvc.GetStakingPositions(c.Request.Context(), user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get positions"})
@@ -1175,7 +1175,7 @@ func handleDeleteSubAccount(c *gin.Context) {
 
 func handleGetAPIKeys(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	keys, err := authService.GetAPIKeys(c.Request.Context(), user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get API keys"})
@@ -1194,7 +1194,7 @@ type CreateAPIKeyRequest struct {
 
 func handleCreateAPIKey(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	var req CreateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1202,7 +1202,7 @@ func handleCreateAPIKey(c *gin.Context) {
 	}
 
 	key, err := authService.CreateAPIKey(c.Request.Context(), &auth.APIKeyRequest{
-		UserID:       user.ID,
+		UserID:      user.ID,
 		Label:       req.Label,
 		Permissions: req.Permissions,
 		ExpiresAt:   req.ExpiresAt,
@@ -1258,7 +1258,7 @@ func handleSetAntiPhishing(c *gin.Context) {
 
 func handleGetKYCStatus(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	status, err := kycService.GetStatus(c.Request.Context(), user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get KYC status"})
@@ -1270,20 +1270,20 @@ func handleGetKYCStatus(c *gin.Context) {
 
 type SubmitKYCRequest struct {
 	DocumentType string `json:"documentType" binding:"required,oneof=passport national_id drivers_license"`
-	FirstName  string `json:"firstName" binding:"required"`
-	LastName  string `json:"lastName" binding:"required"`
-	DOB       string `json:"dob" binding:"required"`
-	Country   string `json:"country" binding:"required"`
-	DocumentID string `json:"documentId" binding:"required"`
-	Address  string `json:"address"`
-	City     string `json:"city"`
-	State    string `json:"state"`
-	ZipCode  string `json:"zipCode"`
+	FirstName    string `json:"firstName" binding:"required"`
+	LastName     string `json:"lastName" binding:"required"`
+	DOB          string `json:"dob" binding:"required"`
+	Country      string `json:"country" binding:"required"`
+	DocumentID   string `json:"documentId" binding:"required"`
+	Address      string `json:"address"`
+	City         string `json:"city"`
+	State        string `json:"state"`
+	ZipCode      string `json:"zipCode"`
 }
 
 func handleSubmitKYC(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	var req SubmitKYCRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1291,17 +1291,17 @@ func handleSubmitKYC(c *gin.Context) {
 	}
 
 	result, err := kycService.Submit(c.Request.Context(), &kyc.SubmissionRequest{
-		UserID:        user.ID,
+		UserID:       user.ID,
 		DocumentType: req.DocumentType,
 		FirstName:    req.FirstName,
-		LastName:    req.LastName,
-		DOB:        req.DOB,
-		Country:    req.Country,
-		DocumentID:  req.DocumentID,
-		Address:   req.Address,
-		City:      req.City,
-		State:     req.State,
-		ZipCode:   req.ZipCode,
+		LastName:     req.LastName,
+		DOB:          req.DOB,
+		Country:      req.Country,
+		DocumentID:   req.DocumentID,
+		Address:      req.Address,
+		City:         req.City,
+		State:        req.State,
+		ZipCode:      req.ZipCode,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1325,7 +1325,7 @@ func handleVerifyEmail(c *gin.Context) {
 
 func handleGetSettings(c *gin.Context) {
 	user := c.MustGet("user").(*api.User)
-	
+
 	settings, err := authService.GetSettings(c.Request.Context(), user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get settings"})
@@ -1402,7 +1402,7 @@ func validatePasswordStrength(password string) error {
 		return fmt.Errorf("password must be at least 8 characters")
 	}
 
-	var hasUpper, hasLower, hasDigit, hasSpecial bool
+	var hasUpper, hasLower, hasDigit bool
 	for _, c := range password {
 		switch {
 		case c >= 'A' && c <= 'Z':
@@ -1412,7 +1412,6 @@ func validatePasswordStrength(password string) error {
 		case c >= '0' && c <= '9':
 			hasDigit = true
 		case c >= 33 && c <= 126 && !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')):
-			hasSpecial = true
 		}
 	}
 

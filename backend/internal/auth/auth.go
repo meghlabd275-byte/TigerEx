@@ -40,8 +40,8 @@ type Session struct {
 	ExpiresAt     time.Time
 	RefreshToken string
 	IsActive     bool
-	2FAVerified  bool
-	2FASecret    string
+	TwoFactorVerified  bool
+	TwoFactorSecret    string
 }
 
 type RefreshToken struct {
@@ -62,8 +62,8 @@ type User struct {
 	UpdatedAt       time.Time
 	EmailVerified    bool
 	PhoneVerified   bool
-	2FAEnabled     bool
-	2FASecret      string
+	TwoFactorEnabled     bool
+	TwoFactorSecret      string
 	KYCVerified     bool
 	KYCLevel       int
 	Status          string
@@ -147,11 +147,11 @@ func (s *AuthService) LoginWith2FA(ctx context.Context, sessionID, code string) 
 	}
 
 	// Verify 2FA code
-	if !s.verify2FACode(session.2FASecret, code) {
+	if !s.verify2FACode(session.TwoFactorSecret, code) {
 		return nil, fmt.Errorf("invalid 2FA code")
 	}
 
-	session.2FAVerified = true
+	session.TwoFactorVerified = true
 
 	return session, nil
 }
@@ -239,7 +239,7 @@ func (s *AuthService) Register(ctx context.Context, email, phone, username, pass
 		UpdatedAt:      time.Now(),
 		EmailVerified:  false,
 		PhoneVerified:  false,
-		2FAEnabled:    false,
+		TwoFactorEnabled:    false,
 		KYCVerified:    false,
 		KYCLevel:       0,
 		Status:         "active",
@@ -261,8 +261,8 @@ func (s *AuthService) Enable2FA(ctx context.Context, userID string) (string, err
 		return "", fmt.Errorf("user not found")
 	}
 
-	user.2FASecret = secret
-	user.2FAEnabled = true
+	user.TwoFactorSecret = secret
+	user.TwoFactorEnabled = true
 
 	return secret, nil
 }
@@ -274,12 +274,12 @@ func (s *AuthService) Disable2FA(ctx context.Context, userID, code string) error
 		return fmt.Errorf("user not found")
 	}
 
-	if !s.verify2FACode(user.2FASecret, code) {
+	if !s.verify2FACode(user.TwoFactorSecret, code) {
 		return fmt.Errorf("invalid 2FA code")
 	}
 
-	user.2FAEnabled = false
-	user.2FASecret = ""
+	user.TwoFactorEnabled = false
+	user.TwoFactorSecret = ""
 
 	return nil
 }
@@ -482,6 +482,3 @@ type Claims struct {
 	jwt.StandardClaims
 }
 
-import (
-	"sync"
-)

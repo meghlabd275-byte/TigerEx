@@ -264,7 +264,7 @@ func (rm *ReferralManager) GetPrograms() []*ReferralProgram {
 
 func (rm *ReferralManager) GetProgram(programID string) (*ReferralProgram, error) {
 	rm.mu.RLock()
-	defer cm.mu.RUnlock()
+	defer rm.mu.RUnlock()
 
 	program, exists := rm.programs[programID]
 	if !exists {

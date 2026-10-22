@@ -1,4 +1,4 @@
-package main
+package legacy
 
 import (
 	"context"
@@ -32,7 +32,7 @@ type AuthService struct {
 	totp         *TOTPService
 	blacklist    *TokenBlacklist
 	loginAttempt *LoginAttemptTracker
-	
+
 	// Config
 	jwtSecret     []byte
 	jwtExpiry     time.Duration
@@ -46,17 +46,17 @@ type SessionStore struct {
 }
 
 type Session struct {
-	SessionID   string
-	UserID      string
-	Token       string
+	SessionID    string
+	UserID       string
+	Token        string
 	RefreshToken string
-	IPAddress   string
-	UserAgent   string
-	DeviceID    string
-	Trusted     bool
-	ExpiresAt   time.Time
-	CreatedAt   time.Time
-	LastActive  time.Time
+	IPAddress    string
+	UserAgent    string
+	DeviceID     string
+	Trusted      bool
+	ExpiresAt    time.Time
+	CreatedAt    time.Time
+	LastActive   time.Time
 }
 
 // TOTPService handles 2FA
@@ -77,15 +77,15 @@ type LoginAttemptTracker struct {
 }
 
 type AttemptInfo struct {
-	Count     int
-	FirstAt   time.Time
-	LastAt    time.Time
+	Count       int
+	FirstAt     time.Time
+	LastAt      time.Time
 	LockedUntil time.Time
 }
 
 const (
 	MaxLoginAttempts = 5
-	LockoutDuration = 15 * time.Minute
+	LockoutDuration  = 15 * time.Minute
 )
 
 // =============================================================================
@@ -98,34 +98,34 @@ func (as *AuthService) CreateUser(ctx context.Context, req *CreateUserRequest) (
 	if !isValidEmail(req.Email) {
 		return nil, errors.New("invalid email format")
 	}
-	
+
 	// Check email exists
 	var exists bool
 	err := as.db.QueryRow(ctx,
 		"SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)",
 		req.Email,
 	).Scan(&exists)
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("database error: %w", err)
 	}
-	
+
 	if exists {
 		return nil, errors.New("email already registered")
 	}
-	
+
 	// Hash password
 	passwordHash, err := hashPassword(req.Password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
-	
+
 	// Generate user ID
 	userID := uuid.New()
-	
+
 	// Generate referral code
 	referralCode := generateReferralCode(req.Email)
-	
+
 	// Create user
 	_, err = as.db.Exec(ctx,
 		`INSERT INTO users (user_id, email, username, password_hash, country_code, 
@@ -133,11 +133,11 @@ func (as *AuthService) CreateUser(ctx context.Context, req *CreateUserRequest) (
 		 VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW())`,
 		userID, req.Email, req.Username, passwordHash, req.CountryCode, referralCode,
 	)
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
-	
+
 	// Create default spot wallet
 	walletID := uuid.New()
 	as.db.Exec(ctx,
@@ -145,7 +145,7 @@ func (as *AuthService) CreateUser(ctx context.Context, req *CreateUserRequest) (
 		 VALUES ($1, $2, 'spot', 'USDT', true)`,
 		walletID, userID,
 	)
-	
+
 	return &User{
 		UserID:        userID.String(),
 		Email:         req.Email,
@@ -180,7 +180,7 @@ func (as *AuthService) Login(ctx context.Context, req *LoginRequest) (*AuthToken
 	if as.loginAttempt.IsLocked(req.Email) {
 		return nil, errors.New("account temporarily locked due to too many failed attempts")
 	}
-	
+
 	// Get user
 	var user User
 	err := as.db.QueryRow(ctx,
@@ -188,87 +188,87 @@ func (as *AuthService) Login(ctx context.Context, req *LoginRequest) (*AuthToken
 		 FROM users WHERE email = $1`,
 		req.Email,
 	).Scan(&user.UserID, &user.Email, &user.PasswordHash, &user.AccountStatus, &user.LockedUntil)
-	
+
 	if err != nil {
 		as.loginAttempt.RecordFailedAttempt(req.Email)
 		return nil, errors.New("invalid credentials")
 	}
-	
+
 	// Check account status
 	if user.AccountStatus != "active" {
 		return nil, errors.New("account is not active")
 	}
-	
+
 	// Check if locked
 	if user.LockedUntil != nil && user.LockedUntil.After(time.Now()) {
 		return nil, fmt.Errorf("account locked until %s", user.LockedUntil.Format(time.RFC3339))
 	}
-	
+
 	// Verify password
 	if !verifyPassword(req.Password, user.PasswordHash) {
 		as.loginAttempt.RecordFailedAttempt(req.Email)
 		return nil, errors.New("invalid credentials")
 	}
-	
+
 	// Clear failed attempts on success
 	as.loginAttempt.ClearAttempts(req.Email)
-	
+
 	// Generate tokens
 	accessToken, err := as.GenerateAccessToken(user.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate access token: %w", err)
 	}
-	
+
 	refreshToken, err := as.GenerateRefreshToken(user.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
 	}
-	
+
 	// Create session
 	session := &Session{
-		SessionID:   uuid.New().String(),
-		UserID:      user.UserID,
-		Token:       accessToken,
-		IPAddress:   req.IPAddress,
-		UserAgent:   req.UserAgent,
-		DeviceID:    req.DeviceID,
-		ExpiresAt:   time.Now().Add(as.sessionExpiry),
-		CreatedAt:   time.Now(),
-		LastActive:  time.Now(),
+		SessionID:  uuid.New().String(),
+		UserID:     user.UserID,
+		Token:      accessToken,
+		IPAddress:  req.IPAddress,
+		UserAgent:  req.UserAgent,
+		DeviceID:   req.DeviceID,
+		ExpiresAt:  time.Now().Add(as.sessionExpiry),
+		CreatedAt:  time.Now(),
+		LastActive: time.Now(),
 	}
-	
+
 	as.sessions.Store(session)
-	
+
 	// Update last login
 	as.db.Exec(ctx,
 		`UPDATE users SET last_login_at = NOW(), login_attempts = 0 WHERE user_id = $1`,
 		user.UserID,
 	)
-	
+
 	// Get user profile
 	var profile User
 	as.db.QueryRow(ctx,
 		`SELECT user_id, email, username, kyc_level, account_status, created_at
 		 FROM users WHERE user_id = $1`,
 		user.UserID,
-	).Scan(&profile.UserID, &profile.Email, &profile.Username, &profile.KYCLevel, 
+	).Scan(&profile.UserID, &profile.Email, &profile.Username, &profile.KYCLevel,
 		&profile.AccountStatus, &profile.CreatedAt)
-	
+
 	return &AuthTokens{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
-		ExpiresIn:   int(as.jwtExpiry.Seconds()),
-		User:        &profile,
+		ExpiresIn:    int(as.jwtExpiry.Seconds()),
+		User:         &profile,
 	}, nil
 }
 
 // LoginRequest for authentication
 type LoginRequest struct {
-	Email       string
-	Password    string
-	IPAddress   string
-	UserAgent   string
-	DeviceID    string
+	Email         string
+	Password      string
+	IPAddress     string
+	UserAgent     string
+	DeviceID      string
 	TwoFactorCode string
 }
 
@@ -276,8 +276,8 @@ type LoginRequest struct {
 type AuthTokens struct {
 	AccessToken  string
 	RefreshToken string
-	ExpiresIn   int
-	User        *User
+	ExpiresIn    int
+	User         *User
 }
 
 // User represents authenticated user
@@ -293,17 +293,17 @@ type User struct {
 	AccountStatus    string
 	LockedUntil      *time.Time
 	TwoFactorEnabled bool
-	CreatedAt       int64
+	CreatedAt        int64
 }
 
 // Logout invalidates user session
 func (as *AuthService) Logout(ctx context.Context, token string) error {
 	// Add to blacklist
 	as.blacklist.Add(token)
-	
+
 	// Remove session
 	as.sessions.DeleteByToken(token)
-	
+
 	return nil
 }
 
@@ -325,31 +325,31 @@ func (as *AuthService) GenerateRefreshToken(userID string) (string, error) {
 func (as *AuthService) generateJWT(userID, tokenType string, expiry time.Duration) (string, error) {
 	now := time.Now()
 	exp := now.Add(expiry)
-	
+
 	// Header
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	
+
 	// Payload
 	payload := map[string]interface{}{
-		"sub":   userID,
-		"type":  tokenType,
-		"iat":   now.Unix(),
-		"exp":   exp.Unix(),
-		"jti":   uuid.New().String(),
+		"sub":  userID,
+		"type": tokenType,
+		"iat":  now.Unix(),
+		"exp":  exp.Unix(),
+		"jti":  uuid.New().String(),
 	}
-	
+
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
-	
+
 	payloadEnc := base64.RawURLEncoding.EncodeToString(payloadJSON)
-	
+
 	// Signature
 	message := header + "." + payloadEnc
 	signature := hmacSHA256(as.jwtSecret, []byte(message))
 	signatureEnc := base64.RawURLEncoding.EncodeToString(signature)
-	
+
 	return message + "." + signatureEnc, nil
 }
 
@@ -359,13 +359,13 @@ func (as *AuthService) ValidateToken(token string) (*TokenClaims, error) {
 	if as.blacklist.IsBlacklisted(token) {
 		return nil, errors.New("token has been revoked")
 	}
-	
+
 	// Parse JWT
 	parts := splitToken(token)
 	if len(parts) != 3 {
 		return nil, errors.New("invalid token format")
 	}
-	
+
 	// Verify signature
 	message := parts[0] + "." + parts[1]
 	expectedSig := hmacSHA256(as.jwtSecret, []byte(message))
@@ -373,27 +373,27 @@ func (as *AuthService) ValidateToken(token string) (*TokenClaims, error) {
 	if err != nil {
 		return nil, errors.New("invalid token signature")
 	}
-	
+
 	if !secureCompare(expectedSig, actualSig) {
 		return nil, errors.New("invalid token signature")
 	}
-	
+
 	// Decode payload
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return nil, errors.New("invalid token payload")
 	}
-	
+
 	var claims TokenClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return nil, errors.New("invalid token claims")
 	}
-	
+
 	// Check expiry
 	if time.Now().Unix() > claims.ExpiresAt {
 		return nil, errors.New("token has expired")
 	}
-	
+
 	return &claims, nil
 }
 
@@ -413,22 +413,22 @@ func (as *AuthService) RefreshTokens(refreshToken string) (*AuthTokens, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid refresh token: %w", err)
 	}
-	
+
 	if claims.Type != "refresh" {
 		return nil, errors.New("not a refresh token")
 	}
-	
+
 	// Generate new tokens
 	accessToken, err := as.GenerateAccessToken(claims.Subject)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate access token: %w", err)
 	}
-	
+
 	newRefreshToken, err := as.GenerateRefreshToken(claims.Subject)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
 	}
-	
+
 	// Get user
 	var user User
 	err = as.db.QueryRow(context.Background(),
@@ -436,16 +436,16 @@ func (as *AuthService) RefreshTokens(refreshToken string) (*AuthTokens, error) {
 		 FROM users WHERE user_id = $1`,
 		claims.Subject,
 	).Scan(&user.UserID, &user.Email, &user.Username, &user.KYCLevel, &user.AccountStatus, &user.CreatedAt)
-	
+
 	if err != nil {
 		return nil, errors.New("user not found")
 	}
-	
+
 	return &AuthTokens{
 		AccessToken:  accessToken,
 		RefreshToken: newRefreshToken,
-		ExpiresIn:   int(as.jwtExpiry.Seconds()),
-		User:        &user,
+		ExpiresIn:    int(as.jwtExpiry.Seconds()),
+		User:         &user,
 	}, nil
 }
 
@@ -461,27 +461,27 @@ func (as *AuthService) Enable2FA(ctx context.Context, userID, password string) (
 		"SELECT password_hash FROM users WHERE user_id = $1",
 		userID,
 	).Scan(&storedHash)
-	
+
 	if err != nil || !verifyPassword(password, storedHash) {
 		return nil, errors.New("invalid password")
 	}
-	
+
 	// Generate secret
 	secret, err := generateTOTPSecret()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Generate QR code URL
 	qrURL := fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=TigerEx",
 		as.totp.Issuer, userID, secret)
-	
+
 	// Store encrypted secret (not enabled yet)
 	encryptedSecret, err := encryptSecret(secret, []byte(password))
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Save pending 2FA
 	as.db.Exec(ctx,
 		`INSERT INTO pending_2fa (user_id, secret, created_at)
@@ -489,7 +489,7 @@ func (as *AuthService) Enable2FA(ctx context.Context, userID, password string) (
 		 ON CONFLICT (user_id) DO UPDATE SET secret = $2`,
 		userID, encryptedSecret,
 	)
-	
+
 	return &TwoFactorSetup{
 		Secret: secret,
 		QRCode: qrURL,
@@ -504,44 +504,44 @@ func (as *AuthService) VerifyAndEnable2FA(ctx context.Context, userID, code, pas
 		"SELECT secret FROM pending_2fa WHERE user_id = $1",
 		userID,
 	).Scan(&encryptedSecret)
-	
+
 	if err != nil {
 		return errors.New("no pending 2FA setup")
 	}
-	
+
 	// Decrypt secret
 	secret, err := decryptSecret(encryptedSecret, []byte(password))
 	if err != nil {
 		return errors.New("failed to decrypt secret")
 	}
-	
+
 	// Verify TOTP code
 	if !verifyTOTP(secret, code) {
 		return errors.New("invalid verification code")
 	}
-	
+
 	// Hash and store secret
 	secretHash := hashSecret(secret)
-	
+
 	// Enable 2FA
 	as.db.Exec(ctx,
 		`UPDATE users SET two_factor_enabled = true, two_factor_secret = $1
 		 WHERE user_id = $2`,
 		secretHash, userID,
 	)
-	
+
 	// Delete pending
 	as.db.Exec(ctx, "DELETE FROM pending_fa WHERE user_id = $1", userID)
-	
+
 	// Generate backup codes
 	backupCodes := generateBackupCodes()
 	backupCodesHash := hashBackupCodes(backupCodes)
-	
+
 	as.db.Exec(ctx,
 		`UPDATE users SET two_factor_backup_codes = $1 WHERE user_id = $2`,
 		backupCodesHash, userID,
 	)
-	
+
 	return nil
 }
 
@@ -553,23 +553,23 @@ func (as *AuthService) Disable2FA(ctx context.Context, userID, password, code st
 		"SELECT password_hash FROM users WHERE user_id = $1",
 		userID,
 	).Scan(&storedHash)
-	
+
 	if err != nil || !verifyPassword(password, storedHash) {
 		return errors.New("invalid password")
 	}
-	
+
 	// Verify 2FA code
 	if !as.Verify2FA(ctx, userID, code) {
 		return errors.New("invalid 2FA code")
 	}
-	
+
 	// Disable
 	as.db.Exec(ctx,
 		`UPDATE users SET two_factor_enabled = false, two_factor_secret = NULL,
 		 two_factor_backup_codes = NULL WHERE user_id = $1`,
 		userID,
 	)
-	
+
 	return nil
 }
 
@@ -580,11 +580,11 @@ func (as *AuthService) Verify2FA(ctx context.Context, userID, code string) bool 
 		"SELECT two_factor_secret FROM users WHERE user_id = $1",
 		userID,
 	).Scan(&secretHash)
-	
+
 	if err != nil {
 		return false
 	}
-	
+
 	// Try each code in window (for clock skew)
 	for i := -1; i <= 1; i++ {
 		expectedCode := generateTOTPCode(secretHash, time.Now().Add(time.Duration(i)*30*time.Second))
@@ -592,7 +592,7 @@ func (as *AuthService) Verify2FA(ctx context.Context, userID, code string) bool 
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -610,14 +610,14 @@ type TwoFactorSetup struct {
 func (as *AuthService) GetSessions(ctx context.Context, userID string) ([]Session, error) {
 	as.sessions.mu.RLock()
 	defer as.sessions.mu.RUnlock()
-	
+
 	var sessions []Session
 	for _, s := range as.sessions.sessions {
 		if s.UserID == userID && s.ExpiresAt.After(time.Now()) {
 			sessions = append(sessions, *s)
 		}
 	}
-	
+
 	return sessions, nil
 }
 
@@ -679,17 +679,17 @@ func (ss *SessionStore) DeleteByUser(userID string) {
 func (tb *TokenBlacklist) Add(token string) {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
-	
+
 	// Parse token to get expiry
 	parts := splitToken(token)
 	if len(parts) != 3 {
 		return
 	}
-	
+
 	payload, _ := base64.RawURLEncoding.DecodeString(parts[1])
 	var claims TokenClaims
 	json.Unmarshal(payload, &claims)
-	
+
 	// Store with actual expiry time
 	expiry := time.Unix(claims.ExpiresAt, 0)
 	tb.tokens[token] = expiry
@@ -698,25 +698,25 @@ func (tb *TokenBlacklist) Add(token string) {
 func (tb *TokenBlacklist) IsBlacklisted(token string) bool {
 	tb.mu.RLock()
 	defer tb.mu.RUnlock()
-	
+
 	expiry, exists := tb.tokens[token]
 	if !exists {
 		return false
 	}
-	
+
 	// Clean up expired entries
 	if time.Now().After(expiry) {
 		delete(tb.tokens, token)
 		return false
 	}
-	
+
 	return true
 }
 
 func (tb *TokenBlacklist) Cleanup() {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
-	
+
 	now := time.Now()
 	for token, expiry := range tb.tokens {
 		if now.After(expiry) {
@@ -732,7 +732,7 @@ func (tb *TokenBlacklist) Cleanup() {
 func (lat *LoginAttemptTracker) RecordFailedAttempt(email string) {
 	lat.mu.Lock()
 	defer lat.mu.Unlock()
-	
+
 	info, exists := lat.attempts[email]
 	if !exists {
 		info = &AttemptInfo{
@@ -740,10 +740,10 @@ func (lat *LoginAttemptTracker) RecordFailedAttempt(email string) {
 		}
 		lat.attempts[email] = info
 	}
-	
+
 	info.Count++
 	info.LastAt = time.Now()
-	
+
 	// Lock account if too many attempts
 	if info.Count >= MaxLoginAttempts {
 		info.LockedUntil = time.Now().Add(LockoutDuration)
@@ -759,16 +759,16 @@ func (lat *LoginAttemptTracker) ClearAttempts(email string) {
 func (lat *LoginAttemptTracker) IsLocked(email string) bool {
 	lat.mu.Lock()
 	defer lat.mu.Unlock()
-	
+
 	info, exists := lat.attempts[email]
 	if !exists {
 		return false
 	}
-	
+
 	if info.Count >= MaxLoginAttempts && time.Now().Before(info.LockedUntil) {
 		return true
 	}
-	
+
 	return false
 }
 
@@ -812,7 +812,7 @@ func isValidEmail(email string) bool {
 	if len(email) < 3 || len(email) > 255 {
 		return false
 	}
-	
+
 	atIndex := -1
 	for i, c := range email {
 		if c == '@' {
@@ -820,18 +820,18 @@ func isValidEmail(email string) bool {
 			break
 		}
 	}
-	
+
 	if atIndex <= 0 || atIndex == len(email)-1 {
 		return false
 	}
-	
+
 	return true
 }
 
 func splitToken(token string) []string {
 	var parts []string
 	var current []byte
-	
+
 	for _, c := range token {
 		if c == '.' {
 			parts = append(parts, string(current))
@@ -840,11 +840,11 @@ func splitToken(token string) []string {
 			current = append(current, byte(c))
 		}
 	}
-	
+
 	if len(current) > 0 {
 		parts = append(parts, string(current))
 	}
-	
+
 	return parts
 }
 
@@ -852,12 +852,12 @@ func secureCompare(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	
+
 	var result byte
 	for i := range a {
 		result |= a[i] ^ b[i]
 	}
-	
+
 	return result == 0
 }
 
@@ -880,7 +880,7 @@ func generateTOTPCode(secret string, t time.Time) string {
 	h.Write([]byte(secret))
 	h.Write([]byte(strconv.FormatInt(t.Unix()/30, 10)))
 	hash := h.Sum(nil)
-	
+
 	code := int(hash[0])<<24 | int(hash[1])<<16 | int(hash[2])<<8 | int(hash[3])
 	return fmt.Sprintf("%06d", code%1000000)
 }
@@ -901,15 +901,15 @@ func encryptSecret(secret, key []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return "", err
 	}
-	
+
 	nonce := make([]byte, gcm.NonceSize())
 	rand.Read(nonce)
-	
+
 	ciphertext := gcm.Seal(nonce, nonce, []byte(secret), nil)
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
@@ -919,28 +919,28 @@ func decryptSecret(encrypted, key []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
 	}
-	
+
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return "", err
 	}
-	
+
 	nonceSize := gcm.NonceSize()
 	if len(data) < nonceSize {
 		return "", errors.New("ciphertext too short")
 	}
-	
+
 	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return "", err
 	}
-	
+
 	return string(plaintext), nil
 }
 

@@ -104,7 +104,7 @@ func GenerateOTP(secret string, timestamp int64) string {
 	
 	// Generate 6-digit code
 	code := 0
-	for i, b := range hash[:4] {
+	for _, b := range hash[:4] {
 		code = code*256 + int(b)
 	}
 	code = code % 1000000

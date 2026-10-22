@@ -1,16 +1,9 @@
-#!/usr/bin/env python3
-"""
-TigerEx - High-Frequency Trading API Gateway
-Go/gRPC Implementation for Low-Latency Trading
-
-Production-Grade Features:
-- gRPC streaming for real-time data
-- HTTP/2 multiplexing
-- Protocol buffers for efficiency
-- Circuit breaker patterns
-- Rate limiting per user
-- Connection pooling
-"""
+// TigerEx - High-Frequency Trading API Gateway
+// Go/gRPC implementation for low-latency trading.
+//
+// Features: gRPC streaming for real-time data, HTTP/2 multiplexing,
+// protocol buffers for efficiency, circuit breaker patterns,
+// per-user rate limiting, and connection pooling.
 
 package main
 

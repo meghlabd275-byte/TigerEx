@@ -16,17 +16,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
-	"math/big"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -435,6 +431,9 @@ type TradingService struct {
 	// Recent trades
 	recentTrades map[string][]*Trade
 	tradesMu     sync.RWMutex
+
+	// Futures positions
+	positionsMu sync.RWMutex
 }
 
 type RedisClient interface {
@@ -442,7 +441,13 @@ type RedisClient interface {
 	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error
 	Del(ctx context.Context, keys ...string) error
 	Publish(ctx context.Context, channel string, message interface{}) error
-	Subscribe(ctx context.Context, channels ...string) (*redis.PubSub, error)
+	Subscribe(ctx context.Context, channels ...string) (PubSub, error)
+}
+
+// PubSub represents a live subscription to one or more Redis channels.
+type PubSub interface {
+	Receive(ctx context.Context) (interface{}, error)
+	Close() error
 }
 
 type Logger interface {
@@ -930,7 +935,11 @@ func (s *TradingService) GetRecentTrades(ctx context.Context, symbol string, lim
 		if len(trades) > limit {
 			start = len(trades) - limit
 		}
-		return trades[start:], nil
+		out := make([]Trade, 0, len(trades)-start)
+		for _, t := range trades[start:] {
+			out = append(out, *t)
+		}
+		return out, nil
 	}
 	s.tradesMu.RUnlock()
 	
@@ -1139,7 +1148,7 @@ func (s *TradingService) createTrade(ctx context.Context, order *Order) {
 	s.recentTrades[order.Symbol] = append(s.recentTrades[order.Symbol], trade)
 	// Keep only last 1000 trades
 	if len(s.recentTrades[order.Symbol]) > 1000 {
-		s.recentTrades[order.Symbol] = s.recentTrades[order.Symbol][-1000:]
+		s.recentTrades[order.Symbol] = s.recentTrades[order.Symbol][len(s.recentTrades[order.Symbol])-1000:]
 	}
 	s.tradesMu.Unlock()
 	
@@ -1329,7 +1338,6 @@ func (s *TradingService) getOpenOrdersFromDB(ctx context.Context, userID uint64,
 	if symbol != "" {
 		query += " AND symbol = $2"
 		args = append(args, symbol)
-		limit = limit
 	}
 	
 	if startTime > 0 {
@@ -1560,7 +1568,6 @@ func (s *TradingService) getTickerFromDB(ctx context.Context, symbol string) (*T
 	
 	if err == sql.ErrNoRows {
 		// Try from symbols table
-		var sym Symbol
 		err = s.db.QueryRow(ctx, `
 			SELECT name, last_price, price_change, price_change_pct,
 			       high_24h, low_24h, volume_24h, quote_volume_24h

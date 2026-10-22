@@ -4,7 +4,6 @@ package p2p
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/google/uuid"
 

@@ -4,7 +4,6 @@
 package notification
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"sync"

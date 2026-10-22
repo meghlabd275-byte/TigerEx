@@ -4,7 +4,6 @@ package lending
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/google/uuid"
 

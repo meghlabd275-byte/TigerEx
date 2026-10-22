@@ -12,7 +12,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"tigerex/services/pricefeed"
+	"tigerex/backend/services/pricefeed"
 )
 
 var (

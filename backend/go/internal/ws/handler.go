@@ -19,8 +19,9 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
+	HandshakeTimeout: 10 * time.Second,
+	ReadBufferSize:   1024,
+	WriteBufferSize:  1024,
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		if origin == "" {
@@ -39,17 +40,17 @@ var upgrader = websocket.Upgrader{
 const (
 	MsgSubscribe   = "subscribe"
 	MsgUnsubscribe = "unsubscribe"
-	MsgPing       = "ping"
-	MsgAuth       = "auth"
-	MsgTicker     = "ticker"
-	MsgTrade      = "trade"
-	MsgOrderBook  = "orderbook"
-	MsgKLine      = "kline"
-	MsgOrder      = "order"
-	MsgTradeExec  = "trade_exec"
-	MsgBalance    = "balance"
-	MsgPong       = "pong"
-	MsgError      = "error"
+	MsgPing        = "ping"
+	MsgAuth        = "auth"
+	MsgTicker      = "ticker"
+	MsgTrade       = "trade"
+	MsgOrderBook   = "orderbook"
+	MsgKLine       = "kline"
+	MsgOrder       = "order"
+	MsgTradeExec   = "trade_exec"
+	MsgBalance     = "balance"
+	MsgPong        = "pong"
+	MsgError       = "error"
 )
 
 type Channel struct {
@@ -59,8 +60,8 @@ type Channel struct {
 }
 
 type Client struct {
-	ID        string
-	UserID    string
+	ID       string
+	UserID   string
 	Conn     *websocket.Conn
 	Send     chan []byte
 	Channels map[string]*Channel
@@ -142,7 +143,7 @@ func HandleWebSocket(hub *Hub) http.HandlerFunc {
 			return
 		}
 		client := &Client{
-			ID:        uuid.New().String(),
+			ID:       uuid.New().String(),
 			Conn:     conn,
 			Send:     make(chan []byte, 256),
 			Channels: make(map[string]*Channel),

@@ -13,10 +13,7 @@ package auth
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -25,7 +22,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -41,18 +37,18 @@ type Config struct {
 	LockoutDuration    time.Duration `mapstructure:"lockout_duration"`
 	PasswordMinLength  int           `mapstructure:"password_min_length"`
 	OTPExpiry          time.Duration `mapstructure:"otp_expiry"`
-	OTP Length         int           `mapstructure:"otp_length"`
+	OTPLength         int           `mapstructure:"otp_length"`
 }
 
 var DefaultConfig = Config{
-	JWTsecret:           "tigerex-jwt-secret-key-change-in-production",
+	JWTsecret:           "", // injected from the environment at startup
 	AccessTokenExpiry:   24 * time.Hour,
 	RefreshTokenExpiry:  7 * 24 * time.Hour,
 	MaxLoginAttempts:   5,
 	LockoutDuration:    48 * time.Hour,
 	PasswordMinLength:  8,
 	OTPExpiry:          5 * time.Minute,
-	OTP Length:         6,
+	OTPLength:         6,
 }
 
 // ============================================================================
@@ -154,6 +150,7 @@ type LoginRequest struct {
 	Password    string `json:"password"`
 	RememberMe  bool   `json:"remember_me"`
 	DeviceID    string `json:"device_id,omitempty"`
+	DeviceFingerprint string `json:"device_fingerprint,omitempty"`
 	DeviceName  string `json:"device_name,omitempty"`
 	IPAddress   string `json:"ip_address"`
 	UserAgent   string `json:"user_agent"`
@@ -237,6 +234,8 @@ type JWTClaims struct {
 	UserID         uint64   `json:"user_id"`
 	Email          string   `json:"email,omitempty"`
 	Phone          string   `json:"phone,omitempty"`
+	IPAddress      string   `json:"ip_address,omitempty"`
+	UserAgent      string   `json:"user_agent,omitempty"`
 	Role           string   `json:"role"`
 	KYCLevel       int      `json:"kyc_level"`
 	KYCStatus      string   `json:"kyc_status"`
@@ -457,7 +456,6 @@ func detectCountryCode(phone string) string {
 		"55": "BR",   // Brazil
 		"7":  "RU",   // Russia
 		"61": "AU",   // Australia
-		"55": "BR",   // Brazil
 		"34": "ES",   // Spain
 		"39": "IT",   // Italy
 		"31": "NL",   // Netherlands
@@ -488,7 +486,6 @@ func detectCountryCode(phone string) string {
 		"593": "EC",  // Ecuador
 		"598": "UY",  // Uruguay
 		"595": "PY",  // Paraguay
-		"54": "AR",   // Argentina
 	}
 
 	// Check for longest match first
@@ -788,9 +785,19 @@ func (s *AuthService) Enable2FA(ctx context.Context, userID uint64, req *Enable2
 		return nil, fmt.Errorf("user not found: %w", err)
 	}
 
-	// Verify the code
-	if !s.otp.Verify(user.Email, "2fa_enable", req.Code) && 
-	   !s.otp.Verify(user.Phone, "2fa_enable", req.Code) {
+	// Verify the code against the user's email or phone.
+	emailOK, err := s.otp.Verify(user.Email, "2fa_enable", req.Code)
+	if err != nil {
+		return nil, fmt.Errorf("2FA verification failed: %w", err)
+	}
+	phoneOK := false
+	if user.Phone != "" {
+		phoneOK, err = s.otp.Verify(user.Phone, "2fa_enable", req.Code)
+		if err != nil {
+			return nil, fmt.Errorf("2FA verification failed: %w", err)
+		}
+	}
+	if !emailOK && !phoneOK {
 		return nil, errors.New("invalid 2FA code")
 	}
 
@@ -871,13 +878,12 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, credential strin
 		return errors.New("invalid credential")
 	}
 
-	var user *User
 	var err error
 
 	if detection.Type == CredentialTypeEmail {
-		user, err = s.db.GetUserByEmail(ctx, detection.Normalized)
+		_, err = s.db.GetUserByEmail(ctx, detection.Normalized)
 	} else {
-		user, err = s.db.GetUserByPhone(ctx, detection.Normalized)
+		_, err = s.db.GetUserByPhone(ctx, detection.Normalized)
 	}
 
 	if err != nil {
@@ -909,7 +915,10 @@ func (s *AuthService) ResetPassword(ctx context.Context, req *ResetPasswordReque
 	}
 
 	// Verify OTP
-	valid := s.otp.Verify(req.Credential, "password_reset", req.OTP)
+	valid, err := s.otp.Verify(req.Credential, "password_reset", req.OTP)
+	if err != nil {
+		return fmt.Errorf("OTP verification failed: %w", err)
+	}
 	if !valid {
 		return errors.New("invalid or expired OTP")
 	}
@@ -925,7 +934,6 @@ func (s *AuthService) ResetPassword(ctx context.Context, req *ResetPasswordReque
 
 	// Get user
 	var user *User
-	var err error
 
 	if detection.Type == CredentialTypeEmail {
 		user, err = s.db.GetUserByEmail(ctx, detection.Normalized)
@@ -971,7 +979,10 @@ func (s *AuthService) ChangeEmail(ctx context.Context, userID uint64, newEmail s
 	}
 
 	// Verify OTP for new email
-	valid := s.otp.Verify(newEmail, "email_change", otp)
+	valid, err := s.otp.Verify(newEmail, "email_change", otp)
+	if err != nil {
+		return fmt.Errorf("OTP verification failed: %w", err)
+	}
 	if !valid {
 		return errors.New("invalid OTP")
 	}
@@ -1005,7 +1016,10 @@ func (s *AuthService) ChangePhone(ctx context.Context, userID uint64, newPhone s
 	}
 
 	// Verify OTP for new phone
-	valid := s.otp.Verify(newPhone, "phone_change", otp)
+	valid, err := s.otp.Verify(newPhone, "phone_change", otp)
+	if err != nil {
+		return fmt.Errorf("OTP verification failed: %w", err)
+	}
 	if !valid {
 		return errors.New("invalid OTP")
 	}

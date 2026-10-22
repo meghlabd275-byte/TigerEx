@@ -1,4 +1,4 @@
-package main
+package legacy
 
 import (
 	"sync"
@@ -33,8 +33,8 @@ func TestRateLimiterRefillsAtRequestsPerSecond(t *testing.T) {
 
 func TestRateLimiterRejectsInvalidConfiguration(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		rate int
+		name  string
+		rate  int
 		burst int
 	}{
 		{name: "zero rate", rate: 0, burst: 1},

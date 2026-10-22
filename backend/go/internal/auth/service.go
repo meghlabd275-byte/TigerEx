@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -35,7 +34,7 @@ type Config struct {
 }
 
 // JWTConfig holds JWT configuration
-type JWTConfig {
+type JWTConfig struct {
 	Secret        []byte
 	AccessExpiry time.Duration
 	RefreshExpiry time.Duration

@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -41,10 +41,10 @@ func main() {
 		Addr:           ":" + cfg.Server.Port,
 		Handler:        router,
 		ReadTimeout:    cfg.Server.ReadTimeout,
-		WriteTimeout:  cfg.Server.WriteTimeout,
-		IdleTimeout:   cfg.Server.IdleTimeout,
+		WriteTimeout:   cfg.Server.WriteTimeout,
+		IdleTimeout:    cfg.Server.IdleTimeout,
 		MaxHeaderBytes: cfg.Server.MaxHeaderBytes,
-		TLSConfig:     getTLSConfig(cfg),
+		TLSConfig:      getTLSConfig(cfg),
 	}
 
 	// Start server in goroutine
@@ -60,7 +60,7 @@ func main() {
 		} else {
 			err = server.ListenAndServe()
 		}
-		
+
 		if err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
 		}
@@ -91,7 +91,7 @@ func main() {
 func getTLSConfig(cfg *config.Config) *tls.Config {
 	return &tls.Config{
 		MinVersion:               tls.VersionTLS12,
-		CurvePreferences:        []tls.CurveID{tls.CurveP256, tls.X25519},
+		CurvePreferences:         []tls.CurveID{tls.CurveP256, tls.X25519},
 		PreferServerCipherSuites: true,
 		CipherSuites: []uint16{
 			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
@@ -147,12 +147,4 @@ const (
 	Version = "1.0.0"
 	// BuildTime is the build timestamp
 	BuildTime = "2026-06-14"
-)
-
-// ============================================================================
-// DEPENDENCIES
-// ============================================================================
-
-import (
-	"sync"
 )

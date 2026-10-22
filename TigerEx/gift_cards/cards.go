@@ -145,7 +145,7 @@ func (p *GiftCardsPlatform) CreateCard(brand GiftCardBrand, amount float64, card
 	}
 
 	// Generate unique card
-	id := fmt.Sprintf("GC-%d-%s", time.Now().UnixNano(), userID[:min(4, len(userID)])
+	id := fmt.Sprintf("GC-%d-%s", time.Now().UnixNano(), userID[:min(4, len(userID))])
 	code := generateCardCode()
 	pin := generatePIN()
 
@@ -242,7 +242,7 @@ func (p *GiftCardsPlatform) CreateBulkOrder(userID string, brand GiftCardBrand, 
 }
 
 func (p *GiftCardsPlatform) createCardInternal(brand GiftCardBrand, amount float64, cardType GiftCardType, userID string) (*GiftCard, error) {
-	id := fmt.Sprintf("GC-%d-%s", time.Now().UnixNano(), userID[:min(4, len(userID)])
+	id := fmt.Sprintf("GC-%d-%s", time.Now().UnixNano(), userID[:min(4, len(userID))])
 	code := generateCardCode()
 	pin := generatePIN()
 

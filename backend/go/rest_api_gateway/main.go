@@ -14,14 +14,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -43,9 +40,9 @@ type OCOOrder struct {
 	Orders            []OCOOrderItem `json:"orderReports"`
 	ContingencyType   string    `json:"contingencyType"` // ONE_CANCELS_ONE
 	ListOrderType    string    `json:"listOrderType"` // OCO
-	Total            int       `json:"listClientOrderId"`
+	Total            int       `json:"listOrdersStatus"`
 	ListStatus      string    `json:"listStatus"` // EXEC_STARTED, ALL_DONE, OCO_CANCELLED
-	Pending          int       `json:"listOrdersStatus,omitempty"`
+	Pending          int       `json:"listPendingOrders,omitempty"`
 	ContractID      int64     `json:"listNoOfOrders"`
 	DisplayID       int64     `json:"listClientOrderId"`
 	DateTime        int64     `json:"datetime"`
@@ -68,9 +65,6 @@ type OCOOrderItem struct {
 	OrigQuoteQty    float64 `json:"origQuoteQty"`
 	ExecutedQuoteQty float64 `json:"executedQuoteQty"`
 	Status          string  `json:"status"`
-	TimeInForce     string  `json:"timeInForce"`
-	Type           string  `json:"type"`
-	Side           string  `json:"side"`
 }
 
 // TrailingStopOrder - Trailing Stop Order
@@ -361,7 +355,7 @@ type (
 // HELPER FUNCTIONS
 // ============================================================================
 
-func generateOrderID() int64 {
+func generateOrderIDInt() int64 {
 	return time.Now().UnixNano() / 1000000
 }
 
@@ -535,7 +529,7 @@ func newOrderHandler(w http.ResponseWriter, r *http.Request) {
 	
 	order := OrderResponse{
 		Symbol:           req.Symbol,
-		OrderId:          generateOrderID(),
+		OrderId:          generateOrderIDInt(),
 		ClientOrderId:     generateClientOrderID(),
 		TransactionTime:  currentTimestamp(),
 		Price:           req.Price,
@@ -700,7 +694,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	atomic.AddUint64(&activeConns, 1)
-	defer atomic.AddUint64(&activeConns, -1)
+	defer atomic.AddUint64(&activeConns, ^uint64(0))
 	
 	for {
 		msgType, msg, err := conn.ReadMessage()

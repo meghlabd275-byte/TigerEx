@@ -10,17 +10,9 @@ TigerEx AI/ML Systems
 # Fraud Detection - Requirements
 # =============================================================================
 
-pandas>=2.0.0
-numpy>=1.24.0
-scikit-learn>=1.3.0
-xgboost>=1.7.0
-lightgbm>=4.0.0
-tensorflow>=2.14.0
-torch>=2.1.0
-psycopg2-binary>=2.9.9
-redis>=5.0.0
-joblib>=1.3.0
-gradio>=3.40.0
+# Runtime dependencies (see requirements.txt):
+#   pandas, numpy, scikit-learn, xgboost, lightgbm,
+#   tensorflow, torch, psycopg2-binary, redis, joblib, gradio
 
 # =============================================================================
 # Fraud Detection Model

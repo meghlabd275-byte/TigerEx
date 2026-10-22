@@ -17,23 +17,18 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/params"
 	"github.com/tendermint/tendermint/crypto/ed25519"
 	"github.com/mr-tron/base58"
 )
@@ -627,7 +622,7 @@ func (s *WalletService) createBitcoinWallet(ctx context.Context, req *CreateWall
 		}
 	} else {
 		// Generate new key
-		privKey, err := btcd.NewPrivateKey(&chaincfg.MainNetParams)
+		privKey, err := btcec.NewPrivateKey()
 		if err != nil {
 			return nil, err
 		}
@@ -640,7 +635,6 @@ func (s *WalletService) createBitcoinWallet(ctx context.Context, req *CreateWall
 	addressPubKeyHash, err := btcutil.NewAddressPubKeyHash(
 		btcutil.Hash160(wif.SerializePubKey()),
 		&chaincfg.MainNetParams,
-		btcutil.PKFCompressed,
 	)
 	if err != nil {
 		return nil, err
@@ -778,10 +772,7 @@ func deriveBitcoinKeyFromSeed(seed string, userID uint64) (*btcutil.WIF, error) 
 	
 	hash := sha256.Sum256([]byte(seed + path))
 	
-	privKey, err := btcd.NewPrivateKeyFromBytes(hash[:32], &chaincfg.MainNetParams)
-	if err != nil {
-		return nil, err
-	}
+	privKey, _ := btcec.PrivKeyFromBytes(hash[:32])
 	
 	return btcutil.NewWIF(privKey, &chaincfg.MainNetParams, true)
 }
@@ -898,7 +889,7 @@ func (s *WalletService) GenerateAddress(ctx context.Context, req *GenerateAddres
 }
 
 func deriveEVMAddress(seed string, userID uint64, index uint32) (string, error) {
-	path := fmt.Sprintf("m/44'/60'/0'/0/%d", userID+index)
+	path := fmt.Sprintf("m/44'/60'/0'/0/%d", userID+uint64(index))
 	hash := sha256.Sum256([]byte(seed + path))
 	
 	privateKey, err := crypto.ToECDSA(hash[:32])
@@ -1037,7 +1028,8 @@ func (s *WalletService) HandleDeposit(ctx context.Context, tx *BlockTx) error {
 	s.notifier.SendDepositNotification(wallet.UserID, tx.Value, tx.Hash)
 
 	// Track analytics
-	s.analytics.TrackDeposit(wallet.UserID, valueFloat.Float64(), wallet.Blockchain)
+	value, _ := valueFloat.Float64()
+	s.analytics.TrackDeposit(wallet.UserID, value, wallet.Blockchain)
 
 	s.logger.Info("Deposit processed", "user_id", wallet.UserID, "amount", tx.Value, "hash", tx.Hash)
 
@@ -1083,8 +1075,7 @@ func (s *WalletService) Withdraw(ctx context.Context, req *WithdrawRequest) (*Tr
 	}
 
 	// Get gas price
-	gasPrice, err := s.blockchain.GetGasPrice(ctx, req.Blockchain)
-	if err != nil {
+	if _, err := s.blockchain.GetGasPrice(ctx, req.Blockchain); err != nil {
 		return nil, fmt.Errorf("failed to get gas price: %w", err)
 	}
 
@@ -1223,7 +1214,7 @@ func (s *WalletService) Transfer(ctx context.Context, req *TransferRequest) (*Tr
 	}
 
 	// Send notification
-	s.notifier.SendTransferNotification(req.ToUserID, req.Amount, req.UserID)
+	s.notifier.SendTransferNotification(req.ToUserID, fmt.Sprintf("%f", req.Amount), req.UserID)
 
 	// Track analytics
 	s.analytics.TrackTransfer(req.UserID, req.Amount, req.ToUserID)
@@ -1275,8 +1266,8 @@ func (s *WalletService) validateBitcoinAddress(address string) error {
 }
 
 func (s *WalletService) validateSolanaAddress(address string) error {
-	decoded := base58.Decode(address)
-	if len(decoded) != 32 {
+	decoded, err := base58.Decode(address)
+	if err != nil || len(decoded) != 32 {
 		return errors.New("invalid Solana address")
 	}
 	return nil

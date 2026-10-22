@@ -6,9 +6,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -24,21 +22,23 @@ import (
 
 type (
 	// Account types
-	AccountType string
+	AccountType   string
 	AccountStatus string
-	Permission string
+	Permission    string
+)
 
-	const (
-		AccountTypeMaster AccountType = "MASTER"
-		AccountTypeSub     AccountType = "SUB"
-		AccountTypeAPIKey  AccountType = "API_KEY"
+const (
+	AccountTypeMaster AccountType = "MASTER"
+	AccountTypeSub    AccountType = "SUB"
+	AccountTypeAPIKey AccountType = "API_KEY"
 
-		AccountStatusActive    AccountStatus = "ACTIVE"
-		AccountStatusFrozen  AccountStatus = "FROZEN"
-		AccountStatusClosed  AccountStatus = "CLOSED"
-		AccountStatusLocked AccountStatus = "LOCKED"
-	)
+	AccountStatusActive AccountStatus = "ACTIVE"
+	AccountStatusFrozen AccountStatus = "FROZEN"
+	AccountStatusClosed AccountStatus = "CLOSED"
+	AccountStatusLocked AccountStatus = "LOCKED"
+)
 
+type (
 	// Account
 	Account struct {
 		ID           string       `json:"id"`
@@ -81,13 +81,16 @@ type (
 		ProcessedAt *int64    `json:"processedAt,omitempty"`
 	}
 
+)
+
+const (
 	// Permission constants
-	PermissionView      Permission = "VIEW"
+	PermissionView     Permission = "VIEW"
 	PermissionTrade    Permission = "TRADE"
 	PermissionWithdraw Permission = "WITHDRAW"
 	PermissionTransfer Permission = "TRANSFER"
-	PermissionAPI     Permission = "API"
-	PermissionAdmin   Permission = "ADMIN"
+	PermissionAPI      Permission = "API"
+	PermissionAdmin    Permission = "ADMIN"
 )
 
 // ============================================================================
@@ -269,6 +272,10 @@ func (s *SubAccountService) Transfer(fromID, toID, asset string, amount float64)
 	to, exists := s.accounts[toID]
 	if !exists {
 		return nil, fmt.Errorf("to account not found")
+	}
+
+	if !to.TransferEnabled {
+		return nil, fmt.Errorf("transfers not enabled for destination account")
 	}
 
 	now := time.Now().UnixMilli()

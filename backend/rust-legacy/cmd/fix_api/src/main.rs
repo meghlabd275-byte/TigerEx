@@ -254,10 +254,14 @@ async fn main() {
     println!("TigerEx FIX API Server v1.0.0");
     println!("Supported: FIX 4.2, FIX 4.4, FIX 5.0 SP2");
     
+    // Credentials must come from the environment; never hard-code them.
     let credentials = FixCredentials {
-        username: "institutional_client".to_string(),
-        password: "secure_password".to_string(),
-        api_key: "api_key_123".to_string(),
+        username: std::env::var("FIX_API_USERNAME")
+            .expect("FIX_API_USERNAME must be set"),
+        password: std::env::var("FIX_API_PASSWORD")
+            .expect("FIX_API_PASSWORD must be set"),
+        api_key: std::env::var("FIX_API_KEY")
+            .expect("FIX_API_KEY must be set"),
     };
     
     let session = server.create_session("CLIENT1", "TIGEREX", credentials, FixVersion::Fix44).await;

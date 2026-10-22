@@ -1,13 +1,7 @@
 package main
 
 import (
-	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"math/big"
 	"net/http"
 	"sync"
 	"time"
@@ -35,77 +29,77 @@ func (e APIError) Error() string {
 // =============================================================================
 
 type P2PAd struct {
-	ID              string    `json:"id"`
-	OwnerID         string    `json:"owner_id"`
-	Type            string    `json:"type"` // "buy" or "sell"
-	Asset           string    `json:"asset"`
-	FiatCurrency    string    `json:"fiat_currency"`
-	PriceType       string    `json:"price_type"` // "fixed" or "float"
-	PriceMargin     float64   `json:"price_margin"` // Percentage margin for floating price
-	FixedPrice      float64   `json:"fixed_price"`
-	MinAmount       float64   `json:"min_amount"`
-	MaxAmount       float64   `json:"max_amount"`
-	PaymentMethod   string    `json:"payment_method"`
-	Terms           string    `json:"terms"`
-	Status          string    `json:"status"` // "active", "paused", "cancelled"
-	TradeCount      int       `json:"trade_count"`
-	CompletionRate   float64   `json:"completion_rate"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	OwnerID        string    `json:"owner_id"`
+	Type           string    `json:"type"` // "buy" or "sell"
+	Asset          string    `json:"asset"`
+	FiatCurrency   string    `json:"fiat_currency"`
+	PriceType      string    `json:"price_type"`   // "fixed" or "float"
+	PriceMargin    float64   `json:"price_margin"` // Percentage margin for floating price
+	FixedPrice     float64   `json:"fixed_price"`
+	MinAmount      float64   `json:"min_amount"`
+	MaxAmount      float64   `json:"max_amount"`
+	PaymentMethod  string    `json:"payment_method"`
+	Terms          string    `json:"terms"`
+	Status         string    `json:"status"` // "active", "paused", "cancelled"
+	TradeCount     int       `json:"trade_count"`
+	CompletionRate float64   `json:"completion_rate"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type P2POrder struct {
-	ID              string    `json:"id"`
-	AdID            string    `json:"ad_id"`
-	BuyerID         string    `json:"buyer_id"`
-	SellerID        string    `json:"seller_id"`
-	Asset           string    `json:"asset"`
-	FiatAmount      float64   `json:"fiat_amount"`
-	CryptoAmount    float64   `json:"crypto_amount"`
-	CryptoPrice     float64   `json:"crypto_price"`
-	Status          string    `json:"status"` // "pending", "paid", "released", "cancelled", "disputed"
-	PaymentProof    string    `json:"payment_proof"`
-	ReleaseTxHash   string    `json:"release_tx_hash"`
-	DisputeReason   string    `json:"dispute_reason"`
-	CreatedAt       time.Time `json:"created_at"`
-	PaidAt          *time.Time `json:"paid_at"`
-	ReleasedAt      *time.Time `json:"released_at"`
+	ID            string     `json:"id"`
+	AdID          string     `json:"ad_id"`
+	BuyerID       string     `json:"buyer_id"`
+	SellerID      string     `json:"seller_id"`
+	Asset         string     `json:"asset"`
+	FiatAmount    float64    `json:"fiat_amount"`
+	CryptoAmount  float64    `json:"crypto_amount"`
+	CryptoPrice   float64    `json:"crypto_price"`
+	Status        string     `json:"status"` // "pending", "paid", "released", "cancelled", "disputed"
+	PaymentProof  string     `json:"payment_proof"`
+	ReleaseTxHash string     `json:"release_tx_hash"`
+	DisputeReason string     `json:"dispute_reason"`
+	CreatedAt     time.Time  `json:"created_at"`
+	PaidAt        *time.Time `json:"paid_at"`
+	ReleasedAt    *time.Time `json:"released_at"`
 }
 
 type User struct {
-	ID              string    `json:"id"`
-	Email           string    `json:"email"`
-	Username        string    `json:"username"`
-	PasswordHash    string    `json:"-"`
-	Role            string    `json:"role"` // "user", "admin"
-	KYCLevel        int       `json:"kyc_level"`
-	TradeCount      int       `json:"trade_count"`
-	CompletionRate  float64   `json:"completion_rate"`
-	AvgReleaseTime  float64   `json:"avg_release_time"` // in minutes
-	TotalVolume     float64   `json:"total_volume"`
-	PositiveRating  int       `json:"positive_rating"`
-	NegativeRating  int       `json:"negative_rating"`
-	RegisteredAt    time.Time `json:"registered_at"`
+	ID             string    `json:"id"`
+	Email          string    `json:"email"`
+	Username       string    `json:"username"`
+	PasswordHash   string    `json:"-"`
+	Role           string    `json:"role"` // "user", "admin"
+	KYCLevel       int       `json:"kyc_level"`
+	TradeCount     int       `json:"trade_count"`
+	CompletionRate float64   `json:"completion_rate"`
+	AvgReleaseTime float64   `json:"avg_release_time"` // in minutes
+	TotalVolume    float64   `json:"total_volume"`
+	PositiveRating int       `json:"positive_rating"`
+	NegativeRating int       `json:"negative_rating"`
+	RegisteredAt   time.Time `json:"registered_at"`
 	LastActiveAt   time.Time `json:"last_active_at"`
 }
 
 type PaymentMethod struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Type        string `json:"type"` // "bank", "wallet", "cash"
-	Enabled     bool   `json:"enabled"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"` // "bank", "wallet", "cash"
+	Enabled bool   `json:"enabled"`
 }
 
 type TradeDispute struct {
-	ID          string    `json:"id"`
-	OrderID     string    `json:"order_id"`
-	OpenedBy    string    `json:"opened_by"`
-	Reason      string    `json:"reason"`
-	Description string    `json:"description"`
-	Status      string    `json:"status"` // "open", "under_review", "resolved", "closed"
-	Resolution  string    `json:"resolution"`
-	ResolvedBy  string    `json:"resolved_by"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string     `json:"id"`
+	OrderID     string     `json:"order_id"`
+	OpenedBy    string     `json:"opened_by"`
+	Reason      string     `json:"reason"`
+	Description string     `json:"description"`
+	Status      string     `json:"status"` // "open", "under_review", "resolved", "closed"
+	Resolution  string     `json:"resolution"`
+	ResolvedBy  string     `json:"resolved_by"`
+	CreatedAt   time.Time  `json:"created_at"`
 	ResolvedAt  *time.Time `json:"resolved_at"`
 }
 
@@ -125,24 +119,24 @@ type UserRating struct {
 
 type P2PService struct {
 	// In production, use database
-	ads         map[string]*P2PAd
-	orders      map[string]*P2POrder
-	users       map[string]*User
+	ads            map[string]*P2PAd
+	orders         map[string]*P2POrder
+	users          map[string]*User
 	paymentMethods map[string]*PaymentMethod
-	disputes    map[string]*TradeDispute
-	ratings     map[string]*UserRating
+	disputes       map[string]*TradeDispute
+	ratings        map[string]*UserRating
 
 	mu sync.RWMutex
 }
 
 func NewP2PService() *P2PService {
 	svc := &P2PService{
-		ads:          make(map[string]*P2PAd),
-		orders:       make(map[string]*P2POrder),
-		users:        make(map[string]*User),
+		ads:            make(map[string]*P2PAd),
+		orders:         make(map[string]*P2POrder),
+		users:          make(map[string]*User),
 		paymentMethods: make(map[string]*PaymentMethod),
-		disputes:     make(map[string]*TradeDispute),
-		ratings:      make(map[string]*UserRating),
+		disputes:       make(map[string]*TradeDispute),
+		ratings:        make(map[string]*UserRating),
 	}
 
 	// Initialize payment methods
@@ -193,20 +187,20 @@ func (s *P2PService) CreateUser(email, username, password string) (*User, error)
 	}
 
 	user := &User{
-		ID:              uuid.New().String(),
-		Email:           email,
-		Username:        username,
-		PasswordHash:    string(hash),
+		ID:             uuid.New().String(),
+		Email:          email,
+		Username:       username,
+		PasswordHash:   string(hash),
 		Role:           "user",
-		KYCLevel:        0,
-		TradeCount:      0,
-		CompletionRate:  0,
-		AvgReleaseTime:  0,
-		TotalVolume:     0,
-		PositiveRating:  0,
-		NegativeRating:  0,
+		KYCLevel:       0,
+		TradeCount:     0,
+		CompletionRate: 0,
+		AvgReleaseTime: 0,
+		TotalVolume:    0,
+		PositiveRating: 0,
+		NegativeRating: 0,
 		RegisteredAt:   time.Now(),
-		LastActiveAt:    time.Now(),
+		LastActiveAt:   time.Now(),
 	}
 
 	s.users[user.ID] = user
@@ -741,8 +735,8 @@ func (s *P2PService) ReleaseOrderHandler(c *gin.Context) {
 	orderID := c.Param("id")
 
 	var req struct {
-		UserID      string `json:"user_id" binding:"required"`
-		TxHash      string `json:"tx_hash" binding:"required"`
+		UserID string `json:"user_id" binding:"required"`
+		TxHash string `json:"tx_hash" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {

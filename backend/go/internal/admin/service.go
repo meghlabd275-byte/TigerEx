@@ -10,11 +10,11 @@ import (
 )
 
 var (
-	ErrUnauthorized        = errors.New("unauthorized operation")
-	ErrNotFound            = errors.New("resource not found")
-	ErrAlreadyExists       = errors.New("resource already exists")
-	ErrInvalidParameter    = errors.New("invalid parameter")
-	ErrInsufficientFunds   = errors.New("insufficient funds")
+	ErrUnauthorized      = errors.New("unauthorized operation")
+	ErrNotFound          = errors.New("resource not found")
+	ErrAlreadyExists     = errors.New("resource already exists")
+	ErrInvalidParameter  = errors.New("invalid parameter")
+	ErrInsufficientFunds = errors.New("insufficient funds")
 	// ErrAdminPersistenceUnavailable prevents admin operations from reporting success
 	// while this service has no durable database, audit log, or transaction signer.
 	ErrAdminPersistenceUnavailable = errors.New("admin persistence and transaction signer are not configured")
@@ -24,35 +24,35 @@ var (
 type AdminRole string
 
 const (
-	RoleSuperAdmin    AdminRole = "super_admin"
-	RoleAdmin         AdminRole = "admin"
-	RoleModerator     AdminRole = "moderator"
-	RoleSupport       AdminRole = "support"
+	RoleSuperAdmin AdminRole = "super_admin"
+	RoleAdmin      AdminRole = "admin"
+	RoleModerator  AdminRole = "moderator"
+	RoleSupport    AdminRole = "support"
 )
 
 // Fee types
 type FeeType string
 
 const (
-	FeeTypeWithdraw    FeeType = "withdraw"
-	FeeTypeSwap        FeeType = "swap"
-	FeeTypeTransfer    FeeType = "transfer"
-	FeeTypeTrade       FeeType = "trade"
-	FeeTypeNetwork     FeeType = "network"
+	FeeTypeWithdraw FeeType = "withdraw"
+	FeeTypeSwap     FeeType = "swap"
+	FeeTypeTransfer FeeType = "transfer"
+	FeeTypeTrade    FeeType = "trade"
+	FeeTypeNetwork  FeeType = "network"
 )
 
 // MasterWallet represents the admin master wallet
 type MasterWallet struct {
-	ID              uuid.UUID
-	Name            string
-	EncryptedSeed   string
-	SeedHash        string
-	Address         string
-	Blockchain      string
-	Balance         *big.Int
-	IsActive        bool
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID            uuid.UUID
+	Name          string
+	EncryptedSeed string
+	SeedHash      string
+	Address       string
+	Blockchain    string
+	Balance       *big.Int
+	IsActive      bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // AdminUser represents an admin user
@@ -70,70 +70,70 @@ type AdminUser struct {
 
 // BlockchainConfig represents a blockchain configuration
 type BlockchainConfig struct {
-	ID               uuid.UUID
-	Name             string
-	Symbol           string
-	ChainID          int64
-	ChainType        string
-	RPCURL           string
-	ExplorerURL      string
-	IsActive         bool
-	MinWithdraw      *big.Int
-	WithdrawFee      *big.Int
+	ID                   uuid.UUID
+	Name                 string
+	Symbol               string
+	ChainID              int64
+	ChainType            string
+	RPCURL               string
+	ExplorerURL          string
+	IsActive             bool
+	MinWithdraw          *big.Int
+	WithdrawFee          *big.Int
 	DepositConfirmations int
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 // TokenConfig represents a token configuration
 type TokenConfig struct {
-	ID               uuid.UUID
-	BlockchainID     uuid.UUID
-	Name             string
-	Symbol           string
-	ContractAddress  string
-	Decimals         int
-	IsActive         bool
-	MinDeposit       *big.Int
-	MinWithdraw      *big.Int
-	WithdrawFee      *big.Int
-	CreatedAt        time.Time
+	ID              uuid.UUID
+	BlockchainID    uuid.UUID
+	Name            string
+	Symbol          string
+	ContractAddress string
+	Decimals        int
+	IsActive        bool
+	MinDeposit      *big.Int
+	MinWithdraw     *big.Int
+	WithdrawFee     *big.Int
+	CreatedAt       time.Time
 }
 
 // FeeConfig represents fee configuration
 type FeeConfig struct {
-	ID           uuid.UUID
-	FeeType      FeeType
-	TokenID      *uuid.UUID
-	Network      string
-	FeeAmount    *big.Int
-	FeePercent   *big.Float
-	IsActive     bool
-	UpdatedAt    time.Time
+	ID         uuid.UUID
+	FeeType    FeeType
+	TokenID    *uuid.UUID
+	Network    string
+	FeeAmount  *big.Int
+	FeePercent *big.Float
+	IsActive   bool
+	UpdatedAt  time.Time
 }
 
 // LaunchpadProject represents a launchpad project
 type LaunchpadProject struct {
-	ID               uuid.UUID
-	Name             string
-	TokenName        string
-	TokenSymbol      string
-	TokenAddress     string
-	BlockchainID     uuid.UUID
-	TotalSupply      *big.Int
-	SaleAllocation   *big.Int
-	PricePerToken    *big.Int
-	AcceptedTokenID  *uuid.UUID
-	MinPurchase      *big.Int
+	ID              uuid.UUID
+	Name            string
+	TokenName       string
+	TokenSymbol     string
+	TokenAddress    string
+	BlockchainID    uuid.UUID
+	TotalSupply     *big.Int
+	SaleAllocation  *big.Int
+	PricePerToken   *big.Int
+	AcceptedTokenID *uuid.UUID
+	MinPurchase     *big.Int
 	MaxPurchase     *big.Int
-	StartTime        time.Time
-	EndTime          time.Time
-	Status           string
-	Description      string
-	WebsiteURL       string
-	LogoURL          string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	StartTime       time.Time
+	EndTime         time.Time
+	Status          string
+	Description     string
+	WebsiteURL      string
+	LogoURL         string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // AdminService handles admin operations

@@ -8,14 +8,9 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
-	"math/big"
 	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -126,7 +121,7 @@ type (
 		Result         string   `json:"result"` // clear, review, blocked
 		RiskScore      int      `json:"riskScore"`
 		PEPStatus      bool     `json:"pepStatus"` // Politically Exposed Person
-		SactionStatus  bool     `json:"sanctionStatus"`
+		SanctionStatus bool     `json:"sanctionStatus"`
 		AdverseMedia   bool     `json:"adverseMedia"`
 		Countries      []string `json:"countries"`
 		Watchlists     []string `json:"watchlists"`

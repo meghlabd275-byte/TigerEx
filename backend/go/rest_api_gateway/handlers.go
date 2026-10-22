@@ -73,9 +73,6 @@ func createOcoHandler(w http.ResponseWriter, r *http.Request) {
 				OrigQty:     req.Quantity,
 				ExecutedQty: 0,
 				Status:      "NEW",
-				TimeInForce: req.TimeInForce,
-				Type:       req.LimitOrderType,
-				Side:       req.Side,
 			},
 			{
 				Symbol:        req.Symbol,
@@ -89,9 +86,6 @@ func createOcoHandler(w http.ResponseWriter, r *http.Request) {
 				OrigQty:     req.Quantity,
 				ExecutedQty: 0,
 				Status:      "NEW",
-				TimeInForce: req.TimeInForce,
-				Type:       req.StopOrderType,
-				Side:       req.Side,
 			},
 		},
 	}

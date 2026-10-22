@@ -228,7 +228,7 @@ func (akm *APIKeyManager) RevokeAPIKey(apiKeyID, userID string) error {
 	akm.mu.Lock()
 	defer akm.mu.Unlock()
 
-	for keyStr, key := range akm.apiKeys {
+	for _, key := range akm.apiKeys {
 		if key.ID == apiKeyID && key.UserID == userID {
 			key.Status = StatusRevoked
 			key.UpdatedAt = time.Now()
@@ -243,7 +243,7 @@ func (akm *APIKeyManager) SuspendAPIKey(apiKeyID, userID string) error {
 	akm.mu.Lock()
 	defer akm.mu.Unlock()
 
-	for keyStr, key := range akm.apiKeys {
+	for _, key := range akm.apiKeys {
 		if key.ID == apiKeyID && key.UserID == userID {
 			key.Status = StatusSuspended
 			key.UpdatedAt = time.Now()
@@ -258,7 +258,7 @@ func (akm *APIKeyManager) UpdateAPIKey(apiKeyID, userID string, updates map[stri
 	akm.mu.Lock()
 	defer akm.mu.Unlock()
 
-	for keyStr, key := range akm.apiKeys {
+	for _, key := range akm.apiKeys {
 		if key.ID == apiKeyID && key.UserID == userID {
 			if name, ok := updates["name"].(string); ok {
 				key.Name = name
@@ -328,7 +328,7 @@ func (akm *APIKeyManager) LogAccess(log APIAccessLog) {
 
 	// Keep only last 10000 logs
 	if len(akm.accessLogs) > 10000 {
-		akm.accessLogs = akm.accessLogs[-10000:]
+		akm.accessLogs = akm.accessLogs[len(akm.accessLogs)-10000:]
 	}
 }
 

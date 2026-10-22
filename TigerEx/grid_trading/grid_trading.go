@@ -20,7 +20,7 @@ import (
 type GridType string
 
 const (
-	GridType arithmetic GridType = "arithmetic" // Equal price intervals
+	GridTypeArithmetic GridType = "arithmetic" // Equal price intervals
 	GridTypeGeometric           GridType = "geometric"  // Equal percentage intervals
 	GridTypeDynamic             GridType = "dynamic"    // Auto-adjusting intervals
 )

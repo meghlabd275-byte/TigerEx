@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
-	"tigerex/internal/config"
+	"tigerex/backend/internal/config"
 )
 
 type Database struct {
@@ -79,7 +80,7 @@ func (db *Database) Close() {
 }
 
 // Transaction executes a function within a database transaction
-func (db *Database) Transaction(ctx context.Context, fn func(tx pgxpool.Tx) error) error {
+func (db *Database) Transaction(ctx context.Context, fn func(tx pgx.Tx) error) error {
 	tx, err := db.Pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)

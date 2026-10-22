@@ -1,4 +1,4 @@
-package main
+package legacy
 
 import (
 	"context"
@@ -21,45 +21,45 @@ import (
 
 type KYCService struct {
 	db interface{} // Database connection
-	
+
 	// Providers
 	providers map[string]KYCProvider
-	
+
 	// Config
 	config KYCConfig
-	
+
 	// Callbacks
 	onVerificationComplete func(*VerificationResult)
-	onRiskUpdate func(string, float64)
-	
+	onRiskUpdate           func(string, float64)
+
 	ctx context.Context
 }
 
 type KYCConfig struct {
 	// Verification levels
-	EnableBasicVerification bool
+	EnableBasicVerification        bool
 	EnableIntermediateVerification bool
-	EnableAdvancedVerification bool
-	
+	EnableAdvancedVerification     bool
+
 	// Providers
-	JumioEnabled bool
-	JumioAPIKey string
+	JumioEnabled   bool
+	JumioAPIKey    string
 	JumioAPISecret string
-	
+
 	OnfidoEnabled bool
-	OnfidoAPIKey string
-	
+	OnfidoAPIKey  string
+
 	SumsubEnabled bool
-	SumsubAPIKey string
-	
+	SumsubAPIKey  string
+
 	// Thresholds
-	MaxDailyDepositBasic int64
+	MaxDailyDepositBasic        int64
 	MaxDailyDepositIntermediate int64
-	MaxDailyDepositAdvanced int64
-	MaxDailyDepositUnlimited int64
-	
+	MaxDailyDepositAdvanced     int64
+	MaxDailyDepositUnlimited    int64
+
 	// Auto-approval
-	AutoApproveBasic bool
+	AutoApproveBasic     bool
 	AutoApproveThreshold float64
 }
 
@@ -71,93 +71,93 @@ type KYCProvider interface {
 }
 
 type VerificationRequest struct {
-	UserID string
-	ApplicantID string
-	DocumentType string
+	UserID         string
+	ApplicantID    string
+	DocumentType   string
 	DocumentNumber string
-	FirstName string
-	LastName string
-	DateOfBirth string
-	Country string
-	CallbackURL string
+	FirstName      string
+	LastName       string
+	DateOfBirth    string
+	Country        string
+	CallbackURL    string
 }
 
 type VerificationResponse struct {
 	VerificationID string
-	ApplicantID string
-	RedirectURL string
-	Expiry time.Time
+	ApplicantID    string
+	RedirectURL    string
+	Expiry         time.Time
 }
 
 type VerificationStatus struct {
-	ID string
-	Status string // "pending", "completed", "failed", "expired"
-	Result VerificationResult
-	Checks []CheckResult
-	Documents []DocumentResult
+	ID          string
+	Status      string // "pending", "completed", "failed", "expired"
+	Result      VerificationResult
+	Checks      []CheckResult
+	Documents   []DocumentResult
 	DateOfBirth string
-	Gender string
+	Gender      string
 	Nationality string
-	Address AddressResult
-	
+	Address     AddressResult
+
 	// Provider specific
-	Similarity string
-	ValidityDate string
+	Similarity      string
+	ValidityDate    string
 	DetectedCountry string
-	
-	CreatedAt time.Time
+
+	CreatedAt   time.Time
 	CompletedAt *time.Time
 }
 
 type VerificationResult struct {
 	OverallResult string // "pass", "fail", "review"
-	Score float64
-	Reasons []string
-	
+	Score         float64
+	Reasons       []string
+
 	// Individual checks
-	IDValidity IDValidityResult
-	LivenessResult LivenessCheckResult
-	AddressResult AddressCheckResult
-	SanctionsResult SanctionsCheckResult
-	PEPResult PEPResult
+	IDValidity         IDValidityResult
+	LivenessResult     LivenessCheckResult
+	AddressResult      AddressCheckResult
+	SanctionsResult    SanctionsCheckResult
+	PEPResult          PEPResult
 	AdverseMediaResult AdverseMediaResult
 }
 
 type CheckResult struct {
-	Type string
-	Result string
+	Type    string
+	Result  string
 	Details map[string]interface{}
 }
 
 type DocumentResult struct {
-	Type string
+	Type    string
 	Country string
-	Number string
-	Expiry string
-	Valid bool
+	Number  string
+	Expiry  string
+	Valid   bool
 }
 
 type AddressResult struct {
 	FullAddress string
-	City string
-	State string
-	PostCode string
-	Country string
+	City        string
+	State       string
+	PostCode    string
+	Country     string
 }
 
 type IDValidityResult struct {
-	Valid bool
+	Valid   bool
 	Details string
 }
 
 type LivenessCheckResult struct {
-	Result string
-	Score float64
+	Result       string
+	Score        float64
 	LivenessType string
 }
 
 type AddressCheckResult struct {
-	Result string
+	Result  string
 	Matched bool
 	Details string
 }
@@ -168,27 +168,27 @@ type SanctionsCheckResult struct {
 }
 
 type PEPResult struct {
-	IsPEP bool
-	PEPType string
+	IsPEP          bool
+	PEPType        string
 	SanctionsMatch bool
-	Score float64
+	Score          float64
 }
 
 type AdverseMediaResult struct {
 	HasAdverseMedia bool
-	Screens []string
+	Screens         []string
 }
 
 type LivenessRequest struct {
-	UserID string
+	UserID       string
 	SessionToken string
-	CallbackURL string
+	CallbackURL  string
 }
 
 type LivenessResponse struct {
 	SessionToken string
-	RedirectURL string
-	ExpiresAt time.Time
+	RedirectURL  string
+	ExpiresAt    time.Time
 }
 
 // =============================================================================
@@ -196,30 +196,30 @@ type LivenessResponse struct {
 // =============================================================================
 
 type UserVerification struct {
-	UserID uuid.UUID
-	Level KYCLevel
-	Status VerificationStatusType
+	UserID    uuid.UUID
+	Level     KYCLevel
+	Status    VerificationStatusType
 	Documents []UserDocument
-	
+
 	// Limits
-	DailyDepositLimit int64
-	MonthlyDepositLimit int64
-	DailyWithdrawalLimit int64
+	DailyDepositLimit      int64
+	MonthlyDepositLimit    int64
+	DailyWithdrawalLimit   int64
 	MonthlyWithdrawalLimit int64
-	
+
 	// Verification dates
 	SubmittedAt *time.Time
-	ApprovedAt *time.Time
-	RejectedAt *time.Time
-	ExpiresAt *time.Time
-	
+	ApprovedAt  *time.Time
+	RejectedAt  *time.Time
+	ExpiresAt   *time.Time
+
 	// Risk
 	RiskScore float64
 	RiskLevel string
-	
+
 	// Metadata
 	Metadata map[string]interface{}
-	
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -227,61 +227,61 @@ type UserVerification struct {
 type KYCLevel string
 
 const (
-	KYCNil KYCLevel = "none"
-	KYCBasic KYCLevel = "basic"      // Email/phone verified
-	KYCIntermediate KYCLevel = "intermediate" // ID verified
-	KYCAdvanced KYCLevel = "advanced"    // ID + Address + Liveness
+	KYCNil           KYCLevel = "none"
+	KYCBasic         KYCLevel = "basic"         // Email/phone verified
+	KYCIntermediate  KYCLevel = "intermediate"  // ID verified
+	KYCAdvanced      KYCLevel = "advanced"      // ID + Address + Liveness
 	KYCInstitutional KYCLevel = "institutional" // Full KYB
 )
 
 type VerificationStatusType string
 
 const (
-	VerificationPending VerificationStatusType = "pending"
-	VerificationInReview VerificationStatusType = "in_review"
-	VerificationApproved VerificationStatusType = "approved"
-	VerificationRejected VerificationStatusType = "rejected"
-	VerificationExpired VerificationStatusType = "expired"
+	VerificationPending    VerificationStatusType = "pending"
+	VerificationInReview   VerificationStatusType = "in_review"
+	VerificationApproved   VerificationStatusType = "approved"
+	VerificationRejected   VerificationStatusType = "rejected"
+	VerificationExpired    VerificationStatusType = "expired"
 	VerificationRestricted VerificationStatusType = "restricted"
 )
 
 type UserDocument struct {
-	DocumentID uuid.UUID
-	DocumentType DocumentType
-	Status DocumentStatus
+	DocumentID     uuid.UUID
+	DocumentType   DocumentType
+	Status         DocumentStatus
 	DocumentNumber string
-	IssuedCountry string
-	ExpiryDate *time.Time
-	
+	IssuedCountry  string
+	ExpiryDate     *time.Time
+
 	// File URLs
-	FrontImageURL string
-	BackImageURL string
+	FrontImageURL  string
+	BackImageURL   string
 	SelfieImageURL string
-	
+
 	// Verification
-	VerifiedAt *time.Time
-	VerifiedBy uuid.UUID
+	VerifiedAt      *time.Time
+	VerifiedBy      uuid.UUID
 	RejectionReason string
-	
+
 	CreatedAt time.Time
 }
 
 type DocumentType string
 
 const (
-	DocumentPassport DocumentType = "passport"
-	DocumentIDCard DocumentType = "id_card"
-	DocumentDriverLicense DocumentType = "driver_license"
+	DocumentPassport        DocumentType = "passport"
+	DocumentIDCard          DocumentType = "id_card"
+	DocumentDriverLicense   DocumentType = "driver_license"
 	DocumentResidencePermit DocumentType = "residence_permit"
 )
 
 type DocumentStatus string
 
 const (
-	DocumentPending DocumentStatus = "pending"
+	DocumentPending  DocumentStatus = "pending"
 	DocumentVerified DocumentStatus = "verified"
 	DocumentRejected DocumentStatus = "rejected"
-	DocumentExpired DocumentStatus = "expired"
+	DocumentExpired  DocumentStatus = "expired"
 )
 
 // =============================================================================
@@ -291,36 +291,36 @@ const (
 type AMLService struct {
 	// Blocklist providers
 	blocklists map[string]BlocklistProvider
-	
+
 	// Internal lists
 	sanctionsList map[string]*SanctionedEntity
-	pepList map[string]*PEPEntity
-	
+	pepList       map[string]*PEPEntity
+
 	// Cache
 	cache *AMLCache
-	
+
 	config AMLConfig
 }
 
 type AMLConfig struct {
-	EnableSanctionsScreening bool
-	EnablePEPScreening bool
+	EnableSanctionsScreening    bool
+	EnablePEPScreening          bool
 	EnableAdverseMediaScreening bool
-	EnableContinuousMonitoring bool
-	
+	EnableContinuousMonitoring  bool
+
 	// Thresholds
-	HighRiskThreshold float64
+	HighRiskThreshold   float64
 	MediumRiskThreshold float64
-	
+
 	// Blocklists to check
 	CheckOFAC bool
-	CheckEU bool
-	CheckUN bool
-	CheckUK bool
+	CheckEU   bool
+	CheckUN   bool
+	CheckUK   bool
 	CheckFATF bool
-	
+
 	// Auto-actions
-	AutoBlockHighRisk bool
+	AutoBlockHighRisk  bool
 	AutoFlagMediumRisk bool
 }
 
@@ -330,80 +330,80 @@ type BlocklistProvider interface {
 }
 
 type BlocklistQuery struct {
-	Name string
+	Name       string
 	EntityType string
-	Country string
-	Aliases []string
-	Addresses []string
+	Country    string
+	Aliases    []string
+	Addresses  []string
 }
 
 type BlocklistResult struct {
-	Matches []BlocklistMatch
-	Source string
+	Matches   []BlocklistMatch
+	Source    string
 	Timestamp time.Time
 }
 
 type BlocklistMatch struct {
-	Name string
-	Alias string
+	Name       string
+	Alias      string
 	EntityType string
-	ListType string
-	Country string
-	Programs []string
-	Score float64
-	Source string
+	ListType   string
+	Country    string
+	Programs   []string
+	Score      float64
+	Source     string
 }
 
 type SanctionedEntity struct {
-	EntityID string
-	Name string
-	Aliases []string
-	EntityType string
-	Countries []string
-	Programs []string
-	ListedDate time.Time
+	EntityID     string
+	Name         string
+	Aliases      []string
+	EntityType   string
+	Countries    []string
+	Programs     []string
+	ListedDate   time.Time
 	DelistedDate *time.Time
-	
+
 	// Identifiers
 	Addresses []string
-	Emails []string
-	Phones []string
+	Emails    []string
+	Phones    []string
 	Passports []string
-	
-	SDNType string
+
+	SDNType           string
 	EntityDescription string
 }
 
 type PEPEntity struct {
-	EntityID string
-	Name string
-	Aliases []string
-	PEPType PEPType
+	EntityID     string
+	Name         string
+	Aliases      []string
+	PEPType      PEPType
 	Jurisdiction string
-	
+
 	// Position
-	Position string
+	Position     string
 	Organization string
-	StartDate time.Time
-	EndDate *time.Time
-	StillActive bool
-	
+	StartDate    time.Time
+	EndDate      *time.Time
+	StillActive  bool
+
 	// Related
-	IsSanctioned bool
+	IsSanctioned   bool
 	IsAdverseMedia bool
-	
+
 	RiskScore float64
 }
 
 type PEPType string
 
 const (
-	PEPDirector PEPType = "director"
-	PEPManager PEPType = "manager"
+	PEPDirector   PEPType = "director"
+	PEPManager    PEPType = "manager"
 	PEPGovernment PEPType = "government"
-	PEPJudge PEPType = "judge"
-	PEPMilitary PEPType = "military"
-	PEPPEP PEPType = "pep" // Politically Exposed Person
+	PEPJudge      PEPType = "judge"
+	PEPMilitary   PEPType = "military"
+	PEPPEP        PEPType = "pep" // Politically Exposed Person
 )
 
 // =============================================================================
@@ -412,57 +412,57 @@ const (
 
 type TravelRuleService struct {
 	db interface{}
-	
+
 	// VASPs (Virtual Asset Service Providers)
 	vasps map[string]*VASP
-	
+
 	// Configuration
 	config TravelRuleConfig
-	
+
 	// Providers
 	travelRuleProviders map[string]TravelRuleProvider
 }
 
 type TravelRuleConfig struct {
-	MinimumThreshold float64 // Threshold for Travel Rule compliance (e.g., $1000)
+	MinimumThreshold     float64 // Threshold for Travel Rule compliance (e.g., $1000)
 	EnableAutoCompliance bool
-	ComplianceLevel string // "full", "enhanced", "basic"
-	
+	ComplianceLevel      string // "full", "enhanced", "basic"
+
 	// Supported chains
 	SupportedChains []string
-	
+
 	// VASPs
 	RegisteredVASPs []string
 }
 
 type VASP struct {
-	VASPID string
-	LegalName string
+	VASPID      string
+	LegalName   string
 	TradingName string
-	Website string
-	Country string
-	
+	Website     string
+	Country     string
+
 	// Travel Rule
 	IsTravelRuleCompliant bool
-	TravelRuleEndpoint string
-	SigningKey string
-	
+	TravelRuleEndpoint    string
+	SigningKey            string
+
 	// Certification
-	IsCertified bool
+	IsCertified    bool
 	Certifications []string
 	VASPCertNumber string
-	
+
 	// Compliance
 	KYCPolicy string
 	AMLPolicy string
-	
+
 	ContactInfo VASPContact
 }
 
 type VASPContact struct {
-	Name string
-	Email string
-	Phone string
+	Name    string
+	Email   string
+	Phone   string
 	Address string
 }
 
@@ -474,44 +474,44 @@ type TravelRuleProvider interface {
 }
 
 type VASPVerification struct {
-	IsValid bool
+	IsValid     bool
 	VASPDetails *VASP
-	Error string
+	Error       string
 }
 
 type TravelRuleInfo struct {
-	Originator OriginatorInfo
+	Originator  OriginatorInfo
 	Beneficiary BeneficiaryInfo
 	Transaction TransactionInfo
-	
+
 	// Compliance
-	IsCompliant bool
+	IsCompliant      bool
 	ComplianceChecks []ComplianceCheck
-	
+
 	// Protocol
-	Protocol string
+	Protocol        string
 	ProtocolVersion string
 }
 
 type OriginatorInfo struct {
 	OriginatorType string // "natural_person" or "legal_entity"
-	
+
 	// Natural person
-	FirstName string
-	LastName string
-	DateOfBirth string
+	FirstName    string
+	LastName     string
+	DateOfBirth  string
 	PlaceOfBirth string
-	
+
 	// Legal entity
 	EntityName string
 	EntityType string
-	
+
 	// Common
 	AccountNumber string
-	Address TravelRuleAddress
-	Country string
-	CustomerID string
-	
+	Address       TravelRuleAddress
+	Country       string
+	CustomerID    string
+
 	// KYC reference
 	KYCReference string
 }
@@ -519,55 +519,55 @@ type OriginatorInfo struct {
 type BeneficiaryInfo struct {
 	BeneficiaryType string
 	BeneficiaryVASP VASPInfo
-	
+
 	// Natural person
 	FirstName string
-	LastName string
-	
+	LastName  string
+
 	// Legal entity
 	EntityName string
-	
+
 	// Common
 	AccountNumber string
-	Address TravelRuleAddress
-	Country string
-	
+	Address       TravelRuleAddress
+	Country       string
+
 	// Wallet
-	WalletAddress string
+	WalletAddress    string
 	WalletBlockchain string
 }
 
 type VASPInfo struct {
-	VASPID string
+	VASPID    string
 	LegalName string
-	Country string
-	Endpoint string
+	Country   string
+	Endpoint  string
 }
 
 type TravelRuleAddress struct {
-	StreetAddress string
+	StreetAddress  string
 	StreetAddress2 string
-	City string
-	PostCode string
-	Country string
+	City           string
+	PostCode       string
+	Country        string
 }
 
 type TransactionInfo struct {
-	TxHash string
+	TxHash     string
 	Blockchain string
-	Network string
-	Amount float64
-	Currency string
-	Timestamp time.Time
-	
-	Senders []string
+	Network    string
+	Amount     float64
+	Currency   string
+	Timestamp  time.Time
+
+	Senders   []string
 	Receivers []string
 }
 
 type ComplianceCheck struct {
 	CheckType string
-	Passed bool
-	Details string
+	Passed    bool
+	Details   string
 }
 
 // =============================================================================
@@ -576,47 +576,47 @@ type ComplianceCheck struct {
 
 type ComplianceMonitor struct {
 	db interface{}
-	
+
 	// Rules
 	rules []ComplianceRule
-	
+
 	// Alerts
 	alerts map[string]*ComplianceAlert
-	
+
 	config ComplianceConfig
 }
 
 type ComplianceConfig struct {
 	EnableRealTimeMonitoring bool
-	EnablePeriodicReview bool
-	ReviewInterval time.Duration
-	
+	EnablePeriodicReview     bool
+	ReviewInterval           time.Duration
+
 	// Thresholds
 	LargeTransactionThreshold float64
-	StructuringThreshold float64
-	VelocityThreshold int // Transactions per hour
-	
+	StructuringThreshold      float64
+	VelocityThreshold         int // Transactions per hour
+
 	// Auto-actions
 	AutoFreezeSuspected bool
 	AutoReportThreshold float64
 }
 
 type ComplianceRule struct {
-	RuleID string
-	Name string
+	RuleID      string
+	Name        string
 	Description string
-	Type RuleType
-	
+	Type        RuleType
+
 	// Conditions
 	Conditions []RuleCondition
-	
+
 	// Actions
 	Actions []RuleAction
-	
+
 	// Status
 	IsActive bool
 	Priority int
-	
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -624,17 +624,17 @@ type ComplianceRule struct {
 type RuleType string
 
 const (
-	RuleTransaction RuleType = "transaction"
-	RuleBehavioral RuleType = "behavioral"
-	RulePattern RuleType = "pattern"
+	RuleTransaction  RuleType = "transaction"
+	RuleBehavioral   RuleType = "behavioral"
+	RulePattern      RuleType = "pattern"
 	RuleGeographical RuleType = "geographical"
-	RuleVelocity RuleType = "velocity"
+	RuleVelocity     RuleType = "velocity"
 )
 
 type RuleCondition struct {
-	Field string
+	Field    string
 	Operator string // "eq", "gt", "lt", "in", "contains"
-	Value interface{}
+	Value    interface{}
 }
 
 type RuleAction struct {
@@ -645,38 +645,38 @@ type RuleAction struct {
 type ActionType string
 
 const (
-	ActionAlert ActionType = "alert"
-	ActionBlock ActionType = "block"
+	ActionAlert  ActionType = "alert"
+	ActionBlock  ActionType = "block"
 	ActionFreeze ActionType = "freeze"
 	ActionReview ActionType = "require_review"
 	ActionReport ActionType = "report"
-	ActionLimit ActionType = "limit"
+	ActionLimit  ActionType = "limit"
 )
 
 type ComplianceAlert struct {
 	AlertID uuid.UUID
-	UserID uuid.UUID
-	
-	RuleID string
+	UserID  uuid.UUID
+
+	RuleID   string
 	RuleName string
-	Type AlertType
-	
+	Type     AlertType
+
 	Severity Severity
-	
+
 	// Details
-	TransactionID string
-	TransactionAmount float64
+	TransactionID       string
+	TransactionAmount   float64
 	TransactionCurrency string
-	
+
 	Description string
-	Details map[string]interface{}
-	
-	Status AlertStatus
+	Details     map[string]interface{}
+
+	Status     AlertStatus
 	AssignedTo *uuid.UUID
 	AssignedAt *time.Time
-	
+
 	Resolution *AlertResolution
-	
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -685,40 +685,40 @@ type AlertType string
 
 const (
 	AlertLargeTransaction AlertType = "large_transaction"
-	AlertStructuring AlertType = "structuring"
-	AlertHighRisk AlertType = "high_risk"
-	AlertVelocity AlertType = "velocity"
-	AlertSanctioned AlertType = "sanctioned"
-	AlertPEP AlertType = "pep"
-	AlertGeographical AlertType = "geographical"
-	AlertPattern AlertType = "pattern"
+	AlertStructuring      AlertType = "structuring"
+	AlertHighRisk         AlertType = "high_risk"
+	AlertVelocity         AlertType = "velocity"
+	AlertSanctioned       AlertType = "sanctioned"
+	AlertPEP              AlertType = "pep"
+	AlertGeographical     AlertType = "geographical"
+	AlertPattern          AlertType = "pattern"
 )
 
 type Severity string
 
 const (
-	SeverityLow Severity = "low"
-	SeverityMedium Severity = "medium"
-	SeverityHigh Severity = "high"
+	SeverityLow      Severity = "low"
+	SeverityMedium   Severity = "medium"
+	SeverityHigh     Severity = "high"
 	SeverityCritical Severity = "critical"
 )
 
 type AlertStatus string
 
 const (
-	AlertNew AlertStatus = "new"
-	AlertAssigned AlertStatus = "assigned"
-	AlertInReview AlertStatus = "in_review"
+	AlertNew             AlertStatus = "new"
+	AlertAssigned        AlertStatus = "assigned"
+	AlertInReview        AlertStatus = "in_review"
 	AlertPendingEvidence AlertStatus = "pending_evidence"
-	AlertResolved AlertStatus = "resolved"
-	AlertDismissed AlertStatus = "dismissed"
-	AlertEscalated AlertStatus = "escalated"
+	AlertResolved        AlertStatus = "resolved"
+	AlertDismissed       AlertStatus = "dismissed"
+	AlertEscalated       AlertStatus = "escalated"
 )
 
 type AlertResolution struct {
 	Resolution string
-	Action string
-	Notes string
+	Action     string
+	Notes      string
 	ResolvedBy uuid.UUID
 	ResolvedAt time.Time
 }
@@ -729,24 +729,24 @@ type AlertResolution struct {
 
 type TransactionMonitor struct {
 	db interface{}
-	
+
 	// Analysis
 	patternAnalyzer *PatternAnalyzer
 	velocityTracker *VelocityTracker
-	riskCalculator *RiskCalculator
-	
+	riskCalculator  *RiskCalculator
+
 	// Config
 	config TransactionMonitorConfig
 }
 
 type TransactionMonitorConfig struct {
 	EnablePatternAnalysis bool
-	EnableVelocityCheck bool
-	EnableRiskScoring bool
-	
+	EnableVelocityCheck   bool
+	EnableRiskScoring     bool
+
 	// Thresholds
-	MinPatternsForAlert int
-	VelocityWindow time.Duration
+	MinPatternsForAlert    int
+	VelocityWindow         time.Duration
 	HighRiskScoreThreshold float64
 }
 
@@ -756,16 +756,16 @@ type PatternAnalyzer struct {
 
 type TransactionPattern struct {
 	PatternID string
-	Name string
-	Type PatternType
-	
+	Name      string
+	Type      PatternType
+
 	// Characteristics
 	Characteristics []PatternCharacteristic
-	
+
 	// Risk
-	IsHighRisk bool
+	IsHighRisk  bool
 	Description string
-	
+
 	Examples []string
 }
 
@@ -773,17 +773,17 @@ type PatternType string
 
 const (
 	PatternStructuring PatternType = "structuring" // Smurfing
-	PatternRoundLot PatternType = "round_lot"
-	PatternFanOut PatternType = "fan_out"
-	PatternFanIn PatternType = "fan_in"
-	PatternLayering PatternType = "layering"
-	PatternSmurfing PatternType = "smurfing"
+	PatternRoundLot    PatternType = "round_lot"
+	PatternFanOut      PatternType = "fan_out"
+	PatternFanIn       PatternType = "fan_in"
+	PatternLayering    PatternType = "layering"
+	PatternSmurfing    PatternType = "smurfing"
 )
 
 type PatternCharacteristic struct {
-	Field string
+	Field    string
 	Operator string
-	Value interface{}
+	Value    interface{}
 }
 
 type VelocityTracker struct {
@@ -792,12 +792,12 @@ type VelocityTracker struct {
 }
 
 type VelocityWindow struct {
-	UserID string
-	WindowStart time.Time
-	WindowDuration time.Duration
-	TransactionCount int
+	UserID            string
+	WindowStart       time.Time
+	WindowDuration    time.Duration
+	TransactionCount  int
 	TransactionVolume float64
-	Currency string
+	Currency          string
 }
 
 // =============================================================================
@@ -810,39 +810,39 @@ type RiskCalculator struct {
 
 type RiskWeights struct {
 	GeographicalRisk float64
-	TransactionRisk float64
-	BehavioralRisk float64
-	EntityRisk float64
-	VelocityRisk float64
+	TransactionRisk  float64
+	BehavioralRisk   float64
+	EntityRisk       float64
+	VelocityRisk     float64
 }
 
 type RiskAssessment struct {
 	OverallScore float64 // 0-100
-	RiskLevel string // "low", "medium", "high", "critical"
-	
+	RiskLevel    string  // "low", "medium", "high", "critical"
+
 	Components RiskComponents
-	
+
 	Factors []RiskFactor
-	
+
 	Recommendations []string
-	
+
 	AssessmentDate time.Time
 	NextReviewDate time.Time
 }
 
 type RiskComponents struct {
 	GeographicalScore float64
-	EntityScore float64
-	TransactionScore float64
-	BehavioralScore float64
-	VelocityScore float64
+	EntityScore       float64
+	TransactionScore  float64
+	BehavioralScore   float64
+	VelocityScore     float64
 }
 
 type RiskFactor struct {
-	FactorType string
-	Description string
+	FactorType   string
+	Description  string
 	Contribution float64
-	Severity Severity
+	Severity     Severity
 }
 
 // =============================================================================
@@ -851,7 +851,7 @@ type RiskFactor struct {
 
 type RegulatoryReporter struct {
 	db interface{}
-	
+
 	// Reporters
 	reporters map[string]RegulatoryReporter
 }
@@ -863,79 +863,79 @@ type RegulatoryReporter interface {
 }
 
 type RegulatoryReport struct {
-	ReportID string
-	ReportType ReportType
+	ReportID     string
+	ReportType   ReportType
 	ReportFormat string
-	
+
 	FilerReference string
-	FilingPeriod string
-	
+	FilingPeriod   string
+
 	// Content
-	Transactions []ReportTransaction
-	parties []ReportParty
-	TotalAmount float64
+	Transactions      []ReportTransaction
+	parties           []ReportParty
+	TotalAmount       float64
 	TotalTransactions int
-	
+
 	// Status
-	Status ReportStatus
+	Status      ReportStatus
 	SubmittedAt *time.Time
-	
+
 	CreatedAt time.Time
 }
 
 type ReportType string
 
 const (
-	ReportCTR ReportType = "ctr" // Currency Transaction Report ($10,000+)
-	ReportSAR ReportType = "sar" // Suspicious Activity Report
-	ReportMMIR ReportType = "mmir" // Marijuana Money Investigation Report
-	ReportFBAR ReportType = "fbar" // Foreign Bank Account Report
+	ReportCTR   ReportType = "ctr"   // Currency Transaction Report ($10,000+)
+	ReportSAR   ReportType = "sar"   // Suspicious Activity Report
+	ReportMMIR  ReportType = "mmir"  // Marijuana Money Investigation Report
+	ReportFBAR  ReportType = "fbar"  // Foreign Bank Account Report
 	ReportFACTA ReportType = "facta" // Foreign Account Tax Compliance Act
-	ReportDAC6 ReportType = "dac6" // Mandatory Disclosure Rules (EU)
-	ReportDACS ReportType = "dacs" // DAC6 Subsequent Report
+	ReportDAC6  ReportType = "dac6"  // Mandatory Disclosure Rules (EU)
+	ReportDACS  ReportType = "dacs"  // DAC6 Subsequent Report
 )
 
 type ReportStatus string
 
 const (
-	ReportDraft ReportStatus = "draft"
+	ReportDraft         ReportStatus = "draft"
 	ReportPendingReview ReportStatus = "pending_review"
-	ReportApproved ReportStatus = "approved"
-	ReportSubmitted ReportStatus = "submitted"
-	ReportAccepted ReportStatus = "accepted"
-	ReportRejected ReportStatus = "rejected"
+	ReportApproved      ReportStatus = "approved"
+	ReportSubmitted     ReportStatus = "submitted"
+	ReportAccepted      ReportStatus = "accepted"
+	ReportRejected      ReportStatus = "rejected"
 )
 
 type ReportTransaction struct {
 	TransactionID string
-	Date time.Time
-	Amount float64
-	Currency string
-	Type string
-	Method string
-	
-	Sender ReportParty
+	Date          time.Time
+	Amount        float64
+	Currency      string
+	Type          string
+	Method        string
+
+	Sender    ReportParty
 	Recipient ReportParty
-	
+
 	BlockchainTxHash string
 }
 
 type ReportParty struct {
 	PartyType string // "individual" or "entity"
-	
+
 	// Individual
-	FirstName string
-	LastName string
+	FirstName   string
+	LastName    string
 	DateOfBirth string
-	
+
 	// Entity
 	EntityName string
 	EntityType string
-	
+
 	// Common
 	AccountNumber string
-	Country string
-	Address string
+	Country       string
+	Address       string
 }
 
 // =============================================================================
@@ -943,26 +943,26 @@ type ReportParty struct {
 // =============================================================================
 
 type ComplianceService struct {
-	KYC *KYCService
-	AML *AMLService
-	TravelRule *TravelRuleService
-	Monitor *ComplianceMonitor
+	KYC                *KYCService
+	AML                *AMLService
+	TravelRule         *TravelRuleService
+	Monitor            *ComplianceMonitor
 	TransactionMonitor *TransactionMonitor
-	Reporter *RegulatoryReporter
-	
+	Reporter           *RegulatoryReporter
+
 	config ComplianceConfig
 }
 
 func NewComplianceService() *ComplianceService {
 	cs := &ComplianceService{
-		KYC: &KYCService{},
-		AML: &AMLService{},
-		TravelRule: &TravelRuleService{},
-		Monitor: &ComplianceMonitor{},
+		KYC:                &KYCService{},
+		AML:                &AMLService{},
+		TravelRule:         &TravelRuleService{},
+		Monitor:            &ComplianceMonitor{},
 		TransactionMonitor: &TransactionMonitor{},
-		Reporter: &RegulatoryReporter{},
+		Reporter:           &RegulatoryReporter{},
 	}
-	
+
 	return cs
 }
 
@@ -970,14 +970,14 @@ func NewComplianceService() *ComplianceService {
 func (cs *ComplianceService) VerifyUser(ctx context.Context, userID string, level KYCLevel, documents []UserDocument) (*UserVerification, error) {
 	// Create verification record
 	verification := &UserVerification{
-		UserID: uuid.MustParse(userID),
-		Level: level,
-		Status: VerificationPending,
+		UserID:    uuid.MustParse(userID),
+		Level:     level,
+		Status:    VerificationPending,
 		Documents: documents,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	
+
 	// Set limits based on level
 	switch level {
 	case KYCNil:
@@ -996,7 +996,7 @@ func (cs *ComplianceService) VerifyUser(ctx context.Context, userID string, leve
 		verification.DailyDepositLimit = 1000000000
 		verification.DailyWithdrawalLimit = 1000000000
 	}
-	
+
 	// Process verification based on level
 	switch level {
 	case KYCBasic:
@@ -1010,7 +1010,7 @@ func (cs *ComplianceService) VerifyUser(ctx context.Context, userID string, leve
 		// Submit to provider for verification
 		// In production, this would call the KYC provider API
 	}
-	
+
 	return verification, nil
 }
 
@@ -1018,10 +1018,10 @@ func (cs *ComplianceService) VerifyUser(ctx context.Context, userID string, leve
 func (cs *ComplianceService) ScreenTransaction(ctx context.Context, tx *Transaction) (*AMLCheckResult, error) {
 	result := &AMLCheckResult{
 		TransactionID: tx.ID,
-		ScreenedAt: time.Now(),
-		Passed: true,
+		ScreenedAt:    time.Now(),
+		Passed:        true,
 	}
-	
+
 	// Check sanctions lists
 	sanctionsResult, err := cs.AML.CheckSanctions(ctx, tx)
 	if err != nil {
@@ -1032,7 +1032,7 @@ func (cs *ComplianceService) ScreenTransaction(ctx context.Context, tx *Transact
 		result.Passed = false
 		result.FailedChecks = append(result.FailedChecks, "sanctions")
 	}
-	
+
 	// Check PEP
 	pepResult, err := cs.AML.CheckPEP(ctx, tx)
 	if err != nil {
@@ -1043,7 +1043,7 @@ func (cs *ComplianceService) ScreenTransaction(ctx context.Context, tx *Transact
 		result.Passed = false
 		result.FailedChecks = append(result.FailedChecks, "pep")
 	}
-	
+
 	// Check adverse media
 	mediaResult, err := cs.AML.CheckAdverseMedia(ctx, tx)
 	if err != nil {
@@ -1053,41 +1053,41 @@ func (cs *ComplianceService) ScreenTransaction(ctx context.Context, tx *Transact
 	if mediaResult.HasAdverseMedia {
 		result.RiskScore += 20
 	}
-	
+
 	// Calculate overall risk
 	result.RiskScore = cs.calculateTransactionRisk(result)
-	
+
 	// Determine risk level
 	result.RiskLevel = cs.determineRiskLevel(result.RiskScore)
-	
+
 	return result, nil
 }
 
 type Transaction struct {
-	ID string
-	UserID string
-	Amount float64
-	Currency string
-	Type string
+	ID          string
+	UserID      string
+	Amount      float64
+	Currency    string
+	Type        string
 	FromAddress string
-	ToAddress string
-	Blockchain string
-	Timestamp time.Time
+	ToAddress   string
+	Blockchain  string
+	Timestamp   time.Time
 }
 
 type AMLCheckResult struct {
 	TransactionID string
-	ScreenedAt time.Time
-	
-	Passed bool
-	RiskScore float64
-	RiskLevel string
+	ScreenedAt    time.Time
+
+	Passed       bool
+	RiskScore    float64
+	RiskLevel    string
 	FailedChecks []string
-	
-	SanctionsResult *SanctionsResult
-	PEPResult *PEPResult
+
+	SanctionsResult    *SanctionsResult
+	PEPResult          *PEPResult
 	AdverseMediaResult *AdverseMediaResult
-	
+
 	Recommendation string
 }
 
@@ -1097,29 +1097,29 @@ type SanctionsResult struct {
 }
 
 type SanctionsMatch struct {
-	List string
-	Name string
+	List    string
+	Name    string
 	Program string
-	Score float64
+	Score   float64
 }
 
 type PEPResult struct {
-	IsPEP bool
-	PEPType string
-	SanctionsMatch bool
+	IsPEP           bool
+	PEPType         string
+	SanctionsMatch  bool
 	RelatedEntities []string
 }
 
 type AdverseMediaResult struct {
 	HasAdverseMedia bool
-	Articles []MediaArticle
+	Articles        []MediaArticle
 }
 
 type MediaArticle struct {
-	Title string
+	Title  string
 	Source string
-	Date time.Time
-	URL string
+	Date   time.Time
+	URL    string
 }
 
 // ProcessTravelRule processes Travel Rule information
@@ -1129,21 +1129,21 @@ func (cs *ComplianceService) ProcessTravelRule(ctx context.Context, tx *Transact
 	if tx.Amount < threshold {
 		return nil
 	}
-	
+
 	// Get Travel Rule info
 	info := &TravelRuleInfo{
 		Transaction: TransactionInfo{
-			TxHash: tx.ID,
+			TxHash:     tx.ID,
 			Blockchain: tx.Blockchain,
-			Amount: tx.Amount,
-			Currency: tx.Currency,
-			Timestamp: tx.Timestamp,
+			Amount:     tx.Amount,
+			Currency:   tx.Currency,
+			Timestamp:  tx.Timestamp,
 		},
 	}
-	
+
 	// Get originator and beneficiary info
 	// In production, query user databases
-	
+
 	// Verify VASP
 	if info.Beneficiary.BeneficiaryVASP.VASPID != "" {
 		verification, err := cs.TravelRule.VerifyVASP(ctx, info.Beneficiary.BeneficiaryVASP.VASPID)
@@ -1151,7 +1151,7 @@ func (cs *ComplianceService) ProcessTravelRule(ctx context.Context, tx *Transact
 			return fmt.Errorf("beneficiary VASP not verified")
 		}
 	}
-	
+
 	// Submit to Travel Rule provider
 	return cs.TravelRule.SubmitTravelRule(ctx, info)
 }
@@ -1159,59 +1159,59 @@ func (cs *ComplianceService) ProcessTravelRule(ctx context.Context, tx *Transact
 // GenerateSAR generates a Suspicious Activity Report
 func (cs *ComplianceService) GenerateSAR(ctx context.Context, alert *ComplianceAlert) (*RegulatoryReport, error) {
 	report := &RegulatoryReport{
-		ReportID: fmt.Sprintf("SAR-%s-%d", alert.UserID, time.Now().Unix()),
-		ReportType: ReportSAR,
+		ReportID:     fmt.Sprintf("SAR-%s-%d", alert.UserID, time.Now().Unix()),
+		ReportType:   ReportSAR,
 		ReportFormat: "xml",
-		Status: ReportDraft,
-		CreatedAt: time.Now(),
+		Status:       ReportDraft,
+		CreatedAt:    time.Now(),
 	}
-	
+
 	// Add transaction details
 	report.Transactions = append(report.Transactions, ReportTransaction{
 		TransactionID: alert.TransactionID,
-		Date: alert.CreatedAt,
-		Amount: alert.TransactionAmount,
-		Currency: alert.TransactionCurrency,
+		Date:          alert.CreatedAt,
+		Amount:        alert.TransactionAmount,
+		Currency:      alert.TransactionCurrency,
 	})
-	
+
 	// Add narrative
 	report.Narrative = fmt.Sprintf(
 		"Suspicious activity detected: %s. Alert ID: %s. Rule: %s. Details: %s",
 		alert.Description, alert.AlertID, alert.RuleName, alert.Details,
 	)
-	
+
 	return report, nil
 }
 
 func (cs *AMLService) CheckSanctions(ctx context.Context, tx *Transaction) (*SanctionsResult, error) {
 	result := &SanctionsResult{Cleared: true}
-	
+
 	// Check against sanctions lists
 	// In production, query actual sanctions databases
-	
+
 	return result, nil
 }
 
 func (cs *AMLService) CheckPEP(ctx context.Context, tx *Transaction) (*PEPResult, error) {
 	result := &PEPResult{}
-	
+
 	// Check PEP database
 	// In production, query actual PEP databases
-	
+
 	return result, nil
 }
 
 func (cs *AMLService) CheckAdverseMedia(ctx context.Context, tx *Transaction) (*AdverseMediaResult, error) {
 	result := &AdverseMediaResult{}
-	
+
 	// Check adverse media databases
-	
+
 	return result, nil
 }
 
 func (cs *ComplianceService) calculateTransactionRisk(result *AMLCheckResult) float64 {
 	risk := 0.0
-	
+
 	if !result.SanctionsResult.Cleared {
 		risk += 50
 	}
@@ -1221,7 +1221,7 @@ func (cs *ComplianceService) calculateTransactionRisk(result *AMLCheckResult) fl
 	if result.AdverseMediaResult.HasAdverseMedia {
 		risk += 20
 	}
-	
+
 	return risk
 }
 

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // Counter metric with atomic operations

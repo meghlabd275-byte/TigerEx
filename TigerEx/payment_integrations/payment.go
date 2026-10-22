@@ -203,7 +203,7 @@ type CardPaymentRequest struct {
 	OrderID       string          `json:"order_id"`
 	Description   string          `json:"description"`
 	IPAddress     string          `json:"ip_address"`
-	3DSecure      string          `json:"3d_secure_token,omitempty"`
+	ThreeDSecure      string          `json:"3d_secure_token,omitempty"`
 }
 
 // BankTransferRequest represents a bank transfer request

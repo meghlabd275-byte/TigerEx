@@ -1,13 +1,9 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"math"
-	"math/big"
 	"net/http"
 	"sync"
 	"time"
@@ -34,77 +30,77 @@ func (e APIError) Error() string {
 // =============================================================================
 
 type StakingPool struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Asset           string    `json:"asset"`
-	Network         string    `json:"network"`
-	Duration        int      `json:"duration"` // in days
-	APY             float64  `json:"apy"`
-	MinStake        float64  `json:"min_stake"`
-	MaxStake        float64  `json:"max_stake"`
-	TotalStaked     float64  `json:"total_staked"`
-	RewardPool      float64  `json:"reward_pool"`
-	Status          string    `json:"status"` // "active", "paused", "completed"
-	StartTime       time.Time `json:"start_time"`
-	EndTime         time.Time `json:"end_time"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Asset       string    `json:"asset"`
+	Network     string    `json:"network"`
+	Duration    int       `json:"duration"` // in days
+	APY         float64   `json:"apy"`
+	MinStake    float64   `json:"min_stake"`
+	MaxStake    float64   `json:"max_stake"`
+	TotalStaked float64   `json:"total_staked"`
+	RewardPool  float64   `json:"reward_pool"`
+	Status      string    `json:"status"` // "active", "paused", "completed"
+	StartTime   time.Time `json:"start_time"`
+	EndTime     time.Time `json:"end_time"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type StakingPosition struct {
-	ID              string    `json:"id"`
-	UserID          string    `json:"user_id"`
-	PoolID          string    `json:"pool_id"`
-	Amount          float64   `json:"amount"`
-	RewardAmount    float64   `json:"reward_amount"`
-	PendingReward   float64   `json:"pending_reward"`
-	StartTime       time.Time `json:"start_time"`
-	EndTime         time.Time `json:"end_time"`
-	Status          string    `json:"status"` // "active", "unclaimed", "claimed"
-	ClaimedAt       *time.Time `json:"claimed_at"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID            string     `json:"id"`
+	UserID        string     `json:"user_id"`
+	PoolID        string     `json:"pool_id"`
+	Amount        float64    `json:"amount"`
+	RewardAmount  float64    `json:"reward_amount"`
+	PendingReward float64    `json:"pending_reward"`
+	StartTime     time.Time  `json:"start_time"`
+	EndTime       time.Time  `json:"end_time"`
+	Status        string     `json:"status"` // "active", "unclaimed", "claimed"
+	ClaimedAt     *time.Time `json:"claimed_at"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type StakingReward struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"user_id"`
-	PoolID      string    `json:"pool_id"`
-	PositionID  string    `json:"position_id"`
-	Amount      float64   `json:"amount"`
-	Type        string    `json:"type"` // "staking", "early_unstake"
-	TaxRate     float64   `json:"tax_rate"`
-	NetAmount   float64   `json:"net_amount"`
-	Status      string    `json:"status"` // "pending", "available", "claimed"
-	ClaimedAt   *time.Time `json:"claimed_at"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID         string     `json:"id"`
+	UserID     string     `json:"user_id"`
+	PoolID     string     `json:"pool_id"`
+	PositionID string     `json:"position_id"`
+	Amount     float64    `json:"amount"`
+	Type       string     `json:"type"` // "staking", "early_unstake"
+	TaxRate    float64    `json:"tax_rate"`
+	NetAmount  float64    `json:"net_amount"`
+	Status     string     `json:"status"` // "pending", "available", "claimed"
+	ClaimedAt  *time.Time `json:"claimed_at"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 type StakingHistory struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"user_id"`
-	PoolID      string    `json:"pool_id"`
-	Action      string    `json:"action"` // "stake", "unstake", "claim", "claim_all"
-	Amount      float64   `json:"amount"`
-	Reward      float64   `json:"reward"`
-	Status      string    `json:"status"`
-	TxHash      string    `json:"tx_hash"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	PoolID    string    `json:"pool_id"`
+	Action    string    `json:"action"` // "stake", "unstake", "claim", "claim_all"
+	Amount    float64   `json:"amount"`
+	Reward    float64   `json:"reward"`
+	Status    string    `json:"status"`
+	TxHash    string    `json:"tx_hash"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type UserStakingStats struct {
-	UserID            string  `json:"user_id"`
-	TotalStaked      float64 `json:"total_staked"`
-	TotalRewards     float64 `json:"total_rewards"`
-	PendingRewards   float64 `json:"pending_rewards"`
-	ActivePositions  int     `json:"active_positions"`
-	CompletedPositions int    `json:"completed_positions"`
+	UserID             string  `json:"user_id"`
+	TotalStaked        float64 `json:"total_staked"`
+	TotalRewards       float64 `json:"total_rewards"`
+	PendingRewards     float64 `json:"pending_rewards"`
+	ActivePositions    int     `json:"active_positions"`
+	CompletedPositions int     `json:"completed_positions"`
 }
 
 type StakingConfig struct {
-	MinStakeAmount    float64 `json:"min_stake_amount"`
-	MaxStakeAmount    float64 `json:"max_stake_amount"`
-	EarlyUnstakeTax  float64 `json:"early_unstake_tax"`
-	ClaimLockPeriod  int     `json:"claim_lock_period"` // in hours
-	AutoCompound     bool    `json:"auto_compound"`
+	MinStakeAmount  float64 `json:"min_stake_amount"`
+	MaxStakeAmount  float64 `json:"max_stake_amount"`
+	EarlyUnstakeTax float64 `json:"early_unstake_tax"`
+	ClaimLockPeriod int     `json:"claim_lock_period"` // in hours
+	AutoCompound    bool    `json:"auto_compound"`
 }
 
 // =============================================================================
@@ -112,26 +108,26 @@ type StakingConfig struct {
 // =============================================================================
 
 type StakingService struct {
-	pools       map[string]*StakingPool
-	positions   map[string]*StakingPosition
-	rewards     map[string]*StakingReward
-	history     map[string]*StakingHistory
-	config      *StakingConfig
-	mu          sync.RWMutex
+	pools     map[string]*StakingPool
+	positions map[string]*StakingPosition
+	rewards   map[string]*StakingReward
+	history   map[string]*StakingHistory
+	config    *StakingConfig
+	mu        sync.RWMutex
 }
 
 func NewStakingService() *StakingService {
 	svc := &StakingService{
-		pools:    make(map[string]*StakingPool),
+		pools:     make(map[string]*StakingPool),
 		positions: make(map[string]*StakingPosition),
-		rewards:  make(map[string]*StakingReward),
-		history:  make(map[string]*StakingHistory),
+		rewards:   make(map[string]*StakingReward),
+		history:   make(map[string]*StakingHistory),
 		config: &StakingConfig{
-			MinStakeAmount:   10.0,
-			MaxStakeAmount:   1000000.0,
-			EarlyUnstakeTax:  0.1, // 10%
-			ClaimLockPeriod:  24,
-			AutoCompound:     false,
+			MinStakeAmount:  10.0,
+			MaxStakeAmount:  1000000.0,
+			EarlyUnstakeTax: 0.1, // 10%
+			ClaimLockPeriod: 24,
+			AutoCompound:    false,
 		},
 	}
 
@@ -361,12 +357,12 @@ func (s *StakingService) CreateStake(userID, poolID string, amount float64) (*St
 	history := &StakingHistory{
 		ID:        uuid.New().String(),
 		UserID:    userID,
-		PoolID:   poolID,
-		Action:   "stake",
-		Amount:   amount,
-		Reward:   0,
-		Status:   "completed",
-		TxHash:   s.generateTxHash(),
+		PoolID:    poolID,
+		Action:    "stake",
+		Amount:    amount,
+		Reward:    0,
+		Status:    "completed",
+		TxHash:    s.generateTxHash(),
 		CreatedAt: now,
 	}
 	s.history[history.ID] = history
@@ -407,14 +403,14 @@ func (s *StakingService) Unstake(userID, positionID string) (*StakingReward, err
 	rewardRecord := &StakingReward{
 		ID:         uuid.New().String(),
 		UserID:     userID,
-		PoolID:    position.PoolID,
+		PoolID:     position.PoolID,
 		PositionID: positionID,
-		Amount:    reward,
-		Type:      "staking",
+		Amount:     reward,
+		Type:       "staking",
 		TaxRate:    0,
-		NetAmount: reward,
-		Status:    "available",
-		CreatedAt: now,
+		NetAmount:  reward,
+		Status:     "available",
+		CreatedAt:  now,
 	}
 
 	// Update pool
@@ -430,12 +426,12 @@ func (s *StakingService) Unstake(userID, positionID string) (*StakingReward, err
 	history := &StakingHistory{
 		ID:        uuid.New().String(),
 		UserID:    userID,
-		PoolID:   position.PoolID,
-		Action:   "unstake",
-		Amount:   position.Amount,
-		Reward:   reward,
-		Status:   "completed",
-		TxHash:   s.generateTxHash(),
+		PoolID:    position.PoolID,
+		Action:    "unstake",
+		Amount:    position.Amount,
+		Reward:    reward,
+		Status:    "completed",
+		TxHash:    s.generateTxHash(),
 		CreatedAt: now,
 	}
 	s.history[history.ID] = history
@@ -476,14 +472,14 @@ func (s *StakingService) EarlyUnstake(userID, positionID string) (*StakingReward
 	rewardRecord := &StakingReward{
 		ID:         uuid.New().String(),
 		UserID:     userID,
-		PoolID:    position.PoolID,
+		PoolID:     position.PoolID,
 		PositionID: positionID,
-		Amount:    reward,
-		Type:      "early_unstake",
+		Amount:     reward,
+		Type:       "early_unstake",
 		TaxRate:    s.config.EarlyUnstakeTax,
-		NetAmount: netReward,
-		Status:    "available",
-		CreatedAt: time.Now(),
+		NetAmount:  netReward,
+		Status:     "available",
+		CreatedAt:  time.Now(),
 	}
 
 	// Update pool
@@ -532,12 +528,12 @@ func (s *StakingService) ClaimReward(userID, rewardID string) error {
 	history := &StakingHistory{
 		ID:        uuid.New().String(),
 		UserID:    userID,
-		PoolID:   reward.PoolID,
-		Action:   "claim",
-		Amount:   reward.NetAmount,
-		Reward:   0,
-		Status:   "completed",
-		TxHash:   s.generateTxHash(),
+		PoolID:    reward.PoolID,
+		Action:    "claim",
+		Amount:    reward.NetAmount,
+		Reward:    0,
+		Status:    "completed",
+		TxHash:    s.generateTxHash(),
 		CreatedAt: now,
 	}
 	s.history[history.ID] = history
@@ -569,12 +565,12 @@ func (s *StakingService) ClaimAllRewards(userID string) ([]*StakingReward, error
 			history := &StakingHistory{
 				ID:        uuid.New().String(),
 				UserID:    userID,
-				PoolID:   reward.PoolID,
-				Action:   "claim_all",
-				Amount:   reward.NetAmount,
-				Reward:   0,
-				Status:   "completed",
-				TxHash:   s.generateTxHash(),
+				PoolID:    reward.PoolID,
+				Action:    "claim_all",
+				Amount:    reward.NetAmount,
+				Reward:    0,
+				Status:    "completed",
+				TxHash:    s.generateTxHash(),
 				CreatedAt: now,
 			}
 			s.history[history.ID] = history
@@ -624,7 +620,7 @@ func (s *StakingService) GetUserStats(userID string) *UserStakingStats {
 
 	stats := &UserStakingStats{
 		UserID:          userID,
-		TotalStaked:    0,
+		TotalStaked:     0,
 		TotalRewards:    0,
 		PendingRewards:  0,
 		ActivePositions: 0,
@@ -708,7 +704,7 @@ func (s *StakingService) GetPoolHandler(c *gin.Context) {
 
 func (s *StakingService) CreateStakeHandler(c *gin.Context) {
 	var req struct {
-		UserID  string  `json:"user_id" binding:"required"`
+		UserID string  `json:"user_id" binding:"required"`
 		PoolID string  `json:"pool_id" binding:"required"`
 		Amount float64 `json:"amount" binding:"required,gt=0"`
 	}
