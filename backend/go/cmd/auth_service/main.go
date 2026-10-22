@@ -214,11 +214,22 @@ func main() {
 	// Setup router
 	mux := http.NewServeMux()
 
-	// CORS middleware
+	// CORS is an explicit deployment allowlist; credentialed authentication
+	// endpoints must never accept arbitrary browser origins.
+	allowedOrigins := strings.Split(os.Getenv("AUTH_CORS_ORIGINS"), ",")
+	if len(allowedOrigins) == 0 || strings.TrimSpace(allowedOrigins[0]) == "" {
+		log.Fatal("AUTH_CORS_ORIGINS must contain explicit trusted origins")
+	}
+	for i := range allowedOrigins {
+		allowedOrigins[i] = strings.TrimSpace(allowedOrigins[i])
+		if allowedOrigins[i] == "" || allowedOrigins[i] == "*" {
+			log.Fatal("AUTH_CORS_ORIGINS must not contain empty or wildcard origins")
+		}
+	}
 	corsMiddleware := cors.New(cors.Options{
-		AllowedOrigins: []string{"*"},
-		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Content-Type", "Authorization"},
+		AllowedOrigins: allowedOrigins,
+		AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Content-Type", "Authorization", "X-Request-ID"},
 	}).Handler
 
 	// Routes
