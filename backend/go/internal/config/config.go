@@ -73,9 +73,9 @@ func Load() *Config {
 		DBHost:         getEnv("DB_HOST", "localhost"),
 		DBPort:         getEnvAsInt("DB_PORT", 5432),
 		DBUser:         getEnv("DB_USER", "tigerex"),
-		DBPassword:     getEnv("DB_PASSWORD", "tigerex"),
+		DBPassword:     getEnv("DB_PASSWORD", ""),
 		DBName:         getEnv("DB_NAME", "tigerex"),
-		DBSSLMode:      getEnv("DB_SSL_MODE", "disable"),
+		DBSSLMode:      getEnv("DB_SSL_MODE", "require"),
 		DBMaxOpenConns: getEnvAsInt("DB_MAX_OPEN_CONNS", 25),
 		DBMaxIdleConns: getEnvAsInt("DB_MAX_IDLE_CONNS", 10),
 		DBMaxLifetime:  getEnvAsDuration("DB_MAX_LIFETIME", 5*time.Minute),
@@ -87,7 +87,7 @@ func Load() *Config {
 		RedisDB:       getEnvAsInt("REDIS_DB", 0),
 
 		// JWT
-		JWTSecret:            getEnv("JWT_SECRET", "tigerex-jwt-secret-key-change-in-production"),
+		JWTSecret:            getEnv("JWT_SECRET", ""),
 		JWTExpireTime:        getEnvAsDuration("JWT_EXPIRE_TIME", 15*time.Minute),
 		JWTRefreshExpireTime: getEnvAsDuration("JWT_REFRESH_EXPIRE_TIME", 7*24*time.Hour),
 		JWTIssuer:            getEnv("JWT_ISSUER", "tigerex"),
@@ -143,6 +143,14 @@ func getEnvAsBool(key string, defaultValue bool) bool {
 	return defaultValue
 }
 
-func getEnvAsDuration(key string, defaultValue time.Duration) string {
-	return getEnv(key, defaultValue.String())
+func getEnvAsDuration(key string, defaultValue time.Duration) time.Duration {
+	valueStr := getEnv(key, "")
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := time.ParseDuration(valueStr)
+	if err != nil || value <= 0 {
+		return defaultValue
+	}
+	return value
 }
