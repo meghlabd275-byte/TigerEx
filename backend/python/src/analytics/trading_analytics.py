@@ -373,13 +373,13 @@ class ScalperStrategy:
 # MAIN EXAMPLE
 # ============================================================================
 
-def main():
-    """Example usage"""
+def _self_test() -> None:
+    """Exercises the analytics engine with explicit fixture trades."""
     
     # Create analytics engine
     analytics = AnalyticsEngine()
     
-    # Simulate some trades
+    # Fixture trades for the self-test.
     now = datetime.now()
     
     trades_data = [
@@ -391,11 +391,13 @@ def main():
     for trade in trades_data:
         analytics.record_trade(trade)
     
-    # Print performance summary
     summary = analytics.get_performance_summary()
-    print("Performance Summary:")
-    print(json.dumps(summary, indent=2, default=str))
+    assert summary['total_trades'] == 3, summary
+    assert summary['total_trades'] == 3, summary
+    assert summary['open_positions'] == 2, summary
+    assert summary['win_rate'] == 100.0, summary
+    print("trading analytics self-test passed")
 
 
 if __name__ == "__main__":
-    main()
+    _self_test()

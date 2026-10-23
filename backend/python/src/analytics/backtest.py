@@ -29,58 +29,105 @@ class BacktestEngine:
         self.equity_curve = []
     
     def run(self, prices: List[float], strategy_func) -> BacktestResult:
-        for price in prices:
-            signal = strategy_func(price, self.position, self.balance)
-            
+        if not prices:
+            raise ValueError("prices must not be empty")
+        if any(not isinstance(price, (int, float)) or price <= 0 for price in prices):
+            raise ValueError("prices must be positive numbers")
+
+        for index, price in enumerate(prices):
+            # The strategy sees the observed history up to and including the
+            # current bar, never future data.
+            history = prices[:index + 1]
+            signal = strategy_func(history, self.position, self.balance)
+
             if signal == 'buy' and self.position == 0:
                 qty = (self.balance * 0.95) / price
                 self.position = qty
                 self.entry_price = price
                 self.position_side = 'long'
                 self.balance -= qty * price
-                
+
             elif signal == 'sell' and self.position == 0:
                 qty = (self.balance * 0.95) / price
                 self.position = -qty
                 self.entry_price = price
                 self.position_side = 'short'
-                
+                self.balance -= abs(qty) * price
+
             elif signal == 'close' and self.position != 0:
                 pnl = self.calculate_pnl(price)
-                self.balance += pnl
-                self.trades.append({'entry': self.entry_price, 'exit': price, 'pnl': pnl, 'side': self.position_side})
-                self.position = 0
-                self.position_side = None
-            
-            self.equity_curve.append(self.balance)
-        
+                self.close_position(price, pnl)
+
+            self.equity_curve.append(self.equity())
+
         if self.position != 0:
-            self.balance += self.calculate_pnl(prices[-1])
-        
+            self.close_position(prices[-1], self.calculate_pnl(prices[-1]))
+
         return self.calculate_stats()
-    
+
+    def close_position(self, price: float, pnl: float) -> None:
+        """Return notional to cash and record the closed trade."""
+        notional = abs(self.position) * self.entry_price
+        self.balance += notional + pnl
+        self.trades.append({
+            'entry': self.entry_price,
+            'exit': price,
+            'pnl': pnl,
+            'side': self.position_side,
+        })
+        self.position = 0
+        self.position_side = None
+
+    def equity(self) -> float:
+        """Cash plus the mark-to-market value of any open position."""
+        if self.position == 0 or not self.equity_curve:
+            return self.balance
+        mark = self.equity_curve[-1]
+        return self.balance + abs(self.position) * mark
+
     def calculate_pnl(self, current_price: float) -> float:
         if self.position_side == 'long':
             return (current_price - self.entry_price) * abs(self.position)
         elif self.position_side == 'short':
             return (self.entry_price - current_price) * abs(self.position)
         return 0.0
-    
+
     def calculate_stats(self) -> BacktestResult:
         winning = sum(1 for t in self.trades if t['pnl'] > 0)
         losing = sum(1 for t in self.trades if t['pnl'] <= 0)
         total_pnl = sum(t['pnl'] for t in self.trades)
         max_dd = self.calculate_max_drawdown()
-        
+
         return BacktestResult(
             total_trades=len(self.trades),
             winning_trades=winning,
             losing_trades=losing,
             total_pnl=total_pnl,
             max_drawdown=max_dd,
-            sharpe_ratio=0.5,
+            sharpe_ratio=self.calculate_sharpe(),
             win_rate=winning / len(self.trades) if self.trades else 0
         )
+
+    def calculate_sharpe(self, periods_per_year: int = 365) -> float:
+        """Annualised Sharpe ratio from the per-bar equity returns."""
+        if len(self.equity_curve) < 2:
+            return 0.0
+
+        returns = []
+        for previous, current in zip(self.equity_curve, self.equity_curve[1:]):
+            if previous <= 0:
+                continue
+            returns.append((current - previous) / previous)
+        if len(returns) < 2:
+            return 0.0
+
+        mean = sum(returns) / len(returns)
+        variance = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+        stddev = variance ** 0.5
+        if stddev == 0:
+            return 0.0
+        return (mean / stddev) * (periods_per_year ** 0.5)
+
     
     def calculate_max_drawdown(self) -> float:
         if not self.equity_curve:

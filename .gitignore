@@ -19,3 +19,8 @@ __pycache__/
 /backend/go/admin_service
 /backend/go/auth_service
 /backend/go/tigerex-api
+
+# Rust build artifacts
+target/
+**/target/
+**/Cargo.lock

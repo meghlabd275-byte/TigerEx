@@ -307,36 +307,29 @@ class AnomalyDetector:
 # MAIN EXAMPLE
 # ============================================================================
 
-def main():
-    # Sample data
+def _self_test() -> None:
+    """Deterministic checks for training, prediction and anomaly detection."""
     price_points = [
-        PricePoint(i, 50000 + i*10, 50050 + i*10, 49950 + i*10, 50000 + i*10, 1000)
+        PricePoint(i, 50000 + i * 10, 50050 + i * 10, 49950 + i * 10, 50000 + i * 10, 1000)
         for i in range(100)
     ]
-    
-    # Train model
+
     model = PricePredictionModel()
     model.train(price_points[:80], [])
-    
-    # Predict
+
     prediction = model.predict("BTC/USDT", price_points[80:])
-    print(f"Prediction: {prediction.direction}")
-    print(f"Confidence: {prediction.confidence:.1%}")
-    print(f"Current: ${price_points[-1].close:.2f}")
-    print(f"Predicted: ${prediction.predicted_price:.2f}")
-    
-    # Anomaly detection
+    assert prediction.direction in ('up', 'down', 'neutral')
+    assert 0.0 <= prediction.confidence <= 1.0
+    assert prediction.predicted_price > 0
+
     detector = AnomalyDetector()
-    detector.fit([p.close for p in price_points[:-10]])
-    
-    test_price = 52000
-    is_anomaly = detector.detect(test_price)
-    z_score = detector.get_z_score(test_price)
-    
-    print(f"\nAnomaly Test:")
-    print(f"Price: ${test_price}")
-    print(f"Z-Score: {z_score:.2f}")
-    print(f"Anomaly: {is_anomaly}")
+    detector.fit([point.close for point in price_points[:-10]])
+    # A price far outside the observed ramp must be flagged.
+    assert detector.detect(90000) is True
+    assert detector.detect(50500) is False
+
+    print("price prediction self-test passed")
+
 
 if __name__ == "__main__":
-    main()
+    _self_test()

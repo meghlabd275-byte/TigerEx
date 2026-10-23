@@ -2,6 +2,7 @@
 //! High-performance cryptographic operations for security-critical functions
 
 pub mod grid;
+pub mod signing;
 
 pub mod crypto {
     use aes_gcm::{
@@ -403,7 +404,6 @@ pub mod orderbook {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::orderbook::{Order, OrderBook, OrderType, Side};
     
     #[test]

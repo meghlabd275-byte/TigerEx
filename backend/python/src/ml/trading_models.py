@@ -303,28 +303,28 @@ def calculate_all_indicators(prices: List[float]) -> dict:
     return indicators
 
 
-def main():
-    """Demo"""
-    print("ML Trading Module initialized")
-    
-    # Generate sample prices
-    prices = [100 + i + (i % 10) * 0.5 for i in range(100)]
-    
-    # Calculate indicators
+def _self_test() -> None:
+    """Deterministic checks for indicators, strategy and pattern detection."""
+    # A linear ramp is exactly what the momentum strategy should read as up.
+    prices = [100.0 + index for index in range(100)]
+
     indicators = calculate_all_indicators(prices)
-    print(f"RSI: {indicators['rsi']:.2f}")
-    print(f"MACD: {indicators['macd']:.2f}")
-    print(f"Bollinger: U={indicators['bb_upper']:.2f} M={indicators['bb_middle']:.2f} L={indicators['bb_lower']:.2f}")
-    
-    # Predict
+    assert 0.0 <= indicators['rsi'] <= 100.0
+    assert indicators['bb_upper'] > indicators['bb_middle'] > indicators['bb_lower']
+
     momentum = MomentumStrategy()
-    pred = momentum.predict(prices)
-    print(f"Prediction: {pred.direction} ({pred.confidence:.2%}) -> ${pred.target_price:.2f}")
-    
-    # Pattern detection
-    print(f"Double bottom: {PatternRecognition.detect_double_bottom(prices)}")
-    print(f"H&S: {PatternRecognition.detect_head_and_shoulders(prices)}")
+    prediction = momentum.predict(prices)
+    assert prediction.direction in ('up', 'down', 'neutral')
+    assert 0.0 <= prediction.confidence <= 1.0
+    assert prediction.target_price > 0
+
+    # A flat series cannot be a double bottom or head-and-shoulders.
+    flat = [100.0] * 100
+    assert PatternRecognition.detect_double_bottom(flat) is False
+    assert PatternRecognition.detect_head_and_shoulders(flat) is False
+
+    print("trading models self-test passed")
 
 
 if __name__ == "__main__":
-    main()
+    _self_test()

@@ -25,6 +25,15 @@ class AuditLog:
             res = [l for l in res if l['action'] == action]
         return res
 
-alog = AuditLog()
-alog.log("user1", "login", {"ip": "1.1.1.1"})
-print(f"Logs: {len(alog.query())}")
+def _self_test() -> None:
+    log = AuditLog()
+    log.log("user1", "login", {"ip": "1.1.1.1"})
+    assert len(log.query()) == 1
+    assert len(log.query(user_id="user1")) == 1
+    assert len(log.query(action="login")) == 1
+    assert len(log.query(action="logout")) == 0
+    print("audit logger self-test passed")
+
+
+if __name__ == "__main__":
+    _self_test()

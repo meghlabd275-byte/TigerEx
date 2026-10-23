@@ -307,10 +307,11 @@ class FraudDetectionEngine:
 # MAIN EXAMPLE
 # ============================================================================
 
-def main():
+def _self_test() -> None:
+    """Exercises the fraud engine with explicit fixture transactions."""
     engine = FraudDetectionEngine()
     
-    # Simulate transactions
+    # Fixture transactions for the self-test.
     transactions = [
         Transaction("tx1", "user1", 500.0, "USDT", "deposit", 
                    datetime.now(), "192.168.1.1", "fp123", "US"),
@@ -328,9 +329,10 @@ def main():
         if alert:
             print(f"  ALERT: {alert.id} - {alert.indicators}")
     
-    # Get stats
     stats = engine.get_stats()
-    print(f"\nStatistics: {json.dumps(stats, indent=2, default=str)}")
+    assert stats['total_transactions'] == 3, stats
+    print("fraud detection self-test passed")
+
 
 if __name__ == "__main__":
-    main()
+    _self_test()

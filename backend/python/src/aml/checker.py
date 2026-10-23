@@ -29,6 +29,11 @@ class AMLChecker:
         
         return {"risk": RiskLevel.LOW}
 
-checker = AMLChecker()
-result = checker.check_transaction({"from": "addr1", "to": "addr2", "amount": 5000})
-print(result)
+if __name__ == "__main__":
+    checker = AMLChecker()
+    assert checker.check_transaction({"from": "addr1", "to": "addr2", "amount": 5000})["risk"] is RiskLevel.LOW
+    checker.add_block("addr1")
+    assert checker.check_transaction({"from": "addr1", "to": "addr2"})["risk"] is RiskLevel.BLOCKED
+    assert checker.check_transaction({"from": "a", "to": "b", "country": "KP"})["risk"] is RiskLevel.HIGH
+    assert checker.check_transaction({"from": "a", "to": "b", "amount": 20000})["risk"] is RiskLevel.MEDIUM
+    print("aml checker self-test passed")
