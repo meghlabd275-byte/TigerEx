@@ -8,23 +8,16 @@ description = "TigerEx Authentication Service - Production Ready"
 [dependencies]
 # Web server
 axum = "0.7.4"
-tower = "0.4.13"
 tower-http = { version = "0.5.1", features = ["cors", "trace", "add-extension"] }
 
 # Async runtime
 tokio = { version = "1.36", features = ["full"] }
 
-# Database
-sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid", "json"] }
-postgres-native-tls = "0.5"
-
 # Cryptography
 argon2 = "0.5"
-bcrypt = "0.15"
 jsonwebtoken = "9.2"
 totp-rs = { version = "5.5", features = ["otpauth", "gen_secret"] }
 rand = "0.8"
-base64 = "0.22"
 sha2 = "0.10"
 
 # Serialization
@@ -36,22 +29,10 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.7", features = ["v4", "serde"] }
 thiserror = "1.0"
 anyhow = "1.0"
-async-trait = "0.1"
 
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
-
-# Validation
-validator = { version = "0.16", features = ["derive"] }
-
-# Cache
-redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
-
-[dev-dependencies]
-tokio-test = "0.4"
-
 [[bin]]
 name = "auth-service"
 path = "src/main.rs"
