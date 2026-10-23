@@ -3,7 +3,7 @@
 //! WHY RUST: Deterministic, no GC pauses during liquidation
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Position side
@@ -233,14 +233,6 @@ impl LiquidationEngine {
         }
 
         events
-    }
-
-    /// Execute liquidation
-    fn execute_liquidations(&self, position: &mut Position, current_price: f64) -> LiquidationEvent {
-        position.status = PositionStatus::Liquidating;
-        
-        // Realized loss is margin that's lost
-        let realized_loss = position.margin;
     }
 
     /// Execute liquidation internally

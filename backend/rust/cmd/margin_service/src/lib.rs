@@ -2,7 +2,7 @@
 //! Leveraged trading with margin
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Margin account
@@ -77,8 +77,8 @@ impl MarginService {
             return Err("Minimum collateral is $100".to_string());
         }
 
-        let account = MarginAccount::new(user_id);
-        let account.collateral = collateral;
+        let mut account = MarginAccount::new(user_id);
+        account.collateral = collateral;
 
         let mut accounts = self.accounts.write().unwrap();
         accounts.insert(user_id.to_string(), account.clone());

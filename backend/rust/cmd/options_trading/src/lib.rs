@@ -2,7 +2,7 @@
 //! Handles options contract trading
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Option type
@@ -136,7 +136,7 @@ impl OptionsTradingService {
         let spot_price = prices.get(&contract.underlying).ok_or("No spot price")?;
 
         // Calculate payout
-        let payout = contract.intrinsic_value(spot_price);
+        let payout = contract.intrinsic_value(*spot_price);
 
         // Update position status
         let mut positions = self.positions.write().unwrap();
