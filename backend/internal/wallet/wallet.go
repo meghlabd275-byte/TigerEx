@@ -3,8 +3,11 @@ package wallet
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
+
+	"tigerex/backend/internal/security"
 )
 
 type WalletService struct {
@@ -22,7 +25,7 @@ type WalletConfig struct {
 }
 
 type SecurityLayer interface {
-	GetSecurityContext(r interface{}) interface{}
+	GetSecurityContext(r *http.Request) *security.SecurityContext
 }
 
 type CryptoManager interface {

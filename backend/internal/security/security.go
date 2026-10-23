@@ -2,7 +2,7 @@ package security
 
 import (
 	"context"
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -88,10 +88,10 @@ func NewSecurityLayer(config SecurityConfig, crypto CryptoManager) *SecurityLaye
 	}
 }
 
-func NewRateLimiter(rate int, burst int) *RateLimiter {
+func NewRateLimiter(r rate.Limit, burst int) *RateLimiter {
 	return &RateLimiter{
 		limiters: make(map[string]*rate.Limiter),
-		rate:     rate,
+		rate:     r,
 		burst:    burst,
 	}
 }
@@ -143,11 +143,10 @@ func (c *CSRFTokenManager) Generate(sessionID string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Generate random token
 	randomBytes := make([]byte, 32)
-	// In production, use crypto/rand
-	for i := range randomBytes {
-		randomBytes[i] = byte(i * 17 % 256)
+	if _, err := rand.Read(randomBytes); err != nil {
+		log.Printf("CSRF: failed to read random bytes: %v", err)
+		return ""
 	}
 	token := hex.EncodeToString(randomBytes)
 
@@ -388,12 +387,14 @@ type SecurityContext struct {
 	TwoFactorEnabled   bool
 }
 
+// GetSecurityContext describes the transport-level properties of a request.
+// It deliberately does not derive identity from request headers: the caller
+// identity comes from the verified access token, and asserting IsVerified
+// here would let any client claim an authenticated session.
 func (s *SecurityLayer) GetSecurityContext(r *http.Request) *SecurityContext {
 	return &SecurityContext{
-		UserID:     r.Header.Get("X-User-ID"),
-		SessionID:  s.getSessionID(r),
-		IPAddress:  s.getClientIP(r),
-		IsVerified: true,
+		SessionID: s.getSessionID(r),
+		IPAddress: s.getClientIP(r),
 	}
 }
 

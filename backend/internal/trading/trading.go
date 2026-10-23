@@ -3,10 +3,12 @@ package trading
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
 	"tigerex/backend/internal/matching"
+	"tigerex/backend/internal/security"
 	"tigerex/backend/internal/wallet"
 )
 
@@ -38,7 +40,7 @@ type TradingConfig struct {
 }
 
 type SecurityLayer interface {
-	GetSecurityContext(r interface{}) interface{}
+	GetSecurityContext(r *http.Request) *security.SecurityContext
 }
 
 type Order struct {
@@ -115,6 +117,7 @@ func (s *TradingService) PlaceOrder(userID, symbol string, side matching.OrderSi
 		Type:      orderType,
 		Price:     price,
 		Quantity:  quantity,
+		Remaining: quantity,
 		Timestamp: time.Now(),
 		Status:    matching.StatusNew,
 	}
@@ -138,6 +141,11 @@ func (s *TradingService) PlaceOrder(userID, symbol string, side matching.OrderSi
 	}
 
 	return order, nil
+}
+
+// OrderBook returns the live order book for a symbol.
+func (s *TradingService) OrderBook(symbol string) (*matching.OrderBook, error) {
+	return s.matchingEngine.GetOrderBook(symbol)
 }
 
 func (s *TradingService) CancelOrder(userID, orderID string) error {

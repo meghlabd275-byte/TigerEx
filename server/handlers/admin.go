@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -805,7 +806,9 @@ func DeletePair(c *gin.Context) {
 
 func ImportPairsFromCEX(c *gin.Context) {
 	adminID := checkAdminPermission(c, "pairs")
-	if adminID == "" { return }
+	if adminID == "" {
+		return
+	}
 	var req struct {
 		Source string `json:"source" binding:"required,oneof=binance bybit okx kucoin gate huobi"`
 	}
@@ -816,6 +819,7 @@ func ImportPairsFromCEX(c *gin.Context) {
 	// Live instrument metadata must be fetched, validated, normalized, and reconciled by a real provider adapter.
 	c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": http.StatusServiceUnavailable, "message": "Live instrument-catalogue adapters are not configured; no pairs were imported"}})
 }
+
 // ============ FEES MANAGEMENT ============
 
 func CreateFeeStructure(c *gin.Context) {
@@ -1012,7 +1016,7 @@ func GetAllTickets(c *gin.Context) {
 	status := c.Query("status")
 	priority := c.Query("priority")
 
-	query := `SELECT t.id, t.user_id, u.username, t.subject, t.description, t.priority, 
+	query := `SELECT t.ticket_id, t.user_id, u.username, t.subject, t.description, t.priority, 
 			  t.status, t.assigned_to, t.created_at, t.updated_at
 		  FROM support_tickets t
 		  LEFT JOIN users u ON t.user_id = u.id WHERE 1=1`
@@ -1043,21 +1047,25 @@ func GetAllTickets(c *gin.Context) {
 	for rows.Next() {
 		var id uuid.UUID
 		var userId uuid.UUID
-		var username, subject, description, priority, status, assignedTo string
+		// username, description and assigned_to are nullable: an unassigned
+		// ticket or a deleted user yields SQL NULL. Scanning NULL into a
+		// plain string fails, which would silently drop every such row.
+		var username, subject, description, priority, status, assignedTo sql.NullString
 		var createdAt, updatedAt *time.Time
 
 		if err := rows.Scan(&id, &userId, &username, &subject, &description, &priority, &status, &assignedTo, &createdAt, &updatedAt); err != nil {
-			continue
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Failed to read tickets"}})
+			return
 		}
 		t := gin.H{
 			"id":          id,
 			"userId":      userId,
-			"username":    username,
-			"subject":     subject,
-			"description": description,
-			"priority":    priority,
-			"status":      status,
-			"assignedTo":  assignedTo,
+			"username":    username.String,
+			"subject":     subject.String,
+			"description": description.String,
+			"priority":    priority.String,
+			"status":      status.String,
+			"assignedTo":  assignedTo.String,
 			"createdAt":   createdAt,
 			"updatedAt":   updatedAt,
 		}
@@ -1074,32 +1082,77 @@ func RespondToTicket(c *gin.Context) {
 	}
 
 	ticketID := c.Param("ticketId")
+	if _, err := uuid.Parse(ticketID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid ticket ID"}})
+		return
+	}
 
 	var req struct {
-		Status   string `json:"status" binding:"required"`
+		Status   string `json:"status"`
 		Reply    string `json:"reply"`
 		AssignTo string `json:"assignTo"`
 	}
-	c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid request body"}})
+		return
+	}
 
-	updates := "updated_at = NOW()"
-	args := []interface{}{}
+	ctx := c.Request.Context()
+
+	// The ticket update and the reply message must land together, so both run in
+	// one transaction and any failure rolls the whole response back.
+	tx, err := models.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Service unavailable"}})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Placeholder numbering is derived from the arguments actually bound. The
+	// ticket ID is reserved up front at $1 so the WHERE clause can never collide
+	// with a SET placeholder.
+	setClauses := []string{"updated_at = NOW()"}
+	args := []interface{}{ticketID}
+	argNum := 2
 
 	if req.Status != "" {
-		updates += ", status = $1"
+		setClauses = append(setClauses, fmt.Sprintf("status = $%d", argNum))
 		args = append(args, req.Status)
+		argNum++
 	}
 	if req.AssignTo != "" {
-		updates += fmt.Sprintf(", assigned_to = $%d", len(args)+1)
+		if _, err := uuid.Parse(req.AssignTo); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid assignee ID"}})
+			return
+		}
+		setClauses = append(setClauses, fmt.Sprintf("assigned_to = $%d", argNum))
 		args = append(args, req.AssignTo)
+		argNum++
 	}
 
-	query := "UPDATE support_tickets SET " + updates + " WHERE id = $1"
-	args = append(args, ticketID)
-
-	_, err := models.Pool.Exec(c.Request.Context(), query, args...)
+	query := "UPDATE support_tickets SET " + strings.Join(setClauses, ", ") + " WHERE ticket_id = $1"
+	tag, err := tx.Exec(ctx, query, args...)
 	if err != nil {
-		c.JSON(500, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Update failed"}})
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Update failed"}})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Ticket not found"}})
+		return
+	}
+
+	if req.Reply != "" {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO support_messages (ticket_id, sender_id, sender_type, message, is_internal)
+			VALUES ($1, $2, 'support', $3, FALSE)
+		`, ticketID, adminID, req.Reply); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Reply could not be saved"}})
+			return
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Update failed"}})
 		return
 	}
 

@@ -3,8 +3,11 @@ package kyc
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
+
+	"tigerex/backend/internal/security"
 )
 
 type KYCService struct {
@@ -23,7 +26,7 @@ type KYCConfig struct {
 }
 
 type SecurityLayer interface {
-	GetSecurityContext(r interface{}) interface{}
+	GetSecurityContext(r *http.Request) *security.SecurityContext
 }
 
 type KYCApplication struct {
@@ -66,11 +69,10 @@ func NewKYCService(config KYCConfig, security SecurityLayer) *KYCService {
 
 func (s *KYCService) SubmitApplication(userID, documentType, documentID string) (*KYCApplication, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	// Check if user already has pending application
 	for _, app := range s.applications {
 		if app.UserID == userID && app.Status == StatusPending {
+			s.mu.Unlock()
 			return nil, fmt.Errorf("pending application already exists")
 		}
 	}
@@ -80,41 +82,43 @@ func (s *KYCService) SubmitApplication(userID, documentType, documentID string) 
 		UserID:        userID,
 		Level:         1,
 		Status:        StatusPending,
-		DocumentType:  documentType,
-		DocumentID:    documentID,
-		SubmittedAt:   time.Now(),
+		DocumentType:   documentType,
+		DocumentID:     documentID,
+		LivenessResult: LivenessPending,
+		SubmittedAt:    time.Now(),
 	}
 
 	s.applications[application.ApplicationID] = application
+	s.mu.Unlock()
 
-	// Process document verification
-	go s.processDocument(application)
+	s.processDocument(application)
 
 	return application, nil
 }
 
 func (s *KYCService) SubmitSelfie(userID, selfieURL string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	// Find user's application
+	// An application may already be under review, so accept both pending
+	// and reviewing states.
 	var application *KYCApplication
 	for _, app := range s.applications {
-		if app.UserID == userID && app.Status == StatusPending {
+		if app.UserID == userID && (app.Status == StatusPending || app.Status == StatusReviewing) {
 			application = app
 			break
 		}
 	}
 
 	if application == nil {
+		s.mu.Unlock()
 		return fmt.Errorf("no pending application found")
 	}
 
 	application.SelfieURL = selfieURL
+	s.mu.Unlock()
 
-	// Process liveness check
 	if s.config.EnableLivenessCheck {
-		go s.processLiveness(application)
+		s.processLiveness(application)
 	}
 
 	return nil
@@ -126,22 +130,22 @@ func (s *KYCService) SubmitVideoKYC(userID, videoURL string) error {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	var application *KYCApplication
 	for _, app := range s.applications {
-		if app.UserID == userID && app.Status == StatusPending {
+		if app.UserID == userID && (app.Status == StatusPending || app.Status == StatusReviewing) {
 			application = app
 			break
 		}
 	}
 
 	if application == nil {
+		s.mu.Unlock()
 		return fmt.Errorf("no pending application found")
 	}
+	s.mu.Unlock()
 
-	// Process video verification
-	go s.processVideoKYC(application)
+	s.processVideoKYC(application)
 
 	return nil
 }
@@ -196,41 +200,35 @@ func (s *KYCService) ReviewApplication(applicationID, reviewerID, reason string,
 	return nil
 }
 
+// processDocument moves an application into manual review. No automated
+// document-verification service is wired in this build, so the application
+// is queued for a human reviewer rather than being auto-approved.
 func (s *KYCService) processDocument(application *KYCApplication) {
-	// Simulate document verification
-	time.Sleep(2 * time.Second)
-
-	// In production, integrate with document verification service
-	// Verify document authenticity, extract data, check for fraud
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	application.Status = StatusReviewing
-	log.Printf("KYC: Document verification started for application %s", application.ApplicationID)
+	log.Printf("KYC: application %s queued for manual document review", application.ApplicationID)
 }
 
+// processLiveness records that a selfie is awaiting review. No liveness
+// detection model is wired in this build, so the result stays pending and a
+// reviewer decides the outcome.
 func (s *KYCService) processLiveness(application *KYCApplication) {
-	// Simulate liveness check
-	time.Sleep(1 * time.Second)
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// In production, use ML model for liveness detection
-	application.LivenessResult = LivenessPassed
-	log.Printf("KYC: Liveness check completed for application %s", application.ApplicationID)
+	application.LivenessResult = LivenessPending
+	log.Printf("KYC: liveness for application %s requires manual review", application.ApplicationID)
 }
 
+// processVideoKYC queues a video session for manual review.
 func (s *KYCService) processVideoKYC(application *KYCApplication) {
-	// Simulate video KYC verification
-	time.Sleep(3 * time.Second)
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	application.Status = StatusReviewing
-	log.Printf("KYC: Video verification started for application %s", application.ApplicationID)
+	log.Printf("KYC: video session for application %s queued for manual review", application.ApplicationID)
 }
 
 func generateApplicationID() string {

@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/pquerna/otp/totp"
 )
 
 type AuthService struct {
@@ -19,6 +21,7 @@ type AuthService struct {
 	mu        sync.RWMutex
 	sessions  map[string]*Session
 	refreshTokens map[string]*RefreshToken
+	users     map[string]*User
 }
 
 type AuthConfig struct {
@@ -73,6 +76,7 @@ type User struct {
 
 type SecurityLayer interface {
 	HashPassword(password string) (string, error)
+	ValidatePassword(password string) error
 	VerifyPassword(password, hash string) (bool, error)
 	GenerateAntiPhishingCode(userID string) string
 	HandleFailedLogin(username, ip string) error
@@ -90,6 +94,7 @@ func NewAuthService(config AuthConfig, security SecurityLayer) *AuthService {
 		jwtSecret:      jwtSecret,
 		sessions:       make(map[string]*Session),
 		refreshTokens: make(map[string]*RefreshToken),
+		users:          make(map[string]*User),
 	}
 }
 
@@ -136,6 +141,21 @@ func (s *AuthService) Login(ctx context.Context, login, password, ip, userAgent 
 	return session, nil
 }
 
+// UserByID returns the stored user, or nil when the user does not exist.
+func (s *AuthService) UserByID(userID string) *User {
+	return s.findUserByID(userID)
+}
+
+// IssueAccessToken mints a signed access token for an authenticated
+// session. Callers must have verified the session (including any second
+// factor) before calling it.
+func (s *AuthService) IssueAccessToken(ctx context.Context, session *Session) (string, error) {
+	if session == nil {
+		return "", fmt.Errorf("session is required")
+	}
+	return s.generateAccessToken(session)
+}
+
 // Login with 2FA
 func (s *AuthService) LoginWith2FA(ctx context.Context, sessionID, code string) (*Session, error) {
 	s.mu.RLock()
@@ -163,13 +183,13 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (st
 	s.mu.RUnlock()
 
 	if !exists || token.Revoked || time.Now().After(token.ExpiresAt) {
-		return nil, fmt.Errorf("invalid refresh token")
+		return "", fmt.Errorf("invalid refresh token")
 	}
 
 	// Generate new access token
 	session := s.sessions[token.TokenID]
 	if session == nil {
-		return nil, fmt.Errorf("session not found")
+		return "", fmt.Errorf("session not found")
 	}
 
 	return s.generateAccessToken(session)
@@ -192,7 +212,8 @@ func (s *AuthService) Logout(ctx context.Context, sessionID string) error {
 
 // Validate token
 func (s *AuthService) ValidateToken(ctx context.Context, tokenString string) (*Claims, error) {
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+	claims := &Claims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
@@ -202,12 +223,11 @@ func (s *AuthService) ValidateToken(ctx context.Context, tokenString string) (*C
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse token: %w", err)
 	}
-
-	if claims, ok := token.Claims.(Claims); ok && token.Valid {
-		return &claims, nil
+	if !token.Valid {
+		return nil, fmt.Errorf("invalid token")
 	}
 
-	return nil, fmt.Errorf("invalid token")
+	return claims, nil
 }
 
 // Register new user
@@ -252,19 +272,44 @@ func (s *AuthService) Register(ctx context.Context, email, phone, username, pass
 	return user, nil
 }
 
-// Enable 2FA
+// Enable2FA provisions a TOTP secret. Two-factor authentication stays
+// disabled until Confirm2FA verifies a code generated from the secret.
 func (s *AuthService) Enable2FA(ctx context.Context, userID string) (string, error) {
-	secret := s.generate2FASecret()
-
 	user := s.findUserByID(userID)
 	if user == nil {
 		return "", fmt.Errorf("user not found")
 	}
 
+	secret, err := s.generate2FASecret(userID)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate 2FA secret: %w", err)
+	}
+
+	s.mu.Lock()
 	user.TwoFactorSecret = secret
-	user.TwoFactorEnabled = true
+	user.TwoFactorEnabled = false
+	s.mu.Unlock()
 
 	return secret, nil
+}
+
+// Confirm2FA enables two-factor authentication once the caller proves they
+// can produce a valid code from the provisioned secret.
+func (s *AuthService) Confirm2FA(ctx context.Context, userID, code string) error {
+	user := s.findUserByID(userID)
+	if user == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	if !s.verify2FACode(user.TwoFactorSecret, code) {
+		return fmt.Errorf("invalid 2FA code")
+	}
+
+	s.mu.Lock()
+	user.TwoFactorEnabled = true
+	s.mu.Unlock()
+
+	return nil
 }
 
 // Disable 2FA
@@ -369,6 +414,9 @@ func (s *AuthService) MetaMaskLogin(ctx context.Context, address, signature, mes
 
 	// Find or create user
 	user := s.findOrCreateWalletUser(address)
+	if user == nil {
+		return nil, fmt.Errorf("invalid wallet address")
+	}
 
 	// Create session
 	session := s.createSession(user.ID, "", "")
@@ -405,14 +453,14 @@ func (s *AuthService) createSession(userID, ip, userAgent string) *Session {
 }
 
 func (s *AuthService) generateAccessToken(session *Session) (string, error) {
-	claims := Claims{
+	claims := &Claims{
 		UserID:    session.UserID,
 		SessionID: session.SessionID,
 		IPAddress: session.IPAddress,
-		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: session.ExpiresAt.Unix(),
-			IssuedAt:  time.Now().Unix(),
-			NotBefore: time.Now().Unix(),
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(session.ExpiresAt),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "tigerex",
 		},
 	}
@@ -421,52 +469,130 @@ func (s *AuthService) generateAccessToken(session *Session) (string, error) {
 	return token.SignedString(s.jwtSecret)
 }
 
-func (s *AuthService) generate2FASecret() string {
-	bytes := make([]byte, 20)
-	rand.Read(bytes)
-	return base64.StdEncoding.EncodeToString(bytes)
+// generate2FASecret returns a new base32 TOTP secret. The account name is
+// the user identifier so authenticator apps display something meaningful.
+func (s *AuthService) generate2FASecret(account string) (string, error) {
+	key, err := totp.Generate(totp.GenerateOpts{
+		Issuer:      "TigerEx",
+		AccountName: account,
+	})
+	if err != nil {
+		return "", err
+	}
+	return key.Secret(), nil
 }
 
+// verify2FACode validates a 6-digit TOTP code against the shared secret.
 func (s *AuthService) verify2FACode(secret, code string) bool {
-	// In production, use proper TOTP verification
-	return len(code) == 6
+	if secret == "" {
+		return false
+	}
+	return totp.Validate(code, secret)
 }
 
 func (s *AuthService) findUserByLogin(login string) *User {
-	// In production, query database
-	return &User{
-		ID:          "user-1",
-		Email:       login,
-		PasswordHash: "$2a$10$xxx", // Pre-hashed for demo
-	}
-}
+	login = strings.ToLower(strings.TrimSpace(login))
 
-func (s *AuthService) findUserByID(userID string) *User {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, u := range s.users {
+		if u.Email == login || u.Phone == login || u.Username == login {
+			return u
+		}
+	}
 	return nil
 }
 
+func (s *AuthService) findUserByID(userID string) *User {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.users[userID]
+}
+
 func (s *AuthService) userExists(email, phone string) bool {
+	email = strings.ToLower(strings.TrimSpace(email))
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, u := range s.users {
+		if u.Email != "" && u.Email == email {
+			return true
+		}
+		if u.Phone != "" && u.Phone == phone {
+			return true
+		}
+	}
 	return false
 }
 
 func (s *AuthService) saveUser(user *User) {
-	// In production, save to database
+	s.mu.Lock()
+	s.users[user.ID] = user
+	s.mu.Unlock()
 }
 
+// findOrCreateSocialUser records a user for a verified social profile.
 func (s *AuthService) findOrCreateSocialUser(provider string, profile map[string]string) *User {
-	return &User{ID: generateID()}
+	email := strings.ToLower(strings.TrimSpace(profile["email"]))
+	if email != "" {
+		if existing := s.findUserByLogin(email); existing != nil {
+			return existing
+		}
+	}
+
+	user := &User{
+		ID:            generateID(),
+		Email:         email,
+		Username:      profile["name"],
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+		EmailVerified: email != "",
+		Status:        "active",
+	}
+	s.saveUser(user)
+	return user
 }
 
 func (s *AuthService) findOrCreateWalletUser(address string) *User {
-	return &User{ID: generateID()}
+	address = strings.ToLower(strings.TrimSpace(address))
+	if address == "" {
+		return nil
+	}
+
+	s.mu.RLock()
+	for _, u := range s.users {
+		if u.Username == address {
+			s.mu.RUnlock()
+			return u
+		}
+	}
+	s.mu.RUnlock()
+
+	user := &User{
+		ID:        generateID(),
+		Username:  address,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Status:    "active",
+	}
+	s.saveUser(user)
+	return user
 }
 
+// verifySocialToken exchanges a provider token for the caller identity.
+// The provider integration is not configured in this build, so the call is
+// rejected rather than trusting an unverified token.
 func (s *AuthService) verifySocialToken(provider, token string) (map[string]string, error) {
-	return map[string]string{}, nil
+	return nil, fmt.Errorf("social login provider %q is not configured", provider)
 }
 
+// verifyMetaMaskSignature verifies an EIP-191 personal_sign signature. The
+// recovery backend is not configured in this build, so the signature is
+// rejected rather than accepted unconditionally.
 func (s *AuthService) verifyMetaMaskSignature(address, signature, message string) bool {
-	return true
+	return false
 }
 
 func generateID() string {
@@ -479,6 +605,16 @@ type Claims struct {
 	UserID    string `json:"user_id"`
 	SessionID string `json:"session_id"`
 	IPAddress string `json:"ip_address"`
-	jwt.StandardClaims
+	jwt.RegisteredClaims
 }
+
+// The following accessors satisfy jwt.Claims. They are required for
+// jwt.Parse to decode into a *Claims instead of a generic MapClaims.
+
+func (c *Claims) GetExpirationTime() (*jwt.NumericDate, error) { return c.RegisteredClaims.GetExpirationTime() }
+func (c *Claims) GetIssuedAt() (*jwt.NumericDate, error)       { return c.RegisteredClaims.GetIssuedAt() }
+func (c *Claims) GetNotBefore() (*jwt.NumericDate, error)      { return c.RegisteredClaims.GetNotBefore() }
+func (c *Claims) GetIssuer() (string, error)                   { return c.RegisteredClaims.GetIssuer() }
+func (c *Claims) GetSubject() (string, error)                  { return c.RegisteredClaims.GetSubject() }
+func (c *Claims) GetAudience() (jwt.ClaimStrings, error)       { return c.RegisteredClaims.GetAudience() }
 

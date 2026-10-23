@@ -18,7 +18,6 @@ import (
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/pbkdf2"
-	"golang.org/x/crypto/scrypt"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -274,7 +273,11 @@ func (c *CryptoManager) GenerateEncryptionKey() ([]byte, error) {
 }
 
 func (c *CryptoManager) GenerateRSAKeyPair(bits int) (*rsa.PrivateKey, *rsa.PublicKey, error) {
-	return rsa.GenerateKey(rand.Reader, bits)
+	key, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		return nil, nil, err
+	}
+	return key, &key.PublicKey, nil
 }
 
 // Crypto utilities

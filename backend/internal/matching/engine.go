@@ -327,18 +327,18 @@ func (e *Engine) executeLimitOrder(ob *OrderBook, order *Order) ([]*Trade, error
 }
 
 func (e *Engine) executeOCO(ob *OrderBook, order *Order) ([]*Trade, error) {
-	// One Cancels Other - implement logic
-	return nil, nil
+	return nil, fmt.Errorf("order type %s is not supported by this engine", order.Type)
 }
 
 func (e *Engine) executeTrailingStop(ob *OrderBook, order *Order) ([]*Trade, error) {
-	// Trailing stop - implement logic
-	return nil, nil
+	return nil, fmt.Errorf("order type %s is not supported by this engine", order.Type)
 }
 
-func (e *Engine) addStopOrder(ob *OrderBook, order *Order) error {
-	// Add stop order to pending list
-	return nil
+func (e *Engine) addStopOrder(ob *OrderBook, order *Order) ([]*Trade, error) {
+	// This engine has no stop-order trigger loop, so it cannot honour the
+	// order. Report an error rather than accepting an order that would
+	// never execute.
+	return nil, fmt.Errorf("order type %s is not supported by this engine", order.Type)
 }
 
 func (e *Engine) Shutdown() {

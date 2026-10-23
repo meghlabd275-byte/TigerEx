@@ -3,12 +3,16 @@ package handlers
 
 import (
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"math/rand"
 	"net/http"
+	"net/mail"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -82,7 +86,16 @@ func GetRecentTrades(c *gin.Context) {
 func Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
+		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid request body"}})
+		return
+	}
+
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	req.Username = strings.ToLower(strings.TrimSpace(req.Username))
+	req.CountryCode = strings.ToUpper(strings.TrimSpace(req.CountryCode))
+
+	if err := validateRegistration(req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
 		return
 	}
 
@@ -90,7 +103,7 @@ func Register(c *gin.Context) {
 	var count int
 	err := models.Pool.QueryRow(c.Request.Context(),
 		"SELECT COUNT(*) FROM users WHERE email = $1 OR username = $2",
-		strings.ToLower(req.Email), strings.ToLower(req.Username)).Scan(&count)
+		req.Email, req.Username).Scan(&count)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Registration is temporarily unavailable"}})
 		return
@@ -123,7 +136,7 @@ func Register(c *gin.Context) {
 	_, err = tx.Exec(ctx, `
 		INSERT INTO users (id, email, username, password_hash, password_salt, referral_code, status, kyc_level, jurisdiction)
 		VALUES ($1, $2, $3, $4, $5, $6, 'active', 0, $7)
-	`, userID, strings.ToLower(req.Email), strings.ToLower(req.Username), string(hash), salt, refCode, req.CountryCode)
+	`, userID, req.Email, req.Username, string(hash), salt, refCode, req.CountryCode)
 
 	if err != nil {
 		c.JSON(500, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Failed to create user"}})
@@ -179,6 +192,67 @@ func Register(c *gin.Context) {
 			},
 		},
 	})
+}
+
+type RegisterRequest struct {
+	Email       string `json:"email" binding:"required"`
+	Username    string `json:"username" binding:"required"`
+	Password    string `json:"password" binding:"required"`
+	CountryCode string `json:"countryCode"`
+}
+
+const (
+	// Bounds are chosen so that stored values always fit the VARCHAR widths in
+	// the canonical schema (email 255, username 100, jurisdiction 3).
+	minPasswordLength = 12
+	maxPasswordLength = 128
+	maxEmailLength    = 255
+	maxUsernameLength = 100
+	minUsernameLength = 3
+)
+
+// validateRegistration rejects malformed or abusive registration input before
+// it reaches the database. Every rejection returns a generic message so the
+// endpoint does not leak which constraint failed.
+func validateRegistration(req RegisterRequest) error {
+	if req.Email == "" || utf8.RuneCountInString(req.Email) > maxEmailLength {
+		return errors.New("Invalid email address")
+	}
+	addr, err := mail.ParseAddress(req.Email)
+	if err != nil || addr.Address != req.Email {
+		return errors.New("Invalid email address")
+	}
+
+	if len(req.Username) < minUsernameLength || utf8.RuneCountInString(req.Username) > maxUsernameLength {
+		return fmt.Errorf("Username must be between %d and %d characters", minUsernameLength, maxUsernameLength)
+	}
+	for _, r := range req.Username {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '_' && r != '-' && r != '.' {
+			return errors.New("Username may only contain letters, numbers, dot, dash and underscore")
+		}
+	}
+
+	// Reject control characters outright rather than trimming them away.
+	for _, r := range req.Password {
+		if r < 0x20 || r == 0x7f {
+			return errors.New("Password may not contain control characters")
+		}
+	}
+	if len(req.Password) < minPasswordLength || len(req.Password) > maxPasswordLength {
+		return fmt.Errorf("Password must be between %d and %d characters", minPasswordLength, maxPasswordLength)
+	}
+
+	if req.CountryCode != "" {
+		if len(req.CountryCode) != 2 {
+			return errors.New("Country code must be a 2-letter ISO 3166-1 alpha-2 code")
+		}
+		for _, r := range req.CountryCode {
+			if r < 'A' || r > 'Z' {
+				return errors.New("Country code must be a 2-letter ISO 3166-1 alpha-2 code")
+			}
+		}
+	}
+	return nil
 }
 
 type LoginRequest struct {

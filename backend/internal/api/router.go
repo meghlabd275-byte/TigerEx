@@ -1,9 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
-	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"tigerex/backend/internal/auth"
@@ -16,21 +17,21 @@ import (
 )
 
 type Router struct {
-	AuthService    auth.AuthService
-	KYCService     kyc.KYCService
-	WalletService  wallet.WalletService
-	TradingService trading.TradingService
-	SecurityLayer  security.SecurityLayer
+	AuthService    *auth.AuthService
+	KYCService     *kyc.KYCService
+	WalletService  *wallet.WalletService
+	TradingService *trading.TradingService
+	SecurityLayer  *security.SecurityLayer
 	Config         *config.Config
 	mux            *http.ServeMux
 }
 
 type RouterConfig struct {
-	AuthService    auth.AuthService
-	KYCService     kyc.KYCService
-	WalletService  wallet.WalletService
-	TradingService trading.TradingService
-	SecurityLayer  security.SecurityLayer
+	AuthService    *auth.AuthService
+	KYCService     *kyc.KYCService
+	WalletService  *wallet.WalletService
+	TradingService *trading.TradingService
+	SecurityLayer  *security.SecurityLayer
 	Config         *config.Config
 }
 
@@ -60,13 +61,67 @@ func (r *Router) Handler() http.Handler {
 	return r.mux
 }
 
+// publicRoutes are the only API paths reachable without an authenticated
+// session. Everything else requires a valid access token.
+var publicRoutes = map[string]bool{
+	"/api/v1/auth/login":           true,
+	"/api/v1/auth/register":        true,
+	"/api/v1/auth/logout":          true,
+	"/api/v1/auth/refresh":         true,
+	"/api/v1/auth/password/reset":  true,
+	"/api/v1/auth/identifier/check": true,
+	"/api/v1/auth/verify-code":     true,
+	"/api/v1/auth/social":          true,
+	"/api/v1/auth/metamask":        true,
+	"/api/v1/auth/passkey":         true,
+	"/api/v1/auth/biometric":       true,
+}
+
+type authContextKey struct{}
+
+// authenticate resolves the bearer token and injects the caller identity
+// into the request context. It fails closed: a missing or invalid token
+// never reaches a protected handler.
+func (r *Router) authenticate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if publicRoutes[req.URL.Path] {
+			next.ServeHTTP(w, req)
+			return
+		}
+
+		header := req.Header.Get("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		claims, err := r.AuthService.ValidateToken(req.Context(), strings.TrimPrefix(header, "Bearer "))
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		ctx := context.WithValue(req.Context(), authContextKey{}, claims)
+		next.ServeHTTP(w, req.WithContext(ctx))
+	})
+}
+
+// userID returns the authenticated caller from the request context. It
+// returns an empty string when the request was not authenticated.
+func userID(req *http.Request) string {
+	if claims, ok := req.Context().Value(authContextKey{}).(*auth.Claims); ok && claims != nil {
+		return claims.UserID
+	}
+	return ""
+}
+
 func (r *Router) setupRoutes() {
 	// Health check
 	r.mux.HandleFunc("/health", r.healthCheck)
 
 	// API v1
 	apiV1 := http.HandlerFunc(r.handleAPIv1)
-	r.mux.Handle("/api/v1/", r.SecurityLayer.CSRFProtection(apiV1))
+	r.mux.Handle("/api/v1/", r.SecurityLayer.CSRFProtection(r.authenticate(apiV1)))
 
 	// WebSocket
 	r.mux.HandleFunc("/ws", r.handleWebSocket)
@@ -86,7 +141,7 @@ func (r *Router) healthCheck(w http.ResponseWriter, req *http.Request) {
 func (r *Router) handleAPIv1(w http.ResponseWriter, req *http.Request) {
 	path := req.URL.Path
 
-	switch {
+	switch path {
 	// Auth routes
 	case "/api/v1/auth/login":
 		r.handleLogin(w, req)
@@ -198,15 +253,35 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	session, err := r.AuthService.Login(req.Context(), reqBody.Login, reqBody.Password, r.SecurityLayer.GetSecurityContext(req).(*security.SecurityContext).IPAddress, req.UserAgent())
+	ctx := req.Context()
+	session, err := r.AuthService.Login(ctx, reqBody.Login, reqBody.Password, r.SecurityLayer.GetSecurityContext(req).IPAddress, req.UserAgent())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 
+	// A user with 2FA enabled receives a challenge session that must be
+	// completed before an access token is issued.
+	if user := r.AuthService.UserByID(session.UserID); user != nil && user.TwoFactorEnabled {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":       true,
+			"two_factor":    true,
+			"session_id":    session.SessionID,
+			"access_token":  "",
+		})
+		return
+	}
+
+	accessToken, err := r.AuthService.IssueAccessToken(ctx, session)
+	if err != nil {
+		http.Error(w, "authentication error", http.StatusInternalServerError)
+		return
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"session": session,
+		"success":      true,
+		"session_id":   session.SessionID,
+		"access_token": accessToken,
 	})
 }
 
@@ -246,8 +321,12 @@ func (r *Router) handleLogout(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	sessionID := req.Header.Get("X-Session-ID")
-	r.AuthService.Logout(req.Context(), sessionID)
+	claims, _ := req.Context().Value(authContextKey{}).(*auth.Claims)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	r.AuthService.Logout(req.Context(), claims.SessionID)
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
@@ -287,7 +366,13 @@ func (r *Router) handleEnable2FA(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	secret, err := r.AuthService.Enable2FA(req.Context(), "user-id")
+	uid := userID(req)
+	if uid == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	secret, err := r.AuthService.Enable2FA(req.Context(), uid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -306,11 +391,43 @@ func (r *Router) handleVerify2FA(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var reqBody struct {
-		Code string `json:"code"`
+		SessionID string `json:"session_id"`
+		Code      string `json:"code"`
 	}
 
 	if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	ctx := req.Context()
+	if reqBody.SessionID != "" {
+		// Completing a login challenge: exchange the code for a token.
+		session, err := r.AuthService.LoginWith2FA(ctx, reqBody.SessionID, reqBody.Code)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
+		accessToken, err := r.AuthService.IssueAccessToken(ctx, session)
+		if err != nil {
+			http.Error(w, "authentication error", http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":      true,
+			"access_token": accessToken,
+		})
+		return
+	}
+
+	// Otherwise this confirms enrolment for the authenticated user.
+	uid := userID(req)
+	if uid == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err := r.AuthService.Confirm2FA(ctx, uid, reqBody.Code); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -333,14 +450,9 @@ func (r *Router) handleIdentifierCheck(w http.ResponseWriter, req *http.Request)
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	registered := reqBody.Identifier != "" && (len(reqBody.Identifier) >= 4)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":            true,
-		"registered":         registered,
-		"type":               reqBody.Type,
-		"two_factor_enabled": registered,
-		"withdrawal_locked_hours_after_security_change": 48,
-	})
+	// The user directory is not queryable from this handler, so the
+	// registration state cannot be reported truthfully.
+	http.Error(w, "identifier lookup is unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handleVerificationCode(w http.ResponseWriter, req *http.Request) {
@@ -348,7 +460,9 @@ func (r *Router) handleVerificationCode(w http.ResponseWriter, req *http.Request
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "verified": true})
+	// No email/SMS delivery backend is configured, so a code can neither be
+	// sent nor verified here.
+	http.Error(w, "verification codes are unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handleTwoFAReset(w http.ResponseWriter, req *http.Request) {
@@ -356,12 +470,9 @@ func (r *Router) handleTwoFAReset(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":                    true,
-		"previous_two_factor_erased": true,
-		"new_two_factor_ready":       true,
-		"withdrawals_disabled_until": time.Now().Add(48 * time.Hour).Unix(),
-	})
+	// Resetting 2FA requires identity re-verification, which is not
+	// implemented in this build. Refuse rather than report success.
+	http.Error(w, "two-factor reset is unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handleAuthOperation(w http.ResponseWriter, req *http.Request, provider string) {
@@ -370,12 +481,18 @@ func (r *Router) handleAuthOperation(w http.ResponseWriter, req *http.Request, p
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":       true,
-		"provider":      provider,
-		"status":        "verified",
-		"session_bound": true,
-	})
+	var reqBody struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Provider integrations are not configured in this build, so the
+	// credential is rejected instead of being trusted blindly.
+	_ = provider
+	http.Error(w, "provider authentication is unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handlePasswordReset(w http.ResponseWriter, req *http.Request) {
@@ -449,7 +566,7 @@ func (r *Router) handleKYCSubmit(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	app, err := r.KYCService.SubmitApplication("user-id", reqBody.DocumentType, reqBody.DocumentID)
+	app, err := r.KYCService.SubmitApplication(userID(req), reqBody.DocumentType, reqBody.DocumentID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -467,7 +584,7 @@ func (r *Router) handleKYCStatus(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	status, level, err := r.KYCService.GetStatus("user-id")
+	status, level, err := r.KYCService.GetStatus(userID(req))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -494,7 +611,7 @@ func (r *Router) handleKYCSelfie(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	err := r.KYCService.SubmitSelfie("user-id", reqBody.SelfieURL)
+	err := r.KYCService.SubmitSelfie(userID(req), reqBody.SelfieURL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -510,11 +627,17 @@ func (r *Router) handleKYCLiveness(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	application, err := r.KYCService.GetApplication(userID(req))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":        true,
-		"face_match":     true,
-		"liveness_score": 0.98,
-		"status":         "submitted_for_admin_review",
+		"success":  true,
+		"liveness": application.LivenessResult,
+		"status":   application.Status,
 	})
 }
 
@@ -524,7 +647,7 @@ func (r *Router) handleGetBalance(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	balance, err := r.WalletService.GetBalance("user-id", wallet.TypeSpot, "USDT")
+	balance, err := r.WalletService.GetBalance(userID(req), wallet.TypeSpot, "USDT")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -551,7 +674,7 @@ func (r *Router) handleDeposit(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	err := r.WalletService.Deposit("user-id", wallet.TypeSpot, reqBody.Symbol, reqBody.Amount)
+	err := r.WalletService.Deposit(userID(req), wallet.TypeSpot, reqBody.Symbol, reqBody.Amount)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -579,7 +702,7 @@ func (r *Router) handleWithdraw(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	err := r.WalletService.Withdraw("user-id", wallet.TypeSpot, reqBody.Symbol, reqBody.Amount, reqBody.ToAddress)
+	err := r.WalletService.Withdraw(userID(req), wallet.TypeSpot, reqBody.Symbol, reqBody.Amount, reqBody.ToAddress)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -607,7 +730,7 @@ func (r *Router) handleTransfer(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	err := r.WalletService.Transfer("user-id", reqBody.ToUser, wallet.TypeSpot, reqBody.Symbol, reqBody.Amount)
+	err := r.WalletService.Transfer(userID(req), reqBody.ToUser, wallet.TypeSpot, reqBody.Symbol, reqBody.Amount)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -623,13 +746,8 @@ func (r *Router) handleWalletHistory(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"history": []map[string]interface{}{
-			{"type": "deposit", "asset": "USDT", "amount": 2500, "chain": "TRC20", "status": "completed"},
-			{"type": "transfer", "asset": "BTC", "amount": 0.05, "from_wallet": "spot", "to_wallet": "futures", "status": "completed"},
-		},
-	})
+	// No ledger backend is wired to this handler.
+	http.Error(w, "wallet history is unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handleWalletTransfer(w http.ResponseWriter, req *http.Request, transferType string) {
@@ -650,13 +768,10 @@ func (r *Router) handleWalletTransfer(w http.ResponseWriter, req *http.Request, 
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":       true,
-		"transfer_type": transferType,
-		"asset":         reqBody.Asset,
-		"amount":        reqBody.Amount,
-		"status":        "completed",
-	})
+	// Wallet-to-wallet transfers are not implemented; a fabricated success
+	// would misrepresent a balance change that never happened.
+	_ = reqBody
+	http.Error(w, "wallet transfers are unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handleGetAddress(w http.ResponseWriter, req *http.Request) {
@@ -665,7 +780,7 @@ func (r *Router) handleGetAddress(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	addresses, err := r.WalletService.GetAddresses("user-id", wallet.TypeSpot)
+	addresses, err := r.WalletService.GetAddresses(userID(req), wallet.TypeSpot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -691,7 +806,7 @@ func (r *Router) handleGenerateAddress(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	address, err := r.WalletService.GenerateAddress("user-id", wallet.TypeSpot, reqBody.Chain)
+	address, err := r.WalletService.GenerateAddress(userID(req), wallet.TypeSpot, reqBody.Chain)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -708,11 +823,7 @@ func (r *Router) handleContactChange(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":                    true,
-		"contact_swapped":            true,
-		"withdrawals_disabled_until": time.Now().Add(48 * time.Hour).Unix(),
-	})
+	http.Error(w, "contact change is unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handleDeleteRequest(w http.ResponseWriter, req *http.Request) {
@@ -720,12 +831,7 @@ func (r *Router) handleDeleteRequest(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":                     true,
-		"logout":                      true,
-		"scheduled_delete_at":         time.Now().Add(30 * 24 * time.Hour).Unix(),
-		"cancel_if_login_within_days": 30,
-	})
+	http.Error(w, "account deletion is unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handleOrder(w http.ResponseWriter, req *http.Request) {
@@ -740,6 +846,7 @@ func (r *Router) handleOrder(w http.ResponseWriter, req *http.Request) {
 		Type     string  `json:"type"`
 		Price    float64 `json:"price"`
 		Quantity float64 `json:"quantity"`
+		StopPrice float64 `json:"stop_price"`
 	}
 
 	if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
@@ -747,15 +854,73 @@ func (r *Router) handleOrder(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if strings.TrimSpace(reqBody.Symbol) == "" {
+		http.Error(w, "symbol is required", http.StatusBadRequest)
+		return
+	}
+	if !(reqBody.Quantity > 0) {
+		http.Error(w, "quantity must be positive", http.StatusBadRequest)
+		return
+	}
+
+	var side matching.OrderSide
+	switch strings.ToLower(reqBody.Side) {
+	case string(matching.SideBuy):
+		side = matching.SideBuy
+	case string(matching.SideSell):
+		side = matching.SideSell
+	default:
+		http.Error(w, "side must be buy or sell", http.StatusBadRequest)
+		return
+	}
+
+	var orderType matching.OrderType
+	switch strings.ToLower(reqBody.Type) {
+	case string(matching.TypeLimit):
+		orderType = matching.TypeLimit
+		if !(reqBody.Price > 0) {
+			http.Error(w, "price must be positive for a limit order", http.StatusBadRequest)
+			return
+		}
+	case string(matching.TypeMarket):
+		orderType = matching.TypeMarket
+	default:
+		http.Error(w, "unsupported order type", http.StatusBadRequest)
+		return
+	}
+
+	order, err := r.TradingService.PlaceOrder(userID(req), reqBody.Symbol, side, orderType, reqBody.Price, reqBody.Quantity, reqBody.StopPrice)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":  true,
-		"order_id": "order-123",
+		"success": true,
+		"order":   order,
 	})
 }
 
 func (r *Router) handleCancelOrder(w http.ResponseWriter, req *http.Request) {
 	if req.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var reqBody struct {
+		OrderID string `json:"order_id"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(reqBody.OrderID) == "" {
+		http.Error(w, "order_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := r.TradingService.CancelOrder(userID(req), reqBody.OrderID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -770,8 +935,14 @@ func (r *Router) handleGetOrders(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	orders, err := r.TradingService.GetOrders(userID(req), req.URL.Query().Get("symbol"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"orders": []interface{}{},
+		"orders": orders,
 	})
 }
 
@@ -781,9 +952,30 @@ func (r *Router) handleGetPositions(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	positions, err := r.TradingService.GetPositions(userID(req))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"positions": []interface{}{},
+		"positions": positions,
 	})
+}
+
+// depthLevels renders an order book side as price/quantity levels.
+func depthLevels(orders []*matching.Order) []map[string]interface{} {
+	levels := make([]map[string]interface{}, 0, len(orders))
+	for _, o := range orders {
+		if o.Status == matching.StatusCancelled || o.Remaining <= 0 {
+			continue
+		}
+		levels = append(levels, map[string]interface{}{
+			"price":    o.Price,
+			"quantity": o.Remaining,
+		})
+	}
+	return levels
 }
 
 func (r *Router) handleMarketDepth(w http.ResponseWriter, req *http.Request) {
@@ -792,9 +984,22 @@ func (r *Router) handleMarketDepth(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	symbol := req.URL.Query().Get("symbol")
+	if strings.TrimSpace(symbol) == "" {
+		http.Error(w, "symbol is required", http.StatusBadRequest)
+		return
+	}
+
+	book, err := r.TradingService.OrderBook(symbol)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"bids": [][]interface{}{},
-		"asks": [][]interface{}{},
+		"symbol": symbol,
+		"bids":   depthLevels(book.Bids),
+		"asks":   depthLevels(book.Asks),
 	})
 }
 
@@ -804,9 +1009,27 @@ func (r *Router) handleTicker(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	symbol := req.URL.Query().Get("symbol")
+	if strings.TrimSpace(symbol) == "" {
+		http.Error(w, "symbol is required", http.StatusBadRequest)
+		return
+	}
+
+	book, err := r.TradingService.OrderBook(symbol)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	if book.LastPrice == 0 {
+		http.Error(w, "no trades for symbol", http.StatusNotFound)
+		return
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"price":  "67000.00",
-		"change": "2.5%",
+		"symbol":     symbol,
+		"price":      book.LastPrice,
+		"updated_at": book.LastTime.Unix(),
 	})
 }
 
@@ -815,10 +1038,8 @@ func (r *Router) handleMarketTrades(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"trades": []interface{}{},
-	})
+	// The engine does not retain a public trade tape yet.
+	http.Error(w, "trade history is unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handleKlines(w http.ResponseWriter, req *http.Request) {
@@ -826,10 +1047,8 @@ func (r *Router) handleKlines(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"klines": []interface{}{},
-	})
+	// Candle aggregation is not implemented.
+	http.Error(w, "candles are unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handleUserFeatures(w http.ResponseWriter, req *http.Request) {
@@ -868,19 +1087,15 @@ func (r *Router) handleProductOperation(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":      true,
-		"operation_id": "op-" + reqBody.Product + "-" + reqBody.Action,
-		"product":      reqBody.Product,
-		"action":       reqBody.Action,
-		"symbol":       reqBody.Symbol,
-		"status":       "accepted",
-	})
+	// Product operations have no backing service; reporting them as
+	// accepted would confirm work that never occurs.
+	_ = reqBody
+	http.Error(w, "product operations are unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
-	// Upgrade to WebSocket
-	log.Println("WebSocket connection established")
+	// No WebSocket upgrade is implemented on this router.
+	http.Error(w, "websocket endpoint is unavailable", http.StatusNotImplemented)
 }
 
 func (r *Router) handleRoot(w http.ResponseWriter, req *http.Request) {

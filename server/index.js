@@ -11,6 +11,10 @@ require("dotenv").config();
 const JWT_SECRET = process.env.JWT_SECRET;
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || process.env.REFRESH_SECRET;
 const PORT = Number(process.env.PORT || 8080);
+// Fixed token issuer/audience. These are validated on every verify so a
+// token minted for another service cannot be replayed against this API.
+const JWT_ISSUER = process.env.JWT_ISSUER || "tigerex-api";
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE || "tigerex-client";
 const isProduction = process.env.NODE_ENV === "production";
 
 function assertRuntimeConfiguration() {
@@ -45,7 +49,6 @@ const compression = require("compression");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -212,20 +215,14 @@ async function initializeDatabase() {
 // HELPER FUNCTIONS
 // ============================================================================
 
-function generateToken(userId, type = "access") {
-  const secret = type === "access" ? JWT_SECRET : REFRESH_SECRET;
-  const expiresIn = type === "access" ? "24h" : "7d";
-  return jwt.sign({ userId, type }, secret, { expiresIn });
-}
+const { createTokenService } = require("./token-service");
 
-function verifyToken(token, type = "access") {
-  try {
-    const secret = type === "access" ? JWT_SECRET : REFRESH_SECRET;
-    return jwt.verify(token, secret);
-  } catch (err) {
-    return null;
-  }
-}
+const { generateToken, verifyToken } = createTokenService({
+  accessSecret: JWT_SECRET,
+  refreshSecret: REFRESH_SECRET,
+  issuer: JWT_ISSUER,
+  audience: JWT_AUDIENCE,
+});
 
 async function authenticateRequest(req, res, next) {
   const authHeader = req.headers.authorization;
