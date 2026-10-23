@@ -13,9 +13,6 @@ tower-http = { version = "0.5.1", features = ["cors", "trace"] }
 # Async runtime
 tokio = { version = "1.36", features = ["full"] }
 
-# Database
-sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid", "json"] }
-
 # Image processing
 image = "0.25"
 base64 = "0.22"
@@ -37,21 +34,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Hashing
 sha2 = "0.10"
+hex = "0.4"
 
-# OCR (placeholder - in production use actual OCR service)
-# In production, integrate with:
-# - AWS Rekognition
-# - Google Cloud Vision
-# - Azure Face API
-# - Onfido
-# - Sumsub
-# - Veriff
-
-# Rate limiting
-ratelimit = "0.9"
-
-# Cache
-redis = { version = "0.25", features = ["tokio-comp"] }
+# OS entropy
+getrandom = "0.2"
 
 [dev-dependencies]
 tokio-test = "0.4"
