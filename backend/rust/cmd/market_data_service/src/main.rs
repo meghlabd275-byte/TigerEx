@@ -10,7 +10,7 @@
 //! - WebSocket streaming
 //! - Price aggregation from multiple sources
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -18,7 +18,7 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -26,8 +26,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
-use uuid::Uuid;
+use tracing::info;
 
 // =============================================================================
 // ERROR TYPES
@@ -51,10 +50,18 @@ pub enum MarketDataError {
 impl IntoResponse for MarketDataError {
     fn into_response(self) -> Response<Body> {
         let (status, message) = match self {
-            MarketDataError::SymbolNotFound => (StatusCode::NOT_FOUND, "Symbol not found"),
-            MarketDataError::InvalidTimeframe => (StatusCode::BAD_REQUEST, "Invalid timeframe"),
-            MarketDataError::DataNotAvailable => (StatusCode::NOT_FOUND, "Data not available"),
-            MarketDataError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, &msg),
+            MarketDataError::SymbolNotFound => {
+                (StatusCode::NOT_FOUND, "Symbol not found".to_string())
+            }
+            MarketDataError::InvalidTimeframe => {
+                (StatusCode::BAD_REQUEST, "Invalid timeframe".to_string())
+            }
+            MarketDataError::DataNotAvailable => {
+                (StatusCode::NOT_FOUND, "Data not available".to_string())
+            }
+            MarketDataError::InternalError(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
         };
         
         let body = serde_json::json!({
@@ -187,27 +194,7 @@ pub struct GetOrderBookQuery {
 // MARKET DATA SERVICE
 // =============================================================================
 
-pub struct MarketDataService {
-    // Tickers
-    tickers: RwLock<HashMap<String, Ticker>>,
-    
-    // Order books
-    order_books: RwLock<HashMap<String, OrderBook>>,
-    
-    // Recent trades
-    trades: RwLock<HashMap<String, Vec<Trade>>>,
-    
-    // K-lines
-    klines: RwLock<HashMap<String, Vec<KLine>>>,
-    
-    // Price sources
-    price_sources: RwLock<Vec<PriceSource>>,
-    
-    // Supported symbols
-    symbols: RwLock<HashMap<String, SymbolInfo>>,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SymbolInfo {
     pub symbol: String,
     pub base_asset: String,
@@ -221,283 +208,378 @@ pub struct SymbolInfo {
     pub step_size: f64,
 }
 
+/// Supported candle intervals, in seconds.
+pub const SUPPORTED_INTERVALS: &[(&str, i64)] = &[
+    ("1m", 60),
+    ("5m", 300),
+    ("15m", 900),
+    ("1h", 3_600),
+    ("4h", 14_400),
+    ("1d", 86_400),
+];
+
+/// Most recent trades retained per symbol.
+const MAX_TRADES_PER_SYMBOL: usize = 50_000;
+
+fn interval_seconds(interval: &str) -> Option<i64> {
+    SUPPORTED_INTERVALS
+        .iter()
+        .find(|(name, _)| *name == interval)
+        .map(|(_, seconds)| *seconds)
+}
+
+/// Market data store.
+///
+/// The service holds no canned values: every price, candle and trade originates
+/// from an ingested trade or an ingested order book snapshot pushed by the
+/// exchange's own matching engine. Until data arrives, reads report that data is
+/// unavailable rather than returning invented numbers.
+pub struct MarketDataService {
+    /// Recent trades per symbol, oldest first.
+    trades: RwLock<HashMap<String, VecDeque<Trade>>>,
+    /// Latest order book snapshot per symbol.
+    order_books: RwLock<HashMap<String, OrderBook>>,
+    /// Tradable symbols, registered by the operator.
+    symbols: RwLock<HashMap<String, SymbolInfo>>,
+    /// Price feeds contributing to the exchange's own index.
+    price_sources: RwLock<Vec<PriceSource>>,
+}
+
 impl MarketDataService {
     pub fn new() -> Self {
-        let service = Self {
-            tickers: RwLock::new(HashMap::new()),
-            order_books: RwLock::new(HashMap::new()),
+        Self {
             trades: RwLock::new(HashMap::new()),
-            klines: RwLock::new(HashMap::new()),
-            price_sources: RwLock::new(vec![
-                PriceSource {
-                    name: "binance".to_string(),
-                    url: "https://api.binance.com".to_string(),
-                    weight: 10,
-                    is_active: true,
-                },
-                PriceSource {
-                    name: "coinbase".to_string(),
-                    url: "https://api.coinbase.com".to_string(),
-                    weight: 8,
-                    is_active: true,
-                },
-                PriceSource {
-                    name: "kraken".to_string(),
-                    url: "https://api.kraken.com".to_string(),
-                    weight: 7,
-                    is_active: true,
-                },
-            ]),
+            order_books: RwLock::new(HashMap::new()),
             symbols: RwLock::new(HashMap::new()),
-        };
-        
-        // Initialize default symbols
-        service.init_symbols();
-        
-        // Initialize sample data
-        service.init_sample_data();
-        
-        service
-    }
-    
-    fn init_symbols(&self) {
-        let symbols = vec![
-            ("BTCUSDT", "BTC", "USDT", 0.01, 1000000.0, 0.01, 0.00001, 10000.0, 0.00001),
-            ("ETHUSDT", "ETH", "USDT", 0.01, 100000.0, 0.01, 0.0001, 1000000.0, 0.0001),
-            ("BNBUSDT", "BNB", "USDT", 0.01, 10000.0, 0.01, 0.001, 1000000.0, 0.001),
-            ("SOLUSDT", "SOL", "USDT", 0.001, 10000.0, 0.001, 0.01, 10000000.0, 0.01),
-            ("XRPUSDT", "XRP", "USDT", 0.0001, 1000.0, 0.0001, 1.0, 100000000.0, 1.0),
-            ("ADAUSDT", "ADA", "USDT", 0.0001, 10.0, 0.0001, 10.0, 100000000.0, 10.0),
-            ("DOGEUSDT", "DOGE", "USDT", 0.00001, 10.0, 0.00001, 100.0, 1000000000.0, 100.0),
-            ("DOTUSDT", "DOT", "USDT", 0.001, 1000.0, 0.001, 0.1, 10000000.0, 0.1),
-            ("MATICUSDT", "MATIC", "USDT", 0.0001, 100.0, 0.0001, 1.0, 10000000.0, 1.0),
-            ("LINKUSDT", "LINK", "USDT", 0.001, 1000.0, 0.001, 0.01, 1000000.0, 0.01),
-            ("AVAXUSDT", "AVAX", "USDT", 0.01, 1000.0, 0.01, 0.01, 1000000.0, 0.01),
-            ("DOTUSDT", "DOT", "USDT", 0.001, 1000.0, 0.001, 0.1, 10000000.0, 0.1),
-        ];
-        
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            let mut symbols_map = self.symbols.write().await;
-            for (symbol, base, quote, min_price, max_price, tick, min_qty, max_qty, step) in symbols {
-                symbols_map.insert(symbol.to_string(), SymbolInfo {
-                    symbol: symbol.to_string(),
-                    base_asset: base.to_string(),
-                    quote_asset: quote.to_string(),
-                    status: "trading".to_string(),
-                    min_price,
-                    max_price,
-                    tick_size: tick,
-                    min_quantity: min_qty,
-                    max_quantity: max_qty,
-                    step_size: step,
-                });
-            }
-        });
-    }
-    
-    fn init_sample_data(&self) {
-        // Initialize with sample data
-        let tickers = vec![
-            ("BTCUSDT", 65432.50, 1234.56, 1.92, 66000.0, 64000.0, 28500.0, 285000000.0),
-            ("ETHUSDT", 3521.80, 89.45, 2.60, 3600.0, 3400.0, 125000.0, 44000000.0),
-            ("BNBUSDT", 587.25, -5.32, -0.90, 600.0, 570.0, 2500.0, 1470000.0),
-            ("SOLUSDT", 148.92, 8.75, 6.24, 155.0, 140.0, 85000.0, 12650000.0),
-            ("XRPUSDT", 0.5234, 0.0123, 2.41, 0.55, 0.50, 1500000.0, 785000.0),
-        ];
-        
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            let mut tickers_map = self.tickers.write().await;
-            let mut order_books_map = self.order_books.write().await;
-            let mut trades_map = self.trades.write().await;
-            let mut klines_map = self.klines.write().await;
-            
-            for (symbol, price, change, change_pct, high, low, vol, qvol) in tickers {
-                // Create ticker
-                let open_price = price - change;
-                let ticker = Ticker {
-                    symbol: symbol.to_string(),
-                    last_price: price,
-                    price_change: change,
-                    price_change_percent: change_pct,
-                    high_24h: high,
-                    low_24h: low,
-                    volume_24h: vol,
-                    quote_volume_24h: qvol,
-                    trades_24h: (vol * 1000.0) as u64,
-                    bid_price: price * 0.9995,
-                    ask_price: price * 1.0005,
-                    bid_quantity: vol * 0.1,
-                    ask_quantity: vol * 0.1,
-                    open_price,
-                    weighted_avg_price: price,
-                    updated_at: Utc::now(),
-                };
-                tickers_map.insert(symbol.to_string(), ticker);
-                
-                // Create order book
-                let order_book = OrderBook {
-                    symbol: symbol.to_string(),
-                    bids: vec![
-                        OrderBookEntry { price: price * 0.999, quantity: vol * 0.05, orders: 15 },
-                        OrderBookEntry { price: price * 0.998, quantity: vol * 0.03, orders: 8 },
-                        OrderBookEntry { price: price * 0.997, quantity: vol * 0.02, orders: 5 },
-                        OrderBookEntry { price: price * 0.996, quantity: vol * 0.01, orders: 3 },
-                    ],
-                    asks: vec![
-                        OrderBookEntry { price: price * 1.001, quantity: vol * 0.05, orders: 12 },
-                        OrderBookEntry { price: price * 1.002, quantity: vol * 0.03, orders: 7 },
-                        OrderBookEntry { price: price * 1.003, quantity: vol * 0.02, orders: 4 },
-                        OrderBookEntry { price: price * 1.004, quantity: vol * 0.01, orders: 2 },
-                    ],
-                    last_update_id: 1234567890,
-                    timestamp: Utc::now(),
-                };
-                order_books_map.insert(symbol.to_string(), order_book);
-                
-                // Create sample trades
-                let mut symbol_trades = Vec::new();
-                for i in 0..50 {
-                    let trade_price = price + (rand::random::<f64>() - 0.5) * price * 0.01;
-                    let trade_qty = rand::random::<f64>() * vol * 0.001;
-                    symbol_trades.push(Trade {
-                        id: format!("{}_{}", symbol, i),
-                        symbol: symbol.to_string(),
-                        price: trade_price,
-                        quantity: trade_qty,
-                        quote_quantity: trade_price * trade_qty,
-                        is_buyer_maker: rand::random::<bool>(),
-                        timestamp: Utc::now() - Duration::seconds(i * 60),
-                    });
-                }
-                trades_map.insert(symbol.to_string(), symbol_trades);
-                
-                // Create K-lines
-                let mut symbol_klines = Vec::new();
-                for i in 0..100 {
-                    let base_time = Utc::now() - Duration::minutes(i * 5);
-                    let open_k = price + (rand::random::<f64>() - 0.5) * price * 0.02;
-                    let close_k = open_k + (rand::random::<f64>() - 0.5) * price * 0.01;
-                    let high_k = open_k.max(close_k) + rand::random::<f64>() * price * 0.005;
-                    let low_k = open_k.min(close_k) - rand::random::<f64>() * price * 0.005;
-                    
-                    symbol_klines.push(KLine {
-                        symbol: symbol.to_string(),
-                        timeframe: "5m".to_string(),
-                        open_time: base_time,
-                        open: open_k,
-                        high: high_k,
-                        low: low_k,
-                        close: close_k,
-                        volume: vol * 0.01 * rand::random::<f64>(),
-                        quote_volume: qvol * 0.01 * rand::random::<f64>(),
-                        trades: rand::random::<u32>() % 1000,
-                        is_closed: true,
-                    });
-                }
-                klines_map.insert(format!("{}:5m", symbol), symbol_klines);
-            }
-        });
-    }
-    
-    // =============================================================================
-    // TICKER
-    // =============================================================================
-    
-    pub async fn get_ticker(&self, symbol: &str) -> Result<Ticker, MarketDataError> {
-        let tickers = self.tickers.read().await;
-        tickers.get(symbol)
-            .cloned()
-            .ok_or(MarketDataError::SymbolNotFound)
-    }
-    
-    pub async fn get_all_tickers(&self) -> Vec<Ticker> {
-        let tickers = self.tickers.read().await;
-        tickers.values().cloned().collect()
-    }
-    
-    // =============================================================================
-    // ORDER BOOK
-    // =============================================================================
-    
-    pub async fn get_order_book(&self, symbol: &str, limit: usize) -> Result<OrderBook, MarketDataError> {
-        let order_books = self.order_books.read().await;
-        let mut ob = order_books.get(symbol)
-            .cloned()
-            .ok_or(MarketDataError::SymbolNotFound)?;
-        
-        if limit > 0 && limit < ob.bids.len() {
-            ob.bids.truncate(limit);
-            ob.asks.truncate(limit);
+            price_sources: RwLock::new(Vec::new()),
         }
-        
-        Ok(ob)
     }
-    
-    // =============================================================================
-    // TRADES
-    // =============================================================================
-    
-    pub async fn get_recent_trades(&self, symbol: &str, limit: usize) -> Result<Vec<Trade>, MarketDataError> {
-        let trades = self.trades.read().await;
-        let symbol_trades = trades.get(symbol)
-            .ok_or(MarketDataError::SymbolNotFound)?;
-        
-        let limit = if limit == 0 || limit > symbol_trades.len() {
-            symbol_trades.len()
-        } else {
-            limit
-        };
-        
-        Ok(symbol_trades[..limit].to_vec())
+
+    /// Register a tradable symbol. Rejects duplicates.
+    pub async fn register_symbol(&self, info: SymbolInfo) -> Result<(), MarketDataError> {
+        if info.symbol.trim().is_empty() {
+            return Err(MarketDataError::InternalError(
+                "symbol must not be empty".to_string(),
+            ));
+        }
+        if info.tick_size <= 0.0 || info.step_size <= 0.0 {
+            return Err(MarketDataError::InternalError(
+                "tick_size and step_size must be positive".to_string(),
+            ));
+        }
+        if info.min_price > info.max_price {
+            return Err(MarketDataError::InternalError(
+                "min_price must not exceed max_price".to_string(),
+            ));
+        }
+        if info.min_quantity > info.max_quantity {
+            return Err(MarketDataError::InternalError(
+                "min_quantity must not exceed max_quantity".to_string(),
+            ));
+        }
+
+        let mut symbols = self.symbols.write().await;
+        if symbols.contains_key(&info.symbol) {
+            return Err(MarketDataError::InternalError(format!(
+                "symbol {} is already registered",
+                info.symbol
+            )));
+        }
+        symbols.insert(info.symbol.clone(), info);
+        Ok(())
     }
-    
-    // =============================================================================
-    // K-LINES
-    // =============================================================================
-    
-    pub async fn get_klines(&self, symbol: &str, interval: &str, limit: usize) -> Result<Vec<KLine>, MarketDataError> {
-        let key = format!("{}:{}", symbol, interval);
-        let klines = self.klines.read().await;
-        let symbol_klines = klines.get(&key)
-            .ok_or(MarketDataError::DataNotAvailable)?;
-        
-        let limit = if limit == 0 || limit > symbol_klines.len() {
-            symbol_klines.len()
-        } else {
-            limit
-        };
-        
-        Ok(symbol_klines[..limit].to_vec())
-    }
-    
-    // =============================================================================
-    // SYMBOLS
-    // =============================================================================
-    
+
     pub async fn get_symbols(&self) -> Vec<SymbolInfo> {
         let symbols = self.symbols.read().await;
-        symbols.values().cloned().collect()
+        let mut list: Vec<SymbolInfo> = symbols.values().cloned().collect();
+        list.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        list
     }
-    
+
     pub async fn get_symbol(&self, symbol: &str) -> Result<SymbolInfo, MarketDataError> {
-        let symbols = self.symbols.read().await;
-        symbols.get(symbol)
+        self.symbols
+            .read()
+            .await
+            .get(symbol)
             .cloned()
             .ok_or(MarketDataError::SymbolNotFound)
     }
-    
-    // =============================================================================
-    // 24H STATS
-    // =============================================================================
-    
+
+    /// Register a price feed used to build the exchange's own index price.
+    pub async fn register_price_source(&self, source: PriceSource) -> Result<(), MarketDataError> {
+        if source.name.trim().is_empty() {
+            return Err(MarketDataError::InternalError(
+                "price source name must not be empty".to_string(),
+            ));
+        }
+        if source.weight == 0 {
+            return Err(MarketDataError::InternalError(
+                "price source weight must be positive".to_string(),
+            ));
+        }
+
+        let mut sources = self.price_sources.write().await;
+        if sources.iter().any(|existing| existing.name == source.name) {
+            return Err(MarketDataError::InternalError(format!(
+                "price source {} is already registered",
+                source.name
+            )));
+        }
+        sources.push(source);
+        Ok(())
+    }
+
+    pub async fn get_price_sources(&self) -> Vec<PriceSource> {
+        self.price_sources.read().await.clone()
+    }
+
+    /// Record an executed trade and fold it into the symbol's history.
+    ///
+    /// This is the only way prices enter the service.
+    pub async fn apply_trade(&self, trade: Trade) -> Result<(), MarketDataError> {
+        if trade.price <= 0.0 || !trade.price.is_finite() {
+            return Err(MarketDataError::InternalError(
+                "trade price must be positive".to_string(),
+            ));
+        }
+        if trade.quantity <= 0.0 || !trade.quantity.is_finite() {
+            return Err(MarketDataError::InternalError(
+                "trade quantity must be positive".to_string(),
+            ));
+        }
+
+        {
+            let symbols = self.symbols.read().await;
+            if !symbols.contains_key(&trade.symbol) {
+                return Err(MarketDataError::SymbolNotFound);
+            }
+        }
+
+        let mut trades = self.trades.write().await;
+        let history = trades.entry(trade.symbol.clone()).or_default();
+
+        // Trades arrive in order; ignore a stale replay.
+        if let Some(last) = history.back() {
+            if trade.timestamp < last.timestamp {
+                return Err(MarketDataError::InternalError(
+                    "trade timestamp is older than the last ingested trade".to_string(),
+                ));
+            }
+        }
+
+        history.push_back(trade);
+        while history.len() > MAX_TRADES_PER_SYMBOL {
+            history.pop_front();
+        }
+
+        Ok(())
+    }
+
+    /// Replace the order book snapshot for a symbol.
+    pub async fn apply_order_book(&self, book: OrderBook) -> Result<(), MarketDataError> {
+        {
+            let symbols = self.symbols.read().await;
+            if !symbols.contains_key(&book.symbol) {
+                return Err(MarketDataError::SymbolNotFound);
+            }
+        }
+
+        let mut books = self.order_books.write().await;
+        books.insert(book.symbol.clone(), book);
+        Ok(())
+    }
+
+    /// Trades within the last 24 hours, newest first.
+    async fn trades_in_window(&self, symbol: &str) -> Result<Vec<Trade>, MarketDataError> {
+        let trades = self.trades.read().await;
+        let history = trades.get(symbol).ok_or(MarketDataError::DataNotAvailable)?;
+
+        let cutoff = Utc::now() - Duration::hours(24);
+        let mut window: Vec<Trade> = history
+            .iter()
+            .filter(|trade| trade.timestamp >= cutoff)
+            .cloned()
+            .collect();
+        window.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        Ok(window)
+    }
+
+    /// 24 hour ticker, computed from ingested trades.
+    pub async fn get_ticker(&self, symbol: &str) -> Result<Ticker, MarketDataError> {
+        let window = self.trades_in_window(symbol).await?;
+        if window.is_empty() {
+            return Err(MarketDataError::DataNotAvailable);
+        }
+
+        // `window` is newest first.
+        let last_price = window[0].price;
+        let open_price = window[window.len() - 1].price;
+        let high_24h = window.iter().fold(f64::MIN, |acc, t| acc.max(t.price));
+        let low_24h = window.iter().fold(f64::MAX, |acc, t| acc.min(t.price));
+        let volume_24h: f64 = window.iter().map(|t| t.quantity).sum();
+        let quote_volume_24h: f64 = window.iter().map(|t| t.quote_quantity).sum();
+
+        let price_change = last_price - open_price;
+        let price_change_percent = if open_price > 0.0 {
+            price_change / open_price * 100.0
+        } else {
+            0.0
+        };
+
+        let (bid_price, bid_quantity, ask_price, ask_quantity) = {
+            let books = self.order_books.read().await;
+            match books.get(symbol) {
+                Some(book) => (
+                    book.bids.first().map(|e| e.price).unwrap_or(0.0),
+                    book.bids.first().map(|e| e.quantity).unwrap_or(0.0),
+                    book.asks.first().map(|e| e.price).unwrap_or(0.0),
+                    book.asks.first().map(|e| e.quantity).unwrap_or(0.0),
+                ),
+                None => (0.0, 0.0, 0.0, 0.0),
+            }
+        };
+
+        Ok(Ticker {
+            symbol: symbol.to_string(),
+            last_price,
+            price_change,
+            price_change_percent,
+            high_24h,
+            low_24h,
+            volume_24h,
+            quote_volume_24h,
+            trades_24h: window.len() as u64,
+            bid_price,
+            ask_price,
+            bid_quantity,
+            ask_quantity,
+            open_price,
+            weighted_avg_price: if volume_24h > 0.0 {
+                quote_volume_24h / volume_24h
+            } else {
+                0.0
+            },
+            updated_at: window[0].timestamp,
+        })
+    }
+
+    pub async fn get_all_tickers(&self) -> Vec<Ticker> {
+        let symbols: Vec<String> = self.symbols.read().await.keys().cloned().collect();
+        let mut tickers = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            if let Ok(ticker) = self.get_ticker(&symbol).await {
+                tickers.push(ticker);
+            }
+        }
+        tickers.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        tickers
+    }
+
+    pub async fn get_order_book(
+        &self,
+        symbol: &str,
+        limit: usize,
+    ) -> Result<OrderBook, MarketDataError> {
+        let books = self.order_books.read().await;
+        let book = books
+            .get(symbol)
+            .cloned()
+            .ok_or(MarketDataError::DataNotAvailable)?;
+
+        let mut book = book;
+        if limit > 0 {
+            book.bids.truncate(limit);
+            book.asks.truncate(limit);
+        }
+        Ok(book)
+    }
+
+    pub async fn get_recent_trades(
+        &self,
+        symbol: &str,
+        limit: usize,
+    ) -> Result<Vec<Trade>, MarketDataError> {
+        let trades = self.trades.read().await;
+        let history = trades.get(symbol).ok_or(MarketDataError::DataNotAvailable)?;
+
+        // Newest first.
+        let mut recent: Vec<Trade> = history.iter().rev().cloned().collect();
+        if limit > 0 {
+            recent.truncate(limit);
+        }
+        Ok(recent)
+    }
+
+    /// Aggregate ingested trades into candles.
+    ///
+    /// Candles are derived from the trade tape, so a candle can never disagree
+    /// with the trades that produced it.
+    pub async fn get_klines(
+        &self,
+        symbol: &str,
+        interval: &str,
+        limit: usize,
+    ) -> Result<Vec<KLine>, MarketDataError> {
+        let seconds = interval_seconds(interval).ok_or(MarketDataError::InvalidTimeframe)?;
+
+        let trades = self.trades.read().await;
+        let history = trades.get(symbol).ok_or(MarketDataError::DataNotAvailable)?;
+        if history.is_empty() {
+            return Err(MarketDataError::DataNotAvailable);
+        }
+
+        let mut candles: Vec<KLine> = Vec::new();
+        for trade in history.iter() {
+            let bucket = trade.timestamp.timestamp().div_euclid(seconds) * seconds;
+            let open_time = DateTime::from_timestamp(bucket, 0).ok_or_else(|| {
+                MarketDataError::InternalError("trade timestamp out of range".to_string())
+            })?;
+
+            match candles.last_mut() {
+                Some(candle) if candle.open_time == open_time => {
+                    candle.high = candle.high.max(trade.price);
+                    candle.low = candle.low.min(trade.price);
+                    candle.close = trade.price;
+                    candle.volume += trade.quantity;
+                    candle.quote_volume += trade.quote_quantity;
+                    candle.trades += 1;
+                }
+                _ => candles.push(KLine {
+                    symbol: symbol.to_string(),
+                    timeframe: interval.to_string(),
+                    open_time,
+                    open: trade.price,
+                    high: trade.price,
+                    low: trade.price,
+                    close: trade.price,
+                    volume: trade.quantity,
+                    quote_volume: trade.quote_quantity,
+                    trades: 1,
+                    is_closed: false,
+                }),
+            }
+        }
+
+        // Every bucket except the one in progress is final.
+        let now = Utc::now().timestamp();
+        let current_bucket = now.div_euclid(seconds) * seconds;
+        for candle in candles.iter_mut() {
+            candle.is_closed = candle.open_time.timestamp() != current_bucket;
+        }
+
+        if limit > 0 && candles.len() > limit {
+            candles.drain(0..candles.len() - limit);
+        }
+
+        Ok(candles)
+    }
+
     pub async fn get_24h_stats(&self) -> Vec<MarketTicker> {
-        let tickers = self.tickers.read().await;
-        
-        tickers.values()
+        self.get_all_tickers()
+            .await
+            .into_iter()
             .map(|t| MarketTicker {
-                symbol: t.symbol.clone(),
+                symbol: t.symbol,
                 price_change: t.price_change,
                 price_change_percent: t.price_change_percent,
                 last_price: t.last_price,
@@ -508,14 +590,11 @@ impl MarketDataService {
             })
             .collect()
     }
-    
-    // =============================================================================
-    // PRICE SOURCES
-    // =============================================================================
-    
-    pub async fn get_price_sources(&self) -> Vec<PriceSource> {
-        let sources = self.price_sources.read().await;
-        sources.clone()
+}
+
+impl Default for MarketDataService {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -525,6 +604,7 @@ impl MarketDataService {
 
 pub type SharedMarketDataService = Arc<MarketDataService>;
 
+#[derive(Clone)]
 pub struct AppState {
     pub market_data_service: SharedMarketDataService,
 }
@@ -586,7 +666,7 @@ async fn get_trades(
 
 async fn get_klines(
     State(state): State<AppState>,
-    Path((symbol, interval)): Path<(String, String)>>,
+    Path((symbol, interval)): Path<(String, String)>,
     Query(query): Query<GetKlinesQuery>,
 ) -> Result<Json<serde_json::Value>, MarketDataError> {
     let limit = query.limit.unwrap_or(100);
@@ -631,6 +711,31 @@ async fn get_price_sources(
     })))
 }
 
+async fn ingest_trade(
+    State(state): State<AppState>,
+    Json(trade): Json<Trade>,
+) -> Result<Json<serde_json::Value>, MarketDataError> {
+    state.market_data_service.apply_trade(trade).await?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+async fn ingest_order_book(
+    State(state): State<AppState>,
+    Json(book): Json<OrderBook>,
+) -> Result<Json<serde_json::Value>, MarketDataError> {
+    state.market_data_service.apply_order_book(book).await?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+async fn register_symbol(
+    State(state): State<AppState>,
+    Json(info): Json<SymbolInfo>,
+) -> Result<Json<serde_json::Value>, MarketDataError> {
+    let symbol = info.symbol.clone();
+    state.market_data_service.register_symbol(info).await?;
+    Ok(Json(serde_json::json!({ "success": true, "data": symbol })))
+}
+
 async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "healthy",
@@ -654,6 +759,22 @@ async fn main() -> Result<()> {
     
     // Create market data service
     let market_data_service = Arc::new(MarketDataService::new());
+
+    // Symbols are configured by the operator; nothing is hard-coded.
+    let symbols_file = std::env::var("MARKET_DATA_SYMBOLS_FILE").map_err(|_| {
+        anyhow::anyhow!("MARKET_DATA_SYMBOLS_FILE must point at a symbol configuration file")
+    })?;
+    let contents = tokio::fs::read_to_string(&symbols_file).await?;
+    let configured: Vec<SymbolInfo> = serde_json::from_str(&contents)?;
+    for info in configured {
+        market_data_service.register_symbol(info).await?;
+    }
+    info!(
+        "Loaded {} symbols from {}",
+        market_data_service.get_symbols().await.len(),
+        symbols_file
+    );
+
     let state = AppState {
         market_data_service: market_data_service.clone(),
     };
@@ -669,10 +790,13 @@ async fn main() -> Result<()> {
         .route("/api/v1/symbols", get(get_symbols))
         .route("/api/v1/24h", get(get_24h_stats))
         .route("/api/v1/price-sources", get(get_price_sources))
+        .route("/api/v1/ingest/trade", post(ingest_trade))
+        .route("/api/v1/ingest/orderbook", post(ingest_order_book))
+        .route("/api/v1/symbols", post(register_symbol))
         .with_state(state);
     
     // Start server
-    let addr = "0.0.0.0:8084".parse()?;
+    let addr: std::net::SocketAddr = "0.0.0.0:8084".parse()?;
     
     info!("Market data service listening on {}", addr);
     
@@ -680,4 +804,308 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
     
     Ok(())
+}
+
+// =============================================================================
+// TESTS
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn symbol(name: &str) -> SymbolInfo {
+        SymbolInfo {
+            symbol: name.to_string(),
+            base_asset: name.trim_end_matches("USDT").to_string(),
+            quote_asset: "USDT".to_string(),
+            status: "trading".to_string(),
+            min_price: 0.01,
+            max_price: 1_000_000.0,
+            tick_size: 0.01,
+            min_quantity: 0.00001,
+            max_quantity: 10_000.0,
+            step_size: 0.00001,
+        }
+    }
+
+    fn trade(symbol: &str, price: f64, quantity: f64, seconds_ago: i64) -> Trade {
+        Trade {
+            id: format!("t-{price}-{seconds_ago}"),
+            symbol: symbol.to_string(),
+            price,
+            quantity,
+            quote_quantity: price * quantity,
+            is_buyer_maker: false,
+            timestamp: Utc::now() - Duration::seconds(seconds_ago),
+        }
+    }
+
+    async fn service_with_symbol() -> MarketDataService {
+        let service = MarketDataService::new();
+        service.register_symbol(symbol("BTCUSDT")).await.unwrap();
+        service
+    }
+
+    #[tokio::test]
+    async fn no_data_is_reported_rather_than_invented() {
+        let service = service_with_symbol().await;
+
+        // Registered, but nothing has traded yet.
+        assert!(matches!(
+            service.get_ticker("BTCUSDT").await,
+            Err(MarketDataError::DataNotAvailable)
+        ));
+        assert!(matches!(
+            service.get_order_book("BTCUSDT", 10).await,
+            Err(MarketDataError::DataNotAvailable)
+        ));
+        assert!(matches!(
+            service.get_recent_trades("BTCUSDT", 10).await,
+            Err(MarketDataError::DataNotAvailable)
+        ));
+        assert!(service.get_all_tickers().await.is_empty());
+        assert!(service.get_24h_stats().await.is_empty());
+        assert!(service.get_price_sources().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unknown_symbol_is_rejected() {
+        let service = service_with_symbol().await;
+
+        assert!(matches!(
+            service.get_symbol("NOPE").await,
+            Err(MarketDataError::SymbolNotFound)
+        ));
+        assert!(matches!(
+            service
+                .apply_trade(trade("NOPE", 1.0, 1.0, 0))
+                .await,
+            Err(MarketDataError::SymbolNotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn duplicate_symbol_is_rejected() {
+        let service = service_with_symbol().await;
+        assert!(service.register_symbol(symbol("BTCUSDT")).await.is_err());
+        assert!(service.register_symbol(symbol("  ")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn invalid_trades_are_rejected() {
+        let service = service_with_symbol().await;
+
+        assert!(service.apply_trade(trade("BTCUSDT", 0.0, 1.0, 0)).await.is_err());
+        assert!(service.apply_trade(trade("BTCUSDT", -1.0, 1.0, 0)).await.is_err());
+        assert!(service.apply_trade(trade("BTCUSDT", 100.0, 0.0, 0)).await.is_err());
+        assert!(service.apply_trade(trade("BTCUSDT", 100.0, -1.0, 0)).await.is_err());
+        assert!(service.get_all_tickers().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stale_trades_are_rejected() {
+        let service = service_with_symbol().await;
+        service.apply_trade(trade("BTCUSDT", 100.0, 1.0, 10)).await.unwrap();
+
+        assert!(service.apply_trade(trade("BTCUSDT", 99.0, 1.0, 60)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn ticker_is_derived_from_ingested_trades() {
+        let service = service_with_symbol().await;
+        service.apply_trade(trade("BTCUSDT", 100.0, 1.0, 300)).await.unwrap();
+        service.apply_trade(trade("BTCUSDT", 120.0, 2.0, 200)).await.unwrap();
+        service.apply_trade(trade("BTCUSDT", 90.0, 1.0, 100)).await.unwrap();
+        service.apply_trade(trade("BTCUSDT", 110.0, 1.0, 0)).await.unwrap();
+
+        let ticker = service.get_ticker("BTCUSDT").await.unwrap();
+        assert_eq!(ticker.last_price, 110.0);
+        assert_eq!(ticker.open_price, 100.0);
+        assert_eq!(ticker.high_24h, 120.0);
+        assert_eq!(ticker.low_24h, 90.0);
+        assert_eq!(ticker.volume_24h, 5.0);
+        assert_eq!(ticker.trades_24h, 4);
+        assert!((ticker.price_change - 10.0).abs() < 1e-9);
+        assert!((ticker.price_change_percent - 10.0).abs() < 1e-9);
+        // (100*1 + 120*2 + 90*1 + 110*1) / 5
+        assert!((ticker.weighted_avg_price - 108.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn trades_outside_the_24h_window_are_excluded() {
+        let service = service_with_symbol().await;
+        service.apply_trade(trade("BTCUSDT", 500.0, 1.0, 90_000)).await.unwrap();
+        service.apply_trade(trade("BTCUSDT", 100.0, 1.0, 60)).await.unwrap();
+
+        let ticker = service.get_ticker("BTCUSDT").await.unwrap();
+        assert_eq!(ticker.high_24h, 100.0);
+        assert_eq!(ticker.volume_24h, 1.0);
+        assert_eq!(ticker.trades_24h, 1);
+    }
+
+    #[tokio::test]
+    async fn ticker_uses_order_book_for_bid_ask() {
+        let service = service_with_symbol().await;
+        service.apply_trade(trade("BTCUSDT", 100.0, 1.0, 10)).await.unwrap();
+
+        service
+            .apply_order_book(OrderBook {
+                symbol: "BTCUSDT".to_string(),
+                bids: vec![OrderBookEntry { price: 99.5, quantity: 3.0, orders: 2 }],
+                asks: vec![OrderBookEntry { price: 100.5, quantity: 4.0, orders: 3 }],
+                last_update_id: 42,
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        let ticker = service.get_ticker("BTCUSDT").await.unwrap();
+        assert_eq!(ticker.bid_price, 99.5);
+        assert_eq!(ticker.bid_quantity, 3.0);
+        assert_eq!(ticker.ask_price, 100.5);
+        assert_eq!(ticker.ask_quantity, 4.0);
+    }
+
+    #[tokio::test]
+    async fn recent_trades_are_newest_first_and_limited() {
+        let service = service_with_symbol().await;
+        for i in 0..5 {
+            service
+                .apply_trade(trade("BTCUSDT", 100.0 + i as f64, 1.0, 100 - i * 10))
+                .await
+                .unwrap();
+        }
+
+        let recent = service.get_recent_trades("BTCUSDT", 3).await.unwrap();
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].price, 104.0);
+        assert_eq!(recent[2].price, 102.0);
+    }
+
+    #[tokio::test]
+    async fn klines_aggregate_the_trade_tape() {
+        let service = service_with_symbol().await;
+
+        // Two trades in one 5m bucket, one in the next.
+        let base = (Utc::now().timestamp() / 300) * 300 - 600;
+        for (offset, price) in [(0i64, 100.0), (60, 130.0), (300, 90.0)] {
+            let mut t = trade("BTCUSDT", price, 1.0, 0);
+            t.timestamp = DateTime::from_timestamp(base + offset, 0).unwrap();
+            service.apply_trade(t).await.unwrap();
+        }
+
+        let candles = service.get_klines("BTCUSDT", "5m", 100).await.unwrap();
+        assert_eq!(candles.len(), 2);
+
+        let first = &candles[0];
+        assert_eq!(first.open, 100.0);
+        assert_eq!(first.high, 130.0);
+        assert_eq!(first.low, 100.0);
+        assert_eq!(first.close, 130.0);
+        assert_eq!(first.volume, 2.0);
+        assert_eq!(first.trades, 2);
+        assert!(first.is_closed);
+
+        let second = &candles[1];
+        assert_eq!(second.open, 90.0);
+        assert_eq!(second.trades, 1);
+    }
+
+    #[tokio::test]
+    async fn klines_reject_unknown_intervals() {
+        let service = service_with_symbol().await;
+        service.apply_trade(trade("BTCUSDT", 100.0, 1.0, 0)).await.unwrap();
+
+        assert!(matches!(
+            service.get_klines("BTCUSDT", "3s", 10).await,
+            Err(MarketDataError::InvalidTimeframe)
+        ));
+    }
+
+    #[tokio::test]
+    async fn klines_are_limited_to_the_newest_candles() {
+        let service = service_with_symbol().await;
+        for i in 0..10 {
+            let mut t = trade("BTCUSDT", 100.0 + i as f64, 1.0, 0);
+            t.timestamp = Utc::now() - Duration::minutes(10 - i);
+            service.apply_trade(t).await.unwrap();
+        }
+
+        let candles = service.get_klines("BTCUSDT", "1m", 3).await.unwrap();
+        assert_eq!(candles.len(), 3);
+        // Newest candle is last.
+        assert_eq!(candles[2].close, 109.0);
+    }
+
+    #[tokio::test]
+    async fn price_sources_must_be_valid_and_unique() {
+        let service = MarketDataService::new();
+
+        let mut bad = PriceSource {
+            name: String::new(),
+            url: "https://oracle.tigerex.internal".to_string(),
+            weight: 1,
+            is_active: true,
+        };
+        assert!(service.register_price_source(bad.clone()).await.is_err());
+
+        bad.name = "own-oracle".to_string();
+        bad.weight = 0;
+        assert!(service.register_price_source(bad.clone()).await.is_err());
+
+        bad.weight = 10;
+        service.register_price_source(bad.clone()).await.unwrap();
+        assert!(service.register_price_source(bad).await.is_err());
+        assert_eq!(service.get_price_sources().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn order_book_for_unknown_symbol_is_rejected() {
+        let service = service_with_symbol().await;
+        assert!(service
+            .apply_order_book(OrderBook {
+                symbol: "NOPE".to_string(),
+                bids: vec![],
+                asks: vec![],
+                last_update_id: 1,
+                timestamp: Utc::now(),
+            })
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn depth_limit_truncates_both_sides() {
+        let service = service_with_symbol().await;
+        service
+            .apply_order_book(OrderBook {
+                symbol: "BTCUSDT".to_string(),
+                bids: (0..10)
+                    .map(|i| OrderBookEntry {
+                        price: 100.0 - i as f64,
+                        quantity: 1.0,
+                        orders: 1,
+                    })
+                    .collect(),
+                asks: (0..10)
+                    .map(|i| OrderBookEntry {
+                        price: 101.0 + i as f64,
+                        quantity: 1.0,
+                        orders: 1,
+                    })
+                    .collect(),
+                last_update_id: 1,
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        let book = service.get_order_book("BTCUSDT", 3).await.unwrap();
+        assert_eq!(book.bids.len(), 3);
+        assert_eq!(book.asks.len(), 3);
+
+        let full = service.get_order_book("BTCUSDT", 0).await.unwrap();
+        assert_eq!(full.bids.len(), 10);
+    }
 }
