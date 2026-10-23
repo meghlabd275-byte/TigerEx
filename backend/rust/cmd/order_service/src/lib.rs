@@ -2,7 +2,7 @@
 //! Converted from Go for order processing performance
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Order side
@@ -219,6 +219,8 @@ impl OrderService {
             request.quantity,
         );
         order.client_order_id = request.client_order_id;
+        // The order is accepted into the book, so it rests as Open.
+        order.status = OrderStatus::Open;
 
         let mut orders = self.orders.write().unwrap();
         orders.insert(order_id.clone(), order.clone());
@@ -310,12 +312,21 @@ fn current_timestamp() -> u64 {
         .as_millis() as u64
 }
 
+/// Unique order id.
+///
+/// Nanosecond time alone can repeat when several orders are created in the same
+/// nanosecond, which would overwrite an existing order. Add a process-wide
+/// counter.
 fn generate_order_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("ord_{:x}", ts)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("ord_{:x}_{}", ts, sequence)
 }
 
 #[cfg(test)]
