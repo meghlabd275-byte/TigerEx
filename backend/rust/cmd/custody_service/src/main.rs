@@ -2,23 +2,17 @@
 //! Complete cold storage, multi-sig, HSM integration with high-level encryption
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
-use aes_gcm::aead::AeadCore;
 use rand::RngCore;
 use sha2::{Sha256, Sha512, Digest};
 use sha3::Keccak256;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use ed25519_dalek::signature::Signature as SigTrait;
-use std::path::PathBuf;
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write, BufReader, BufWriter};
 
 // ============================================================================
 // CRYPTOGRAPHIC TYPES
@@ -236,10 +230,13 @@ impl CryptoService {
             .map_err(|e| format!("UTF-8 error: {}", e))
     }
     
-    /// RSA-4096 Key Generation (simulated with ED25519 for demo)
+    /// Generate an ED25519 signing key pair.
+    ///
+    /// Returns (private key, public key), both base64 encoded.
     pub fn generate_keypair(&self) -> (String, String) {
-        let mut csprng = OsRng;
-        let signing_key = SigningKey::generate(&mut csprng);
+        let mut secret = [0u8; 32];
+        OsRng.fill_bytes(&mut secret);
+        let signing_key = SigningKey::from_bytes(&secret);
         let verifying_key = signing_key.verifying_key();
         
         (base64_encode(&signing_key.to_bytes()),
@@ -291,10 +288,7 @@ impl CryptoService {
             Err(_) => return false,
         };
         
-        let signature = match Signature::from_bytes(&sig_array) {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
+        let signature = Signature::from_bytes(&sig_array);
         
         verifying_key.verify(data.as_bytes(), &signature).is_ok()
     }
@@ -604,15 +598,17 @@ impl CryptoService {
             "wrong", "yard", "year", "yellow", "you", "young", "youth", "zebra", "zero", "zone", "zoo",
         ];
         
-        let mut result = Vec::new();
-        let mut indices = [0usize; 24];
-        OsRng.fill_bytes(&mut indices);
-        
+        let mut entropy = [0u8; 32];
+        OsRng.fill_bytes(&mut entropy);
+
+        let mut result = Vec::with_capacity(word_count);
         for i in 0..word_count {
-            let idx = indices[i] % words.len();
-            result.push(words[idx].to_string());
+            // Fold two entropy bytes into an index below the word count.
+            let hi = entropy[(i * 2) % entropy.len()] as usize;
+            let lo = entropy[(i * 2 + 1) % entropy.len()] as usize;
+            result.push(words[((hi << 8) | lo) % words.len()].to_string());
         }
-        
+
         result
     }
 }
@@ -688,155 +684,70 @@ impl SecurityService {
         }
     }
     
-    pub fn initialize(&self) {
-        // Initialize cold storage config
-        let cold_config = ColdStorageConfig {
-            config_id: generate_id("COLD"),
-            hot_wallet_limit: "100000".to_string(),
-            cold_wallet_percentage: "95".to_string(),
-            auto_top_up: true,
-            top_up_threshold: "50000".to_string(),
-            top_up_amount: "50000".to_string(),
-            max_daily_withdrawal: "1000000".to_string(),
-            max_withdrawal_per_tx: "100000".to_string(),
-            approval_required: true,
-            approval_threshold: 2,
-        };
-        
-        *self.cold_storage.write() = Some(cold_config);
-        
-        // Initialize insurance fund
-        let fund = InsuranceFund {
-            fund_id: generate_id("INS"),
-            total_assets: "50000000".to_string(),
-            currency: "USDT".to_string(),
-            coverage_amount: "50000000".to_string(),
-            last_replenished: current_timestamp(),
-            status: "active".to_string(),
-        };
-        
-        *self.insurance_fund.write() = Some(fund);
-        
-        // Initialize sample wallet addresses
-        let mut addresses = self.wallet_addresses.write();
-        
-        // BTC Cold Wallet
-        addresses.insert("btc-cold-001".to_string(), WalletAddress {
-            id: "btc-cold-001".to_string(),
-            currency: "BTC".to_string(),
-            address: "bc1qxy89kgkrevqhgeu0m2fkr3ap3g8lyr8a8l7x5z".to_string(),
-            public_key: "".to_string(),
-            address_type: "native".to_string(),
-            chain: "bitcoin".to_string(),
-            created_at: current_timestamp(),
-            status: "active".to_string(),
-            is_cold: true,
-            multi_sig_id: Some("multisig-btc-001".to_string()),
-        });
-        
-        // ETH Cold Wallet
-        addresses.insert("eth-cold-001".to_string(), WalletAddress {
-            id: "eth-cold-001".to_string(),
-            currency: "ETH".to_string(),
-            address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1".to_string(),
-            public_key: "".to_string(),
-            address_type: "evm".to_string(),
-            chain: "ethereum".to_string(),
-            created_at: current_timestamp(),
-            status: "active".to_string(),
-            is_cold: true,
-            multi_sig_id: Some("multisig-eth-001".to_string()),
-        });
-        
-        // USDT Cold Wallet
-        addresses.insert("usdt-cold-001".to_string(), WalletAddress {
-            id: "usdt-cold-001".to_string(),
-            currency: "USDT".to_string(),
-            address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1".to_string(),
-            public_key: "".to_string(),
-            address_type: "erc20".to_string(),
-            chain: "ethereum".to_string(),
-            created_at: current_timestamp(),
-            status: "active".to_string(),
-            is_cold: true,
-            multi_sig_id: Some("multisig-usdt-001".to_string()),
-        });
-        
-        // USDC Cold Wallet
-        addresses.insert("usdc-cold-001".to_string(), WalletAddress {
-            id: "usdc-cold-001".to_string(),
-            currency: "USDC".to_string(),
-            address: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1".to_string(),
-            public_key: "".to_string(),
-            address_type: "erc20".to_string(),
-            chain: "ethereum".to_string(),
-            created_at: current_timestamp(),
-            status: "active".to_string(),
-            is_cold: true,
-            multi_sig_id: Some("multisig-usdc-001".to_string()),
-        });
-        
-        drop(addresses);
-        
-        // Initialize multi-sig configs
-        let mut multi_sigs = self.multi_sigs.write();
-        
-        multi_sigs.insert("multisig-btc-001".to_string(), MultiSigConfig {
-            config_id: "multisig-btc-001".to_string(),
-            threshold: 2,
-            signers: vec![
-                SignerInfo {
-                    signer_id: "signer-001".to_string(),
-                    public_key: "".to_string(),
-                    role: "primary".to_string(),
-                    name: "Primary Signer".to_string(),
-                    verified_at: current_timestamp(),
-                },
-                SignerInfo {
-                    signer_id: "signer-002".to_string(),
-                    public_key: "".to_string(),
-                    role: "secondary".to_string(),
-                    name: "Secondary Signer".to_string(),
-                    verified_at: current_timestamp(),
-                },
-                SignerInfo {
-                    signer_id: "signer-003".to_string(),
-                    public_key: "".to_string(),
-                    role: "backup".to_string(),
-                    name: "Backup Signer".to_string(),
-                    verified_at: current_timestamp(),
-                },
-            ],
-            created_at: current_timestamp(),
-            status: "active".to_string(),
-        });
-        
-        multi_sigs.insert("multisig-eth-001".to_string(), MultiSigConfig {
-            config_id: "multisig-eth-001".to_string(),
-            threshold: 2,
-            signers: vec![
-                SignerInfo {
-                    signer_id: "signer-001".to_string(),
-                    public_key: "".to_string(),
-                    role: "primary".to_string(),
-                    name: "Primary Signer".to_string(),
-                    verified_at: current_timestamp(),
-                },
-                SignerInfo {
-                    signer_id: "signer-002".to_string(),
-                    public_key: "".to_string(),
-                    role: "secondary".to_string(),
-                    name: "Secondary Signer".to_string(),
-                    verified_at: current_timestamp(),
-                },
-            ],
-            created_at: current_timestamp(),
-            status: "active".to_string(),
-        });
-        
-        drop(multi_sigs);
+    /// Register a cold wallet address.
+    ///
+    /// Addresses are supplied by the operator, never generated here.
+    pub async fn register_wallet_address(
+        &self,
+        address: WalletAddress,
+    ) -> Result<(), String> {
+        if address.id.trim().is_empty() || address.address.trim().is_empty() {
+            return Err("wallet address id and address are required".to_string());
+        }
+        if !address.is_cold {
+            return Err("only cold wallet addresses may be registered here".to_string());
+        }
+
+        let mut addresses = self.wallet_addresses.write().await;
+        if addresses.contains_key(&address.id) {
+            return Err(format!("wallet address {} already exists", address.id));
+        }
+        addresses.insert(address.id.clone(), address);
+        Ok(())
     }
-    
+
+    /// Register a multi-signature configuration.
+    pub async fn register_multisig(&self, config: MultiSigConfig) -> Result<(), String> {
+        if config.threshold == 0 {
+            return Err("threshold must be at least 1".to_string());
+        }
+        if config.threshold as usize > config.signers.len() {
+            return Err("threshold cannot exceed the number of signers".to_string());
+        }
+        if config.signers.is_empty() {
+            return Err("at least one signer is required".to_string());
+        }
+        if config.signers.iter().any(|s| s.public_key.trim().is_empty()) {
+            return Err("every signer must have a public key".to_string());
+        }
+
+        let mut multi_sigs = self.multi_sigs.write().await;
+        if multi_sigs.contains_key(&config.config_id) {
+            return Err(format!("multisig {} already exists", config.config_id));
+        }
+        multi_sigs.insert(config.config_id.clone(), config);
+        Ok(())
+    }
+
+    /// Set the cold storage policy.
+    pub async fn set_cold_storage_config(&self, config: ColdStorageConfig) -> Result<(), String> {
+        if config.approval_threshold == 0 {
+            return Err("approval_threshold must be at least 1".to_string());
+        }
+        *self.cold_storage.write().await = Some(config);
+        Ok(())
+    }
+
+    /// Set the insurance fund record. The balance is reported by the treasury,
+    /// not invented here.
+    pub async fn set_insurance_fund(&self, fund: InsuranceFund) -> Result<(), String> {
+        if fund.total_assets.trim().is_empty() {
+            return Err("insurance fund total_assets is required".to_string());
+        }
+        *self.insurance_fund.write().await = Some(fund);
+        Ok(())
+    }
+
     // ========================================================================
     // COLD WALLET OPERATIONS
     // ========================================================================
@@ -1119,43 +1030,222 @@ impl SecurityService {
 }
 
 // ============================================================================
-// MAIN - CLI Entry Point
+// MAIN
 // ============================================================================
 
 #[tokio::main]
-async fn main() {
-    let service = Arc::new(SecurityService::new());
-    service.initialize();
-    
-    println!("TigerEx Cold Wallet Security Infrastructure initialized");
-    println!("Version: 1.0.0");
-    println!("");
-    
-    // Test encryption
-    let test_data = "sensitive_data_123";
-    let encrypted = service.encrypt_data(test_data).unwrap();
-    println!("Encrypted: {} (nonce: {})", encrypted.ciphertext, encrypted.nonce);
-    
-    let decrypted = service.decrypt_data(&encrypted).unwrap();
-    println!("Decrypted: {}", decrypted);
-    
-    // Test cold wallet
-    let btc_wallet = service.get_cold_wallet_address("BTC").await.unwrap();
-    println!("BTC Cold Wallet: {}", btc_wallet.address);
-    
-    // Test transaction
-    let tx = service.create_transaction("BTC", "1.5", "bc1qxy89kgkrevqhgeu0m2fkr3ap3g8lyr8a8l7x5z", true).await.unwrap();
-    println!("Created Transaction: {} - {} {}", tx.tx_id, tx.currency, tx.amount);
-    
-    // Test mnemonic generation
-    let mnemonic = service.crypto.generate_mnemonic(12);
-    println!("Generated Mnemonic: {:?}", mnemonic);
-    
-    // Test signature
-    let (private_key, _) = service.crypto.generate_keypair();
-    let signature = service.crypto.sign("test_message", &private_key).unwrap();
-    println!("Signature: {}", signature);
-    
-    println!("");
-    println!("All tests passed!");
+async fn main() -> Result<(), String> {
+    let service = SecurityService::new();
+
+    // Cold storage policy comes from configuration, not from invented values.
+    service
+        .set_cold_storage_config(ColdStorageConfig {
+            config_id: generate_id("COLD"),
+            hot_wallet_limit: std::env::var("COLD_HOT_WALLET_LIMIT")
+                .map_err(|_| "COLD_HOT_WALLET_LIMIT must be set".to_string())?,
+            cold_wallet_percentage: std::env::var("COLD_WALLET_PERCENTAGE")
+                .map_err(|_| "COLD_WALLET_PERCENTAGE must be set".to_string())?,
+            auto_top_up: true,
+            top_up_threshold: std::env::var("COLD_TOP_UP_THRESHOLD")
+                .map_err(|_| "COLD_TOP_UP_THRESHOLD must be set".to_string())?,
+            top_up_amount: std::env::var("COLD_TOP_UP_AMOUNT")
+                .map_err(|_| "COLD_TOP_UP_AMOUNT must be set".to_string())?,
+            max_daily_withdrawal: std::env::var("COLD_MAX_DAILY_WITHDRAWAL")
+                .map_err(|_| "COLD_MAX_DAILY_WITHDRAWAL must be set".to_string())?,
+            max_withdrawal_per_tx: std::env::var("COLD_MAX_WITHDRAWAL_PER_TX")
+                .map_err(|_| "COLD_MAX_WITHDRAWAL_PER_TX must be set".to_string())?,
+            approval_required: true,
+            approval_threshold: std::env::var("COLD_APPROVAL_THRESHOLD")
+                .map_err(|_| "COLD_APPROVAL_THRESHOLD must be set".to_string())?
+                .parse()
+                .map_err(|_| "COLD_APPROVAL_THRESHOLD must be a number".to_string())?,
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tigerex_custody::Wallet;
+
+    #[test]
+    fn keypair_signs_and_verifies() {
+        let crypto = CryptoService::new();
+        let (private_key, public_key) = crypto.generate_keypair();
+
+        let signature = crypto.sign("message", &private_key).unwrap();
+        assert!(crypto.verify("message", &signature, &public_key));
+        assert!(!crypto.verify("tampered", &signature, &public_key));
+    }
+
+    #[test]
+    fn keypairs_are_unique() {
+        let crypto = CryptoService::new();
+        let (a, _) = crypto.generate_keypair();
+        let (b, _) = crypto.generate_keypair();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn sign_rejects_a_bad_key() {
+        let crypto = CryptoService::new();
+        assert!(crypto.sign("message", "not-base64").is_err());
+        assert!(crypto.sign("message", &base64_encode(&[0u8; 16])).is_err());
+    }
+
+    #[test]
+    fn encryption_round_trips_and_hides_plaintext() {
+        let crypto = CryptoService::new();
+        let plaintext = "cold wallet secret material";
+
+        let encrypted = crypto.encrypt(plaintext).unwrap();
+        assert_ne!(encrypted.ciphertext, plaintext);
+        assert_eq!(crypto.decrypt(&encrypted).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn encryption_uses_a_fresh_nonce() {
+        let crypto = CryptoService::new();
+        let first = crypto.encrypt("same input").unwrap();
+        let second = crypto.encrypt("same input").unwrap();
+
+        assert_ne!(first.nonce, second.nonce);
+        assert_ne!(first.ciphertext, second.ciphertext);
+    }
+
+    #[test]
+    fn mnemonic_words_are_unique_per_call() {
+        let crypto = CryptoService::new();
+        let first = crypto.generate_mnemonic(12);
+        let second = crypto.generate_mnemonic(12);
+
+        assert_eq!(first.len(), 12);
+        assert_eq!(second.len(), 12);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn mnemonic_honours_the_requested_length() {
+        let crypto = CryptoService::new();
+        for count in [1usize, 12, 24] {
+            assert_eq!(crypto.generate_mnemonic(count).len(), count);
+        }
+    }
+
+    #[tokio::test]
+    async fn withdrawals_require_kyc_and_sufficient_balance() {
+        let mut wallet = Wallet::new("u1");
+
+        wallet.deposit("BTC", 1.0);
+        // No KYC yet.
+        assert!(!wallet.can_withdraw("BTC", 0.5));
+
+        wallet.kyc_level = 2;
+        assert!(wallet.can_withdraw("BTC", 1.0));
+
+        // Insufficient funds: this check used to be unreachable.
+        assert!(!wallet.can_withdraw("BTC", 1.5));
+        assert!(!wallet.can_withdraw("BTC", 0.0));
+        assert!(!wallet.can_withdraw("BTC", -1.0));
+        assert!(!wallet.can_withdraw("DOGE", 1.0));
+
+        wallet.blocked = true;
+        assert!(!wallet.can_withdraw("BTC", 0.5));
+    }
+
+    #[tokio::test]
+    async fn lower_kyc_assets_need_level_one() {
+        let mut wallet = Wallet::new("u1");
+        wallet.deposit("DOGE", 100.0);
+
+        assert!(!wallet.can_withdraw("DOGE", 10.0));
+        wallet.kyc_level = 1;
+        assert!(wallet.can_withdraw("DOGE", 10.0));
+    }
+
+    #[tokio::test]
+    async fn no_wallets_are_seeded_on_startup() {
+        let service = SecurityService::new();
+        assert!(service.get_cold_wallet_address("BTC").await.is_none());
+        assert!(service.insurance_fund.read().await.is_none());
+        assert!(service.cold_storage.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn wallet_registration_validates_input() {
+        let service = SecurityService::new();
+
+        let mut address = WalletAddress {
+            id: "btc-cold-1".to_string(),
+            currency: "BTC".to_string(),
+            address: "bc1qreal".to_string(),
+            public_key: "pub".to_string(),
+            address_type: "native".to_string(),
+            chain: "bitcoin".to_string(),
+            created_at: current_timestamp(),
+            status: "active".to_string(),
+            is_cold: true,
+            multi_sig_id: None,
+        };
+
+        service.register_wallet_address(address.clone()).await.unwrap();
+        // Duplicate id.
+        assert!(service.register_wallet_address(address.clone()).await.is_err());
+
+        address.id = "btc-hot-1".to_string();
+        address.is_cold = false;
+        assert!(service.register_wallet_address(address).await.is_err());
+
+        assert!(service.get_cold_wallet_address("BTC").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn multisig_threshold_is_enforced() {
+        let service = SecurityService::new();
+
+        let signers = vec![SignerInfo {
+            signer_id: "s1".to_string(),
+            public_key: "pk1".to_string(),
+            role: "primary".to_string(),
+            name: "Primary".to_string(),
+            verified_at: current_timestamp(),
+        }];
+
+        let mut config = MultiSigConfig {
+            config_id: "ms-1".to_string(),
+            threshold: 0,
+            signers: signers.clone(),
+            created_at: current_timestamp(),
+            status: "active".to_string(),
+        };
+        assert!(service.register_multisig(config.clone()).await.is_err());
+
+        config.threshold = 2;
+        assert!(service.register_multisig(config.clone()).await.is_err());
+
+        config.threshold = 1;
+        service.register_multisig(config.clone()).await.unwrap();
+        assert!(service.register_multisig(config).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cold_storage_config_requires_a_threshold() {
+        let service = SecurityService::new();
+
+        let config = ColdStorageConfig {
+            config_id: "cold-1".to_string(),
+            hot_wallet_limit: "100".to_string(),
+            cold_wallet_percentage: "95".to_string(),
+            auto_top_up: false,
+            top_up_threshold: "50".to_string(),
+            top_up_amount: "50".to_string(),
+            max_daily_withdrawal: "1000".to_string(),
+            max_withdrawal_per_tx: "100".to_string(),
+            approval_required: true,
+            approval_threshold: 0,
+        };
+        assert!(service.set_cold_storage_config(config).await.is_err());
+    }
 }

@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Asset supported
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Asset {
     pub symbol: String,
     pub decimals: u8,
@@ -132,16 +132,18 @@ impl Wallet {
     }
 
     pub fn can_withdraw(&self, symbol: &str, amount: f64) -> bool {
-        if self.blocked {
+        if self.blocked || !amount.is_finite() || amount <= 0.0 {
             return false;
         }
-        
-        // Check KYC requirements
-        match symbol {
-            "BTC" | "ETH" | "USDT" => return self.kyc_level >= 2,
-            _ => return self.kyc_level >= 1,
+
+        let required_kyc = match symbol {
+            "BTC" | "ETH" | "USDT" => 2,
+            _ => 1,
+        };
+        if self.kyc_level < required_kyc {
+            return false;
         }
-        
+
         self.balances
             .get(symbol)
             .map(|b| b.available >= amount)
@@ -240,7 +242,7 @@ impl WithdrawalRequest {
 
 /// Custody service - manages all funds
 pub struct CustodyService {
-    wallets: RwLock<HashMap<String, Wallet>>,
+    wallets: RwLock<HashMap<String, Arc<RwLock<Wallet>>>>,
     withdrawals: RwLock<HashMap<String, WithdrawalRequest>>,
     assets: RwLock<HashMap<String, Asset>>,
 }
@@ -268,17 +270,17 @@ impl CustodyService {
         assets.insert(asset.symbol.clone(), asset);
     }
 
-    /// Get or create wallet
+    /// Get or create wallet.
+    ///
+    /// The shared handle is returned, not a copy: returning a clone meant every
+    /// deposit and withdrawal was written to a throwaway wallet and silently
+    /// lost, leaving all balances at zero.
     pub fn get_wallet(&self, user_id: &str) -> Arc<RwLock<Wallet>> {
         let mut wallets = self.wallets.write().unwrap();
-        if let Some(w) = wallets.get(user_id) {
-            return Arc::new(RwLock::new(w.clone()));
-        }
-        
-        let wallet = Wallet::new(user_id);
-        let arc = Arc::new(RwLock::new(wallet.clone()));
-        wallets.insert(user_id.to_string(), wallet);
-        arc
+        wallets
+            .entry(user_id.to_string())
+            .or_insert_with(|| Arc::new(RwLock::new(Wallet::new(user_id))))
+            .clone()
     }
 
     /// Deposit funds
