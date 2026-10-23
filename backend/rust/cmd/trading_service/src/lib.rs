@@ -1,7 +1,7 @@
 //! TigerEx Trading Service - Core trading operations
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Trade request
@@ -40,7 +40,7 @@ pub struct TradeResult {
     pub average_price: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TradeStatus {
     Pending,
     Open,
@@ -51,6 +51,7 @@ pub enum TradeStatus {
 }
 
 /// Trading session
+#[derive(Debug, Clone)]
 pub struct TradingSession {
     pub user_id: String,
     pub symbol: String,

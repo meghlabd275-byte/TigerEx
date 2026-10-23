@@ -13,12 +13,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -72,18 +71,32 @@ pub enum TradingError {
 
 impl IntoResponse for TradingError {
     fn into_response(self) -> Response<Body> {
-        let (status, message) = match self {
-            TradingError::InvalidOrder => (StatusCode::BAD_REQUEST, "Invalid order"),
-            TradingError::OrderNotFound => (StatusCode::NOT_FOUND, "Order not found"),
-            TradingError::InsufficientBalance => (StatusCode::BAD_REQUEST, "Insufficient balance"),
-            TradingError::PairNotFound => (StatusCode::NOT_FOUND, "Trading pair not found"),
-            TradingError::TradingDisabled => (StatusCode::SERVICE_UNAVAILABLE, "Trading disabled"),
-            TradingError::PriceOutOfRange => (StatusCode::BAD_REQUEST, "Price out of range"),
-            TradingError::QuantityTooSmall => (StatusCode::BAD_REQUEST, "Quantity too small"),
-            TradingError::PositionNotFound => (StatusCode::NOT_FOUND, "Position not found"),
-            TradingError::InvalidOrderType => (StatusCode::BAD_REQUEST, "Invalid order type"),
-            TradingError::OrderRejected(msg) => (StatusCode::BAD_REQUEST, &msg),
-            TradingError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, &msg),
+        let (status, message): (StatusCode, String) = match self {
+            TradingError::InvalidOrder => (StatusCode::BAD_REQUEST, "Invalid order".into()),
+            TradingError::OrderNotFound => (StatusCode::NOT_FOUND, "Order not found".into()),
+            TradingError::InsufficientBalance => {
+                (StatusCode::BAD_REQUEST, "Insufficient balance".into())
+            }
+            TradingError::PairNotFound => {
+                (StatusCode::NOT_FOUND, "Trading pair not found".into())
+            }
+            TradingError::TradingDisabled => {
+                (StatusCode::SERVICE_UNAVAILABLE, "Trading disabled".into())
+            }
+            TradingError::PriceOutOfRange => {
+                (StatusCode::BAD_REQUEST, "Price out of range".into())
+            }
+            TradingError::QuantityTooSmall => {
+                (StatusCode::BAD_REQUEST, "Quantity too small".into())
+            }
+            TradingError::PositionNotFound => {
+                (StatusCode::NOT_FOUND, "Position not found".into())
+            }
+            TradingError::InvalidOrderType => {
+                (StatusCode::BAD_REQUEST, "Invalid order type".into())
+            }
+            TradingError::OrderRejected(msg) => (StatusCode::BAD_REQUEST, msg),
+            TradingError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         
         let body = serde_json::json!({
@@ -613,7 +626,7 @@ impl TradingService {
     }
     
     async fn add_to_order_book(&self, pair_id: &str, order: &Order) {
-        if let Some(ob) = self.order_books.get_mut(pair_id) {
+        if let Some(mut ob) = self.order_books.get_mut(pair_id) {
             let entry = OrderBookEntry {
                 price: order.price,
                 quantity: order.remaining_quantity(),
@@ -633,7 +646,7 @@ impl TradingService {
     }
     
     async fn remove_from_order_book(&self, pair_id: &str, order: &Order) {
-        if let Some(ob) = self.order_books.get_mut(pair_id) {
+        if let Some(mut ob) = self.order_books.get_mut(pair_id) {
             if order.side == OrderSide::Buy {
                 ob.bids.retain(|e| e.price != order.price);
             } else {
@@ -726,6 +739,7 @@ impl TradingService {
 
 pub type SharedTradingService = Arc<TradingService>;
 
+#[derive(Clone)]
 pub struct AppState {
     pub trading_service: SharedTradingService,
 }
@@ -772,7 +786,7 @@ async fn get_order(
 
 async fn get_orders(
     State(state): State<AppState>,
-    Path((user_id, symbol)): Path<(String, String)>>,
+    Path((user_id, symbol)): Path<(String, String)>,
     Query(query): Query<GetOrdersQuery>,
 ) -> Result<Json<serde_json::Value>, TradingError> {
     let pair_id = symbol.replace('/', "-").to_lowercase();
@@ -811,7 +825,7 @@ async fn get_trades(
 
 async fn get_position(
     State(state): State<AppState>,
-    Path((user_id, symbol)): Path<(String, String)>>,
+    Path((user_id, symbol)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, TradingError> {
     let pair_id = symbol.replace('/', "-").to_lowercase();
     let position = state.trading_service.get_position(&user_id, &pair_id).await;
@@ -911,7 +925,7 @@ async fn main() -> Result<()> {
         .with_state(state);
     
     // Start server
-    let addr = "0.0.0.0:8082".parse()?;
+    let addr: std::net::SocketAddr = "0.0.0.0:8082".parse()?;
     
     info!("Trading service listening on {}", addr);
     
