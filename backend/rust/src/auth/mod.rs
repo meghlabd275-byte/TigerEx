@@ -40,6 +40,8 @@ pub struct AuthService {
     sessions: HashMap<String, String>, // token -> user_id
     refresh_tokens: HashMap<String, String>,
     email_to_id: HashMap<String, String>,
+    /// (user_id, time_step) pairs whose TOTP code has already been used.
+    consumed_totp: std::collections::HashSet<(String, i64)>,
 }
 
 impl AuthService {
@@ -49,6 +51,7 @@ impl AuthService {
             sessions: HashMap::new(),
             refresh_tokens: HashMap::new(),
             email_to_id: HashMap::new(),
+            consumed_totp: std::collections::HashSet::new(),
         };
         
         // Starts empty. The previous implementation seeded a hardcoded
@@ -256,16 +259,50 @@ impl AuthService {
         Ok(true)
     }
 
-    /// Verify 2FA
-    pub fn verify_2fa(&self, user_id: &str, code: &str) -> bool {
-        let user = match self.users.get(user_id) {
-            Some(u) => u,
+    /// Verify a TOTP code (RFC 6238) against the user's enrolled secret.
+    ///
+    /// The previous implementation accepted any six-digit string, so 2FA
+    /// protected nothing. Verification uses HMAC-SHA1 over the 30-second time
+    /// step with a +/-1 step window for clock drift, and rejects a code that
+    /// has already been consumed for the same user to block replay.
+    pub fn verify_2fa(&mut self, user_id: &str, code: &str) -> bool {
+        let secret = match self.users.get(user_id) {
+            Some(u) => match &u.two_factor_secret {
+                Some(s) => s.clone(),
+                None => return false,
+            },
             None => return false,
         };
 
-        // In production, use proper TOTP verification
-        // Here simplified - accept any 6 digit code
-        code.len() == 6 && code.chars().all(|c| c.is_ascii_digit())
+        let Ok(secret_bytes) = data_encoding::BASE32_NOPAD.decode(
+            secret.trim_end_matches('=').to_ascii_uppercase().as_bytes(),
+        ) else {
+            return false;
+        };
+        if secret_bytes.is_empty() {
+            return false;
+        }
+
+        let now = current_timestamp_ms() / 1000;
+        let step = now / 30;
+
+        // Accept the current step and one either side for clock drift.
+        for offset in [-1i64, 0, 1] {
+            let candidate_step = step as i64 + offset;
+            if candidate_step < 0 {
+                continue;
+            }
+            let expected = totp_code(&secret_bytes, candidate_step as u64);
+            if constant_time_eq(expected.as_bytes(), code.as_bytes())
+                && !self.consumed_totp.contains(&(user_id.to_string(), candidate_step))
+            {
+                self.consumed_totp
+                    .insert((user_id.to_string(), candidate_step));
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Update KYC level
@@ -475,6 +512,32 @@ fn current_timestamp_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// Compute a 6-digit TOTP code for a time step (RFC 6238, HMAC-SHA1).
+fn totp_code(secret: &[u8], time_step: u64) -> String {
+    use hmac::{Hmac, Mac};
+    use sha1::Sha1;
+
+    let mut mac = Hmac::<Sha1>::new_from_slice(secret).expect("HMAC accepts any key length");
+    mac.update(&time_step.to_be_bytes());
+    let digest = mac.finalize().into_bytes();
+
+    let offset = (digest[19] & 0x0f) as usize;
+    let binary = ((digest[offset] as u32 & 0x7f) << 24)
+        | ((digest[offset + 1] as u32) << 16)
+        | ((digest[offset + 2] as u32) << 8)
+        | (digest[offset + 3] as u32);
+
+    format!("{:06}", binary % 1_000_000)
+}
+
+/// Compare two byte strings without early exit, to avoid timing leaks.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 /// Random, opaque user identifier.
 fn new_user_id() -> String {
     use rand::RngCore;
@@ -501,6 +564,88 @@ mod tests {
         auth.register("test@example.com", "SecurePass123", None);
         let result = auth.login("test@example.com", "SecurePass123");
         assert!(result.success);
+    }
+
+    #[test]
+    fn totp_matches_rfc6238_test_vector() {
+        // RFC 6238 appendix B: secret "12345678901234567890" (ASCII), SHA-1.
+        let secret = b"12345678901234567890";
+        assert_eq!(totp_code(secret, 59 / 30), "287082");
+        assert_eq!(totp_code(secret, 1111111109 / 30), "081804");
+    }
+
+    #[test]
+    fn totp_verification_accepts_only_the_real_code() {
+        let mut auth = AuthService::new();
+        auth.register("totp@example.com", "SecurePass123", None);
+        let user_id = auth.email_to_id.get("totp@example.com").unwrap().clone();
+
+        // Base32 of the RFC test secret, so the current-step code is known.
+        let secret = data_encoding::BASE32_NOPAD.encode(b"12345678901234567890");
+        auth.enable_2fa(&user_id, &secret).unwrap();
+
+        let step = (current_timestamp_ms() / 1000) / 30;
+        let real_code = totp_code(b"12345678901234567890", step as u64);
+
+        assert!(auth.verify_2fa(&user_id, &real_code));
+        // The old implementation accepted any six-digit string.
+        assert!(!auth.verify_2fa(&user_id, "000000"));
+        assert!(!auth.verify_2fa(&user_id, "abcdef"));
+    }
+
+    #[test]
+    fn totp_rejects_replay_of_a_consumed_code() {
+        let mut auth = AuthService::new();
+        auth.register("replay@example.com", "SecurePass123", None);
+        let user_id = auth.email_to_id.get("replay@example.com").unwrap().clone();
+
+        let secret = data_encoding::BASE32_NOPAD.encode(b"12345678901234567890");
+        auth.enable_2fa(&user_id, &secret).unwrap();
+
+        let step = (current_timestamp_ms() / 1000) / 30;
+        let code = totp_code(b"12345678901234567890", step as u64);
+
+        assert!(auth.verify_2fa(&user_id, &code));
+        assert!(!auth.verify_2fa(&user_id, &code));
+    }
+
+    #[test]
+    fn totp_without_enrolment_fails() {
+        let mut auth = AuthService::new();
+        auth.register("no2fa@example.com", "SecurePass123", None);
+        let user_id = auth.email_to_id.get("no2fa@example.com").unwrap().clone();
+
+        assert!(!auth.verify_2fa(&user_id, "123456"));
+    }
+
+    #[test]
+    fn registration_stores_a_salted_argon2_hash() {
+        let mut auth = AuthService::new();
+        auth.register("hash@example.com", "SecurePass123", None);
+
+        let user = auth.users.get(&auth.email_to_id["hash@example.com"]).unwrap();
+        let hash = user.password_hash.as_ref().unwrap();
+        assert!(hash.starts_with("$argon2"), "unexpected hash: {hash}");
+
+        // The weak djb2 digest was a bare hex u64 with no salt.
+        assert_ne!(hash.as_str(), format!("{:x}", 0u64));
+    }
+
+    #[test]
+    fn login_rejects_wrong_password_and_unknown_user() {
+        let mut auth = AuthService::new();
+        auth.register("login@example.com", "SecurePass123", None);
+
+        assert!(auth.login("login@example.com", "SecurePass123").success);
+        assert!(!auth.login("login@example.com", "wrong").success);
+        assert!(!auth.login("nobody@example.com", "SecurePass123").success);
+    }
+
+    #[test]
+    fn no_hardcoded_demo_account_exists() {
+        let auth = AuthService::new();
+        // The old constructor seeded demo@example.com with KYC level 2.
+        assert!(auth.email_to_id.is_empty());
     }
 
     #[test]
