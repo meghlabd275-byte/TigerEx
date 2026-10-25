@@ -2,6 +2,8 @@
 //! High-performance cryptographic operations for security-critical functions
 
 pub mod grid;
+pub mod merkle;
+pub mod cross;
 pub mod signing;
 pub mod websocket_gateway;
 pub mod stream_processor;
