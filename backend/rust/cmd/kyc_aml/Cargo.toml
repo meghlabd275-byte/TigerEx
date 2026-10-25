@@ -7,6 +7,10 @@ edition = "2021"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 
+[lib]
+name = "tigerex_kyc"
+path = "src/lib.rs"
+
 [[bin]]
 name = "kyc_aml"
 path = "src/main.rs"
