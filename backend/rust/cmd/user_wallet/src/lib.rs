@@ -54,12 +54,23 @@ impl UserWallet {
         self.balances.get(asset).map(|b| b.available).unwrap_or(0.0)
     }
 
-    pub fn credit(&mut self, asset: &str, amount: f64) {
+    pub fn credit(&mut self, asset: &str, amount: f64) -> Result<(), String> {
+        // A negative credit would otherwise debit the wallet.
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("Credit amount must be finite and positive".to_string());
+        }
         let balance = self.balances.entry(asset.to_string()).or_insert_with(Balance::new);
         balance.available += amount;
+        Ok(())
     }
 
     pub fn debit(&mut self, asset: &str, amount: f64) -> Result<(), String> {
+        // A negative or NaN debit would slip past the balance check and credit
+        // the wallet.
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("Debit amount must be finite and positive".to_string());
+        }
+
         let balance = self.balances
             .get_mut(asset)
             .ok_or("No balance")?;
@@ -73,6 +84,10 @@ impl UserWallet {
     }
 
     pub fn lock(&mut self, asset: &str, amount: f64) -> Result<(), String> {
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("Lock amount must be finite and positive".to_string());
+        }
+
         let balance = self.balances
             .entry(asset.to_string()).or_insert_with(Balance::new);
         
@@ -141,7 +156,7 @@ pub enum WithdrawalStatus {
 
 /// UserWalletService
 pub struct UserWalletService {
-    wallets: RwLock<HashMap<String, UserWallet>>,
+    wallets: RwLock<HashMap<String, Arc<RwLock<UserWallet>>>>,
     deposit_history: RwLock<HashMap<String, Vec<Deposit>>>,
     withdrawal_history: RwLock<HashMap<String, Vec<Withdrawal>>>,
 }
@@ -155,18 +170,20 @@ impl UserWalletService {
         }
     }
 
-    /// Get or create wallet
+    /// Get or create the wallet handle for a user.
+    ///
+    /// The shared `Arc` is returned, not a clone of the wallet: the previous
+    /// version returned a fresh `Arc` wrapping a copy, so every credit, debit
+    /// and lock was written to a throwaway and silently discarded, leaving all
+    /// balances at zero.
     pub fn get_wallet(&self, user_id: &str) -> Arc<RwLock<UserWallet>> {
         let mut wallets = self.wallets.write().unwrap();
-        if let Some(w) = wallets.get(user_id) {
-            return Arc::new(RwLock::new(w.clone()));
-        }
-        
-        let wallet = UserWallet::new(user_id);
-        let arc = Arc::new(RwLock::new(wallet.clone()));
-        wallets.insert(user_id.to_string(), wallet);
-        arc
+        wallets
+            .entry(user_id.to_string())
+            .or_insert_with(|| Arc::new(RwLock::new(UserWallet::new(user_id))))
+            .clone()
     }
+        
 
     /// Get balance
     pub fn get_balance(&self, user_id: &str, asset: &str) -> f64 {
@@ -183,7 +200,10 @@ impl UserWalletService {
         {
             let wallet = self.get_wallet(&user_id);
             let mut wallet = wallet.write().unwrap();
-            wallet.credit(&deposit.asset, deposit.amount);
+            if let Err(err) = wallet.credit(&deposit.asset, deposit.amount) {
+                eprintln!("rejected deposit {}: {err}", deposit.id);
+                return;
+            }
         }
         
         // Store deposit
@@ -196,6 +216,10 @@ impl UserWalletService {
 
     /// Process withdrawal request
     pub fn request_withdrawal(&self, user_id: &str, asset: &str, amount: f64, address: &str) -> Result<Withdrawal, String> {
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("Withdrawal amount must be finite and positive".to_string());
+        }
+
         let wallet = self.get_wallet(user_id);
         let mut wallet = wallet.write().unwrap();
         
@@ -205,11 +229,17 @@ impl UserWalletService {
             return Err("Insufficient balance".to_string());
         }
         
+        // The fee must not exceed the withdrawal, or the user would be paid a
+        // negative net amount.
+        let fee = Self::calculate_fee(asset, amount);
+        let net_amount = amount - fee;
+        if net_amount <= 0.0 {
+            return Err("Amount does not cover the withdrawal fee".to_string());
+        }
+
         // Deduct amount
         wallet.debit(asset, amount)?;
         
-        let fee = Self::calculate_fee(asset, amount);
-        let net_amount = amount - fee;
         
         let withdrawal = Withdrawal {
             id: generate_id(),
@@ -290,5 +320,94 @@ mod tests {
         let wallet = service.get_wallet("user1");
         let balance = wallet.read().unwrap().get_balance("BTC");
         assert_eq!(balance, 0.0);
+    }
+
+    fn deposit(service: &UserWalletService, user: &str, asset: &str, amount: f64) {
+        service.credit_deposit(Deposit {
+            id: format!("d_{user}_{asset}"),
+            user_id: user.to_string(),
+            asset: asset.to_string(),
+            amount,
+            tx_hash: "0xabc".to_string(),
+            confirmations: 6,
+            status: DepositStatus::Confirmed,
+            created_at: 0,
+        });
+    }
+
+    #[test]
+    fn deposits_persist_instead_of_being_discarded() {
+        let service = UserWalletService::new();
+        deposit(&service, "user1", "BTC", 1.5);
+
+        // The old get_wallet returned a throwaway clone, so this read 0.0.
+        assert_eq!(service.get_balance("user1", "BTC"), 1.5);
+    }
+
+    #[test]
+    fn negative_credits_debits_and_locks_are_rejected() {
+        let service = UserWalletService::new();
+        deposit(&service, "user1", "BTC", 1.0);
+
+        let wallet = service.get_wallet("user1");
+        assert!(wallet.write().unwrap().credit("BTC", -1.0).is_err());
+        assert!(wallet.write().unwrap().debit("BTC", -1.0).is_err());
+        assert!(wallet.write().unwrap().lock("BTC", -1.0).is_err());
+        assert_eq!(service.get_balance("user1", "BTC"), 1.0);
+    }
+
+    #[test]
+    fn lock_moves_balance_between_available_and_locked() {
+        let service = UserWalletService::new();
+        deposit(&service, "user1", "BTC", 1.0);
+
+        let wallet = service.get_wallet("user1");
+        wallet.write().unwrap().lock("BTC", 0.4).unwrap();
+        {
+            let w = wallet.read().unwrap();
+            assert_eq!(w.get_balance("BTC"), 0.6);
+            assert_eq!(w.balances.get("BTC").unwrap().locked, 0.4);
+        }
+
+        wallet.write().unwrap().unlock("BTC", 0.4);
+        assert_eq!(service.get_balance("user1", "BTC"), 1.0);
+    }
+
+    #[test]
+    fn withdrawals_debit_the_balance_and_reject_overspend() {
+        let service = UserWalletService::new();
+        deposit(&service, "user1", "BTC", 1.0);
+
+        assert!(service
+            .request_withdrawal("user1", "BTC", 2.0, "addr")
+            .is_err());
+
+        let withdrawal = service
+            .request_withdrawal("user1", "BTC", 0.5, "addr")
+            .unwrap();
+        assert_eq!(withdrawal.status, WithdrawalStatus::Pending);
+        assert_eq!(service.get_balance("user1", "BTC"), 0.5);
+        assert!((withdrawal.amount - (0.5 - withdrawal.fee)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_withdrawal_below_the_fee_is_rejected() {
+        let service = UserWalletService::new();
+        deposit(&service, "user1", "BTC", 1.0);
+
+        // The BTC fee is 0.0005, so a 0.0001 withdrawal nets negative.
+        assert!(service
+            .request_withdrawal("user1", "BTC", 0.0001, "addr")
+            .is_err());
+        assert_eq!(service.get_balance("user1", "BTC"), 1.0);
+    }
+
+    #[test]
+    fn non_positive_deposits_are_not_recorded() {
+        let service = UserWalletService::new();
+        deposit(&service, "user1", "BTC", -1.0);
+
+        assert_eq!(service.get_balance("user1", "BTC"), 0.0);
+        assert!(service.get_deposits("user1").is_empty());
     }
 }
