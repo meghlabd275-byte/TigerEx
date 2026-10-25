@@ -73,3 +73,38 @@ go test -mod=mod . ./internal/api ./internal/wallet ./internal/perpetual \
   amounts; pass amounts as strings.
 - Write Go error paths so that a missing dependency (DB, Redis, RPC) surfaces as
   an error, not as a zero value.
+
+## Rust backend (`backend/rust`) status
+
+`cargo test --lib` in `backend/rust` (crate `tigerex-security`) passes: 31 tests.
+
+The `backend/rust/cmd/*` directories are ~91 independent crates. Many were
+generated placeholders whose functions returned fabricated constants and
+fail-open booleans. Treat any `cmd/*/src/lib.rs` you have not personally
+verified as untrusted. Each crate is its own Cargo project: run
+`cargo test --lib` from inside the crate directory, not the repo root.
+
+Audited and made real (each has tests):
+
+- `hsm` - Ed25519 key store; `verify` no longer returns `true` unconditionally.
+- `mpc` - Shamir sharing over GF(256) with threshold signing (was literal strings).
+- `identity_v2` - DIDs and credentials from real Ed25519 keys (was a constant DID
+  and an always-true verifier).
+- `regulatory_ai` - jurisdiction/KYC/sanctions rule engine (was always compliant).
+- `aml_ai` - graduated risk scoring (was fixed 0.1 / 10k threshold).
+- `oracle` - median of fresh validated sources with a deviation guard (was
+  echoing any f64, including NaN and negatives).
+- `funding`, `margin`, `collateral`, `insurance_fund`, `treasury`,
+  `referral_program`, `incentives`, `order_auction` - real accounting and risk
+  math (were constants, missing validation, or prefix-match bugs).
+- `websocket_v2`, `rest_api_v2` - wired to the real `marketdata` crate.
+
+Known remaining placeholder crates in `cmd/` (not yet audited), e.g.
+`audit`, `subaccount`, `prime_brokerage`, `social_trading`, `yield_optimizer`,
+`metrics`, `reports`, `migrations`, and others. Prefer fixing the ones that
+guard funds, auth, or market data first.
+
+Conventions for these crates: return `Result` with a typed error enum, reject
+non-finite and non-positive amounts, fail closed on unknown keys/symbols, and
+add a `#[cfg(test)] mod tests` that asserts the failure cases the old code got
+wrong.
