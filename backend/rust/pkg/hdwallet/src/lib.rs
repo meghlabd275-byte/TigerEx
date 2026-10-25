@@ -22,6 +22,35 @@ use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use sha2::{Digest, Sha256, Sha512};
 use slip10::{derive_key_from_path, BIP32Path, Curve};
 
+/// A BIP39 seed that zeroizes its bytes when dropped or explicitly cleared.
+///
+/// Seed material is the root of every derived key, so it must never be left in
+/// freed memory. Wrapping it here means callers cannot accidentally copy it out
+/// into an ordinary buffer that survives.
+pub struct ZeroizingSeed(zeroize::Zeroizing<[u8; 64]>);
+
+impl ZeroizingSeed {
+    pub fn new(seed: [u8; 64]) -> Self {
+        Self(zeroize::Zeroizing::new(seed))
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 64] {
+        &self.0
+    }
+
+    pub fn zeroize(&mut self) {
+        use zeroize::Zeroize;
+        self.0.zeroize();
+    }
+}
+
+impl std::fmt::Debug for ZeroizingSeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never print seed material.
+        f.write_str("ZeroizingSeed(<redacted>)")
+    }
+}
+
 /// Errors produced during derivation, decoding or validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HdError {
