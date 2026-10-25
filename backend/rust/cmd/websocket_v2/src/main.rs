@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tokio::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use axum::{
     Router, 
@@ -15,7 +14,7 @@ use axum::{
 };
 use axum::body::Body;
 use axum::routing::{get, post};
-use tower_http::cors::{CorsLayer, Any, ExposeHeaders, AllowedOrigins};
+use tower_http::cors::{CorsLayer, Any, ExposeHeaders};
 use tower_http::trace::TraceLayer;
 use hyper::Request;
 use std::net::SocketAddr;
@@ -321,7 +320,7 @@ pub struct WsOrderTrade {
 // ============================================================================
 
 pub struct WsClient {
-    pub subscriptions: RwLock<HashMap<String, Vec<String>>,
+    pub subscriptions: RwLock<HashMap<String, Vec<String>>>,
     pub last_ping: RwLock<i64>,
 }
 
@@ -360,7 +359,7 @@ impl WsClient {
 // ============================================================================
 
 pub struct WsAppState {
-    pub clients: RwLock<HashMap<String, Arc<WsClient>>,
+    pub clients: RwLock<HashMap<String, Arc<WsClient>>>,
     pub subscriptions: RwLock<HashMap<String, Vec<String>>>,
     pub ticker_data: RwLock<HashMap<String, WsTicker>>,
     pub orderbook_data: RwLock<HashMap<String, WsOrderBook>>,
@@ -402,7 +401,7 @@ fn validate_stream(stream: &str) -> bool {
         "depth", "depth@100ms", "depth@1000ms",
         "account", "position", "order",
     ];
-    valid_streams.contains(&stream.to_lowercase())
+    valid_streams.contains(&stream.to_lowercase().as_str())
 }
 
 fn validate_symbol(symbol: &str) -> bool {
@@ -410,7 +409,7 @@ fn validate_symbol(symbol: &str) -> bool {
         "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", 
         "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "MATICUSDT",
     ];
-    valid_symbols.contains(&symbol.to_uppercase())
+    valid_symbols.contains(&symbol.to_uppercase().as_str())
 }
 
 // ============================================================================
@@ -509,7 +508,7 @@ async fn handle_combined_stream(
 
 fn create_router(state: Arc<WsAppState>) -> Router {
     let cors = CorsLayer::new()
-        .allow_origin(AllowedOrigins::Any)
+        .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any)
         .expose_headers(ExposeHeaders::any());
