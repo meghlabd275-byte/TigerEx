@@ -55,9 +55,15 @@ impl Balance {
         }
     }
 
-    pub fn add(&mut self, amount: f64) {
+    /// Credit the balance. Rejects non-finite and non-positive amounts so a
+    /// negative deposit cannot drain the wallet.
+    pub fn add(&mut self, amount: f64) -> Result<(), String> {
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("Deposit amount must be finite and positive".to_string());
+        }
         self.available += amount;
         self.total += amount;
+        Ok(())
     }
 
     pub fn lock(&mut self, amount: f64) -> Result<(), String> {
@@ -126,9 +132,12 @@ impl Wallet {
         self.balances.get(symbol).map(|b| b.available).unwrap_or(0.0)
     }
 
-    pub fn deposit(&mut self, symbol: &str, amount: f64) {
-        let balance = self.balances.entry(symbol.to_string()).or_insert_with(Balance::new);
-        balance.add(amount);
+    pub fn deposit(&mut self, symbol: &str, amount: f64) -> Result<(), String> {
+        let balance = self
+            .balances
+            .entry(symbol.to_string())
+            .or_insert_with(Balance::new);
+        balance.add(amount)
     }
 
     pub fn can_withdraw(&self, symbol: &str, amount: f64) -> bool {
@@ -153,6 +162,12 @@ impl Wallet {
     pub fn withdraw(&mut self, symbol: &str, amount: f64) -> Result<(), String> {
         if self.blocked {
             return Err("Wallet blocked".to_string());
+        }
+
+        // A negative or NaN amount would slip past the minimum-withdrawal
+        // check (NaN comparisons are false) and credit the balance.
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("Withdrawal amount must be finite and positive".to_string());
         }
 
         // Check minimum withdrawal
@@ -285,10 +300,14 @@ impl CustodyService {
 
     /// Deposit funds
     pub fn deposit(&self, user_id: &str, symbol: &str, amount: f64) -> Result<(), String> {
+        // Only registered assets may be deposited.
+        if !self.assets.read().unwrap().contains_key(symbol) {
+            return Err(format!("Unsupported asset: {symbol}"));
+        }
+
         let wallet = self.get_wallet(user_id);
         let mut wallet = wallet.write().unwrap();
-        wallet.deposit(symbol, amount);
-        Ok(())
+        wallet.deposit(symbol, amount)
     }
 
     /// Request withdrawal
@@ -420,5 +439,62 @@ mod tests {
         let balance = service.get_balance("user1", "BTC");
         
         assert_eq!(balance, 1.0);
+    }
+
+    #[test]
+    fn negative_and_non_finite_deposits_are_rejected() {
+        let service = CustodyService::new();
+
+        // The old implementation added a negative amount straight to the wallet.
+        assert!(service.deposit("user1", "BTC", -1.0).is_err());
+        assert!(service.deposit("user1", "BTC", f64::NAN).is_err());
+        assert!(service.deposit("user1", "BTC", 0.0).is_err());
+        assert_eq!(service.get_balance("user1", "BTC"), 0.0);
+    }
+
+    #[test]
+    fn unregistered_assets_cannot_be_deposited() {
+        let service = CustodyService::new();
+        assert!(service.deposit("user1", "SCAM", 1.0).is_err());
+    }
+
+    #[test]
+    fn negative_withdrawals_are_rejected() {
+        let service = CustodyService::new();
+        service.deposit("user1", "BTC", 1.0).unwrap();
+        service.set_kyc("user1", 2).unwrap();
+
+        // The old implementation credited the wallet on a negative amount.
+        assert!(service
+            .request_withdrawal(WithdrawalRequest::new("user1", "BTC", -0.5, "addr"))
+            .is_err());
+        assert_eq!(service.get_balance("user1", "BTC"), 1.0);
+    }
+
+    #[test]
+    fn withdrawal_requires_kyc_and_sufficient_balance() {
+        let service = CustodyService::new();
+        service.deposit("user1", "BTC", 1.0).unwrap();
+
+        // BTC requires KYC level 2.
+        assert!(service
+            .request_withdrawal(WithdrawalRequest::new("user1", "BTC", 0.5, "addr"))
+            .is_err());
+
+        service.set_kyc("user1", 2).unwrap();
+        // Over the balance.
+        assert!(service
+            .request_withdrawal(WithdrawalRequest::new("user1", "BTC", 2.0, "addr"))
+            .is_err());
+
+        let request = service
+            .request_withdrawal(WithdrawalRequest::new("user1", "BTC", 0.5, "addr"))
+            .unwrap();
+        assert_eq!(service.get_balance("user1", "BTC"), 0.5);
+        assert_eq!(request.status, WithdrawalStatus::Pending);
+
+        // The same request cannot be approved twice.
+        service.approve_withdrawal(&request.id).unwrap();
+        assert!(service.approve_withdrawal(&request.id).is_err());
     }
 }
