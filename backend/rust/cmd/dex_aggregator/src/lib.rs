@@ -51,16 +51,12 @@ pub enum DexAggregatorError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Exchange {
-    Binance,
-    Bybit,
-    Coinbase,
-    Kraken,
-    KuCoin,
-    OKX,
-    Gate,
-    HTX,
-    Bitget,
-    MEXC,
+    /// TigerEx's own central limit order book.
+    TigerExSpot,
+    /// TigerEx's own perpetuals book.
+    TigerExFutures,
+    /// TigerEx's on-chain pool.
+    TigerExPool,
     UniswapV3,
     Sushiswap,
     Curve,
@@ -68,34 +64,52 @@ pub enum Exchange {
 }
 
 impl Exchange {
-    pub fn is_cex(&self) -> bool {
-        !matches!(self, Exchange::UniswapV3 | Exchange::Sushiswap | Exchange::Curve | Exchange::Balancer)
+    /// True for TigerEx's own venues.
+    pub fn is_own(&self) -> bool {
+        matches!(
+            self,
+            Exchange::TigerExSpot | Exchange::TigerExFutures | Exchange::TigerExPool
+        )
     }
-    
+
+    pub fn is_cex(&self) -> bool {
+        matches!(self, Exchange::TigerExSpot | Exchange::TigerExFutures)
+    }
+
     pub fn is_dex(&self) -> bool {
         !self.is_cex()
     }
-    
+
+    /// Taker fee for a venue, as a fraction of notional.
     pub fn fee(&self) -> f64 {
         match self {
-            Exchange::Binance => 0.001,
-            Exchange::Bybit => 0.001,
-            Exchange::Coinbase => 0.006,
-            Exchange::Kraken => 0.002,
-            Exchange::KuCoin => 0.001,
-            Exchange::OKX => 0.001,
-            Exchange::Gate => 0.002,
-            Exchange::HTX => 0.002,
-            Exchange::Bitget => 0.001,
-            Exchange::MEXC => 0.002,
+            Exchange::TigerExSpot | Exchange::TigerExFutures => 0.001,
+            Exchange::TigerExPool => 0.0005,
             Exchange::UniswapV3 => 0.003,
             Exchange::Sushiswap => 0.003,
             Exchange::Curve => 0.0004,
             Exchange::Balancer => 0.001,
         }
     }
-}
 
+
+    /// Venues an aggregator may route to.
+    ///
+    /// TigerEx never depends on another exchange, so this list contains only
+    /// TigerEx's own venues and public on-chain pools.
+    pub fn supported() -> Vec<Exchange> {
+        vec![
+            Exchange::TigerExSpot,
+            Exchange::TigerExFutures,
+            Exchange::TigerExPool,
+            Exchange::UniswapV3,
+            Exchange::Sushiswap,
+            Exchange::Curve,
+            Exchange::Balancer,
+        ]
+    }
+}
+    
 // ============================================================================
 // TOKEN AND PAIR
 // ============================================================================
@@ -559,13 +573,20 @@ impl DexAggregator {
     // GAS OPTIMIZATION
     // ============================================================================
     
-    pub async fn optimize_gas(&self, route: &Route) -> Result<GasRecommendation, DexAggregatorError> {
+    pub async fn optimize_gas(
+        &self,
+        route: &Route,
+        gas_price_gwei: f64,
+        native_price_usd: f64,
+    ) -> Result<GasRecommendation, DexAggregatorError> {
         let mut recommendations = Vec::new();
         
         for exchange in &route.exchanges {
             if let Some(connector) = self.connectors.get(exchange) {
                 // Estimate gas for this exchange
-                let gas_estimate = self.estimate_gas(exchange, &route.path).await?;
+                let gas_estimate = self
+                    .estimate_gas(exchange, &route.path, gas_price_gwei, native_price_usd)
+                    .await?;
                 
                 recommendations.push(GasRecommendation {
                     exchange: *exchange,
@@ -598,35 +619,53 @@ impl DexAggregator {
         Ok(recommendations)
     }
     
-    async fn estimate_gas(&self, exchange: &Exchange, path: &[String]) -> Result<(u64, f64, f64, u64), DexAggregatorError> {
-        // Simplified gas estimation
+    /// Estimate the gas a route will consume.
+    ///
+    /// `gas_price_gwei` and `native_price_usd` must come from the caller's
+    /// oracle; nothing is assumed, so an unset price is rejected rather than
+    /// silently defaulted.
+    async fn estimate_gas(
+        &self,
+        exchange: &Exchange,
+        path: &[String],
+        gas_price_gwei: f64,
+        native_price_usd: f64,
+    ) -> Result<(u64, f64, f64, u64), DexAggregatorError> {
+        if !gas_price_gwei.is_finite() || gas_price_gwei <= 0.0 {
+            return Err(DexAggregatorError::InvalidAmount(format!(
+                "gas price {gas_price_gwei} must be finite and positive"
+            )));
+        }
+        if !native_price_usd.is_finite() || native_price_usd <= 0.0 {
+            return Err(DexAggregatorError::InvalidAmount(format!(
+                "native token price {native_price_usd} must be finite and positive"
+            )));
+        }
+
         let base_gas: u64 = match exchange {
-            Exchange::UniswapV3 => 150000,
-            Exchange::Sushiswap => 200000,
-            Exchange::Curve => 100000,
-            Exchange::Balancer => 180000,
-            _ => 50000,
+            Exchange::TigerExSpot | Exchange::TigerExFutures => 0,
+            Exchange::TigerExPool => 90_000,
+            Exchange::UniswapV3 => 150_000,
+            Exchange::Sushiswap => 200_000,
+            Exchange::Curve => 100_000,
+            Exchange::Balancer => 180_000,
         };
-        
-        let path_multiplier = path.len() as u64;
+
+        let path_multiplier = path.len().max(1) as u64;
         let gas_limit = base_gas * path_multiplier;
-        
-        // Current gas price (simplified - in production use oracle)
-        let gas_price_gwei = 30.0;
+
         let gas_price_wei = gas_price_gwei * 1e9;
-        
-        // Estimate cost in USD
-        let eth_price = 3500.0; // In production, fetch from oracle
-        let estimated_cost_usd = (gas_limit as f64 * gas_price_wei / 1e18) * eth_price;
-        
-        // Estimated time
+        let estimated_cost_usd = (gas_limit as f64 * gas_price_wei / 1e18) * native_price_usd;
+
         let time = match exchange {
-            Exchange::UniswapV3 => 15000,
-            Exchange::Sushiswap => 20000,
-            Exchange::Curve => 10000,
-            _ => 5000,
+            Exchange::TigerExSpot | Exchange::TigerExFutures => 0,
+            Exchange::TigerExPool => 12_000,
+            Exchange::UniswapV3 => 15_000,
+            Exchange::Sushiswap => 20_000,
+            Exchange::Curve => 10_000,
+            Exchange::Balancer => 15_000,
         };
-        
+
         Ok((gas_limit, gas_price_gwei, estimated_cost_usd, time))
     }
     
@@ -715,12 +754,30 @@ mod tests {
     
     #[test]
     fn test_exchange_fees() {
-        assert!(Exchange::Binance.fee() < Exchange::Coinbase.fee());
+        // TigerEx's own pool is cheaper than a public DEX pool.
+        assert!(Exchange::TigerExPool.fee() < Exchange::UniswapV3.fee());
     }
-    
+
     #[test]
     fn test_dex_classification() {
-        assert!(Exchange::Binance.is_cex());
+        assert!(Exchange::TigerExSpot.is_cex());
         assert!(Exchange::UniswapV3.is_dex());
+    }
+
+    #[test]
+    fn test_supported_venues_contain_no_rival_exchanges() {
+        // TigerEx never depends on another exchange.
+        for exchange in Exchange::supported() {
+            assert!(
+                exchange.is_own()
+                    || matches!(
+                        exchange,
+                        Exchange::UniswapV3
+                            | Exchange::Sushiswap
+                            | Exchange::Curve
+                            | Exchange::Balancer
+                    )
+            );
+        }
     }
 }
