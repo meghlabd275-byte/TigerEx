@@ -14,23 +14,25 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use axum::{
-    body::Body,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use hex;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::info;
 use uuid::Uuid;
+
+mod derivation;
+mod keystore;
+
+use derivation::derive_for_chain;
+use keystore::SeedKeystore;
 
 // =============================================================================
 // ERROR TYPES
@@ -73,19 +75,19 @@ pub enum WalletError {
 }
 
 impl IntoResponse for WalletError {
-    fn into_response(self) -> Response<Body> {
+    fn into_response(self) -> Response {
         let (status, message) = match self {
-            WalletError::InvalidSeedPhrase => (StatusCode::BAD_REQUEST, "Invalid seed phrase"),
-            WalletError::WalletNotFound => (StatusCode::NOT_FOUND, "Wallet not found"),
-            WalletError::AddressNotFound => (StatusCode::NOT_FOUND, "Address not found"),
-            WalletError::InsufficientBalance => (StatusCode::BAD_REQUEST, "Insufficient balance"),
-            WalletError::InvalidAddress => (StatusCode::BAD_REQUEST, "Invalid address"),
-            WalletError::TransactionFailed(msg) => (StatusCode::BAD_REQUEST, &msg),
-            WalletError::SigningError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, &msg),
-            WalletError::NetworkError(msg) => (StatusCode::BAD_GATEWAY, &msg),
-            WalletError::ChainNotSupported => (StatusCode::BAD_REQUEST, "Chain not supported"),
-            WalletError::RateLimitExceeded => (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded"),
-            WalletError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, &msg),
+            WalletError::InvalidSeedPhrase => (StatusCode::BAD_REQUEST, "Invalid seed phrase".to_string()),
+            WalletError::WalletNotFound => (StatusCode::NOT_FOUND, "Wallet not found".to_string()),
+            WalletError::AddressNotFound => (StatusCode::NOT_FOUND, "Address not found".to_string()),
+            WalletError::InsufficientBalance => (StatusCode::BAD_REQUEST, "Insufficient balance".to_string()),
+            WalletError::InvalidAddress => (StatusCode::BAD_REQUEST, "Invalid address".to_string()),
+            WalletError::TransactionFailed(msg) => (StatusCode::BAD_REQUEST, msg),
+            WalletError::SigningError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            WalletError::NetworkError(msg) => (StatusCode::BAD_GATEWAY, msg),
+            WalletError::ChainNotSupported => (StatusCode::BAD_REQUEST, "Chain not supported".to_string()),
+            WalletError::RateLimitExceeded => (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded".to_string()),
+            WalletError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         
         let body = serde_json::json!({
@@ -352,16 +354,34 @@ pub struct WalletService {
     addresses: RwLock<HashMap<String, Vec<WalletAddress>>>,
     balances: RwLock<HashMap<String, Vec<TokenBalance>>>,
     transactions: RwLock<HashMap<String, Vec<Transaction>>>,
+    keystore: SeedKeystore,
 }
 
 impl WalletService {
-    pub fn new() -> Self {
+    /// Builds the service using the master key from `TIGEREX_WALLET_MASTER_KEY`.
+    ///
+    /// Fails closed: without a valid master key the service will not start, so seed phrases
+    /// can never be written to storage in an unprotected form.
+    pub fn new() -> Result<Self, WalletError> {
+        Ok(Self {
+            blockchain_configs: get_blockchain_configs(),
+            wallets: RwLock::new(HashMap::new()),
+            addresses: RwLock::new(HashMap::new()),
+            balances: RwLock::new(HashMap::new()),
+            transactions: RwLock::new(HashMap::new()),
+            keystore: SeedKeystore::from_env()?,
+        })
+    }
+
+    /// Builds the service with an explicit master key (used by tests).
+    pub fn with_master_key(master_key: &[u8; 32]) -> Self {
         Self {
             blockchain_configs: get_blockchain_configs(),
             wallets: RwLock::new(HashMap::new()),
             addresses: RwLock::new(HashMap::new()),
             balances: RwLock::new(HashMap::new()),
             transactions: RwLock::new(HashMap::new()),
+            keystore: SeedKeystore::new(master_key),
         }
     }
     
@@ -369,23 +389,22 @@ impl WalletService {
     // WALLET MANAGEMENT
     // =============================================================================
     
-    /// Generate a new wallet with a random 24-word seed phrase
+    /// Generate a new wallet with a random 24-word BIP39 seed phrase
     pub async fn generate_wallet(&self, user_id: &str, name: &str) -> Result<(Wallet, Vec<WalletAddress>), WalletError> {
-        // Generate random seed phrase (in production, use proper entropy)
-        let seed_phrase = self.generate_seed_phrase();
+        let seed_phrase = generate_seed_phrase()?;
         
         // Create wallet
         let wallet = Wallet {
             id: Uuid::new_v4().to_string(),
             user_id: user_id.to_string(),
             name: name.to_string(),
-            seed_phrase_encrypted: self.encrypt_seed_phrase(&seed_phrase)?,
+            seed_phrase_encrypted: self.keystore.encrypt(&seed_phrase)?,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
         
         // Generate addresses for all supported blockchains
-        let addresses = self.derive_addresses(&wallet.id, &seed_phrase).await?;
+        let addresses = self.derive_addresses(&wallet.id, &seed_phrase)?;
         
         // Store wallet and addresses
         {
@@ -405,8 +424,7 @@ impl WalletService {
     
     /// Import wallet from existing seed phrase
     pub async fn import_wallet(&self, user_id: &str, name: &str, seed_phrase: &str) -> Result<(Wallet, Vec<WalletAddress>), WalletError> {
-        // Validate seed phrase
-        if !self.validate_seed_phrase(seed_phrase) {
+        if !validate_seed_phrase(seed_phrase) {
             return Err(WalletError::InvalidSeedPhrase);
         }
         
@@ -415,13 +433,13 @@ impl WalletService {
             id: Uuid::new_v4().to_string(),
             user_id: user_id.to_string(),
             name: name.to_string(),
-            seed_phrase_encrypted: self.encrypt_seed_phrase(seed_phrase)?,
+            seed_phrase_encrypted: self.keystore.encrypt(seed_phrase)?,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
         
         // Generate addresses for all supported blockchains
-        let addresses = self.derive_addresses(&wallet.id, seed_phrase).await?;
+        let addresses = self.derive_addresses(&wallet.id, seed_phrase)?;
         
         // Store wallet and addresses
         {
@@ -533,124 +551,79 @@ impl WalletService {
     // INTERNAL METHODS
     // =============================================================================
     
-    fn generate_seed_phrase(&self) -> String {
-        // BIP39 word list - shortened for demo
-        let words = [
-            "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract",
-            "absurd", "abuse", "access", "accident", "account", "accuse", "achieve", "acid",
-            "acoustic", "acquire", "across", "act", "action", "actor", "actress", "actual",
-            "adapt", "add", "addict", "address", "adjust", "admit", "adult", "advance",
-            "advice", "aerobic", "affair", "afford", "afraid", "again", "age", "agent",
-            "agree", "ahead", "aim", "air", "airport", "aisle", "alarm", "album",
-        ];
-        
-        let mut rng = rand::thread_rng();
-        let mut phrase = Vec::new();
-        
-        for _ in 0..24 {
-            let idx = rand::Rng::gen_range(&mut rng, 0..words.len());
-            phrase.push(words[idx]);
-        }
-        
-        phrase.join(" ")
-    }
-    
-    fn validate_seed_phrase(&self, phrase: &str) -> bool {
-        let words: Vec<&str> = phrase.split_whitespace().collect();
-        words.len() == 24
-    }
-    
-    fn encrypt_seed_phrase(&self, phrase: &str) -> Result<String, WalletError> {
-        // In production, use proper encryption with key derivation
-        // For now, simple base64 encoding (NOT for production!)
-        Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, phrase))
-    }
-    
-    fn decrypt_seed_phrase(&self, encrypted: &str) -> Result<String, WalletError> {
-        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encrypted)
-            .map_err(|e| WalletError::InternalError(e.to_string()))?;
-        
-        String::from_utf8(decoded)
-            .map_err(|e| WalletError::InternalError(e.to_string()))
-    }
-    
-    async fn derive_addresses(&self, wallet_id: &str, seed_phrase: &str) -> Result<Vec<WalletAddress>, WalletError> {
-        let mut addresses = Vec::new();
-        
+    /// Re-derives every chain address for a wallet from its decrypted seed phrase.
+    fn derive_addresses(
+        &self,
+        wallet_id: &str,
+        seed_phrase: &str,
+    ) -> Result<Vec<WalletAddress>, WalletError> {
+        let seed = bip39_seed(seed_phrase)?;
+        let mut addresses = Vec::with_capacity(self.blockchain_configs.len());
+
         for (blockchain, config) in &self.blockchain_configs {
-            let address = self.derive_address(seed_phrase, config)?;
-            
+            let derived = derive_for_chain(
+                &config.id,
+                &seed,
+                seed_phrase,
+                &config.derivation_path,
+            )?;
+
             addresses.push(WalletAddress {
                 id: Uuid::new_v4().to_string(),
                 wallet_id: wallet_id.to_string(),
                 blockchain: blockchain.clone(),
-                address,
-                public_key: String::new(), // Would be derived in production
+                address: derived.address,
+                public_key: derived.public_key_hex,
                 derivation_path: config.derivation_path.clone(),
                 created_at: Utc::now(),
             });
         }
-        
+
+        // Deterministic ordering keeps responses stable across restarts.
+        addresses.sort_by(|a, b| a.blockchain.cmp(&b.blockchain));
         Ok(addresses)
     }
-    
-    fn derive_address(&self, seed_phrase: &str, config: &BlockchainConfig) -> Result<String, WalletError> {
-        // Simplified address derivation (not production-ready)
-        // In production, use proper BIP32/BIP44 derivation
-        
-        let mut hasher = Sha256::new();
-        hasher.update(seed_phrase.as_bytes());
-        hasher.update(config.derivation_path.as_bytes());
-        let hash = hasher.finalize();
-        
-        if config.is_evm {
-            // EVM address (simplified)
-            let addr = format!("0x{}", hex::encode(&hash[12..32]));
-            Ok(addr)
-        } else if config.id == "sol" {
-            // Solana address (simplified)
-            let addr = base58::encode(&hash[..32]);
-            Ok(addr)
-        } else if config.id == "tron" {
-            // TRON address (simplified)
-            let addr = format!("T{}", base58::encode(&hash[21..33]));
-            Ok(addr)
-        } else {
-            // Generic
-            Ok(hex::encode(&hash[..20]))
-        }
-    }
-    
+
+    /// Validates an address using the chain's real encoding rules.
     fn validate_address(&self, address: &str, blockchain: &str) -> bool {
-        let config = match self.blockchain_configs.get(blockchain) {
-            Some(c) => c,
-            None => return false,
-        };
-        
-        if config.is_evm {
-            // Check if it's a valid Ethereum address
-            address.starts_with("0x") && address.len() == 42
-        } else if blockchain == "sol" {
-            // Solana address (base58)
-            address.len() >= 32 && address.len() <= 44
-        } else if blockchain == "tron" {
-            // TRON address
-            address.starts_with('T') && address.len() == 34
-        } else {
-            // Generic validation
-            !address.is_empty()
+        match self.blockchain_configs.get(blockchain) {
+            Some(config) => derivation::is_valid_address_for_chain(&config.id, address),
+            None => false,
         }
     }
-    
-    async fn query_balance(&self, address: &WalletAddress) -> Result<Vec<TokenBalance>, WalletError> {
+
+    async fn query_balance(&self, _address: &WalletAddress) -> Result<Vec<TokenBalance>, WalletError> {
         // In production, query RPC endpoints
         // For now, return empty balances
         Ok(vec![])
     }
     
-    async fn simulate_transfer(&self, _request: &TransferRequest, _from: &str, _config: &BlockchainConfig) -> Result<String, WalletError> {
-        Err(WalletError::NetworkError("mock transaction hashes are disabled; chain broadcast provider is not configured".to_string()))
-    }
+}
+
+// =============================================================================
+// SEED PHRASE HELPERS
+// =============================================================================
+
+/// Generates a fresh 24-word English BIP39 mnemonic from OS entropy.
+///
+/// The phrase carries a valid checksum, so it round-trips through
+/// [`validate_seed_phrase`] and can be re-imported by any BIP39-compatible wallet.
+fn generate_seed_phrase() -> Result<String, WalletError> {
+    let mnemonic = bip39::Mnemonic::generate_in(bip39::Language::English, 24)
+        .map_err(|e| WalletError::InternalError(format!("seed generation failed: {e}")))?;
+    Ok(mnemonic.to_string())
+}
+
+/// Validates a BIP39 mnemonic: known words, allowed length, and a correct checksum.
+fn validate_seed_phrase(phrase: &str) -> bool {
+    bip39::Mnemonic::parse_in(bip39::Language::English, phrase).is_ok()
+}
+
+/// Expands a validated BIP39 mnemonic into its 64-byte seed (PBKDF2-HMAC-SHA512, empty passphrase).
+fn bip39_seed(phrase: &str) -> Result<[u8; 64], WalletError> {
+    let mnemonic = bip39::Mnemonic::parse_in(bip39::Language::English, phrase)
+        .map_err(|_| WalletError::InvalidSeedPhrase)?;
+    Ok(mnemonic.to_seed(""))
 }
 
 // =============================================================================
@@ -659,6 +632,7 @@ impl WalletService {
 
 pub type SharedWalletService = Arc<WalletService>;
 
+#[derive(Clone)]
 pub struct AppState {
     pub wallet_service: SharedWalletService,
 }
@@ -791,7 +765,7 @@ async fn main() -> Result<()> {
     info!("Starting TigerEx Wallet Service");
     
     // Create wallet service
-    let wallet_service = Arc::new(WalletService::new());
+    let wallet_service = Arc::new(WalletService::new()?);
     let state = AppState {
         wallet_service: wallet_service.clone(),
     };
@@ -809,7 +783,7 @@ async fn main() -> Result<()> {
         .with_state(state);
     
     // Start server
-    let addr = "0.0.0.0:8081".parse()?;
+    let addr: std::net::SocketAddr = "0.0.0.0:8081".parse()?;
     
     info!("Wallet service listening on {}", addr);
     
