@@ -36,13 +36,13 @@ pub struct StreamMessage {
 }
 
 /// Stream event handler function type
-pub type EventHandler = Box<dyn Fn(StreamMessage) + Send + Sync>;
+pub type EventHandler = Arc<dyn Fn(StreamMessage) + Send + Sync>;
 
 /// High-performance stream processor with ring buffer
 pub struct StreamProcessor {
     buffer: Mutex<VecDeque<StreamMessage>>,
     max_size: usize,
-    handlers: Mutex<Vec<Arc<EventHandler>>],
+    handlers: Mutex<Vec<EventHandler>>,
     subscriptions: Mutex<HashMap<String, bool>>,
 }
 
@@ -66,7 +66,7 @@ impl StreamProcessor {
     }
 
     /// Add event handler
-    pub fn add_handler(&self, handler: Arc<EventHandler>) {
+    pub fn add_handler(&self, handler: EventHandler) {
         let mut handlers = self.handlers.lock().unwrap();
         handlers.push(handler);
     }
@@ -74,17 +74,17 @@ impl StreamProcessor {
     /// Push message to stream
     pub fn push(&self, msg: StreamMessage) -> bool {
         let mut buffer = self.buffer.lock().unwrap();
-        
+
         if buffer.len() >= self.max_size {
             return false; // Buffer full
         }
-        
+
         buffer.push_back(msg);
-        
+
         // Notify handlers
         drop(buffer);
         self.notify_handlers();
-        
+
         true
     }
 
@@ -108,7 +108,7 @@ impl StreamProcessor {
     fn notify_handlers(&self) {
         let handlers = self.handlers.lock().unwrap();
         let buffer = self.buffer.lock().unwrap();
-        
+
         if let Some(msg) = buffer.back() {
             for handler in handlers.iter() {
                 handler(msg.clone());
@@ -172,14 +172,14 @@ mod tests {
     fn test_stream_processor() {
         let sp = StreamProcessor::new(100);
         sp.subscribe(&["BTC/USDT".to_string()]);
-        
+
         let msg = StreamMessage {
             msg_type: "ticker".to_string(),
             symbol: Some("BTC/USDT".to_string()),
-            data: serde_json::json!({"price": 50000.0)),
+            data: serde_json::json!({"price": 50000.0}),
             timestamp: current_timestamp_ms(),
         };
-        
+
         assert!(sp.push(msg));
         assert_eq!(sp.len(), 1);
     }

@@ -1,5 +1,5 @@
 //! WebSocket Gateway - Rust Implementation
-//! 
+//!
 //! Real-time trading via WebSocket
 
 use serde::{Serialize, Deserialize};
@@ -84,14 +84,14 @@ impl WebSocketGateway {
     pub fn accept_connection(&mut self) -> String {
         self.counter += 1;
         let conn_id = format!("ws_{}", self.counter);
-        
+
         self.connections.insert(conn_id.clone(), WSConnection {
             id: conn_id.clone(),
             subscriptions: Vec::new(),
             authenticated: false,
             user_id: None,
         });
-        
+
         conn_id
     }
 
@@ -99,14 +99,14 @@ impl WebSocketGateway {
     pub fn subscribe(&mut self, conn_id: &str, channel: &str) -> Result<(), String> {
         let conn = self.connections.get_mut(conn_id)
             .ok_or("Connection not found")?;
-        
+
         conn.subscriptions.push(channel.to_string());
-        
+
         // Add to channel subscribers
         self.subscriptions.entry(channel.to_string())
             .or_insert_with(Vec::new)
             .push(conn_id.to_string());
-        
+
         Ok(())
     }
 
@@ -124,14 +124,15 @@ impl WebSocketGateway {
         }
     }
 
-    /// Send order book
-    pub fn send_orderbook(&self, symbol: &str) -> WSMessage {
+    /// Send order book snapshot from real book state.
+    pub fn send_orderbook(&self, symbol: &str, book: &OrderBook) -> WSMessage {
         WSMessage {
             channel: format!("{}@depth", symbol),
             data: serde_json::json!({
                 "symbol": symbol,
-                "bids": [[50000.0, 1.5], [49999.0, 2.0]],
-                "asks": [[50001.0, 1.0], [50002.0, 2.5]]
+                "bids": book.bids.iter().map(|l| [l.price, l.quantity]).collect::<Vec<_>>(),
+                "asks": book.asks.iter().map(|l| [l.price, l.quantity]).collect::<Vec<_>>(),
+                "lastUpdate": book.last_update,
             }),
             timestamp: current_timestamp_ms(),
         }
@@ -159,19 +160,36 @@ impl WebSocketGateway {
         // In real impl: send to all connected clients
     }
 
-    /// Authenticate
-    pub fn authenticate(&mut self, conn_id: &str, token: &str) -> Result<(), String> {
+    /// Authenticate a connection against the session store.
+    ///
+    /// A connection is authenticated only if `verify` accepts the token and
+    /// returns the owning user id. The previous implementation accepted any
+    /// string beginning with `tk_` and hardcoded the caller to `user1`, which
+    /// let anyone act as that account over the socket.
+    pub fn authenticate<F>(&mut self, conn_id: &str, token: &str, verify: F) -> Result<String, String>
+    where
+        F: FnOnce(&str) -> Option<String>,
+    {
+        if token.is_empty() {
+            return Err("empty token".to_string());
+        }
+
+        let user_id = verify(token).ok_or_else(|| "invalid or expired token".to_string())?;
+
         let conn = self.connections.get_mut(conn_id)
             .ok_or("Connection not found")?;
-        
-        // Verify token - simplified
-        if token.starts_with("tk_") {
-            conn.authenticated = true;
-            conn.user_id = Some("user1".to_string());
-            Ok(())
-        } else {
-            Err("Invalid token".to_string())
-        }
+
+        conn.authenticated = true;
+        conn.user_id = Some(user_id.clone());
+        Ok(user_id)
+    }
+
+    /// Whether a connection has completed authentication.
+    pub fn is_authenticated(&self, conn_id: &str) -> bool {
+        self.connections
+            .get(conn_id)
+            .map(|c| c.authenticated)
+            .unwrap_or(false)
     }
 
     /// Close connection
@@ -184,6 +202,11 @@ impl WebSocketGateway {
             }
         }
     }
+}
+
+/// Stable identifier for a trade, derived from its own fields.
+fn trade_id(symbol: &str, price: f64, qty: f64, time: i64) -> String {
+    format!("{symbol}:{price}:{qty}:{time}")
 }
 
 fn current_timestamp_ms() -> i64 {
@@ -202,5 +225,37 @@ mod tests {
         let mut gw = WebSocketGateway::new();
         let conn_id = gw.accept_connection();
         assert!(conn_id.starts_with("ws_"));
+    }
+
+    #[test]
+    fn rejects_unverified_tokens() {
+        let mut gw = WebSocketGateway::new();
+        let conn_id = gw.accept_connection();
+
+        // The old implementation accepted anything starting with "tk_".
+        assert!(gw.authenticate(&conn_id, "tk_anything", |_| None).is_err());
+        assert!(!gw.is_authenticated(&conn_id));
+
+        assert!(gw.authenticate(&conn_id, "", |_| Some("u".into())).is_err());
+        assert!(!gw.is_authenticated(&conn_id));
+    }
+
+    #[test]
+    fn accepts_tokens_the_store_verifies() {
+        let mut gw = WebSocketGateway::new();
+        let conn_id = gw.accept_connection();
+
+        let user = gw
+            .authenticate(&conn_id, "real-session-token", |token| {
+                if token == "real-session-token" {
+                    Some("user-42".to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+
+        assert_eq!(user, "user-42");
+        assert!(gw.is_authenticated(&conn_id));
     }
 }

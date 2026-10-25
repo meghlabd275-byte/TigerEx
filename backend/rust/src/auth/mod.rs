@@ -44,32 +44,16 @@ pub struct AuthService {
 
 impl AuthService {
     pub fn new() -> Self {
-        let mut service = Self {
+        let service = Self {
             users: HashMap::new(),
             sessions: HashMap::new(),
             refresh_tokens: HashMap::new(),
             email_to_id: HashMap::new(),
         };
         
-        // Create demo user
-        let demo_user = User {
-            id: "user_demo".to_string(),
-            email: "demo@example.com".to_string(),
-            phone: None,
-            kyc_level: 2,
-            level: 2,
-            can_trade: true,
-            can_withdraw: true,
-            can_deposit: true,
-            created: current_timestamp_ms(),
-            password_hash: None,
-            two_factor_secret: None,
-            failed_login_attempts: 0,
-            locked_until: None,
-        };
-        
-        service.users.insert(demo_user.id.clone(), demo_user);
-        service.email_to_id.insert(demo_user.email.clone(), demo_user.id);
+        // Starts empty. The previous implementation seeded a hardcoded
+        // "demo@example.com" account with KYC level 2, deposit and withdrawal
+        // rights and no password hash; every deployment inherited that account.
         
         service
     }
@@ -87,11 +71,21 @@ impl AuthService {
             };
         }
 
-        // Hash password (in production use bcrypt/argon2)
-        let password_hash = self.hash_password(password);
-        
+        let password_hash = match self.hash_password(password) {
+            Ok(hash) => hash,
+            Err(e) => {
+                return AuthResult {
+                    success: false,
+                    token: None,
+                    refresh_token: None,
+                    user: None,
+                    message: Some(e),
+                };
+            }
+        };
+
         let user = User {
-            id: format!("user_{}", current_timestamp_ms()),
+            id: new_user_id(),
             email: email.to_string(),
             phone: None,
             kyc_level: 0,
@@ -108,7 +102,7 @@ impl AuthService {
 
         let user_id = user.id.clone();
         self.users.insert(user_id.clone(), user.clone());
-        self.email_to_id.insert(email.to_string(), user_id);
+        self.email_to_id.insert(email.to_string(), user_id.clone());
 
         // Generate tokens
         let token = self.generate_token();
@@ -141,6 +135,15 @@ impl AuthService {
             }
         };
 
+        // Read the stored hash before taking the mutable borrow for the
+        // lockout bookkeeping below.
+        let stored_hash = self
+            .users
+            .get(&user_id)
+            .and_then(|u| u.password_hash.clone())
+            .unwrap_or_default();
+        let password_ok = self.verify_password(password, &stored_hash);
+
         let user = self.users.get_mut(&user_id).unwrap();
 
         // Check if locked
@@ -156,9 +159,8 @@ impl AuthService {
             }
         }
 
-        // Verify password
-        let password_hash = self.hash_password(password);
-        if user.password_hash.as_ref() != Some(&password_hash) {
+        // Verify password against the stored Argon2id hash.
+        if !password_ok {
             user.failed_login_attempts += 1;
             
             // Lock after 5 failed attempts
@@ -182,18 +184,21 @@ impl AuthService {
             };
         }
 
-        // Reset failed attempts
-        user.failed_login_attempts = 0;
-        user.locked_until = None;
+        // Reset failed attempts, then release the borrow before touching the
+        // session maps.
+        let user_clone = {
+            user.failed_login_attempts = 0;
+            user.locked_until = None;
+            user.clone()
+        };
 
         // Generate tokens
         let token = self.generate_token();
         let refresh_token = self.generate_token();
 
         self.sessions.insert(token.clone(), user_id.clone());
-        self.refresh_tokens.insert(refresh_token.clone(), user_id.clone());
-
-        let user_clone = user.clone();
+        self.refresh_tokens
+            .insert(refresh_token.clone(), user_id.clone());
         
         AuthResult {
             success: true,
@@ -305,13 +310,44 @@ impl AuthService {
     }
 
     // Helper: Simple hash (in production use bcrypt/argon2)
-    fn hash_password(&self, password: &str) -> String {
-        format!("{:x}", simple_hash(password))
+    /// Hash a password with Argon2id and a fresh random salt.
+    ///
+    /// The previous implementation returned `format!("{:x}", djb2(password))`,
+    /// a 64-bit non-cryptographic digest with no salt. That is trivially
+    /// reversible with a rainbow table and made every stored credential
+    /// recoverable. Argon2id is memory-hard and salted per credential.
+    fn hash_password(&self, password: &str) -> Result<String, String> {
+        use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString};
+        use argon2::Argon2;
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map(|h| h.to_string())
+            .map_err(|e| format!("password hashing failed: {e}"))
     }
 
-    // Helper: Generate random token
+    /// Constant-time verification of a password against a stored Argon2 hash.
+    fn verify_password(&self, password: &str, stored: &str) -> bool {
+        use argon2::password_hash::{PasswordHash, PasswordVerifier};
+        use argon2::Argon2;
+        match PasswordHash::new(stored) {
+            Ok(parsed) => Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok(),
+            Err(_) => false,
+        }
+    }
+
+    /// Generate a session token from the OS CSPRNG.
+    ///
+    /// The previous implementation derived every token from the sub-second
+    /// clock (`rand_string` shifted `nanos`), so tokens were guessable and
+    /// collided within the same nanosecond bucket.
     fn generate_token(&self) -> String {
-        format!("tk_{}_{}", current_timestamp_ms(), rand_string(32))
+        use rand::RngCore;
+        let mut bytes = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        format!("tk_{}", hex::encode(bytes))
     }
 }
 
@@ -439,26 +475,14 @@ fn current_timestamp_ms() -> i64 {
         .as_millis() as i64
 }
 
-fn simple_hash(s: &str) -> u64 {
-    let mut hash: u64 = 5381;
-    for c in s.bytes() {
-        hash = hash.wrapping_mul(33).wrapping_add(c as u64);
-    }
-    hash
+/// Random, opaque user identifier.
+fn new_user_id() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    format!("user_{}", hex::encode(bytes))
 }
 
-fn rand_string(len: usize) -> String {
-    use std::time::SystemTime;
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .subsec_nanos();
-    
-    let chars: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
-    (0..len)
-        .map(|i| chars[(nanos >> i) as usize % chars.len()])
-        .collect()
-}
 
 #[cfg(test)]
 mod tests {

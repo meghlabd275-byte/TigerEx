@@ -157,7 +157,7 @@ impl SigningEngine {
         };
 
         let signature = Signature {
-            id: format!("sig_{}", hex::encode(rand::random::<[u8; 8]>())),
+            id: format!("sig_{}", &signature_hex[..signature_hex.len().min(32)]),
             sig_type,
             public_key: public_key_hex,
             signature: signature_hex,
@@ -240,8 +240,18 @@ impl SigningEngine {
 
         let signature = self.sign(from, &msg)?;
 
+        let tx_id = {
+            let mut hasher = Sha256::new();
+            hasher.update(from.as_bytes());
+            hasher.update(to.as_bytes());
+            hasher.update(amount.to_be_bytes());
+            hasher.update(nonce.to_be_bytes());
+            hasher.update(signature.signature.as_bytes());
+            format!("tx_{}", hex::encode(hasher.finalize()))
+        };
+
         let tx = SignedTx {
-            tx_id: format!("tx_{}", hex::encode(rand::random::<[u8; 16]>())),
+            tx_id,
             from: from.to_string(),
             to: to.to_string(),
             amount,

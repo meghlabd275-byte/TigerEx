@@ -3,6 +3,12 @@
 
 pub mod grid;
 pub mod signing;
+pub mod websocket_gateway;
+pub mod stream_processor;
+pub mod auth;
+pub mod risk;
+pub mod pnl;
+
 
 pub mod crypto {
     use aes_gcm::{
