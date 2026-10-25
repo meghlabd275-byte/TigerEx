@@ -61,10 +61,21 @@ fn logistic(x: f64) -> f64 {
     1.0 / (1.0 + (-x).exp())
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignalExecution {
+    pub signal_id: String,
+    pub asset: String,
+    pub action: String,
+    pub confidence: f64,
+}
+
 pub struct AITradingService {
     signals: RwLock<Vec<AISignal>>,
     bots: RwLock<HashMap<String, BotConfig>>,
+    executions: RwLock<Vec<SignalExecution>>,
     model_version: String,
+    next_signal_id: RwLock<u64>,
+    next_bot_id: RwLock<u64>,
 }
 
 impl Default for AITradingService {
@@ -78,7 +89,10 @@ impl AITradingService {
         Self {
             signals: RwLock::new(Vec::new()),
             bots: RwLock::new(HashMap::new()),
+            executions: RwLock::new(Vec::new()),
             model_version: "v2.6".to_string(),
+            next_signal_id: RwLock::new(1),
+            next_bot_id: RwLock::new(1),
         }
     }
 
@@ -111,8 +125,14 @@ impl AITradingService {
         let confidence = logistic(score);
         let action = if score >= 0.0 { "BUY" } else { "SELL" };
 
+        let id = {
+            let mut next = self.next_signal_id.write().unwrap();
+            let id = format!("sig_{}", *next);
+            *next += 1;
+            id
+        };
         let signal = AISignal {
-            id: format!("sig_{}_{}", asset, self.signals.read().unwrap().len()),
+            id,
             asset: asset.to_string(),
             action: action.to_string(),
             confidence,
@@ -139,8 +159,13 @@ impl AITradingService {
             return Err(AITradingError::InvalidRiskLevel(risk_level));
         }
 
+        let id = {
+            let mut next = self.next_bot_id.write().unwrap();
+            let id = format!("bot_{}", *next);
+            *next += 1;
+            id
+        };
         let mut bots = self.bots.write().unwrap();
-        let id = format!("bot_{}", bots.len());
         bots.insert(
             id.clone(),
             BotConfig {
@@ -168,19 +193,42 @@ impl AITradingService {
         self.bots.read().unwrap().get(bot_id).cloned()
     }
 
-    /// Accept a signal for execution only when it clears `min_confidence`.
+    /// Accept a signal for execution only when it clears `min_confidence`,
+    /// recording the execution.
     pub fn execute_signal(
         &self,
         signal: &AISignal,
         min_confidence: f64,
-    ) -> Result<String, AITradingError> {
+    ) -> Result<SignalExecution, AITradingError> {
         if !(0.0..1.0).contains(&min_confidence) {
             return Err(AITradingError::LowConfidence(min_confidence));
         }
         if signal.confidence < min_confidence {
             return Err(AITradingError::LowConfidence(signal.confidence));
         }
-        Ok(format!("executed {} {}", signal.action, signal.asset))
+
+        let execution = SignalExecution {
+            signal_id: signal.id.clone(),
+            asset: signal.asset.clone(),
+            action: signal.action.clone(),
+            confidence: signal.confidence,
+        };
+        self.executions.write().unwrap().push(execution.clone());
+        Ok(execution)
+    }
+
+    /// Executions recorded so far.
+    pub fn executions(&self) -> Vec<SignalExecution> {
+        self.executions.read().unwrap().clone()
+    }
+
+    pub fn signal(&self, id: &str) -> Option<AISignal> {
+        self.signals
+            .read()
+            .unwrap()
+            .iter()
+            .find(|s| s.id == id)
+            .cloned()
     }
 }
 
@@ -240,6 +288,29 @@ mod tests {
             service.execute_signal(&signal, 0.6).unwrap_err(),
             AITradingError::LowConfidence(_)
         ));
+    }
+
+    #[test]
+    fn signal_ids_are_unique_and_executions_are_recorded() {
+        let service = AITradingService::new();
+        let a = service.generate_signal("BTC", &[1.0], &[1.0], 0.0).unwrap();
+        let b = service.generate_signal("BTC", &[1.0], &[1.0], 0.0).unwrap();
+        // The old id embedded the signal count, so repeated signals collided.
+        assert_ne!(a.id, b.id);
+        assert!(service.signal(&a.id).is_some());
+
+        let execution = service.execute_signal(&a, 0.5).unwrap();
+        // The old execute_signal returned a formatted string and recorded nothing.
+        assert_eq!(execution.signal_id, a.id);
+        assert_eq!(service.executions().len(), 1);
+    }
+
+    #[test]
+    fn bot_ids_are_unique() {
+        let service = AITradingService::new();
+        let a = service.create_bot("u1", "momentum", 3).unwrap();
+        let b = service.create_bot("u1", "momentum", 3).unwrap();
+        assert_ne!(a, b);
     }
 
     #[test]
