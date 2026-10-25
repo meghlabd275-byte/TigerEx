@@ -280,6 +280,12 @@ impl OrderService {
     }
 
     pub fn fill_order(&self, order_id: &str, quantity: f64) -> Result<Order, String> {
+        // A negative or NaN quantity would otherwise slip past the
+        // "exceeds remaining" check and reduce filled_quantity.
+        if !quantity.is_finite() || quantity <= 0.0 {
+            return Err("Fill quantity must be finite and positive".to_string());
+        }
+
         let mut orders = self.orders.write().unwrap();
         
         if let Some(order) = orders.get_mut(order_id) {
@@ -351,5 +357,66 @@ mod tests {
         
         let order = service.create_order(request).unwrap();
         assert_eq!(order.side, Side::Buy);
+    }
+
+    fn limit_order(service: &OrderService) -> Order {
+        service
+            .create_order(CreateOrderRequest {
+                user_id: "user1".to_string(),
+                symbol: "BTC/USDT".to_string(),
+                side: "buy".to_string(),
+                order_type: "limit".to_string(),
+                price: 50_000.0,
+                quantity: 2.0,
+                stop_price: None,
+                time_in_force: None,
+                client_order_id: None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn fills_accumulate_up_to_the_order_quantity() {
+        let service = OrderService::new();
+        let order = limit_order(&service);
+
+        let partial = service.fill_order(&order.id, 0.5).unwrap();
+        assert_eq!(partial.filled_quantity, 0.5);
+        assert_eq!(partial.status, OrderStatus::PartiallyFilled);
+
+        let full = service.fill_order(&order.id, 1.5).unwrap();
+        assert!(full.is_filled());
+        assert_eq!(full.status, OrderStatus::Filled);
+    }
+
+    #[test]
+    fn negative_and_non_finite_fills_are_rejected() {
+        let service = OrderService::new();
+        let order = limit_order(&service);
+
+        // The old implementation accepted these and shrank filled_quantity.
+        assert!(service.fill_order(&order.id, -1.0).is_err());
+        assert!(service.fill_order(&order.id, f64::NAN).is_err());
+        assert!(service.fill_order(&order.id, 0.0).is_err());
+        assert_eq!(service.get_order(&order.id).unwrap().filled_quantity, 0.0);
+    }
+
+    #[test]
+    fn overfilling_is_rejected() {
+        let service = OrderService::new();
+        let order = limit_order(&service);
+        assert!(service.fill_order(&order.id, 3.0).is_err());
+    }
+
+    #[test]
+    fn only_the_owner_can_cancel() {
+        let service = OrderService::new();
+        let order = limit_order(&service);
+
+        assert!(service.cancel_order(&order.id, "intruder").is_err());
+        let cancelled = service.cancel_order(&order.id, "user1").unwrap();
+        assert_eq!(cancelled.status, OrderStatus::Cancelled);
+        // A cancelled order cannot be filled.
+        assert!(service.fill_order(&order.id, 0.1).is_err());
     }
 }

@@ -144,6 +144,20 @@ impl TradingService {
         };
 
         if let Some(pair) = pair {
+            // NaN compares false against every bound, so a NaN quantity or
+            // price would otherwise pass all of the checks below.
+            if !request.quantity.is_finite() || request.quantity <= 0.0 {
+                return Err("Quantity must be finite and positive".to_string());
+            }
+            if !request.price.is_finite() || request.price <= 0.0 {
+                return Err("Price must be finite and positive".to_string());
+            }
+            if let Some(stop) = request.stop_price {
+                if !stop.is_finite() || stop <= 0.0 {
+                    return Err("Stop price must be finite and positive".to_string());
+                }
+            }
+
             // Validate quantity
             if request.quantity < pair.min_quantity {
                 return Err(format!("Minimum quantity is {}", pair.min_quantity));
@@ -261,5 +275,57 @@ mod tests {
         
         let result = service.submit_order(&request).unwrap();
         assert!(!result.order_id.is_empty());
+    }
+
+    fn request(price: f64, quantity: f64) -> TradeRequest {
+        TradeRequest {
+            user_id: "user1".to_string(),
+            symbol: "BTC/USDT".to_string(),
+            side: TradeSide::Buy,
+            order_type: OrderType::Limit,
+            price,
+            quantity,
+            stop_price: None,
+        }
+    }
+
+    #[test]
+    fn non_finite_and_non_positive_orders_are_rejected() {
+        let service = TradingService::new();
+
+        // NaN compared false against every bound, so the old validation
+        // accepted a NaN price or quantity.
+        assert!(service.validate_order(&request(f64::NAN, 1.0)).is_err());
+        assert!(service.validate_order(&request(50_000.0, f64::NAN)).is_err());
+        assert!(service.validate_order(&request(-1.0, 1.0)).is_err());
+        assert!(service.validate_order(&request(50_000.0, -1.0)).is_err());
+        assert!(service.validate_order(&request(0.0, 1.0)).is_err());
+    }
+
+    #[test]
+    fn valid_orders_pass_and_unknown_pairs_fail() {
+        let service = TradingService::new();
+        assert!(service.validate_order(&request(50_000.0, 1.0)).is_ok());
+
+        let mut unknown = request(50_000.0, 1.0);
+        unknown.symbol = "NOPE/USDT".to_string();
+        assert!(service.validate_order(&unknown).is_err());
+    }
+
+    #[test]
+    fn submit_returns_a_pending_order_that_can_be_cancelled() {
+        let service = TradingService::new();
+        let result = service.submit_order(&request(50_000.0, 1.0)).unwrap();
+
+        assert_eq!(result.status, TradeStatus::Pending);
+        assert_eq!(result.filled_quantity, 0.0);
+
+        service.cancel_order(&result.order_id).unwrap();
+        assert_eq!(
+            service.get_order_status(&result.order_id),
+            Some(TradeStatus::Cancelled)
+        );
+        // A cancelled order cannot be cancelled again.
+        assert!(service.cancel_order(&result.order_id).is_err());
     }
 }
