@@ -4,6 +4,7 @@
  */
 
 #include "order_book.hpp"
+#include "matching_engine.hpp"
 #include <iostream>
 #include <cassert>
 #include <chrono>
@@ -440,6 +441,216 @@ void benchmark_order_matching() {
     std::cout << "  PASSED" << std::endl;
 }
 
+
+// Test price-time priority: the earliest order at a price fills first.
+void test_price_time_priority() {
+    std::cout << "Testing price-time priority..." << std::endl;
+
+    OrderBook book("BTCUSDT", 8, 8);
+
+    // Three resting sells at the same price, in arrival order 10, 11, 12.
+    for (uint64_t id : {10ULL, 11ULL, 12ULL}) {
+        Order sell;
+        sell.order_id = id;
+        sell.side = Side::SELL;
+        sell.price = 50000 * 100000000ULL;
+        sell.quantity = 1 * 100000000ULL;
+        sell.remaining_quantity = sell.quantity;
+        book.add_order(sell);
+    }
+
+    Order buy;
+    buy.order_id = 100;
+    buy.side = Side::BUY;
+    buy.type = OrderType::LIMIT;
+    buy.price = 50000 * 100000000ULL;
+    buy.quantity = 2 * 100000000ULL;
+    buy.remaining_quantity = buy.quantity;
+
+    auto trades = book.match_orders(buy);
+    assert(trades.size() == 2);
+    // The first arrival is consumed first.
+    assert(trades[0].counter_order_id == 10);
+    assert(trades[1].counter_order_id == 11);
+    // The third order is untouched and still rests.
+    assert(book.get_order(12, Side::SELL).has_value());
+
+    std::cout << "  PASSED" << std::endl;
+}
+
+// Test price priority: a better price is always taken first.
+void test_price_priority() {
+    std::cout << "Testing price priority..." << std::endl;
+
+    OrderBook book("BTCUSDT", 8, 8);
+
+    // Inserted worst-first on purpose.
+    for (uint64_t price : {50200ULL, 50100ULL, 50000ULL}) {
+        Order sell;
+        sell.order_id = price;
+        sell.side = Side::SELL;
+        sell.price = price * 100000000ULL;
+        sell.quantity = 1 * 100000000ULL;
+        sell.remaining_quantity = sell.quantity;
+        book.add_order(sell);
+    }
+
+    // Best ask is the lowest price.
+    assert(book.best_ask().first == 50000 * 100000000ULL);
+
+    Order buy;
+    buy.order_id = 1;
+    buy.side = Side::BUY;
+    buy.type = OrderType::LIMIT;
+    buy.price = 50200 * 100000000ULL;
+    buy.quantity = 3 * 100000000ULL;
+    buy.remaining_quantity = buy.quantity;
+
+    auto trades = book.match_orders(buy);
+    assert(trades.size() == 3);
+    // Cheapest seller first, most expensive last.
+    assert(trades[0].price == 50000 * 100000000ULL);
+    assert(trades[1].price == 50100 * 100000000ULL);
+    assert(trades[2].price == 50200 * 100000000ULL);
+
+    std::cout << "  PASSED" << std::endl;
+}
+
+// Test that a limit order never fills worse than its own price.
+void test_limit_price_respected() {
+    std::cout << "Testing limit price boundary..." << std::endl;
+
+    OrderBook book("BTCUSDT", 8, 8);
+
+    Order sell;
+    sell.order_id = 1;
+    sell.side = Side::SELL;
+    sell.price = 50100 * 100000000ULL;
+    sell.quantity = 1 * 100000000ULL;
+    sell.remaining_quantity = sell.quantity;
+    book.add_order(sell);
+
+    Order buy;
+    buy.order_id = 2;
+    buy.side = Side::BUY;
+    buy.type = OrderType::LIMIT;
+    buy.price = 50000 * 100000000ULL;  // Below the ask.
+    buy.quantity = 1 * 100000000ULL;
+    buy.remaining_quantity = buy.quantity;
+
+    auto trades = book.match_orders(buy);
+    // The old match_limit_order was an empty body; nothing ever filled.
+    assert(trades.empty());
+    assert(buy.remaining_quantity == buy.quantity);
+
+    std::cout << "  PASSED" << std::endl;
+}
+
+// Test partial fill accounting and the resulting average price.
+void test_partial_fill_and_vwap() {
+    std::cout << "Testing partial fill and average price..." << std::endl;
+
+    OrderBook book("BTCUSDT", 8, 8);
+
+    Order sell;
+    sell.order_id = 1;
+    sell.side = Side::SELL;
+    sell.price = 50000 * 100000000ULL;
+    sell.quantity = 1 * 100000000ULL;
+    sell.remaining_quantity = sell.quantity;
+    book.add_order(sell);
+
+    Order buy;
+    buy.order_id = 2;
+    buy.side = Side::BUY;
+    buy.type = OrderType::LIMIT;
+    buy.price = 50000 * 100000000ULL;
+    buy.quantity = 3 * 100000000ULL;
+    buy.remaining_quantity = buy.quantity;
+
+    auto trades = book.match_orders(buy);
+    assert(trades.size() == 1);
+    assert(buy.filled_quantity == 1 * 100000000ULL);
+    assert(buy.remaining_quantity == 2 * 100000000ULL);
+    assert(buy.avg_fill_price == 50000 * 100000000ULL);
+    assert(buy.status == OrderStatus::PARTIALLY_FILLED);
+
+    std::cout << "  PASSED" << std::endl;
+}
+
+// Test that the engine moves balances and emits trades when orders match.
+void test_engine_settlement() {
+    std::cout << "Testing engine settlement..." << std::endl;
+
+    MatchingEngine engine;
+    assert(engine.init());
+    assert(engine.create_market("BTCUSDT", 8, 8));
+
+    // The seller holds 1 BTC; the buyer holds 100,000 USDT.
+    engine.set_balance(2, "BTC", 1 * 100000000ULL);
+    engine.set_balance(1, "USDT", 100000 * 100000000ULL);
+
+    std::vector<tigerex::matching::TradeNotification> received;
+    engine.on_trade([&](const tigerex::matching::TradeNotification& n) {
+        received.push_back(n);
+    });
+
+    // Resting sell from user 2.
+    tigerex::matching::OrderRequest sell;
+    sell.user_id = 2;
+    sell.account_id = 2;
+    sell.symbol = "BTCUSDT";
+    sell.side = tigerex::matching::Side::SELL;
+    sell.type = tigerex::matching::OrderType::LIMIT;
+    sell.tif = tigerex::matching::TimeInForce::GTC;
+    sell.price = 50000 * 100000000ULL;
+    sell.quantity = 1 * 100000000ULL;
+    auto sell_response = engine.process_order(sell);
+    assert(sell_response.status == tigerex::matching::OrderStatus::NEW);
+
+    // Aggressive buy from user 1 crosses it.
+    tigerex::matching::OrderRequest buy = sell;
+    buy.user_id = 1;
+    buy.account_id = 1;
+    buy.side = tigerex::matching::Side::BUY;
+    auto buy_response = engine.process_order(buy);
+    assert(buy_response.status == tigerex::matching::OrderStatus::FILLED);
+
+    // The old engine moved no balances and published no trade.
+    assert(received.size() == 1);
+    assert(received[0].price == 50000 * 100000000ULL);
+
+    // The buyer paid 50,000 USDT and now holds 1 BTC.
+    auto buyer_btc = engine.get_balance(1, "BTC");
+    auto buyer_usdt = engine.get_balance(1, "USDT");
+    assert(buyer_btc.free == 1 * 100000000ULL);
+    assert(buyer_usdt.free == 50000 * 100000000ULL);
+
+    // The seller received 50,000 USDT and delivered its BTC.
+    auto seller_usdt = engine.get_balance(2, "USDT");
+    auto seller_btc = engine.get_balance(2, "BTC");
+    assert(seller_usdt.free == 50000 * 100000000ULL);
+    assert(seller_btc.free == 0);
+
+    std::cout << "  PASSED" << std::endl;
+}
+
+// Test that symbol splitting picks the longest quote.
+void test_symbol_split() {
+    std::cout << "Testing symbol splitting..." << std::endl;
+
+    auto a = MatchingEngine::split_symbol("BTCUSDT");
+    assert(a.first == "BTC" && a.second == "USDT");
+
+    auto b = MatchingEngine::split_symbol("ETHUSDC");
+    assert(b.first == "ETH" && b.second == "USDC");
+
+    auto c = MatchingEngine::split_symbol("SOLBTC");
+    assert(c.first == "SOL" && c.second == "BTC");
+
+    std::cout << "  PASSED" << std::endl;
+}
+
 int main() {
     std::cout << "TigerEx Matching Engine Test Suite" << std::endl;
     std::cout << "=======================================" << std::endl;
@@ -456,6 +667,12 @@ int main() {
         test_market_data_manager();
         test_balance_manager();
         test_concurrent_operations();
+        test_price_time_priority();
+        test_price_priority();
+        test_limit_price_respected();
+        test_partial_fill_and_vwap();
+        test_engine_settlement();
+        test_symbol_split();
         benchmark_order_matching();
         
         std::cout << "=======================================" << std::endl;

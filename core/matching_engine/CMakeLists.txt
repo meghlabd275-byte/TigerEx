@@ -26,10 +26,12 @@ set(SOURCES
 # Headers
 set(HEADERS
     include/order_book.hpp
+    include/matching_engine.hpp
 )
 
-# Create executable
-add_executable(matching_engine ${SOURCES} ${HEADERS})
+# The engine process entry point. It is a separate file so the test and
+# benchmark binaries can link the engine without a duplicate main().
+add_executable(matching_engine src/engine_daemon.cpp ${SOURCES} ${HEADERS})
 
 # Include directories
 target_include_directories(matching_engine PRIVATE

@@ -304,6 +304,10 @@ struct Trade {
     uint64_t trade_id;
     uint64_t order_id;
     uint64_t counter_order_id;
+    // The two parties, so the engine can move balances without re-reading the
+    // book (a fully filled maker is removed from it during matching).
+    uint64_t taker_user_id;
+    uint64_t maker_user_id;
     uint64_t symbol;
     Side side;
     TradeType type;
@@ -377,8 +381,8 @@ private:
     std::unordered_map<uint64_t, Order> ask_orders_;
     
     // Price aggregation
-    std::map<uint64_t, std::vector<uint64_t>> bid_aggregations_;
-    std::map<uint64_t, std::vector<uint64_t>> ask_aggregations_;
+    std::map<uint64_t, std::deque<uint64_t>> bid_aggregations_;
+    std::map<uint64_t, std::deque<uint64_t>> ask_aggregations_;
     
     // Mutexes
     mutable std::shared_mutex bid_mutex_;
@@ -446,10 +450,10 @@ public:
     bool add_order(Order& order) {
         if (order.side == Side::BUY) {
             std::unique_lock lock(bid_mutex_);
-            return add_order_internal(order, bid_orders_, bid_levels_);
+            return add_order_internal(order, bid_orders_, bid_levels_, bid_aggregations_);
         } else {
             std::unique_lock lock(ask_mutex_);
-            return add_order_internal(order, ask_orders_, ask_levels_);
+            return add_order_internal(order, ask_orders_, ask_levels_, ask_aggregations_);
         }
     }
     
@@ -457,10 +461,10 @@ public:
     bool cancel_order(uint64_t order_id, Side side) {
         if (side == Side::BUY) {
             std::unique_lock lock(bid_mutex_);
-            return cancel_order_internal(order_id, bid_orders_, bid_levels_);
+            return cancel_order_internal(order_id, bid_orders_, bid_levels_, bid_aggregations_);
         } else {
             std::unique_lock lock(ask_mutex_);
-            return cancel_order_internal(order_id, ask_orders_, ask_levels_);
+            return cancel_order_internal(order_id, ask_orders_, ask_levels_, ask_aggregations_);
         }
     }
     
@@ -468,10 +472,10 @@ public:
     bool modify_order(uint64_t order_id, Side side, uint64_t new_price, uint64_t new_quantity) {
         if (side == Side::BUY) {
             std::unique_lock lock(bid_mutex_);
-            return modify_order_internal(order_id, new_price, new_quantity, bid_orders_, bid_levels_);
+            return modify_order_internal(order_id, new_price, new_quantity, bid_orders_, bid_levels_, bid_aggregations_);
         } else {
             std::unique_lock lock(ask_mutex_);
-            return modify_order_internal(order_id, new_price, new_quantity, ask_orders_, ask_levels_);
+            return modify_order_internal(order_id, new_price, new_quantity, ask_orders_, ask_levels_, ask_aggregations_);
         }
     }
     
@@ -499,10 +503,10 @@ public:
         
         if (order.side == Side::BUY) {
             std::unique_lock lock(ask_mutex_);
-            match_order_internal(order, ask_orders_, ask_levels_, trades);
+            match_order_internal(order, ask_orders_, ask_levels_, ask_aggregations_, trades);
         } else {
             std::unique_lock lock(bid_mutex_);
-            match_order_internal(order, bid_orders_, bid_levels_, trades);
+            match_order_internal(order, bid_orders_, bid_levels_, bid_aggregations_, trades);
         }
         
         return trades;
@@ -536,251 +540,308 @@ public:
     }
     
 private:
-    bool add_order_internal(Order& order, 
-                          std::unordered_map<uint64_t, Order>& orders,
-                          std::vector<PriceLevel>& levels) {
-        auto it = orders.find(order.order_id);
-        if (it != orders.end()) {
+    using OrderMap = std::unordered_map<uint64_t, Order>;
+    using LevelVec = std::vector<PriceLevel>;
+    using AggMap = std::map<uint64_t, std::deque<uint64_t>>;
+
+    static uint64_t now_ms() {
+        return static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            ).count()
+        );
+    }
+
+    // Insert or update a price level, keeping the vector ordered best-price
+    // first: bids descending, asks ascending. The previous implementation
+    // always sorted descending, so best_ask() returned the *worst* ask.
+    static void upsert_level(LevelVec& levels, uint64_t price, uint64_t quantity, bool is_bid) {
+        for (auto& level : levels) {
+            if (level.price == price) {
+                level.quantity += quantity;
+                level.orders_count += 1;
+                level.last_update_time = now_ms();
+                return;
+            }
+        }
+
+        PriceLevel level;
+        level.price = price;
+        level.quantity = quantity;
+        level.orders_count = 1;
+        level.last_update_time = now_ms();
+
+        auto pos = std::find_if(levels.begin(), levels.end(), [&](const PriceLevel& other) {
+            return is_bid ? (price > other.price) : (price < other.price);
+        });
+        levels.insert(pos, level);
+    }
+
+    // Reduce a level by one order's remaining quantity, dropping it when empty.
+    static void reduce_level(LevelVec& levels, uint64_t price, uint64_t quantity) {
+        for (auto it = levels.begin(); it != levels.end(); ++it) {
+            if (it->price != price) {
+                continue;
+            }
+            it->quantity = (it->quantity > quantity) ? (it->quantity - quantity) : 0;
+            if (it->orders_count > 0) {
+                it->orders_count -= 1;
+            }
+            if (it->quantity == 0 || it->orders_count == 0) {
+                levels.erase(it);
+            }
+            return;
+        }
+    }
+
+    // Drop an order id from a level's FIFO queue, removing the queue if empty.
+    static void remove_from_queue(AggMap& aggs, uint64_t price, uint64_t order_id) {
+        auto agg_it = aggs.find(price);
+        if (agg_it == aggs.end()) {
+            return;
+        }
+        auto& queue = agg_it->second;
+        for (auto it = queue.begin(); it != queue.end(); ++it) {
+            if (*it == order_id) {
+                queue.erase(it);
+                break;
+            }
+        }
+        if (queue.empty()) {
+            aggs.erase(agg_it);
+        }
+    }
+
+    bool add_order_internal(Order& order,
+                            OrderMap& orders,
+                            LevelVec& levels,
+                            AggMap& aggs) {
+        if (orders.find(order.order_id) != orders.end()) {
             return false;  // Order already exists
         }
-        
-        // Insert order
-        orders[order.order_id] = order;
-        
-        // Update price level
-        update_price_level(levels, order.price, order.remaining_quantity, true);
-        
+
+        const bool is_bid = (order.side == Side::BUY);
+        if (order.remaining_quantity == 0) {
+            order.remaining_quantity = order.quantity;
+        }
+        if (order.status == OrderStatus::PENDING) {
+            order.status = OrderStatus::NEW;
+        }
+
+        orders.emplace(order.order_id, order);
+        aggs[order.price].push_back(order.order_id);
+        upsert_level(levels, order.price, order.remaining_quantity, is_bid);
+
         last_update_id_.fetch_add(1);
-        
-        if (order.side == Side::BUY) {
+
+        if (is_bid) {
             bids_count_.fetch_add(1);
             bids_quantity_.fetch_add(order.remaining_quantity);
         } else {
             asks_count_.fetch_add(1);
             asks_quantity_.fetch_add(order.remaining_quantity);
         }
-        
+
         return true;
     }
-    
+
     bool cancel_order_internal(uint64_t order_id,
-                       std::unordered_map<uint64_t, Order>& orders,
-                       std::vector<PriceLevel>& levels) {
+                               OrderMap& orders,
+                               LevelVec& levels,
+                               AggMap& aggs) {
         auto it = orders.find(order_id);
         if (it == orders.end()) {
             return false;
         }
-        
-        Order& order = it->second;
-        
-        // Update quantity
-        update_price_level(levels, order.price, order.remaining_quantity, false);
-        
-        // Remove order
+
+        const Order order = it->second;
+        const bool is_bid = (order.side == Side::BUY);
+
+        remove_from_queue(aggs, order.price, order_id);
+        reduce_level(levels, order.price, order.remaining_quantity);
+
         orders.erase(it);
-        
+
         last_update_id_.fetch_add(1);
-        
-        if (order.side == Side::BUY) {
+
+        if (is_bid) {
             bids_count_.fetch_sub(1);
+            bids_quantity_.fetch_sub(order.remaining_quantity);
         } else {
             asks_count_.fetch_sub(1);
+            asks_quantity_.fetch_sub(order.remaining_quantity);
         }
-        
+
         return true;
     }
-    
+
     bool modify_order_internal(uint64_t order_id,
-                             uint64_t new_price,
-                             uint64_t new_quantity,
-                             std::unordered_map<uint64_t, Order>& orders,
-                             std::vector<PriceLevel>& levels) {
+                               uint64_t new_price,
+                               uint64_t new_quantity,
+                               OrderMap& orders,
+                               LevelVec& levels,
+                               AggMap& aggs) {
         auto it = orders.find(order_id);
         if (it == orders.end()) {
             return false;
         }
-        
+
         Order& order = it->second;
-        uint64_t old_price = order.price;
-        uint64_t old_quantity = order.remaining_quantity;
-        
-        // Update price level - remove old
-        update_price_level(levels, old_price, old_quantity, false);
-        
-        // Update order
+        const bool is_bid = (order.side == Side::BUY);
+        const uint64_t old_price = order.price;
+        const uint64_t old_remaining = order.remaining_quantity;
+
+        remove_from_queue(aggs, old_price, order_id);
+        reduce_level(levels, old_price, old_remaining);
+
         order.price = new_price;
         order.quantity = new_quantity;
         order.remaining_quantity = new_quantity;
-        order.updated_at = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()
-        ).count();
-        
-        // Update price level - add new
-        update_price_level(levels, new_price, new_quantity, true);
-        
+        order.filled_quantity = 0;
+        order.updated_at = now_ms();
+
+        aggs[new_price].push_back(order_id);
+        upsert_level(levels, new_price, new_quantity, is_bid);
+
         last_update_id_.fetch_add(1);
-        
+
         return true;
     }
-    
+
     void match_order_internal(Order& order,
-                          std::unordered_map<uint64_t, Order>& counter_orders,
-                          std::vector<PriceLevel>& levels,
-                          std::vector<Trade>& trades) {
-        if (order.type == OrderType::MARKET) {
-            // Market order - match at any price
-            match_market_order(order, counter_orders, levels, trades);
-        } else {
-            // Limit order - match at limit price or better
-            match_limit_order(order, counter_orders, levels, trades);
-        }
+                              OrderMap& counter_orders,
+                              LevelVec& levels,
+                              AggMap& aggs,
+                              std::vector<Trade>& trades) {
+        // A market order has no price limit and sweeps the book; a limit order
+        // stops as soon as the next level is worse than its own price.
+        const bool is_market = (order.type == OrderType::MARKET);
+        match_against(order, counter_orders, levels, aggs, trades, is_market);
     }
-    
-    void match_market_order(Order& order,
-                         std::unordered_map<uint64_t, Order>& counter_orders,
-                         std::vector<PriceLevel>& levels,
-                         std::vector<Trade>& trades) {
+
+    // Walk the opposite book best-price-first and fill with price-time
+    // priority. The previous match_limit_order had an empty body, so limit
+    // orders never filled at all.
+    void match_against(Order& order,
+                       OrderMap& counter_orders,
+                       LevelVec& levels,
+                       AggMap& aggs,
+                       std::vector<Trade>& trades,
+                       bool is_market) {
         uint64_t remaining = order.remaining_quantity;
-        
-        for (auto it = levels.begin(); it != levels.end() && remaining > 0; ++it) {
-            PriceLevel& level = *it;
-            
-            // Check if price is acceptable
-            bool price_ok = (order.side == Side::BUY) ? 
-                (level.price <= order.price) : 
-                (level.price >= order.price);
-            
-            if (!price_ok) break;
-            
-            // Match against orders at this level
-            std::vector<uint64_t> orders_to_remove;
-            for (auto& [order_id, counter_order] : counter_orders) {
-                if (remaining == 0) break;
-                
-                uint64_t match_qty = std::min(remaining, counter_order.remaining_quantity);
-                
-                // Create trade
+        const bool is_buy = (order.side == Side::BUY);
+        unsigned __int128 notional = 0;
+
+        while (remaining > 0 && !levels.empty()) {
+            const uint64_t level_price = levels.front().price;
+
+            if (!is_market) {
+                const bool price_ok = is_buy ? (level_price <= order.price)
+                                             : (level_price >= order.price);
+                if (!price_ok) {
+                    break;
+                }
+            }
+
+            auto agg_it = aggs.find(level_price);
+            if (agg_it == aggs.end() || agg_it->second.empty()) {
+                // A level with no resting orders: discard it.
+                levels.erase(levels.begin());
+                if (agg_it != aggs.end()) {
+                    aggs.erase(agg_it);
+                }
+                continue;
+            }
+
+            while (remaining > 0 && !agg_it->second.empty()) {
+                const uint64_t counter_id = agg_it->second.front();
+                auto counter_it = counter_orders.find(counter_id);
+                if (counter_it == counter_orders.end()) {
+                    agg_it->second.pop_front();
+                    continue;
+                }
+
+                Order& counter = counter_it->second;
+                const uint64_t match_qty = std::min(remaining, counter.remaining_quantity);
+                if (match_qty == 0) {
+                    agg_it->second.pop_front();
+                    continue;
+                }
+
                 Trade trade;
-                trade.trade_id = 0;  // Will be assigned by engine
+                trade.trade_id = 0;  // Assigned by the engine
                 trade.order_id = order.order_id;
-                trade.counter_order_id = counter_order.order_id;
-                trade.symbol = 0;  // Will be assigned
+                trade.counter_order_id = counter.order_id;
+                trade.taker_user_id = order.user_id;
+                trade.maker_user_id = counter.user_id;
+                trade.symbol = 0;    // Assigned by the engine
                 trade.side = order.side;
                 trade.type = TradeType::TRADE;
-                trade.price = level.price;
+                trade.price = level_price;
                 trade.quantity = match_qty;
-                trade.fee = 0;  // Calculated by engine
+                trade.fee = 0;
                 trade.fee_deducted = 0;
                 trade.realized_pnl = 0;
-                trade.created_at = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()
-                ).count();
-                trade.is_maker = order.side == Side::SELL;
-                
+                trade.created_at = now_ms();
+                // The resting order is the maker, the incoming order the taker.
+                trade.is_maker = false;
                 trades.push_back(trade);
-                
-                // Update remaining quantities
-                counter_order.remaining_quantity -= match_qty;
+
+                counter.remaining_quantity -= match_qty;
+                counter.filled_quantity += match_qty;
+                counter.status = (counter.remaining_quantity == 0)
+                                     ? OrderStatus::FILLED
+                                     : OrderStatus::PARTIALLY_FILLED;
+                counter.updated_at = trade.created_at;
+
                 remaining -= match_qty;
                 order.filled_quantity += match_qty;
-                
-                if (counter_order.remaining_quantity == 0) {
-                    orders_to_remove.push_back(order_id);
-                }
-            }
-            
-            // Remove fully filled orders
-            for (const auto& order_id : orders_to_remove) {
-                counter_orders.erase(order_id);
-            }
-            
-            // Update level
-            level.quantity = 0;
-        }
-        
-        order.remaining_quantity = remaining;
-    }
-    
-    void match_limit_order(Order& order,
-                      std::unordered_map<uint64_t, Order>& counter_orders,
-                      std::vector<PriceLevel>& levels,
-                      std::vector<Trade>& trades) {
-        uint64_t remaining = order.remaining_quantity;
-        
-        for (auto it = levels.begin(); it != levels.end() && remaining > 0; ++it) {
-            PriceLevel& level = *it;
-            
-            // Check price priority
-            bool price_ok = (order.side == Side::BUY) ?
-                (level.price <= order.price) :
-                (level.price >= order.price);
-            
-            if (!price_ok) break;
-            
-            // Match at level price (not order price)
-            uint64_t match_price = level.price;
-            
-            // Similar matching logic as market order...
-            // (simplified for brevity)
-        }
-        
-        order.remaining_quantity = remaining;
-    }
-    
-    void update_price_level(std::vector<PriceLevel>& levels, 
-                         uint64_t price, 
-                         uint64_t quantity, 
-                         bool add) {
-        if (add) {
-            // Add or update price level
-            bool found = false;
-            for (auto& level : levels) {
-                if (level.price == price) {
-                    level.quantity += quantity;
-                    level.orders_count += 1;
-                    level.last_update_time = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::system_clock::now().time_since_epoch()
-                    ).count();
-                    found = true;
-                    break;
-                }
-            }
-            
-            if (!found) {
-                PriceLevel new_level;
-                new_level.price = price;
-                new_level.quantity = quantity;
-                new_level.orders_count = 1;
-                new_level.last_update_time = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()
-                ).count();
-                
-                // Insert in sorted order
-                if (levels.empty() || price > levels[0].price) {
-                    levels.insert(levels.begin(), new_level);
+                notional += static_cast<unsigned __int128>(level_price) * match_qty;
+
+                auto& level = levels.front();
+                level.quantity = (level.quantity > match_qty) ? (level.quantity - match_qty) : 0;
+
+                if (is_buy) {
+                    asks_quantity_.fetch_sub(match_qty);
                 } else {
-                    levels.push_back(new_level);
-                    std::sort(levels.begin(), levels.end(), [](const PriceLevel& a, const PriceLevel& b) {
-                        return a.price > b.price;
-                    });
+                    bids_quantity_.fetch_sub(match_qty);
+                }
+
+                if (counter.remaining_quantity == 0) {
+                    agg_it->second.pop_front();
+                    counter_orders.erase(counter_it);
+                    if (level.orders_count > 0) {
+                        level.orders_count -= 1;
+                    }
+                    if (is_buy) {
+                        asks_count_.fetch_sub(1);
+                    } else {
+                        bids_count_.fetch_sub(1);
+                    }
                 }
             }
-        } else {
-            // Remove or update price level
-            for (auto it = levels.begin(); it != levels.end(); ++it) {
-                if (it->price == price) {
-                    if (it->quantity >= quantity) {
-                        it->quantity -= quantity;
-                        it->orders_count -= 1;
-                    }
-                    
-                    if (it->quantity == 0 || it->orders_count == 0) {
-                        levels.erase(it);
-                    }
-                    break;
+
+            if (agg_it->second.empty() || levels.front().quantity == 0 ||
+                levels.front().orders_count == 0) {
+                if (agg_it->second.empty()) {
+                    aggs.erase(agg_it);
                 }
+                levels.erase(levels.begin());
             }
         }
+
+        order.remaining_quantity = remaining;
+        if (order.remaining_quantity == 0) {
+            order.status = OrderStatus::FILLED;
+        } else if (order.filled_quantity > 0) {
+            order.status = OrderStatus::PARTIALLY_FILLED;
+        }
+
+        if (order.filled_quantity > 0) {
+            order.avg_fill_price = static_cast<uint64_t>(notional / order.filled_quantity);
+        }
+
+        last_update_id_.fetch_add(1);
     }
 };
 
