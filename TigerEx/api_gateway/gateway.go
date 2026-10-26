@@ -2,21 +2,20 @@
 // High-performance API gateway for distributed systems
 // Built with Go for high-load worldwide distributed systems
 
-package main
+package apigateway
 
 import (
-	"context"
 	"fmt"
-	"math"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 )
 
 type Route struct {
-	Pattern    string
+	Pattern   string
 	Methods   []string
 	Backend   string
 	Timeout   time.Duration
@@ -31,15 +30,18 @@ type APIGateway struct {
 	middleware  []Middleware
 	stats       GatewayStats
 	rateLimiter *RateLimiter
+	// proxies caches one reverse proxy per backend URL. Building one per
+	// request would leak a transport and defeat connection reuse.
+	proxies map[string]*httputil.ReverseProxy
 }
 
 type GatewayStats struct {
-	Requests    int64
-	Errors      int64
-	LatencySum  float64
-	MaxLatency  float64
-	BytesIn     int64
-	BytesOut    int64
+	Requests   int64
+	Errors     int64
+	LatencySum float64
+	MaxLatency float64
+	BytesIn    int64
+	BytesOut   int64
 }
 
 type RateLimiter struct {
@@ -60,10 +62,10 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 func (rl *RateLimiter) Allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	
+
 	now := time.Now()
 	requests := rl.requests[key]
-	
+
 	// Remove old requests
 	var valid []time.Time
 	for _, t := range requests {
@@ -71,28 +73,29 @@ func (rl *RateLimiter) Allow(key string) bool {
 			valid = append(valid, t)
 		}
 	}
-	
+
 	if len(valid) >= rl.limit {
 		rl.requests[key] = valid
 		return false
 	}
-	
+
 	rl.requests[key] = append(valid, now)
 	return true
 }
 
 func NewAPIGateway() *Gateway {
 	return &Gateway{
-		routes:     make(map[string]*Route),
-		middleware: make([]Middleware, 0),
+		routes:      make(map[string]*Route),
+		middleware:  make([]Middleware, 0),
 		rateLimiter: NewRateLimiter(100, time.Minute),
+		proxies:     make(map[string]*httputil.ReverseProxy),
 	}
 }
 
 func (g *Gateway) AddRoute(pattern, backend string, methods []string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	
+
 	g.routes[pattern] = &Route{
 		Pattern:   pattern,
 		Backend:   backend,
@@ -110,7 +113,7 @@ func (g *Gateway) Use(m Middleware) {
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	
+
 	// Rate limiting
 	if !g.rateLimiter.Allow(r.RemoteAddr) {
 		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
@@ -119,7 +122,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.mu.Unlock()
 		return
 	}
-	
+
 	// Route matching
 	route := g.matchRoute(r)
 	if route == nil {
@@ -129,7 +132,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.mu.Unlock()
 		return
 	}
-	
+
 	// Method check
 	if !contains(route.Methods, r.Method) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -138,10 +141,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.mu.Unlock()
 		return
 	}
-	
-	// Proxy to backend (simplified)
-	proxyRequest(w, r, route.Backend)
-	
+
+	// Proxy to the backend that owns this route.
+	g.proxyRequest(w, r, route.Backend)
+
 	// Update stats
 	latency := time.Since(start).Seconds()
 	g.mu.Lock()
@@ -156,7 +159,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) matchRoute(r *http.Request) *Route {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	
+
 	path := r.URL.Path
 	for pattern, route := range g.routes {
 		if match, _ := regexp.MatchString(pattern, path); match {
@@ -169,7 +172,7 @@ func (g *Gateway) matchRoute(r *http.Request) *Route {
 func (g *Gateway) GetStats() GatewayStats {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	
+
 	stats := g.stats
 	if stats.Requests > 0 {
 		stats.LatencySum = stats.LatencySum / float64(stats.Requests)
@@ -177,10 +180,56 @@ func (g *Gateway) GetStats() GatewayStats {
 	return stats
 }
 
-func proxyRequest(w http.ResponseWriter, r *http.Request, backend string) {
-	// Simplified - in production use httputil.ReverseProxy
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"status":"ok","backend":"%s"}`, backend)
+// proxyRequest forwards the request to the backend that owns the route.
+//
+// The previous version answered 200 with a canned JSON body and never
+// contacted the backend, so every gateway route silently returned a fake
+// success. This builds and caches a real reverse proxy per backend.
+func (g *Gateway) proxyRequest(w http.ResponseWriter, r *http.Request, backend string) {
+	proxy, err := g.proxyFor(backend)
+	if err != nil {
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		g.mu.Lock()
+		g.stats.Errors++
+		g.mu.Unlock()
+		return
+	}
+
+	proxy.ServeHTTP(w, r)
+}
+
+// proxyFor returns the cached reverse proxy for a backend URL.
+func (g *Gateway) proxyFor(backend string) (*httputil.ReverseProxy, error) {
+	g.mu.RLock()
+	cached, ok := g.proxies[backend]
+	g.mu.RUnlock()
+	if ok {
+		return cached, nil
+	}
+
+	target, err := url.Parse(backend)
+	if err != nil {
+		return nil, fmt.Errorf("invalid backend URL %q: %w", backend, err)
+	}
+	if target.Scheme != "http" && target.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported backend scheme %q", target.Scheme)
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	// A backend failure must surface as 502, never as a fabricated 200.
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+	}
+
+	g.mu.Lock()
+	if existing, ok := g.proxies[backend]; ok {
+		g.mu.Unlock()
+		return existing, nil
+	}
+	g.proxies[backend] = proxy
+	g.mu.Unlock()
+
+	return proxy, nil
 }
 
 func contains(slice []string, item string) bool {
@@ -193,32 +242,3 @@ func contains(slice []string, item string) bool {
 }
 
 type Gateway = APIGateway
-
-func main() {
-	fmt.Println("TigerEx API Gateway")
-	fmt.Println("==================")
-	
-	gateway := NewAPIGateway()
-	
-	// Add routes
-	gateway.AddRoute("/api/v1/market.*", "http://market-service:8080", []string{"GET"})
-	gateway.AddRoute("/api/v1/order.*", "http://order-service:8080", []string{"GET", "POST", "DELETE"})
-	gateway.AddRoute("/api/v1/wallet.*", "http://wallet-service:8080", []string{"GET", "POST"})
-	gateway.AddRoute("/api/v1/user.*", "http://user-service:8080", []string{"GET", "POST", "PUT"})
-	
-	// Add middleware
-	gateway.Use(func(h http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			r.Header.Set("X-Gateway", "TigerEx")
-			h.ServeHTTP(w, r)
-		})
-	})
-	
-	// Stats
-	stats := gateway.GetStats()
-	fmt.Printf("Requests: %d\n", stats.Requests)
-	fmt.Printf("Errors: %d\n", stats.Errors)
-	fmt.Printf("Max Latency: %.2fs\n", stats.MaxLatency)
-	
-	fmt.Println("\nAPI Gateway ready on :8080")
-}
