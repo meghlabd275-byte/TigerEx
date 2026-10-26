@@ -5,97 +5,125 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/base32"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/shopspring/decimal"
 	"golang.org/x/crypto/bcrypt"
 )
 
+// RegisterRequest is the payload for RegisterUser.
+type RegisterRequest struct {
+	Email        string `json:"email"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+	ConfirmPass  string `json:"confirm_password"`
+	Country      string `json:"country"`
+	ReferralCode string `json:"referral_code,omitempty"`
+}
+
+// LoginRequest is the payload for Login.
+type LoginRequest struct {
+	// Email accepts either an email address or a username.
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+	IP        string `json:"ip"`
+	UserAgent string `json:"user_agent"`
+}
+
 // AuthService handles authentication
 type AuthService struct {
-	mu          sync.RWMutex
-	users      map[string]*User
-	sessions   map[string]*Session
-	policies   map[string]*PasswordPolicy
-	otpSecret  []byte
-	db         *sql.DB
-	redis      interface{} // Redis client placeholder
+	mu        sync.RWMutex
+	users     map[string]*User
+	sessions  map[string]*Session
+	policies  map[string]*PasswordPolicy
+	otpSecret []byte
+	// passwordResets holds single-use reset tokens keyed by user id.
+	passwordResets map[string]*passwordReset
+	// loginAttempts records authentication attempts for auditing. It is
+	// guarded by attemptMu because callers append to it while already
+	// holding as.mu.
+	loginAttempts []*LoginAttempt
+	attemptMu     sync.Mutex
+	db            *sql.DB
 }
 
 // PasswordPolicy defines password requirements
 type PasswordPolicy struct {
-	MinLength        int            `json:"min_length"`
-	RequireUpper    bool          `json:"require_upper"`
-	RequireLower    bool          `json:"require_lower"`
-	RequireNumber  bool          `json:"require_number"`
-	RequireSpecial bool          `json:"require_special"`
-	ExpiryDays     int           `json:"expiry_days"`
-	HistoryCount   int           `json:"history_count"`
+	MinLength      int  `json:"min_length"`
+	RequireUpper   bool `json:"require_upper"`
+	RequireLower   bool `json:"require_lower"`
+	RequireNumber  bool `json:"require_number"`
+	RequireSpecial bool `json:"require_special"`
+	ExpiryDays     int  `json:"expiry_days"`
+	HistoryCount   int  `json:"history_count"`
 }
 
 // User represents a user
 type User struct {
-	ID                string          `json:"id" db:"id"`
-	Email             string          `json:"email" db:"email"`
-	Username         string          `json:"username" db:"username"`
-	PasswordHash      string          `json:"-" db:"password_hash"`
-	PasswordSalt     string          `json:"-" db:"password_salt"`
+	ID               string         `json:"id" db:"id"`
+	Email            string         `json:"email" db:"email"`
+	Username         string         `json:"username" db:"username"`
+	PasswordHash     string         `json:"-" db:"password_hash"`
+	PasswordSalt     string         `json:"-" db:"password_salt"`
 	TwoFactorSecret  sql.NullString `json:"-" db:"two_factor_secret"`
-	TwoFactorEnabled  bool          `json:"two_factor_enabled" db:"two_factor_enabled"`
+	TwoFactorEnabled bool           `json:"two_factor_enabled" db:"two_factor_enabled"`
 	KYCStatus        string         `json:"kyc_status" db:"kyc_status"`
 	KYCLevel         int            `json:"kyc_level" db:"kyc_level"`
-	Status          string         `json:"status" db:"status"`
+	Status           string         `json:"status" db:"status"`
 	Country          string         `json:"country" db:"country"`
-	ReferralCode    string         `json:"referral_code" db:"referral_code"`
-	ReferrerID      sql.NullString `json:"referrer_id" db:"referrer_id"`
-	CreatedAt       time.Time     `json:"created_at" db:"created_at"`
-	UpdatedAt       time.Time     `json:"updated_at" db:"updated_at"`
-	LastLoginAt     sql.NullTime  `json:"last_login_at" db:"last_login_at"`
-	LockedUntil    sql.NullTime  `json:"locked_until" db:"locked_until"`
-	LoginAttempts  int           `json:"login_attempts" db:"login_attempts"`
+	ReferralCode     string         `json:"referral_code" db:"referral_code"`
+	ReferrerID       sql.NullString `json:"referrer_id" db:"referrer_id"`
+	CreatedAt        time.Time      `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at" db:"updated_at"`
+	LastLoginAt      sql.NullTime   `json:"last_login_at" db:"last_login_at"`
+	LockedUntil      sql.NullTime   `json:"locked_until" db:"locked_until"`
+	LoginAttempts    int            `json:"login_attempts" db:"login_attempts"`
 }
 
 // Session represents an authenticated session
 type Session struct {
-	ID           string         `json:"id" db:"id"`
-	UserID       string         `json:"user_id" db:"user_id"`
-	Token        string         `json:"token" db:"token"`
-	RefreshToken string         `json:"refresh_token" db:"refresh_token"`
-	IPAddress    string         `json:"ip_address" db:"ip_address"`
-	UserAgent    string         `json:"user_agent" db:"user_agent"`
-	ExpiresAt    time.Time     `json:"expires_at" db:"expires_at"`
-	CreatedAt    time.Time     `json:"created_at" db:"created_at"`
-	LastActivity time.Time     `json:"last_activity" db:"last_activity"`
+	ID           string    `json:"id" db:"id"`
+	UserID       string    `json:"user_id" db:"user_id"`
+	Token        string    `json:"token" db:"token"`
+	RefreshToken string    `json:"refresh_token" db:"refresh_token"`
+	IPAddress    string    `json:"ip_address" db:"ip_address"`
+	UserAgent    string    `json:"user_agent" db:"user_agent"`
+	ExpiresAt    time.Time `json:"expires_at" db:"expires_at"`
+	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+	LastActivity time.Time `json:"last_activity" db:"last_activity"`
 }
 
 // JWTClaims represents JWT claims
 type JWTClaims struct {
-	UserID   string `json:"user_id"`
-	Email    string `json:"email"`
-	Username string `json:"username"`
+	UserID    string `json:"user_id"`
+	Email     string `json:"email"`
+	Username  string `json:"username"`
 	SessionID string `json:"session_id"`
 	jwt.RegisteredClaims
 }
 
 // Device represents a trusted device
 type Device struct {
-	ID           string     `json:"id"`
-	UserID       string     `json:"user_id"`
-	Name         string     `json:"name"`
-	DeviceType   string     `json:"device_type"`
-	Browser     string     `json:"browser"`
-	OS          string     `json:"os"`
-	IPAddress   string     `json:"ip_address"`
-	Fingerprint string     `json:"fingerprint"`
+	ID          string    `json:"id"`
+	UserID      string    `json:"user_id"`
+	Name        string    `json:"name"`
+	DeviceType  string    `json:"device_type"`
+	Browser     string    `json:"browser"`
+	OS          string    `json:"os"`
+	IPAddress   string    `json:"ip_address"`
+	Fingerprint string    `json:"fingerprint"`
 	LastUsed    time.Time `json:"last_used"`
 	Trusted     bool      `json:"trusted"`
 }
@@ -106,7 +134,7 @@ type LoginAttempt struct {
 	UserID    string    `json:"user_id"`
 	Email     string    `json:"email"`
 	IPAddress string    `json:"ip_address"`
-	Success   bool     `json:"success"`
+	Success   bool      `json:"success"`
 	Reason    string    `json:"reason"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -115,31 +143,32 @@ type LoginAttempt struct {
 type TwoFactorType string
 
 const (
-	TwoFactorNone    TwoFactorType = ""
-	TwoFactorTOTP    TwoFactorType = "TOTP"
-	TwoFactorSMS     TwoFactorType = "SMS"
-	TwoFactorEmail   TwoFactorType = "EMAIL"
+	TwoFactorNone  TwoFactorType = ""
+	TwoFactorTOTP  TwoFactorType = "TOTP"
+	TwoFactorSMS   TwoFactorType = "SMS"
+	TwoFactorEmail TwoFactorType = "EMAIL"
 )
 
 // NewAuthService creates a new auth service
 func NewAuthService() *AuthService {
 	return &AuthService{
-		users:     make(map[string]*User),
-		sessions:  make(map[string]*Session),
-		policies: defaultPolicies(),
+		users:          make(map[string]*User),
+		sessions:       make(map[string]*Session),
+		policies:       defaultPolicies(),
+		passwordResets: make(map[string]*passwordReset),
 	}
 }
 
 func defaultPolicies() map[string]*PasswordPolicy {
 	return map[string]*PasswordPolicy{
 		"default": {
-			MinLength:       8,
+			MinLength:      8,
 			RequireUpper:   true,
 			RequireLower:   true,
 			RequireNumber:  true,
 			RequireSpecial: false,
 			ExpiryDays:     90,
-			HistoryCount:  5,
+			HistoryCount:   5,
 		},
 	}
 }
@@ -179,13 +208,13 @@ func (as *AuthService) RegisterUser(ctx context.Context, req *RegisterRequest) (
 	user := &User{
 		ID:           userID,
 		Email:        req.Email,
-		Username:    req.Username,
+		Username:     req.Username,
 		PasswordHash: hash,
 		PasswordSalt: salt,
-		Status:      "active",
+		Status:       "active",
 		ReferralCode: generateReferralCode(),
-		CreatedAt:   time.Now(),
-		UpdatedAt:  time.Now(),
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
 	}
 
 	as.mu.Lock()
@@ -226,13 +255,13 @@ func (as *AuthService) Login(ctx context.Context, req *LoginRequest) (*Session, 
 	// Verify password
 	if !verifyPassword(req.Password, user.PasswordHash, user.PasswordSalt) {
 		user.LoginAttempts++
-		
+
 		// Lock after 5 failed attempts
 		if user.LoginAttempts >= 5 {
 			user.LockedUntil.Time = time.Now().Add(15 * time.Minute)
 			user.LockedUntil.Valid = true
 		}
-		
+
 		as.recordLoginAttempt(ctx, user.Email, req.IP, false, "invalid_password")
 		return nil, nil, fmt.Errorf("invalid credentials")
 	}
@@ -271,7 +300,7 @@ func (as *AuthService) Logout(ctx context.Context, token string) error {
 // RefreshToken refreshes a session token
 func (as *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*Session, error) {
 	as.mu.RLock()
-	
+
 	var session *Session
 	for _, s := range as.sessions {
 		if s.RefreshToken == refreshToken {
@@ -301,8 +330,18 @@ func (as *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*
 
 // ValidateToken validates a JWT token
 func (as *AuthService) ValidateToken(ctx context.Context, tokenString string) (*JWTClaims, error) {
+	secret, err := jwtSecret()
+	if err != nil {
+		return nil, err
+	}
+
 	token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
-		return []byte(os.Getenv("JWT_SECRET")), nil
+		// Pin the algorithm. Accepting whatever the token declares allows
+		// "none" and HMAC-with-public-key forgeries.
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return secret, nil
 	})
 
 	if err != nil {
@@ -324,6 +363,21 @@ func (as *AuthService) ValidateToken(ctx context.Context, tokenString string) (*
 	}
 
 	return claims, nil
+}
+
+// minJWTSecretLength is the shortest signing key accepted.
+const minJWTSecretLength = 32
+
+// jwtSecret loads the JWT signing key.
+//
+// The old code passed os.Getenv("JWT_SECRET") straight through, so an unset
+// variable produced a token signed with the empty string.
+func jwtSecret() ([]byte, error) {
+	secret := os.Getenv("JWT_SECRET")
+	if len(secret) < minJWTSecretLength {
+		return nil, fmt.Errorf("JWT_SECRET must be set and at least %d characters", minJWTSecretLength)
+	}
+	return []byte(secret), nil
 }
 
 // EnableTwoFactor enables 2FA for a user
@@ -376,11 +430,26 @@ func (as *AuthService) VerifyTwoFactor(ctx context.Context, userID, code string)
 	user, ok := as.users[userID]
 	as.mu.RUnlock()
 
-	if !ok || !user.TwoFactorEnabled {
-		return true // 2FA not enabled means always pass
+	if !ok {
+		return false
+	}
+	if !user.TwoFactorEnabled {
+		// Nothing was verified. Returning true here is what let the old
+		// code be read as "2FA satisfied". Callers that only want to know
+		// whether a factor is required should call TwoFactorRequired.
+		return false
 	}
 
 	return verifyTOTPCode(user.TwoFactorSecret.String, code)
+}
+
+// TwoFactorRequired reports whether the user has a second factor enabled.
+func (as *AuthService) TwoFactorRequired(userID string) bool {
+	as.mu.RLock()
+	defer as.mu.RUnlock()
+
+	user, ok := as.users[userID]
+	return ok && user.TwoFactorEnabled
 }
 
 // ChangePassword changes user password
@@ -417,14 +486,68 @@ func (as *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, 
 	return nil
 }
 
-// ResetPassword resets password via email
-func (as *AuthService) ResetPassword(ctx context.Context, email, resetToken, newPassword string) error {
-	// Verify reset token (in production, validate against stored token)
-	if len(resetToken) < 32 {
-		return fmt.Errorf("invalid reset token")
+// passwordResetTTL is how long a password reset token stays valid.
+const passwordResetTTL = 30 * time.Minute
+
+// passwordReset is a pending, single-use password reset.
+type passwordReset struct {
+	UserID string
+	// Hash is the SHA-256 of the token handed to the user. The plaintext is
+	// never stored, so a database leak does not hand over account access.
+	Hash      string
+	ExpiresAt time.Time
+}
+
+// HashResetToken hashes a reset token for storage or comparison.
+func HashResetToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// RequestPasswordReset issues a single-use reset token for an email address.
+//
+// It returns an empty token when the address is unknown, so the caller cannot
+// use it to enumerate accounts.
+func (as *AuthService) RequestPasswordReset(ctx context.Context, email string) (string, error) {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+
+	var user *User
+	for _, u := range as.users {
+		if u.Email == email {
+			user = u
+			break
+		}
 	}
 
-	// Find user
+	if user == nil {
+		return "", nil
+	}
+
+	token, err := generateSecureToken(32)
+	if err != nil {
+		return "", err
+	}
+	as.passwordResets[user.ID] = &passwordReset{
+		UserID:    user.ID,
+		Hash:      HashResetToken(token),
+		ExpiresAt: time.Now().Add(passwordResetTTL),
+	}
+
+	return token, nil
+}
+
+// generateSecureToken returns a URL safe token from a cryptographic source.
+func generateSecureToken(length int) (string, error) {
+	buf := make([]byte, length)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// ResetPassword resets password via email
+func (as *AuthService) ResetPassword(ctx context.Context, email, resetToken, newPassword string) error {
 	as.mu.RLock()
 	var user *User
 	for _, u := range as.users {
@@ -437,6 +560,25 @@ func (as *AuthService) ResetPassword(ctx context.Context, email, resetToken, new
 
 	if user == nil {
 		return fmt.Errorf("user not found")
+	}
+
+	// The token must match the one issued for this user, must not have
+	// expired, and must not have been used. The old check only looked at the
+	// token length, so any 32 character string reset any account.
+	as.mu.RLock()
+	pending, ok := as.passwordResets[user.ID]
+	as.mu.RUnlock()
+	if !ok || pending == nil {
+		return fmt.Errorf("invalid or expired reset token")
+	}
+	if time.Now().After(pending.ExpiresAt) {
+		as.mu.Lock()
+		delete(as.passwordResets, user.ID)
+		as.mu.Unlock()
+		return fmt.Errorf("invalid or expired reset token")
+	}
+	if subtle.ConstantTimeCompare([]byte(pending.Hash), []byte(HashResetToken(resetToken))) != 1 {
+		return fmt.Errorf("invalid or expired reset token")
 	}
 
 	// Validate new password
@@ -455,6 +597,8 @@ func (as *AuthService) ResetPassword(ctx context.Context, email, resetToken, new
 	user.PasswordHash = hash
 	user.PasswordSalt = salt
 	user.UpdatedAt = time.Now()
+	// A reset token is single use.
+	delete(as.passwordResets, user.ID)
 	// Clear all sessions - force re-login
 	for token, sess := range as.sessions {
 		if sess.UserID == user.ID {
@@ -532,16 +676,33 @@ func (as *AuthService) validatePassword(password, policyName string) error {
 }
 
 func (as *AuthService) recordLoginAttempt(ctx context.Context, email, ip string, success bool, reason string) {
-	// Would log to database or SIEM
 	attempt := &LoginAttempt{
 		ID:        generateAttemptID(),
 		Email:     email,
 		IPAddress: ip,
-		Success:  success,
-		Reason:   reason,
+		Success:   success,
+		Reason:    reason,
 		CreatedAt: time.Now(),
 	}
-	_ = attempt
+
+	as.attemptMu.Lock()
+	as.loginAttempts = append(as.loginAttempts, attempt)
+	// Bound memory; a real deployment also ships these to a SIEM.
+	const maxRetainedAttempts = 10000
+	if len(as.loginAttempts) > maxRetainedAttempts {
+		as.loginAttempts = as.loginAttempts[len(as.loginAttempts)-maxRetainedAttempts:]
+	}
+	as.attemptMu.Unlock()
+}
+
+// LoginAttempts returns a copy of the recorded authentication attempts.
+func (as *AuthService) LoginAttempts() []*LoginAttempt {
+	as.attemptMu.Lock()
+	defer as.attemptMu.Unlock()
+
+	out := make([]*LoginAttempt, len(as.loginAttempts))
+	copy(out, as.loginAttempts)
+	return out
 }
 
 func hashPassword(password, salt string) (string, error) {
@@ -606,37 +767,122 @@ func containsNumber(s string) bool {
 
 func generateToken() string {
 	buf := make([]byte, 32)
-	rand.Read(buf)
-	return base64.StdEncoding.EncodeToString(buf)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Sprintf("secure random unavailable: %v", err))
+	}
+	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
+// generateUserID returns a random identifier.
+//
+// The previous version built ids from the clock, so they were guessable and
+// could collide when two accounts were created in the same nanosecond.
 func generateUserID() string {
-	return fmt.Sprintf("UID%d%d", time.Now().UnixNano(), time.Now().Nanosecond())
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Sprintf("secure random unavailable: %v", err))
+	}
+	return "UID" + hex.EncodeToString(buf)
 }
 
 func generateSessionID() string {
-	return fmt.Sprintf("SES%d%d", time.Now().UnixNano(), time.Now().Nanosecond())
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Sprintf("secure random unavailable: %v", err))
+	}
+	return "SES" + hex.EncodeToString(buf)
 }
 
 func generateAttemptID() string {
-	return fmt.Sprintf("ATT%d%d", time.Now().UnixNano(), time.Now().Nanosecond())
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Sprintf("secure random unavailable: %v", err))
+	}
+	return "ATT" + hex.EncodeToString(buf)
 }
 
 func generateReferralCode() string {
-	buf := make([]byte, 4)
-	rand.Read(buf)
-	return "REF" + base64.StdEncoding.EncodeToString(buf)[:6]
+	buf := make([]byte, 5)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Sprintf("secure random unavailable: %v", err))
+	}
+	return "REF" + strings.ToUpper(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(buf))
 }
 
+// isValidTOTPSecret reports whether a secret is a usable base32 key. Length
+// alone is not enough: an undecodable secret can never produce a valid code.
 func isValidTOTPSecret(secret string) bool {
-	// Basic validation
-	return len(secret) >= 16
+	if len(secret) < 16 {
+		return false
+	}
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(secret))
+	return err == nil && len(key) >= 10
 }
 
+// totpPeriod is the TOTP time step in seconds, fixed by RFC 6238.
+const totpPeriod int64 = 30
+
+// totpSkew is how many steps either side of the current one are accepted, to
+// tolerate clock drift between the server and the authenticator.
+const totpSkew = 1
+
+// verifyTOTPCode checks a TOTP code against an RFC 6238 secret.
+//
+// The previous version returned true for any six digit string (and for the
+// literal 123456), so two factor authentication could be bypassed by typing
+// six arbitrary digits.
 func verifyTOTPCode(secret, code string) bool {
-	// In production, use TOTP library to verify
-	// Simple length check for demo
-	return subtle.ConstantTimeCompare([]byte(code), []byte("123456")) == 1 || len(code) == 6
+	if secret == "" {
+		return false
+	}
+	code = strings.TrimSpace(code)
+	if len(code) != 6 {
+		return false
+	}
+	for _, c := range code {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+
+	counter := time.Now().Unix() / totpPeriod
+	for offset := -totpSkew; offset <= totpSkew; offset++ {
+		expected := hotp(secret, uint64(counter+int64(offset)))
+		if subtle.ConstantTimeCompare([]byte(expected), []byte(code)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
-var _ = decimal.Decimal{}
+// hotp derives a six digit code from a secret and counter per RFC 4226.
+func hotp(secret string, counter uint64) string {
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(secret))
+	if err != nil || len(key) == 0 {
+		return ""
+	}
+
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], counter)
+
+	mac := hmac.New(sha1.New, key)
+	mac.Write(buf[:])
+	sum := mac.Sum(nil)
+
+	offset := sum[len(sum)-1] & 0x0F
+	value := (uint32(sum[offset])&0x7F)<<24 |
+		uint32(sum[offset+1])<<16 |
+		uint32(sum[offset+2])<<8 |
+		uint32(sum[offset+3])
+
+	return fmt.Sprintf("%06d", value%1000000)
+}
+
+// GenerateTOTPSecret creates a fresh base32 TOTP secret for enrolment.
+func GenerateTOTPSecret() (string, error) {
+	buf := make([]byte, 20) // 160 bits, the RFC 4226 recommendation
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(buf), nil
+}
