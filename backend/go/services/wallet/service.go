@@ -2,7 +2,7 @@
  * TigerEx Wallet Service
  * Production-Ready Multi-Chain Wallet Management
  * Supports 110+ Blockchains, MPC, Hardware Wallets, Web3
- * 
+ *
  * @author TigerEx Team
  * @version 3.0.0
  * @date July 2026
@@ -13,7 +13,6 @@ package wallet
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -29,8 +28,8 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/tendermint/tendermint/crypto/ed25519"
 	"github.com/mr-tron/base58"
+	"github.com/tendermint/tendermint/crypto/ed25519"
 )
 
 // ============================================================================
@@ -38,28 +37,28 @@ import (
 // ============================================================================
 
 type Config struct {
-	Network             string        `mapstructure:"network"` // "mainnet", "testnet"
-	Confirmations        int           `mapstructure:"confirmations"`
-	MinWithdrawal        float64       `mapstructure:"min_withdrawal"`
-	MaxWithdrawal       float64       `mapstructure:"max_withdrawal"`
-	WithdrawalFeePercent float64      `mapstructure:"withdrawal_fee_percent"`
-	HotWalletThreshold  float64       `mapstructure:"hot_wallet_threshold"`
-	ColdWalletAddresses []string      `mapstructure:"cold_wallet_addresses"`
-	MPCEnabled          bool          `mapstructure:"mpc_enabled"`
-	HardwareWalletEnabled bool         `mapstructure:"hardware_wallet_enabled"`
-	MaxDailyWithdrawal  float64       `mapstructure:"max_daily_withdrawal"`
-	MaxDailyDeposit     float64       `mapstructure:"max_daily_deposit"`
+	Network               string   `mapstructure:"network"` // "mainnet", "testnet"
+	Confirmations         int      `mapstructure:"confirmations"`
+	MinWithdrawal         float64  `mapstructure:"min_withdrawal"`
+	MaxWithdrawal         float64  `mapstructure:"max_withdrawal"`
+	WithdrawalFeePercent  float64  `mapstructure:"withdrawal_fee_percent"`
+	HotWalletThreshold    float64  `mapstructure:"hot_wallet_threshold"`
+	ColdWalletAddresses   []string `mapstructure:"cold_wallet_addresses"`
+	MPCEnabled            bool     `mapstructure:"mpc_enabled"`
+	HardwareWalletEnabled bool     `mapstructure:"hardware_wallet_enabled"`
+	MaxDailyWithdrawal    float64  `mapstructure:"max_daily_withdrawal"`
+	MaxDailyDeposit       float64  `mapstructure:"max_daily_deposit"`
 }
 
 var DefaultConfig = Config{
 	Network:              "mainnet",
-	Confirmations:       6,
-	MinWithdrawal:       10,
-	MaxWithdrawal:       1000000,
+	Confirmations:        6,
+	MinWithdrawal:        10,
+	MaxWithdrawal:        1000000,
 	WithdrawalFeePercent: 0.1,
-	HotWalletThreshold:  10000000,
-	MaxDailyWithdrawal:  5000000,
-	MaxDailyDeposit:     10000000,
+	HotWalletThreshold:   10000000,
+	MaxDailyWithdrawal:   5000000,
+	MaxDailyDeposit:      10000000,
 }
 
 // ============================================================================
@@ -71,11 +70,11 @@ type BlockchainType string
 const (
 	BlockchainTypeEVM      BlockchainType = "evm"
 	BlockchainTypeBitcoin  BlockchainType = "bitcoin"
-	BlockchainTypeSolana  BlockchainType = "solana"
+	BlockchainTypeSolana   BlockchainType = "solana"
 	BlockchainTypeTON      BlockchainType = "ton"
-	BlockchainTypeCosmos  BlockchainType = "cosmos"
-	BlockchainTypeAptos   BlockchainType = "aptos"
-	BlockchainTypeNear    BlockchainType = "near"
+	BlockchainTypeCosmos   BlockchainType = "cosmos"
+	BlockchainTypeAptos    BlockchainType = "aptos"
+	BlockchainTypeNear     BlockchainType = "near"
 	BlockchainTypeAlgorand BlockchainType = "algorand"
 )
 
@@ -176,21 +175,21 @@ var SupportedBlockchains = map[string]*Blockchain{
 // ============================================================================
 
 type Token struct {
-	ID            uint64     `json:"id"`
-	BlockchainID  uint32     `json:"blockchain_id"`
-	Address       string     `json:"address"`
-	Symbol        string     `json:"symbol"`
-	Name          string     `json:"name"`
-	Decimals      int        `json:"decimals"`
-	TotalSupply   string     `json:"total_supply"`
-	IsNative      bool       `json:"is_native"`
-	IsMintable    bool       `json:"is_mintable"`
-	IsPaused      bool       `json:"is_paused"`
-	LogoURL       string     `json:"logo_url"`
-	PriceUSD      float64    `json:"price_usd"`
-	MarketCap     float64    `json:"market_cap"`
-	Volume24h     float64    `json:"volume_24h"`
-	Enabled       bool       `json:"enabled"`
+	ID           uint64  `json:"id"`
+	BlockchainID uint32  `json:"blockchain_id"`
+	Address      string  `json:"address"`
+	Symbol       string  `json:"symbol"`
+	Name         string  `json:"name"`
+	Decimals     int     `json:"decimals"`
+	TotalSupply  string  `json:"total_supply"`
+	IsNative     bool    `json:"is_native"`
+	IsMintable   bool    `json:"is_mintable"`
+	IsPaused     bool    `json:"is_paused"`
+	LogoURL      string  `json:"logo_url"`
+	PriceUSD     float64 `json:"price_usd"`
+	MarketCap    float64 `json:"market_cap"`
+	Volume24h    float64 `json:"volume_24h"`
+	Enabled      bool    `json:"enabled"`
 }
 
 // ============================================================================
@@ -198,20 +197,20 @@ type Token struct {
 // ============================================================================
 
 type Wallet struct {
-	ID           uint64         `json:"id"`
-	UserID       uint64         `json:"user_id"`
-	Type         WalletType     `json:"type"`
-	Blockchain   string         `json:"blockchain"`
-	Address      string         `json:"address"`
-	PublicKey    string         `json:"public_key"`
-	PrivateKey   string         `json:"-"` // Never exposed
-	SeedPhrase   string         `json:"-"` // For HD wallets
-	Path         string         `json:"path"` // BIP44 path
-	Status       WalletStatus   `json:"status"`
+	ID           uint64             `json:"id"`
+	UserID       uint64             `json:"user_id"`
+	Type         WalletType         `json:"type"`
+	Blockchain   string             `json:"blockchain"`
+	Address      string             `json:"address"`
+	PublicKey    string             `json:"public_key"`
+	PrivateKey   string             `json:"-"`    // Never exposed
+	SeedPhrase   string             `json:"-"`    // For HD wallets
+	Path         string             `json:"path"` // BIP44 path
+	Status       WalletStatus       `json:"status"`
 	Balance      map[string]Balance `json:"balance"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	LastSyncedAt time.Time      `json:"last_synced_at"`
+	CreatedAt    time.Time          `json:"created_at"`
+	UpdatedAt    time.Time          `json:"updated_at"`
+	LastSyncedAt time.Time          `json:"last_synced_at"`
 }
 
 type WalletType string
@@ -235,10 +234,10 @@ const (
 )
 
 type Balance struct {
-	Available   string `json:"available"`
-	Locked      string `json:"locked"`
-	Total       string `json:"total"`
-	USDValue    float64 `json:"usd_value"`
+	Available string  `json:"available"`
+	Locked    string  `json:"locked"`
+	Total     string  `json:"total"`
+	USDValue  float64 `json:"usd_value"`
 }
 
 // ============================================================================
@@ -246,46 +245,46 @@ type Balance struct {
 // ============================================================================
 
 type Transaction struct {
-	ID            uint64         `json:"id"`
-	UserID        uint64         `json:"user_id"`
-	WalletID      uint64         `json:"wallet_id"`
-	Hash          string         `json:"hash"`
-	BlockHash     string         `json:"block_hash"`
-	BlockNumber   uint64         `json:"block_number"`
-	From          string         `json:"from"`
-	To            string         `json:"to"`
-	Value         string         `json:"value"`
-	Fee           string         `json:"fee"`
-	GasUsed       uint64         `json:"gas_used"`
-	GasPrice      string         `json:"gas_price"`
-	Nonce         uint64         `json:"nonce"`
-	Token         string         `json:"token"`
-	Status        TxStatus       `json:"status"`
-	Type          TxType         `json:"type"`
-	Confirmations int            `json:"confirmations"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	CompletedAt   *time.Time     `json:"completed_at,omitempty"`
+	ID            uint64     `json:"id"`
+	UserID        uint64     `json:"user_id"`
+	WalletID      uint64     `json:"wallet_id"`
+	Hash          string     `json:"hash"`
+	BlockHash     string     `json:"block_hash"`
+	BlockNumber   uint64     `json:"block_number"`
+	From          string     `json:"from"`
+	To            string     `json:"to"`
+	Value         string     `json:"value"`
+	Fee           string     `json:"fee"`
+	GasUsed       uint64     `json:"gas_used"`
+	GasPrice      string     `json:"gas_price"`
+	Nonce         uint64     `json:"nonce"`
+	Token         string     `json:"token"`
+	Status        TxStatus   `json:"status"`
+	Type          TxType     `json:"type"`
+	Confirmations int        `json:"confirmations"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 }
 
 type TxStatus string
 
 const (
-	TxStatusPending   TxStatus = "pending"
+	TxStatusPending    TxStatus = "pending"
 	TxStatusConfirming TxStatus = "confirming"
-	TxStatusCompleted TxStatus = "completed"
-	TxStatusFailed    TxStatus = "failed"
-	TxStatusCancelled TxStatus = "cancelled"
+	TxStatusCompleted  TxStatus = "completed"
+	TxStatusFailed     TxStatus = "failed"
+	TxStatusCancelled  TxStatus = "cancelled"
 )
 
 type TxType string
 
 const (
-	TxTypeDeposit     TxType = "deposit"
-	TxTypeWithdrawal  TxType = "withdrawal"
-	TxTypeTransfer    TxType = "transfer"
-	TxTypeSwap        TxType = "swap"
-	TxTypeInternal    TxType = "internal"
+	TxTypeDeposit    TxType = "deposit"
+	TxTypeWithdrawal TxType = "withdrawal"
+	TxTypeTransfer   TxType = "transfer"
+	TxTypeSwap       TxType = "swap"
+	TxTypeInternal   TxType = "internal"
 )
 
 // ============================================================================
@@ -293,12 +292,12 @@ const (
 // ============================================================================
 
 type CreateWalletRequest struct {
-	UserID      uint64 `json:"user_id"`
-	Blockchain  string `json:"blockchain"`
-	Type        WalletType `json:"type"`
-	SeedPhrase  string `json:"seed_phrase,omitempty"`
-	PrivateKey  string `json:"private_key,omitempty"`
-	Password    string `json:"password"`
+	UserID     uint64     `json:"user_id"`
+	Blockchain string     `json:"blockchain"`
+	Type       WalletType `json:"type"`
+	SeedPhrase string     `json:"seed_phrase,omitempty"`
+	PrivateKey string     `json:"private_key,omitempty"`
+	Password   string     `json:"password"`
 }
 
 type GenerateAddressRequest struct {
@@ -316,28 +315,28 @@ type DepositRequest struct {
 }
 
 type WithdrawRequest struct {
-	UserID        uint64  `json:"user_id"`
-	Blockchain    string  `json:"blockchain"`
-	ToAddress     string  `json:"to_address"`
-	Amount        float64 `json:"amount"`
-	Token         string  `json:"token"`
-	Fee           float64 `json:"fee,omitempty"`
-	Memo          string  `json:"memo,omitempty"`
+	UserID     uint64  `json:"user_id"`
+	Blockchain string  `json:"blockchain"`
+	ToAddress  string  `json:"to_address"`
+	Amount     float64 `json:"amount"`
+	Token      string  `json:"token"`
+	Fee        float64 `json:"fee,omitempty"`
+	Memo       string  `json:"memo,omitempty"`
 }
 
 type TransferRequest struct {
-	UserID       uint64  `json:"user_id"`
-	ToUserID     uint64  `json:"to_user_id"`
-	Blockchain   string  `json:"blockchain"`
-	Amount       float64 `json:"amount"`
-	Token        string  `json:"token"`
-	Memo         string  `json:"memo,omitempty"`
+	UserID     uint64  `json:"user_id"`
+	ToUserID   uint64  `json:"to_user_id"`
+	Blockchain string  `json:"blockchain"`
+	Amount     float64 `json:"amount"`
+	Token      string  `json:"token"`
+	Memo       string  `json:"memo,omitempty"`
 }
 
 type GetBalanceRequest struct {
-	UserID     uint64  `json:"user_id"`
-	Blockchain string  `json:"blockchain"`
-	Token      string  `json:"token"`
+	UserID     uint64 `json:"user_id"`
+	Blockchain string `json:"blockchain"`
+	Token      string `json:"token"`
 }
 
 // ============================================================================
@@ -345,22 +344,25 @@ type GetBalanceRequest struct {
 // ============================================================================
 
 type WalletService struct {
-	config      Config
-	db          Database
-	redis       Cache
-	blockchain  BlockchainClient
-	mpc         MPCService
-	notifier    NotificationService
-	analytics   AnalyticsService
-	logger      Logger
+	config     Config
+	db         Database
+	redis      Cache
+	blockchain BlockchainClient
+	mpc        MPCService
+	notifier   NotificationService
+	analytics  AnalyticsService
+	logger     Logger
 
 	// Wallet storage
-	wallets     map[uint64]map[string]*Wallet // userID -> blockchain -> wallet
-	mu          sync.RWMutex
+	wallets map[uint64]map[string]*Wallet // userID -> blockchain -> wallet
+	mu      sync.RWMutex
 
 	// Transaction storage
 	transactions map[uint64][]*Transaction
 	txMu         sync.RWMutex
+
+	// price values balances in USD. When nil, no USD value is reported.
+	price PriceProvider
 }
 
 type Database interface {
@@ -387,6 +389,40 @@ type Database interface {
 
 	GetBalance(ctx context.Context, userID uint64, blockchain, token string) (*Balance, error)
 	UpdateBalance(ctx context.Context, userID uint64, blockchain, token string, balance *Balance) error
+}
+
+// PriceProvider returns the USD price of a token. It is the seam a real
+// market-data service implements.
+type PriceProvider interface {
+	GetPrice(ctx context.Context, token string) (float64, error)
+}
+
+// NewWalletService wires the wallet service. price may be nil; USD valuations
+// are then omitted rather than computed from a stale constant.
+func NewWalletService(
+	config Config,
+	db Database,
+	cache Cache,
+	blockchain BlockchainClient,
+	mpc MPCService,
+	notifier NotificationService,
+	analytics AnalyticsService,
+	logger Logger,
+	price PriceProvider,
+) *WalletService {
+	return &WalletService{
+		config:       config,
+		db:           db,
+		redis:        cache,
+		blockchain:   blockchain,
+		mpc:          mpc,
+		notifier:     notifier,
+		analytics:    analytics,
+		logger:       logger,
+		price:        price,
+		wallets:      make(map[uint64]map[string]*Wallet),
+		transactions: make(map[uint64][]*Transaction),
+	}
 }
 
 type Cache interface {
@@ -419,11 +455,11 @@ type MPCKey struct {
 }
 
 type TransactionReceipt struct {
-	BlockHash     string
-	BlockNumber   uint64
-	Status        bool
+	BlockHash       string
+	BlockNumber     uint64
+	Status          bool
 	TransactionHash string
-	GasUsed       uint64
+	GasUsed         uint64
 }
 
 type BlockTx struct {
@@ -436,26 +472,26 @@ type BlockTx struct {
 }
 
 type Deposit struct {
-	ID          uint64
-	UserID      uint64
-	WalletID    uint64
-	Blockchain  string
-	Address     string
-	TxHash      string
-	Amount      string
-	Status      DepositStatus
+	ID            uint64
+	UserID        uint64
+	WalletID      uint64
+	Blockchain    string
+	Address       string
+	TxHash        string
+	Amount        string
+	Status        DepositStatus
 	Confirmations int
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type DepositStatus string
 
 const (
-	DepositStatusPending   DepositStatus = "pending"
+	DepositStatusPending    DepositStatus = "pending"
 	DepositStatusConfirming DepositStatus = "confirming"
-	DepositStatusCredited  DepositStatus = "credited"
-	DepositStatusFailed    DepositStatus = "failed"
+	DepositStatusCredited   DepositStatus = "credited"
+	DepositStatusFailed     DepositStatus = "failed"
 )
 
 type Withdrawal struct {
@@ -477,10 +513,10 @@ type Withdrawal struct {
 type WithdrawalStatus string
 
 const (
-	WithdrawalStatusPending   WithdrawalStatus = "pending"
+	WithdrawalStatusPending    WithdrawalStatus = "pending"
 	WithdrawalStatusProcessing WithdrawalStatus = "processing"
 	WithdrawalStatusCompleted  WithdrawalStatus = "completed"
-	WithdrawalStatusFailed    WithdrawalStatus = "failed"
+	WithdrawalStatusFailed     WithdrawalStatus = "failed"
 	WithdrawalStatusCancelled  WithdrawalStatus = "cancelled"
 )
 
@@ -575,8 +611,9 @@ func (s *WalletService) createEVMWallet(ctx context.Context, req *CreateWalletRe
 			return nil, errors.New("invalid private key")
 		}
 	} else {
-		// Generate new key
-		privateKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		// Generate new key. EVM chains use secp256k1; P-256 would produce
+		// addresses that no EVM wallet can spend from.
+		privateKey, err = ecdsa.GenerateKey(crypto.S256(), rand.Reader)
 		if err != nil {
 			return nil, err
 		}
@@ -591,10 +628,10 @@ func (s *WalletService) createEVMWallet(ctx context.Context, req *CreateWalletRe
 	address := crypto.PubkeyToAddress(*publicKeyECDSA).Hex()
 
 	return &Wallet{
-		UserID:      req.UserID,
-		Type:        req.Type,
-		Blockchain:  req.Blockchain,
-		Address:     address,
+		UserID:     req.UserID,
+		Type:       req.Type,
+		Blockchain: req.Blockchain,
+		Address:    address,
 		PublicKey:  hex.EncodeToString(crypto.CompressPubkey(publicKeyECDSA)),
 		PrivateKey: hex.EncodeToString(privateKey.D.Bytes()),
 		Status:     WalletStatusActive,
@@ -641,10 +678,10 @@ func (s *WalletService) createBitcoinWallet(ctx context.Context, req *CreateWall
 	}
 
 	return &Wallet{
-		UserID:      req.UserID,
-		Type:        req.Type,
-		Blockchain:  req.Blockchain,
-		Address:     addressPubKeyHash.String(),
+		UserID:     req.UserID,
+		Type:       req.Type,
+		Blockchain: req.Blockchain,
+		Address:    addressPubKeyHash.String(),
 		PublicKey:  hex.EncodeToString(wif.SerializePubKey()),
 		PrivateKey: wif.String(),
 		Status:     WalletStatusActive,
@@ -677,10 +714,10 @@ func (s *WalletService) createSolanaWallet(ctx context.Context, req *CreateWalle
 	address := base58.Encode(publicKey[:])
 
 	return &Wallet{
-		UserID:      req.UserID,
-		Type:        req.Type,
-		Blockchain:  req.Blockchain,
-		Address:     address,
+		UserID:     req.UserID,
+		Type:       req.Type,
+		Blockchain: req.Blockchain,
+		Address:    address,
 		PublicKey:  base58.Encode(publicKey[:]),
 		PrivateKey: base58.Encode(privateKey[:]),
 		Status:     WalletStatusActive,
@@ -707,10 +744,10 @@ func (s *WalletService) createTONWallet(ctx context.Context, req *CreateWalletRe
 	address := fmt.Sprintf("EQ%s", base58.Encode(publicKey[:]))
 
 	return &Wallet{
-		UserID:      req.UserID,
-		Type:        req.Type,
-		Blockchain:  req.Blockchain,
-		Address:     address,
+		UserID:     req.UserID,
+		Type:       req.Type,
+		Blockchain: req.Blockchain,
+		Address:    address,
 		PublicKey:  hex.EncodeToString(publicKey[:]),
 		PrivateKey: hex.EncodeToString(privateKey),
 		Status:     WalletStatusActive,
@@ -736,10 +773,10 @@ func (s *WalletService) createCosmosWallet(ctx context.Context, req *CreateWalle
 	address := "cosmos1" + base58.Encode(publicKey[:20])
 
 	return &Wallet{
-		UserID:      req.UserID,
-		Type:        req.Type,
-		Blockchain:  req.Blockchain,
-		Address:     address,
+		UserID:     req.UserID,
+		Type:       req.Type,
+		Blockchain: req.Blockchain,
+		Address:    address,
 		PublicKey:  hex.EncodeToString(publicKey[:]),
 		PrivateKey: hex.EncodeToString(privateKey),
 		Status:     WalletStatusActive,
@@ -756,32 +793,32 @@ func (s *WalletService) createCosmosWallet(ctx context.Context, req *CreateWalle
 func deriveEVmKeyFromSeed(seed string, userID uint64) (*ecdsa.PrivateKey, error) {
 	// BIP44 derivation path: m/44'/60'/0'/0/0
 	path := fmt.Sprintf("m/44'/60'/0'/0/%d", userID)
-	
+
 	// Simplified derivation (in production, use proper BIP39/BIP44)
 	hash := sha256.Sum256([]byte(seed + path))
 	privateKey, err := crypto.ToECDSA(hash[:32])
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return privateKey, nil
 }
 
 func deriveBitcoinKeyFromSeed(seed string, userID uint64) (*btcutil.WIF, error) {
 	path := fmt.Sprintf("m/44'/0'/0'/0/%d", userID)
-	
+
 	hash := sha256.Sum256([]byte(seed + path))
-	
+
 	privKey, _ := btcec.PrivKeyFromBytes(hash[:32])
-	
+
 	return btcutil.NewWIF(privKey, &chaincfg.MainNetParams, true)
 }
 
 func deriveSolanaKeyFromSeed(seed string, userID uint64) ed25519.PrivKey {
 	path := fmt.Sprintf("m/44'/501'/%d'/0'", userID)
-	
+
 	hash := sha256.Sum256([]byte(seed + path))
-	
+
 	var key ed25519.PrivKey
 	copy(key[:], hash[:32])
 	return key
@@ -828,7 +865,7 @@ func (s *WalletService) GetWallet(ctx context.Context, userID uint64, blockchain
 			s.wallets[wallet.UserID] = make(map[string]*Wallet)
 		}
 		s.wallets[wallet.UserID][wallet.Blockchain] = wallet
-		
+
 		if wallet.Blockchain == blockchain {
 			return wallet, nil
 		}
@@ -891,12 +928,12 @@ func (s *WalletService) GenerateAddress(ctx context.Context, req *GenerateAddres
 func deriveEVMAddress(seed string, userID uint64, index uint32) (string, error) {
 	path := fmt.Sprintf("m/44'/60'/0'/0/%d", userID+uint64(index))
 	hash := sha256.Sum256([]byte(seed + path))
-	
+
 	privateKey, err := crypto.ToECDSA(hash[:32])
 	if err != nil {
 		return "", err
 	}
-	
+
 	address := crypto.PubkeyToAddress(*privateKey.Public().(*ecdsa.PublicKey))
 	return address.Hex(), nil
 }
@@ -946,7 +983,7 @@ func (s *WalletService) GetAllBalances(ctx context.Context, userID uint64) (map[
 
 	for _, wallet := range wallets {
 		result[wallet.Blockchain] = make(map[string]Balance)
-		
+
 		// Get native token balance
 		balance, err := s.GetBalance(ctx, userID, wallet.Blockchain, wallet.Blockchain)
 		if err == nil {
@@ -961,77 +998,151 @@ func (s *WalletService) GetAllBalances(ctx context.Context, userID uint64) (map[
 // DEPOSIT
 // ============================================================================
 
+// HandleDeposit credits a deposit after it has reached the required number of
+// on-chain confirmations.
+//
+// The previous version credited the full amount to the user's available
+// balance and marked the transaction completed as soon as a BlockTx was seen,
+// with no receipt lookup and no confirmation count. Any unconfirmed or
+// reorged transaction, and any replayed callback, credited real balance.
 func (s *WalletService) HandleDeposit(ctx context.Context, tx *BlockTx) error {
-	// Find wallet by address
 	wallet, err := s.db.GetWalletByAddress(ctx, tx.To)
 	if err != nil {
 		s.logger.Warn("Deposit to unknown address", "address", tx.To, "hash", tx.Hash)
 		return err
 	}
 
-	// Check if transaction already processed
-	existing, _ := s.db.GetTransactionByHash(ctx, tx.Hash)
-	if existing != nil {
-		return nil // Already processed
+	value, ok := new(big.Float).SetString(tx.Value)
+	if !ok || value.Sign() <= 0 {
+		return fmt.Errorf("deposit %s has an invalid or non-positive value %q", tx.Hash, tx.Value)
 	}
 
-	// Get token (simplified - would need proper token detection)
+	// The token key is the wallet's chain for native deposits. This mirrors the
+	// rest of the service, which keys native balances by chain.
 	token := wallet.Blockchain
 
-	// Create transaction record
+	// Reject anything the chain has not actually included.
+	receipt, err := s.blockchain.GetTransactionReceipt(ctx, wallet.Blockchain, tx.Hash)
+	if err != nil {
+		return fmt.Errorf("failed to verify deposit receipt for %s: %w", tx.Hash, err)
+	}
+	if receipt == nil {
+		return fmt.Errorf("no on-chain receipt for deposit %s", tx.Hash)
+	}
+	if !receipt.Status {
+		return fmt.Errorf("deposit %s failed on chain", tx.Hash)
+	}
+
+	currentHeight, err := s.blockchain.GetBlockNumber(ctx, wallet.Blockchain)
+	if err != nil {
+		return fmt.Errorf("failed to read chain height: %w", err)
+	}
+	confirmations := 0
+	if currentHeight >= receipt.BlockNumber {
+		confirmations = int(currentHeight-receipt.BlockNumber) + 1
+	}
+
+	required := s.config.Confirmations
+	if info, ok := SupportedBlockchains[wallet.Blockchain]; ok && info.Confirmations > 0 {
+		required = info.Confirmations
+	}
+
+	// A deposit already seen must not be credited twice. Update its
+	// confirmation count instead.
+	if existing, _ := s.db.GetTransactionByHash(ctx, tx.Hash); existing != nil {
+		if existing.Status == TxStatusCompleted {
+			return nil
+		}
+		existing.Confirmations = confirmations
+		existing.UpdatedAt = time.Now()
+		if confirmations >= required {
+			return s.creditDeposit(ctx, wallet, existing, token, value)
+		}
+		existing.Status = TxStatusConfirming
+		return s.db.UpdateTransaction(ctx, existing)
+	}
+
 	transaction := &Transaction{
-		UserID:       wallet.UserID,
-		WalletID:     wallet.ID,
-		Hash:         tx.Hash,
-		BlockNumber:  tx.BlockNumber,
-		From:         tx.From,
-		To:           tx.To,
-		Value:        tx.Value,
-		Token:        token,
-		Status:       TxStatusPending,
-		Type:         TxTypeDeposit,
-		Confirmations: 0,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		UserID:        wallet.UserID,
+		WalletID:      wallet.ID,
+		Hash:          tx.Hash,
+		BlockNumber:   receipt.BlockNumber,
+		From:          tx.From,
+		To:            tx.To,
+		Value:         tx.Value,
+		Token:         token,
+		Status:        TxStatusConfirming,
+		Type:          TxTypeDeposit,
+		Confirmations: confirmations,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+
+	if confirmations < required {
+		transaction.Status = TxStatusPending
+		if err := s.db.CreateTransaction(ctx, transaction); err != nil {
+			return err
+		}
+		s.logger.Info("Deposit awaiting confirmations",
+			"user_id", wallet.UserID, "hash", tx.Hash,
+			"confirmations", confirmations, "required", required)
+		return nil
 	}
 
 	if err := s.db.CreateTransaction(ctx, transaction); err != nil {
 		return err
 	}
+	return s.creditDeposit(ctx, wallet, transaction, token, value)
+}
 
-	// Update user balance
+// parseAmount converts a stored balance string to a float, treating an empty
+// or malformed value as zero. big.Float.SetString returns a nil pointer on
+// failure, and passing that to Add panics.
+func parseAmount(s string) *big.Float {
+	if f, ok := new(big.Float).SetString(s); ok {
+		return f
+	}
+	return new(big.Float)
+}
+
+// creditDeposit adds a confirmed deposit to the user's available balance and
+// marks the transaction completed.
+func (s *WalletService) creditDeposit(ctx context.Context, wallet *Wallet, transaction *Transaction, token string, value *big.Float) error {
 	balance, err := s.db.GetBalance(ctx, wallet.UserID, wallet.Blockchain, token)
-	if err != nil {
+	if err != nil || balance == nil {
 		balance = &Balance{}
 	}
 
-	// Parse value
-	valueFloat, _ := new(big.Float).SetString(tx.Value)
-	existingBalance, _ := new(big.Float).SetString(balance.Available)
-	newBalance := new(big.Float).Add(existingBalance, valueFloat)
+	newBalance := new(big.Float).Add(parseAmount(balance.Available), value)
 
 	balance.Available = newBalance.String()
 	balance.Total = balance.Available
-	balance.USDValue = s.calculateUSDValue(balance.Total, token)
+	usdValue, err := s.calculateUSDValue(balance.Total, token)
+	if err != nil {
+		// A missing price must not block a confirmed deposit, but it must not
+		// be reported as a real valuation either.
+		s.logger.Warn("Deposit USD valuation unavailable", "token", token, "error", err)
+	}
+	balance.USDValue = usdValue
 
 	if err := s.db.UpdateBalance(ctx, wallet.UserID, wallet.Blockchain, token, balance); err != nil {
 		return err
 	}
 
-	// Update transaction status
 	transaction.Status = TxStatusCompleted
 	completedAt := time.Now()
 	transaction.CompletedAt = &completedAt
-	s.db.UpdateTransaction(ctx, transaction)
+	transaction.UpdatedAt = completedAt
+	if err := s.db.UpdateTransaction(ctx, transaction); err != nil {
+		return err
+	}
 
-	// Send notification
-	s.notifier.SendDepositNotification(wallet.UserID, tx.Value, tx.Hash)
+	s.notifier.SendDepositNotification(wallet.UserID, transaction.Value, transaction.Hash)
 
-	// Track analytics
-	value, _ := valueFloat.Float64()
-	s.analytics.TrackDeposit(wallet.UserID, value, wallet.Blockchain)
+	amount, _ := value.Float64()
+	s.analytics.TrackDeposit(wallet.UserID, amount, wallet.Blockchain)
 
-	s.logger.Info("Deposit processed", "user_id", wallet.UserID, "amount", tx.Value, "hash", tx.Hash)
+	s.logger.Info("Deposit credited", "user_id", wallet.UserID, "amount", transaction.Value, "hash", transaction.Hash)
 
 	return nil
 }
@@ -1125,11 +1236,11 @@ func (s *WalletService) Withdraw(ctx context.Context, req *WithdrawRequest) (*Tr
 	if err != nil {
 		withdrawal.Status = WithdrawalStatusFailed
 		s.db.UpdateWithdrawal(ctx, withdrawal)
-		
+
 		// Refund balance
 		balance.Available = new(big.Float).Add(balanceFloat, totalFloat).String()
 		s.db.UpdateBalance(ctx, req.UserID, req.Blockchain, req.Token, balance)
-		
+
 		return nil, fmt.Errorf("failed to send transaction: %w", err)
 	}
 
@@ -1139,18 +1250,18 @@ func (s *WalletService) Withdraw(ctx context.Context, req *WithdrawRequest) (*Tr
 
 	// Create transaction record
 	transaction := &Transaction{
-		UserID:      req.UserID,
-		WalletID:    wallet.ID,
-		Hash:        txHash,
-		From:        wallet.Address,
-		To:          req.ToAddress,
-		Value:       amountFloat.String(),
-		Fee:         new(big.Float).SetFloat64(feeFloat).String(),
-		Token:       req.Token,
-		Status:      TxStatusPending,
-		Type:        TxTypeWithdrawal,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		UserID:    req.UserID,
+		WalletID:  wallet.ID,
+		Hash:      txHash,
+		From:      wallet.Address,
+		To:        req.ToAddress,
+		Value:     amountFloat.String(),
+		Fee:       new(big.Float).SetFloat64(feeFloat).String(),
+		Token:     req.Token,
+		Status:    TxStatusPending,
+		Type:      TxTypeWithdrawal,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 
 	if err := s.db.CreateTransaction(ctx, transaction); err != nil {
@@ -1177,7 +1288,7 @@ func (s *WalletService) Transfer(ctx context.Context, req *TransferRequest) (*Tr
 	}
 
 	amountFloat := new(big.Float).SetFloat64(req.Amount)
-	senderBalanceFloat, _ := new(big.Float).SetString(senderBalance.Available)
+	senderBalanceFloat := parseAmount(senderBalance.Available)
 
 	if senderBalanceFloat.Cmp(amountFloat) < 0 {
 		return nil, errors.New("insufficient balance")
@@ -1192,8 +1303,7 @@ func (s *WalletService) Transfer(ctx context.Context, req *TransferRequest) (*Tr
 	if err != nil {
 		receiverBalance = &Balance{}
 	}
-	receiverBalanceFloat, _ := new(big.Float).SetString(receiverBalance.Available)
-	receiverBalance.Available = new(big.Float).Add(receiverBalanceFloat, amountFloat).String()
+	receiverBalance.Available = new(big.Float).Add(parseAmount(receiverBalance.Available), amountFloat).String()
 	receiverBalance.Total = receiverBalance.Available
 	s.db.UpdateBalance(ctx, req.ToUserID, req.Blockchain, req.Token, receiverBalance)
 
@@ -1312,35 +1422,41 @@ func (s *WalletService) calculateWithdrawalFee(amount float64, blockchain string
 	return amount * s.config.WithdrawalFeePercent / 100
 }
 
-func (s *WalletService) calculateUSDValue(amountStr, token string) float64 {
+// calculateUSDValue converts amountStr of token to USD.
+//
+// The previous version multiplied by a hardcoded table (BTC = 65000,
+// ETH = 3500, ...) and returned a zero price for any unknown token, so every
+// USD valuation was wrong and silently so.
+func (s *WalletService) calculateUSDValue(amountStr, token string) (float64, error) {
 	amount, ok := new(big.Float).SetString(amountStr)
 	if !ok {
-		return 0
+		return 0, fmt.Errorf("invalid amount %q", amountStr)
 	}
 
-	// Get token price (simplified - would integrate with price service)
-	price := s.getTokenPrice(token)
+	price, err := s.getTokenPrice(token)
+	if err != nil {
+		return 0, err
+	}
 
-	// Convert to USD
 	usdValue := new(big.Float).Mul(amount, new(big.Float).SetFloat64(price))
 	floatVal, _ := usdValue.Float64()
-	return floatVal
+	return floatVal, nil
 }
 
-func (s *WalletService) getTokenPrice(token string) float64 {
-	// Would integrate with price service
-	prices := map[string]float64{
-		"ETH":  3500,
-		"BTC":  65000,
-		"BNB":  600,
-		"SOL":  150,
-		"MATIC": 0.9,
-		"AVAX": 35,
-		"TRX":  0.12,
-		"USDT": 1,
-		"USDC": 1,
+// getTokenPrice returns the current USD price of token from the configured
+// price provider.
+func (s *WalletService) getTokenPrice(token string) (float64, error) {
+	if s.price == nil {
+		return 0, errors.New("no price provider configured")
 	}
-	return prices[token]
+	price, err := s.price.GetPrice(context.Background(), token)
+	if err != nil {
+		return 0, fmt.Errorf("price unavailable for %s: %w", token, err)
+	}
+	if price <= 0 {
+		return 0, fmt.Errorf("price provider returned a non-positive price for %s", token)
+	}
+	return price, nil
 }
 
 // Errors
