@@ -1,12 +1,16 @@
-package main
+package payment_integration
 
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,29 +23,29 @@ import (
 
 // Payment Gateway Types
 const (
-	GatewayStripe    = "stripe"
-	GatewaySimplex   = "simplex"
-	GatewayMoonpay   = "moonpay"
-	GatewayBanxa     = "banxa"
-	GatewayMercuryo  = "mercuryo"
-	GatewayWyre      = "wyre"
+	GatewayStripe   = "stripe"
+	GatewaySimplex  = "simplex"
+	GatewayMoonpay  = "moonpay"
+	GatewayBanxa    = "banxa"
+	GatewayMercuryo = "mercuryo"
+	GatewayWyre     = "wyre"
 )
 
 // Payment Status
 const (
-	PaymentPending   = "pending"
+	PaymentPending    = "pending"
 	PaymentProcessing = "processing"
-	PaymentCompleted = "completed"
-	PaymentFailed    = "failed"
-	PaymentCancelled = "cancelled"
-	PaymentRefunded  = "refunded"
+	PaymentCompleted  = "completed"
+	PaymentFailed     = "failed"
+	PaymentCancelled  = "cancelled"
+	PaymentRefunded   = "refunded"
 )
 
 // Payment Types
 const (
-	TypeBuy  = "buy"
-	TypeSell = "sell"
-	TypeDeposit = "deposit"
+	TypeBuy      = "buy"
+	TypeSell     = "sell"
+	TypeDeposit  = "deposit"
 	TypeWithdraw = "withdraw"
 )
 
@@ -50,48 +54,48 @@ const (
 // ============================================================================
 
 type Payment struct {
-	ID              string            `json:"id"`
-	UserID          string            `json:"userId"`
-	Type            string            `json:"type"`
-	Gateway         string            `json:"gateway"`
-	Amount          float64           `json:"amount"`
-	Currency        string            `json:"currency"`
-	CryptoAmount    float64           `json:"cryptoAmount"`
-	CryptoCurrency  string            `json:"cryptoCurrency"`
-	ExchangeRate    float64           `json:"exchangeRate"`
-	Fee             float64           `json:"fee"`
-	TotalAmount     float64           `json:"totalAmount"`
-	Status          string            `json:"status"`
-	PaymentMethod   string            `json:"paymentMethod"` // card, bank, etc.
-	CardLast4       string            `json:"cardLast4,omitempty"`
-	BankReference   string            `json:"bankReference,omitempty"`
-	KYCVerified     bool              `json:"kycVerified"`
-	CreatedAt       int64             `json:"createdAt"`
-	UpdatedAt       int64             `json:"updatedAt"`
-	CompletedAt     int64             `json:"completedAt,omitempty"`
-	ExpiresAt       int64             `json:"expiresAt,omitempty"`
-	RedirectURL     string            `json:"redirectUrl,omitempty"`
-	WebhookURL      string            `json:"webhookUrl,omitempty"`
-	Metadata        map[string]string `json:"metadata,omitempty"`
+	ID             string            `json:"id"`
+	UserID         string            `json:"userId"`
+	Type           string            `json:"type"`
+	Gateway        string            `json:"gateway"`
+	Amount         float64           `json:"amount"`
+	Currency       string            `json:"currency"`
+	CryptoAmount   float64           `json:"cryptoAmount"`
+	CryptoCurrency string            `json:"cryptoCurrency"`
+	ExchangeRate   float64           `json:"exchangeRate"`
+	Fee            float64           `json:"fee"`
+	TotalAmount    float64           `json:"totalAmount"`
+	Status         string            `json:"status"`
+	PaymentMethod  string            `json:"paymentMethod"` // card, bank, etc.
+	CardLast4      string            `json:"cardLast4,omitempty"`
+	BankReference  string            `json:"bankReference,omitempty"`
+	KYCVerified    bool              `json:"kycVerified"`
+	CreatedAt      int64             `json:"createdAt"`
+	UpdatedAt      int64             `json:"updatedAt"`
+	CompletedAt    int64             `json:"completedAt,omitempty"`
+	ExpiresAt      int64             `json:"expiresAt,omitempty"`
+	RedirectURL    string            `json:"redirectUrl,omitempty"`
+	WebhookURL     string            `json:"webhookUrl,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
 }
 
 type CardPayment struct {
-	CardNumber     string `json:"cardNumber"` // Last 4 digits only
-	ExpiryMonth    int    `json:"expiryMonth"`
-	ExpiryYear     int    `json:"expiryYear"`
-	CVV            string `json:"cvv"`
-	CardholderName string `json:"cardholderName"`
+	CardNumber     string   `json:"cardNumber"` // Last 4 digits only
+	ExpiryMonth    int      `json:"expiryMonth"`
+	ExpiryYear     int      `json:"expiryYear"`
+	CVV            string   `json:"cvv"`
+	CardholderName string   `json:"cardholderName"`
 	BillingAddress *Address `json:"billingAddress,omitempty"`
 }
 
 type BankTransfer struct {
-	BankName       string `json:"bankName"`
-	AccountNumber  string `json:"accountNumber"`
-	RoutingNumber  string `json:"routingNumber"`
-	IBAN           string `json:"iban"`
-	SWIFTBIC       string `json:"swiftBic"`
-	AccountName    string `json:"accountName"`
-	Reference      string `json:"reference"`
+	BankName      string `json:"bankName"`
+	AccountNumber string `json:"accountNumber"`
+	RoutingNumber string `json:"routingNumber"`
+	IBAN          string `json:"iban"`
+	SWIFTBIC      string `json:"swiftBic"`
+	AccountName   string `json:"accountName"`
+	Reference     string `json:"reference"`
 }
 
 type Address struct {
@@ -122,17 +126,17 @@ type PaymentGateway interface {
 // ============================================================================
 
 type StripeGateway struct {
-	apiKey       string
+	apiKey        string
 	webhookSecret string
-	baseURL      string
-	client       *http.Client
+	baseURL       string
+	client        *http.Client
 }
 
 func NewStripeGateway(apiKey, webhookSecret string) *StripeGateway {
 	return &StripeGateway{
-		apiKey:       apiKey,
+		apiKey:        apiKey,
 		webhookSecret: webhookSecret,
-		baseURL:      "https://api.stripe.com/v1",
+		baseURL:       "https://api.stripe.com/v1",
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -142,8 +146,8 @@ func NewStripeGateway(apiKey, webhookSecret string) *StripeGateway {
 func (sg *StripeGateway) CreatePayment(ctx context.Context, payment *Payment) (*Payment, error) {
 	// Stripe API integration
 	// In production, this would call Stripe API to create a payment intent
-	
-	payment.ID = fmt.Sprintf("pay_%d_%s", time.Now().UnixMilli(), payment.UserID[:8])
+
+	payment.ID = newPaymentID("pay", payment.UserID)
 	payment.Status = PaymentPending
 	payment.CreatedAt = time.Now().UnixMilli()
 	payment.UpdatedAt = payment.CreatedAt
@@ -196,10 +200,10 @@ func (sg *StripeGateway) GetMinMax(amountType string) (float64, float64) {
 // ============================================================================
 
 type SimplexGateway struct {
-	apiKey       string
-	environment  string // sandbox, production
-	baseURL      string
-	client       *http.Client
+	apiKey      string
+	environment string // sandbox, production
+	baseURL     string
+	client      *http.Client
 }
 
 func NewSimplexGateway(apiKey string, sandbox bool) *SimplexGateway {
@@ -220,10 +224,10 @@ func NewSimplexGateway(apiKey string, sandbox bool) *SimplexGateway {
 
 func (sg *SimplexGateway) CreatePayment(ctx context.Context, payment *Payment) (*Payment, error) {
 	// Simplex API integration for crypto purchases
-	payment.ID = fmt.Sprintf("simplex_%d_%s", time.Now().UnixMilli(), payment.UserID[:8])
+	payment.ID = newPaymentID("simplex", payment.UserID)
 	payment.Status = PaymentPending
 	payment.CreatedAt = time.Now().UnixMilli()
-	
+
 	return payment, nil
 }
 
@@ -260,17 +264,17 @@ func (sg *SimplexGateway) GetMinMax(amountType string) (float64, float64) {
 // ============================================================================
 
 type MoonpayGateway struct {
-	apiKey       string
-	secretKey    string
-	baseURL      string
-	client       *http.Client
+	apiKey    string
+	secretKey string
+	baseURL   string
+	client    *http.Client
 }
 
 func NewMoonpayGateway(apiKey, secretKey string) *MoonpayGateway {
 	return &MoonpayGateway{
-		apiKey:   apiKey,
+		apiKey:    apiKey,
 		secretKey: secretKey,
-		baseURL:  "https://api.moonpay.com/v3",
+		baseURL:   "https://api.moonpay.com/v3",
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -278,14 +282,14 @@ func NewMoonpayGateway(apiKey, secretKey string) *MoonpayGateway {
 }
 
 func (mg *MoonpayGateway) CreatePayment(ctx context.Context, payment *Payment) (*Payment, error) {
-	payment.ID = fmt.Sprintf("moonpay_%d_%s", time.Now().UnixMilli(), payment.UserID[:8])
+	payment.ID = newPaymentID("moonpay", payment.UserID)
 	payment.Status = PaymentPending
 	payment.CreatedAt = time.Now().UnixMilli()
-	
+
 	// Generate redirect URL for Moonpay checkout
 	payment.RedirectURL = fmt.Sprintf("%s/v3/crypto?apiKey=%s&currency=%s&amount=%f",
 		mg.baseURL, mg.apiKey, payment.CryptoCurrency, payment.CryptoAmount)
-	
+
 	return payment, nil
 }
 
@@ -324,14 +328,20 @@ func (mg *MoonpayGateway) GetMinMax(amountType string) (float64, float64) {
 type PaymentService struct {
 	gateways map[string]PaymentGateway
 	// Internal payment storage
-	payments map[string]*Payment
+	payments     map[string]*Payment
 	userPayments map[string][]*Payment
 	// Fee structure
 	cardFeePercent float64
 	bankFeePercent float64
 	// Webhook handlers
 	webhookHandlers map[string]func(*Payment) error
-	mu sync.RWMutex
+	// webhookSecret keys the HMAC that authenticates gateway callbacks.
+	// Without it no webhook can be trusted, so verification fails closed.
+	webhookSecret string
+	// rateSource prices purchases. Nil until wired, and a nil source is an
+	// error rather than a fabricated rate.
+	rateSource RateSource
+	mu         sync.RWMutex
 }
 
 func NewPaymentService() *PaymentService {
@@ -339,8 +349,8 @@ func NewPaymentService() *PaymentService {
 		gateways:        make(map[string]PaymentGateway),
 		payments:        make(map[string]*Payment),
 		userPayments:    make(map[string][]*Payment),
-		cardFeePercent:  2.99,  // 2.99%
-		bankFeePercent:  0.50,  // 0.50%
+		cardFeePercent:  2.99, // 2.99%
+		bankFeePercent:  0.50, // 0.50%
 		webhookHandlers: make(map[string]func(*Payment) error),
 	}
 
@@ -407,27 +417,30 @@ func (ps *PaymentService) CreatePayment(ctx context.Context, req *CreatePaymentR
 		fee = req.Amount * ps.bankFeePercent / 100
 	}
 
-	// Get exchange rate (in production, fetch from price service)
-	exchangeRate := ps.getExchangeRate(req.Currency, req.CryptoCurrency)
+	// Price the purchase from the configured rate source.
+	exchangeRate, err := ps.getExchangeRate(req.Currency, req.CryptoCurrency)
+	if err != nil {
+		return nil, err
+	}
 	cryptoAmount := (req.Amount - fee) / exchangeRate
 
 	payment := &Payment{
 		UserID:         req.UserID,
-		Type:          req.Type,
-		Gateway:       req.Gateway,
-		Amount:        req.Amount,
-		Currency:      req.Currency,
-		CryptoAmount:  cryptoAmount,
+		Type:           req.Type,
+		Gateway:        req.Gateway,
+		Amount:         req.Amount,
+		Currency:       req.Currency,
+		CryptoAmount:   cryptoAmount,
 		CryptoCurrency: req.CryptoCurrency,
-		ExchangeRate:  exchangeRate,
-		Fee:           fee,
-		TotalAmount:   req.Amount,
-		Status:        PaymentPending,
-		PaymentMethod: req.PaymentMethod,
-		KYCVerified:   req.KYCVerified,
-		CreatedAt:     time.Now().UnixMilli(),
-		UpdatedAt:     time.Now().UnixMilli(),
-		Metadata:     req.Metadata,
+		ExchangeRate:   exchangeRate,
+		Fee:            fee,
+		TotalAmount:    req.Amount,
+		Status:         PaymentPending,
+		PaymentMethod:  req.PaymentMethod,
+		KYCVerified:    req.KYCVerified,
+		CreatedAt:      time.Now().UnixMilli(),
+		UpdatedAt:      time.Now().UnixMilli(),
+		Metadata:       req.Metadata,
 	}
 
 	// Create with gateway
@@ -600,8 +613,8 @@ func (ps *PaymentService) HandleWebhook(gateway string, payload []byte, signatur
 }
 
 type WebhookEvent struct {
-	Type      string `json:"type"`
-	PaymentID string `json:"paymentId"`
+	Type      string                 `json:"type"`
+	PaymentID string                 `json:"paymentId"`
 	Data      map[string]interface{} `json:"data"`
 }
 
@@ -611,38 +624,180 @@ func (ps *PaymentService) RegisterWebhookHandler(eventType string, handler func(
 	ps.webhookHandlers[eventType] = handler
 }
 
+// Webhook signature verification and payload decoding.
+//
+// The gateway webhooks are the only path that can mark a payment completed, so
+// an unverified webhook is an open door to crediting an account without money
+// arriving. Each gateway therefore verifies with its own documented scheme and
+// every comparison is constant time.
+
+// stripeSignatureTolerance is how far a Stripe timestamp may drift from ours.
+const stripeSignatureTolerance = 5 * time.Minute
+
+// verifyStripeWebhook checks a Stripe-Signature header.
+//
+// The header looks like "t=1700000000,v1=<hex hmac>". The signed payload is
+// "<timestamp>.<body>" and the MAC is HMAC-SHA256 keyed with the endpoint
+// secret. The timestamp is checked so a captured request cannot be replayed
+// indefinitely.
 func (ps *PaymentService) verifyStripeWebhook(payload []byte, signature string) bool {
-	// Stripe webhook signature verification
-	return true
+	if ps.webhookSecret == "" {
+		// Refusing everything is the only safe behaviour without a secret.
+		return false
+	}
+
+	var timestamp string
+	var provided []byte
+	for _, part := range strings.Split(signature, ",") {
+		part = strings.TrimSpace(part)
+		switch {
+		case strings.HasPrefix(part, "t="):
+			timestamp = strings.TrimPrefix(part, "t=")
+		case strings.HasPrefix(part, "v1="):
+			decoded, err := hex.DecodeString(strings.TrimPrefix(part, "v1="))
+			if err != nil {
+				return false
+			}
+			provided = decoded
+		}
+	}
+	if timestamp == "" || len(provided) == 0 {
+		return false
+	}
+
+	ts, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return false
+	}
+	age := time.Since(time.Unix(ts, 0))
+	if age > stripeSignatureTolerance || age < -stripeSignatureTolerance {
+		return false
+	}
+
+	mac := hmac.New(sha256.New, []byte(ps.webhookSecret))
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	mac.Write(payload)
+
+	return hmac.Equal(mac.Sum(nil), provided)
 }
 
+// verifyMoonpayWebhook checks the "X-Signature" header MoonPay sends, which is
+// a hex HMAC-SHA256 of the raw body keyed with the webhook secret.
 func (ps *PaymentService) verifyMoonpayWebhook(payload []byte, signature string) bool {
-	// Moonpay webhook signature verification
-	return true
+	if ps.webhookSecret == "" {
+		return false
+	}
+
+	provided, err := hex.DecodeString(strings.TrimSpace(signature))
+	if err != nil {
+		return false
+	}
+
+	mac := hmac.New(sha256.New, []byte(ps.webhookSecret))
+	mac.Write(payload)
+
+	return hmac.Equal(mac.Sum(nil), provided)
 }
 
+// verifySimplexWebhook checks the scheme Simplex uses: a hex HMAC-SHA256 of the
+// body, delivered in the "X-Simplex-Signature" header.
+func (ps *PaymentService) verifySimplexWebhook(payload []byte, signature string) bool {
+	return ps.verifyMoonpayWebhook(payload, signature)
+}
+
+// verifyBanxaWebhook checks the "X-Banxa-Signature" header: a base64
+// HMAC-SHA256 of the body.
+func (ps *PaymentService) verifyBanxaWebhook(payload []byte, signature string) bool {
+	if ps.webhookSecret == "" {
+		return false
+	}
+
+	provided, err := base64.StdEncoding.DecodeString(strings.TrimSpace(signature))
+	if err != nil {
+		return false
+	}
+
+	mac := hmac.New(sha256.New, []byte(ps.webhookSecret))
+	mac.Write(payload)
+
+	return hmac.Equal(mac.Sum(nil), provided)
+}
+
+// verifyWebhook dispatches to the scheme for a gateway.
+func (ps *PaymentService) verifyWebhook(gateway string, payload []byte, signature string) bool {
+	switch gateway {
+	case GatewayStripe:
+		return ps.verifyStripeWebhook(payload, signature)
+	case GatewayMoonpay:
+		return ps.verifyMoonpayWebhook(payload, signature)
+	case GatewaySimplex:
+		return ps.verifySimplexWebhook(payload, signature)
+	case GatewayBanxa:
+		return ps.verifyBanxaWebhook(payload, signature)
+	default:
+		// An unknown gateway has no verification scheme, so its webhook can
+		// never be trusted.
+		return false
+	}
+}
+
+// parseWebhookPayload decodes a gateway webhook body into a WebhookEvent.
+//
+// Gateway payloads differ, so the payment id and event type are read from the
+// first of the documented shapes that is present. A body that carries no
+// payment id is rejected instead of silently producing an empty event.
 func parseWebhookPayload(payload []byte, event *WebhookEvent) error {
-	// Parse webhook payload
+	var raw map[string]interface{}
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return fmt.Errorf("webhook payload is not valid JSON: %w", err)
+	}
+
+	pickString := func(keys ...string) string {
+		for _, key := range keys {
+			if value, ok := raw[key]; ok {
+				if s, ok := value.(string); ok && s != "" {
+					return s
+				}
+			}
+		}
+		return ""
+	}
+
+	event.Type = pickString("type", "event", "event_type", "status")
+	event.PaymentID = pickString("paymentId", "payment_id", "id", "externalId", "external_id")
+	event.Data = raw
+
+	if event.PaymentID == "" {
+		return fmt.Errorf("webhook payload carries no payment id")
+	}
+	if event.Type == "" {
+		return fmt.Errorf("webhook payload carries no event type")
+	}
+
 	return nil
 }
 
-func (ps *PaymentService) getExchangeRate(fiat, crypto string) float64 {
-	// In production, fetch from real-time price service
-	// For now, return mock rates
-	rates := map[string]map[string]float64{
-		"BTC": {"USD": 67000, "EUR": 62000, "GBP": 53000},
-		"ETH": {"USD": 3800, "EUR": 3500, "GBP": 3000},
-		"USDT": {"USD": 1.0, "EUR": 0.92, "GBP": 0.79},
-		"USDC": {"USD": 1.0, "EUR": 0.92, "GBP": 0.79},
+// getExchangeRate returns the fiat value of one unit of crypto.
+//
+// Rates come from the caller-provided RateSource, which is wired to the
+// exchange's own price service. There is deliberately no built-in table: an
+// invented rate would silently mis-price a customer's purchase. A nil source
+// or an unknown pair is an error, never a guess.
+func (ps *PaymentService) getExchangeRate(fiat, crypto string) (float64, error) {
+	if ps.rateSource == nil {
+		return 0, fmt.Errorf("no rate source configured for %s/%s", crypto, fiat)
 	}
 
-	if cryptoRates, ok := rates[crypto]; ok {
-		if rate, ok := cryptoRates[fiat]; ok {
-			return rate
-		}
+	rate, err := ps.rateSource.Rate(fiat, crypto)
+	if err != nil {
+		return 0, fmt.Errorf("no rate for %s/%s: %w", crypto, fiat, err)
+	}
+	if !(rate > 0) {
+		return 0, fmt.Errorf("non-positive rate for %s/%s", crypto, fiat)
 	}
 
-	return 1.0
+	return rate, nil
 }
 
 // ============================================================================
@@ -660,24 +815,24 @@ func NewBankTransferService(ps *PaymentService) *BankTransferService {
 
 func (bts *BankTransferService) InitiateSWIFTTransfer(payment *Payment, bankInfo *BankTransfer) (string, error) {
 	// Generate reference number
-	reference := fmt.Sprintf("TIGEREX%d%s", time.Now().UnixMilli(), payment.UserID[:4])
-	
+	reference := newBankReference("TIGEREX", payment.UserID)
+
 	// In production, this would call bank API
 	return reference, nil
 }
 
 func (bts *BankTransferService) InitiateSEPATransfer(payment *Payment, bankInfo *BankTransfer) (string, error) {
-	reference := fmt.Sprintf("SEPA%d%s", time.Now().UnixMilli(), payment.UserID[:4])
+	reference := newBankReference("SEPA", payment.UserID)
 	return reference, nil
 }
 
 func (bts *BankTransferService) InitiateACHTransfer(payment *Payment, bankInfo *BankTransfer) (string, error) {
-	reference := fmt.Sprintf("ACH%d%s", time.Now().UnixMilli(), payment.UserID[:4])
+	reference := newBankReference("ACH", payment.UserID)
 	return reference, nil
 }
 
 func (bts *BankTransferService) InitiateFPS(payment *Payment, bankInfo *BankTransfer) (string, error) {
-	reference := fmt.Sprintf("FPS%d%s", time.Now().UnixMilli(), payment.UserID[:4])
+	reference := newBankReference("FPS", payment.UserID)
 	return reference, nil
 }
 
@@ -705,40 +860,6 @@ func (cds *CryptoDeliveryService) ConfirmDelivery(paymentID string) error {
 // MAIN
 // ============================================================================
 
-func main() {
-	fmt.Println("TigerEx Payment Integration Service v1.0")
-	fmt.Println()
-
-	ps := NewPaymentService()
-
-	// Create test payment
-	req := &CreatePaymentRequest{
-		UserID:         "user123",
-		Type:           TypeBuy,
-		Gateway:        GatewayStripe,
-		Amount:         100,
-		Currency:       "USD",
-		CryptoCurrency: "BTC",
-		PaymentMethod:  "card",
-		KYCVerified:    true,
-	}
-
-	payment, err := ps.CreatePayment(context.Background(), req)
-	if err != nil {
-		fmt.Printf("Failed to create payment: %v\n", err)
-		return
-	}
-
-	fmt.Printf("Payment created: %s\n", payment.ID)
-	fmt.Printf("Amount: %.2f %s -> %.8f %s\n", payment.Amount, payment.Currency, payment.CryptoAmount, payment.CryptoCurrency)
-	fmt.Printf("Fee: %.2f %s\n", payment.Fee, payment.Currency)
-	fmt.Printf("Exchange Rate: %.2f\n", payment.ExchangeRate)
-	fmt.Printf("Status: %s\n", payment.Status)
-
-	fmt.Println()
-	fmt.Println("Payment Service initialized and ready!")
-}
-
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -748,3 +869,53 @@ var _ = hmac.New
 var _ = sha256.New
 var _ = hex.EncodeToString
 var _ = strings.ToUpper
+
+// ============================================================================
+// IDENTIFIER AND REFERENCE HELPERS
+// ============================================================================
+
+// shortUserPrefix returns at most four characters of a user id. The previous
+// code sliced [:4] and [:8] directly, which panics for any id shorter than
+// that (for example a numeric id or an empty string).
+func shortUserPrefix(userID string) string {
+	if len(userID) <= 4 {
+		return userID
+	}
+	return userID[:4]
+}
+
+// randomToken returns n bytes of cryptographically secure randomness, hex
+// encoded. Identifiers must not be guessable from the clock.
+func randomToken(n int) string {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		// crypto/rand only fails if the kernel entropy source is
+		// broken, in which case no identifier can be safely minted.
+		panic(fmt.Sprintf("secure random unavailable: %v", err))
+	}
+	return hex.EncodeToString(buf)
+}
+
+// newPaymentID mints a unique gateway payment id.
+func newPaymentID(prefix, userID string) string {
+	return fmt.Sprintf("%s_%s_%s", prefix, shortUserPrefix(userID), randomToken(12))
+}
+
+// newBankReference mints a unique, sortable bank transfer reference.
+func newBankReference(prefix, userID string) string {
+	return fmt.Sprintf("%s%s%s", prefix, randomToken(8), shortUserPrefix(userID))
+}
+
+// RateSource supplies fiat/crypto exchange rates from the exchange's own price
+// service. It is an interface so the payment service never invents a rate and
+// never reaches out to a third party it does not control.
+type RateSource interface {
+	Rate(fiat, crypto string) (float64, error)
+}
+
+// SetRateSource wires the price service used to price purchases.
+func (ps *PaymentService) SetRateSource(source RateSource) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	ps.rateSource = source
+}
