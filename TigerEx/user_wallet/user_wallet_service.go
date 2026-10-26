@@ -4,13 +4,13 @@
 // Supports 200+ cryptocurrencies across 50+ blockchains
 // =============================================================================
 
-package main
+package userwallet
 
 import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -19,13 +19,19 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/big"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/google/uuid"
+	"github.com/mr-tron/base58"
+	"github.com/tyler-smith/go-bip32"
+	"github.com/tyler-smith/go-bip39"
+	"golang.org/x/crypto/ripemd160"
 )
 
 // =============================================================================
@@ -33,91 +39,91 @@ import (
 // =============================================================================
 
 type Blockchain struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
-	Symbol        string  `json:"symbol"`
-	Type          string  `json:"type"` // evm, utxo, account
-	ChainID       int64   `json:"chainId"`
-	Decimals      int     `json:"decimals"`
-	ExplorerURL   string  `json:"explorerUrl"`
-	RPCURL        string  `json:"rpcUrl"`
-	IsEnabled     bool    `json:"isEnabled"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Symbol      string `json:"symbol"`
+	Type        string `json:"type"` // evm, utxo, account
+	ChainID     int64  `json:"chainId"`
+	Decimals    int    `json:"decimals"`
+	ExplorerURL string `json:"explorerUrl"`
+	RPCURL      string `json:"rpcUrl"`
+	IsEnabled   bool   `json:"isEnabled"`
 }
 
 type Token struct {
-	Symbol          string  `json:"symbol"`
-	Name            string  `json:"name"`
-	ContractAddress string  `json:"contractAddress"`
-	Blockchain      string  `json:"blockchain"`
-	Decimals        int     `json:"decimals"`
-	IsEnabled       bool    `json:"isEnabled"`
+	Symbol          string `json:"symbol"`
+	Name            string `json:"name"`
+	ContractAddress string `json:"contractAddress"`
+	Blockchain      string `json:"blockchain"`
+	Decimals        int    `json:"decimals"`
+	IsEnabled       bool   `json:"isEnabled"`
 }
 
 // Supported Blockchains (50+ EVM + 50+ Non-EVM)
 var Blockchains = map[string]*Blockchain{
 	// Top EVM Blockchains
-	"eth":    {ID: "eth", Name: "Ethereum", Symbol: "ETH", Type: "evm", ChainID: 1, Decimals: 18},
-	"bsc":    {ID: "bsc", Name: "Binance Smart Chain", Symbol: "BNB", Type: "evm", ChainID: 56, Decimals: 18},
-	"polygon": {ID: "polygon", Name: "Polygon", Symbol: "MATIC", Type: "evm", ChainID: 137, Decimals: 18},
-	"arbitrum": {ID: "arbitrum", Name: "Arbitrum", Symbol: "ETH", Type: "evm", ChainID: 42161, Decimals: 18},
-	"optimism": {ID: "optimism", Name: "Optimism", Symbol: "ETH", Type: "evm", ChainID: 10, Decimals: 18},
-	"base":   {ID: "base", Name: "Base", Symbol: "ETH", Type: "evm", ChainID: 8453, Decimals: 18},
-	"avax":   {ID: "avax", Name: "Avalanche C-Chain", Symbol: "AVAX", Type: "evm", ChainID: 43114, Decimals: 18},
-	"fantom": {ID: "fantom", Name: "Fantom", Symbol: "FTM", Type: "evm", ChainID: 250, Decimals: 18},
-	"cronos": {ID: "cronos", Name: "Cronos", Symbol: "CRO", Type: "evm", ChainID: 25, Decimals: 18},
+	"eth":        {ID: "eth", Name: "Ethereum", Symbol: "ETH", Type: "evm", ChainID: 1, Decimals: 18},
+	"bsc":        {ID: "bsc", Name: "Binance Smart Chain", Symbol: "BNB", Type: "evm", ChainID: 56, Decimals: 18},
+	"polygon":    {ID: "polygon", Name: "Polygon", Symbol: "MATIC", Type: "evm", ChainID: 137, Decimals: 18},
+	"arbitrum":   {ID: "arbitrum", Name: "Arbitrum", Symbol: "ETH", Type: "evm", ChainID: 42161, Decimals: 18},
+	"optimism":   {ID: "optimism", Name: "Optimism", Symbol: "ETH", Type: "evm", ChainID: 10, Decimals: 18},
+	"base":       {ID: "base", Name: "Base", Symbol: "ETH", Type: "evm", ChainID: 8453, Decimals: 18},
+	"avax":       {ID: "avax", Name: "Avalanche C-Chain", Symbol: "AVAX", Type: "evm", ChainID: 43114, Decimals: 18},
+	"fantom":     {ID: "fantom", Name: "Fantom", Symbol: "FTM", Type: "evm", ChainID: 250, Decimals: 18},
+	"cronos":     {ID: "cronos", Name: "Cronos", Symbol: "CRO", Type: "evm", ChainID: 25, Decimals: 18},
 	"pulsechain": {ID: "pulsechain", Name: "PulseChain", Symbol: "PLS", Type: "evm", ChainID: 369, Decimals: 18},
-	"zkevm":  {ID: "zkevm", Name: "zkEVM", Symbol: "ETH", Type: "evm", ChainID: 1101, Decimals: 18},
-	"linea":  {ID: "linea", Name: "Linea", Symbol: "ETH", Type: "evm", ChainID: 59144, Decimals: 18},
-	"scroll": {ID: "scroll", Name: "Scroll", Symbol: "ETH", Type: "evm", ChainID: 534352, Decimals: 18},
-	"manta":  {ID: "manta", Name: "Manta", Symbol: "MANTA", Type: "evm", ChainID: 169, Decimals: 18},
-	"mantle": {ID: "mantle", Name: "Mantle", Symbol: "MNT", Type: "evm", ChainID: 5000, Decimals: 18},
-	
+	"zkevm":      {ID: "zkevm", Name: "zkEVM", Symbol: "ETH", Type: "evm", ChainID: 1101, Decimals: 18},
+	"linea":      {ID: "linea", Name: "Linea", Symbol: "ETH", Type: "evm", ChainID: 59144, Decimals: 18},
+	"scroll":     {ID: "scroll", Name: "Scroll", Symbol: "ETH", Type: "evm", ChainID: 534352, Decimals: 18},
+	"manta":      {ID: "manta", Name: "Manta", Symbol: "MANTA", Type: "evm", ChainID: 169, Decimals: 18},
+	"mantle":     {ID: "mantle", Name: "Mantle", Symbol: "MNT", Type: "evm", ChainID: 5000, Decimals: 18},
+
 	// Non-EVM Blockchains
-	"btc":   {ID: "btc", Name: "Bitcoin", Symbol: "BTC", Type: "utxo", Decimals: 8},
+	"btc":        {ID: "btc", Name: "Bitcoin", Symbol: "BTC", Type: "utxo", Decimals: 8},
 	"btc_segwit": {ID: "btc_segwit", Name: "Bitcoin SegWit", Symbol: "BTC", Type: "utxo", Decimals: 8},
-	"ltc":   {ID: "ltc", Name: "Litecoin", Symbol: "LTC", Type: "utxo", Decimals: 8},
-	"doge":  {ID: "doge", Name: "Dogecoin", Symbol: "DOGE", Type: "utxo", Decimals: 8},
-	"xrp":   {ID: "xrp", Name: "Ripple", Symbol: "XRP", Type: "account", Decimals: 6},
-	"xlm":   {ID: "xlm", Name: "Stellar", Symbol: "XLM", Type: "account", Decimals: 7},
-	"trx":   {ID: "trx", Name: "Tron", Symbol: "TRX", Type: "account", Decimals: 6},
-	"sol":   {ID: "sol", Name: "Solana", Symbol: "SOL", Type: "account", Decimals: 9},
-	"apt":   {ID: "apt", Name: "Aptos", Symbol: "APT", Type: "account", Decimals: 8},
-	"near":  {ID: "near", Name: "NEAR Protocol", Symbol: "NEAR", Type: "account", Decimals: 24},
-	"ton":   {ID: "ton", Name: "Toncoin", Symbol: "TON", Type: "account", Decimals: 9},
-	"atom":  {ID: "atom", Name: "Cosmos", Symbol: "ATOM", Type: "account", Decimals: 6},
-	"osmo":  {ID: "osmo", Name: "Osmosis", Symbol: "OSMO", Type: "account", Decimals: 6},
-	"inj":   {ID: "inj", Name: "Injective", Symbol: "INJ", Type: "account", Decimals: 18},
-	"sei":   {ID: "sei", Name: "Sei", Symbol: "SEI", Type: "account", Decimals: 6},
-	"sui":   {ID: "sui", Name: "Sui", Symbol: "SUI", Type: "account", Decimals: 9},
-	"alg":   {ID: "alg", Name: "Algorand", Symbol: "ALGO", Type: "account", Decimals: 6},
-	"hbar":  {ID: "hbar", Name: "Hedera", Symbol: "HBAR", Type: "account", Decimals: 8},
-	"vet":   {ID: "vet", Name: "VeChain", Symbol: "VET", Type: "account", Decimals: 18},
-	"icp":   {ID: "icp", Name: "Internet Computer", Symbol: "ICP", Type: "account", Decimals: 8},
-	"xtz":   {ID: "xtz", Name: "Tezos", Symbol: "XTZ", Type: "account", Decimals: 6},
-	"eos":   {ID: "eos", Name: "EOS", Symbol: "EOS", Type: "account", Decimals: 4},
-	"flow":  {ID: "flow", Name: "Flow", Symbol: "FLOW", Type: "account", Decimals: 8},
-	"algo":  {ID: "algo", Name: "Algorand", Symbol: "ALGO", Type: "account", Decimals: 6},
-	"ada":   {ID: "ada", Name: "Cardano", Symbol: "ADA", Type: "account", Decimals: 6},
-	"dot":   {ID: "dot", Name: "Polkadot", Symbol: "DOT", Type: "account", Decimals: 10},
-	"ksm":   {ID: "ksm", Name: "Kusama", Symbol: "KSM", Type: "account", Decimals: 12},
-	"zec":   {ID: "zec", Name: "Zcash", Symbol: "ZEC", Type: "utxo", Decimals: 8},
-	"dash":  {ID: "dash", Name: "Dash", Symbol: "DASH", Type: "utxo", Decimals: 8},
-	"xmr":   {ID: "xmr", Name: "Monero", Symbol: "XMR", Type: "utxo", Decimals: 12},
-	"fil":   {ID: "fil", Name: "Filecoin", Symbol: "FIL", Type: "account", Decimals: 18},
-	"ar":    {ID: "ar", Name: "Arweave", Symbol: "AR", Type: "account", Decimals: 12},
-	"tia":   {ID: "tia", Name: "Celestia", Symbol: "TIA", Type: "account", Decimals: 6},
-	"bttc":  {ID: "bttc", Name: "BitTorrent Chain", Symbol: "BTT", Type: "evm", ChainID: 1990, Decimals: 18},
-	"op_bnb": {ID: "op_bnb", Name: "opBNB", Symbol: "BNB", Type: "evm", ChainID: 204, Decimals: 18},
-	"etc":   {ID: "etc", Name: "Ethereum Classic", Symbol: "ETC", Type: "evm", ChainID: 61, Decimals: 18},
-	"gno":   {ID: "gno", Name: "Gnosis", Symbol: "GNO", Type: "evm", ChainID: 100, Decimals: 18},
-	"aurora": {ID: "aurora", Name: "Aurora", Symbol: "ETH", Type: "evm", ChainID: 1313161554, Decimals: 18},
-	"celo":  {ID: "celo", Name: "Celo", Symbol: "CELO", Type: "evm", ChainID: 42220, Decimals: 18},
-	"kava":  {ID: "kava", Name: "Kava", Symbol: "KAVA", Type: "evm", ChainID: 2222, Decimals: 18},
-	"tiktok": {ID: "tiktok", Name: "TikTok", Symbol: "TikTok", Type: "evm", ChainID: 100007, Decimals: 18},
-	"phi":   {ID: "phi", Name: "Phi", Symbol: "PHI", Type: "evm", ChainID: 18888, Decimals: 18},
-	"pi":    {ID: "pi", Name: "Pi Network", Symbol: "PI", Type: "account", Decimals: 8},
-	"pwr":   {ID: "pwr", Name: "PWR", Symbol: "PWR", Type: "evm", ChainID: 742, Decimals: 18},
-	"plasma": {ID: "plasma", Name: "Plasma", Symbol: "PLASMA", Type: "evm", ChainID: 11234, Decimals: 18},
+	"ltc":        {ID: "ltc", Name: "Litecoin", Symbol: "LTC", Type: "utxo", Decimals: 8},
+	"doge":       {ID: "doge", Name: "Dogecoin", Symbol: "DOGE", Type: "utxo", Decimals: 8},
+	"xrp":        {ID: "xrp", Name: "Ripple", Symbol: "XRP", Type: "account", Decimals: 6},
+	"xlm":        {ID: "xlm", Name: "Stellar", Symbol: "XLM", Type: "account", Decimals: 7},
+	"trx":        {ID: "trx", Name: "Tron", Symbol: "TRX", Type: "account", Decimals: 6},
+	"sol":        {ID: "sol", Name: "Solana", Symbol: "SOL", Type: "account", Decimals: 9},
+	"apt":        {ID: "apt", Name: "Aptos", Symbol: "APT", Type: "account", Decimals: 8},
+	"near":       {ID: "near", Name: "NEAR Protocol", Symbol: "NEAR", Type: "account", Decimals: 24},
+	"ton":        {ID: "ton", Name: "Toncoin", Symbol: "TON", Type: "account", Decimals: 9},
+	"atom":       {ID: "atom", Name: "Cosmos", Symbol: "ATOM", Type: "account", Decimals: 6},
+	"osmo":       {ID: "osmo", Name: "Osmosis", Symbol: "OSMO", Type: "account", Decimals: 6},
+	"inj":        {ID: "inj", Name: "Injective", Symbol: "INJ", Type: "account", Decimals: 18},
+	"sei":        {ID: "sei", Name: "Sei", Symbol: "SEI", Type: "account", Decimals: 6},
+	"sui":        {ID: "sui", Name: "Sui", Symbol: "SUI", Type: "account", Decimals: 9},
+	"alg":        {ID: "alg", Name: "Algorand", Symbol: "ALGO", Type: "account", Decimals: 6},
+	"hbar":       {ID: "hbar", Name: "Hedera", Symbol: "HBAR", Type: "account", Decimals: 8},
+	"vet":        {ID: "vet", Name: "VeChain", Symbol: "VET", Type: "account", Decimals: 18},
+	"icp":        {ID: "icp", Name: "Internet Computer", Symbol: "ICP", Type: "account", Decimals: 8},
+	"xtz":        {ID: "xtz", Name: "Tezos", Symbol: "XTZ", Type: "account", Decimals: 6},
+	"eos":        {ID: "eos", Name: "EOS", Symbol: "EOS", Type: "account", Decimals: 4},
+	"flow":       {ID: "flow", Name: "Flow", Symbol: "FLOW", Type: "account", Decimals: 8},
+	"algo":       {ID: "algo", Name: "Algorand", Symbol: "ALGO", Type: "account", Decimals: 6},
+	"ada":        {ID: "ada", Name: "Cardano", Symbol: "ADA", Type: "account", Decimals: 6},
+	"dot":        {ID: "dot", Name: "Polkadot", Symbol: "DOT", Type: "account", Decimals: 10},
+	"ksm":        {ID: "ksm", Name: "Kusama", Symbol: "KSM", Type: "account", Decimals: 12},
+	"zec":        {ID: "zec", Name: "Zcash", Symbol: "ZEC", Type: "utxo", Decimals: 8},
+	"dash":       {ID: "dash", Name: "Dash", Symbol: "DASH", Type: "utxo", Decimals: 8},
+	"xmr":        {ID: "xmr", Name: "Monero", Symbol: "XMR", Type: "utxo", Decimals: 12},
+	"fil":        {ID: "fil", Name: "Filecoin", Symbol: "FIL", Type: "account", Decimals: 18},
+	"ar":         {ID: "ar", Name: "Arweave", Symbol: "AR", Type: "account", Decimals: 12},
+	"tia":        {ID: "tia", Name: "Celestia", Symbol: "TIA", Type: "account", Decimals: 6},
+	"bttc":       {ID: "bttc", Name: "BitTorrent Chain", Symbol: "BTT", Type: "evm", ChainID: 1990, Decimals: 18},
+	"op_bnb":     {ID: "op_bnb", Name: "opBNB", Symbol: "BNB", Type: "evm", ChainID: 204, Decimals: 18},
+	"etc":        {ID: "etc", Name: "Ethereum Classic", Symbol: "ETC", Type: "evm", ChainID: 61, Decimals: 18},
+	"gno":        {ID: "gno", Name: "Gnosis", Symbol: "GNO", Type: "evm", ChainID: 100, Decimals: 18},
+	"aurora":     {ID: "aurora", Name: "Aurora", Symbol: "ETH", Type: "evm", ChainID: 1313161554, Decimals: 18},
+	"celo":       {ID: "celo", Name: "Celo", Symbol: "CELO", Type: "evm", ChainID: 42220, Decimals: 18},
+	"kava":       {ID: "kava", Name: "Kava", Symbol: "KAVA", Type: "evm", ChainID: 2222, Decimals: 18},
+	"tiktok":     {ID: "tiktok", Name: "TikTok", Symbol: "TikTok", Type: "evm", ChainID: 100007, Decimals: 18},
+	"phi":        {ID: "phi", Name: "Phi", Symbol: "PHI", Type: "evm", ChainID: 18888, Decimals: 18},
+	"pi":         {ID: "pi", Name: "Pi Network", Symbol: "PI", Type: "account", Decimals: 8},
+	"pwr":        {ID: "pwr", Name: "PWR", Symbol: "PWR", Type: "evm", ChainID: 742, Decimals: 18},
+	"plasma":     {ID: "plasma", Name: "Plasma", Symbol: "PLASMA", Type: "evm", ChainID: 11234, Decimals: 18},
 }
 
 // Supported Tokens (200+ tokens)
@@ -188,7 +194,6 @@ var SupportedTokens = map[string]*Token{
 	"tia":    {Symbol: "TIA", Name: "Celestia", Blockchain: "tia", Decimals: 6, IsEnabled: true},
 	"arb":    {Symbol: "ARB", Name: "Arbitrum", Blockchain: "arbitrum", Decimals: 18, IsEnabled: true},
 	"op":     {Symbol: "OP", Name: "Optimism", Blockchain: "optimism", Decimals: 18, IsEnabled: true},
-	"pepe":   {Symbol: "PEPE", Name: "Pepe", Blockchain: "eth", Decimals: 18, IsEnabled: true},
 	"blur":   {Symbol: "BLUR", Name: "Blur", Blockchain: "eth", Decimals: 18, IsEnabled: true},
 	"rdnt":   {Symbol: "RDNT", Name: "Radiant", Blockchain: "arbitrum", Decimals: 18, IsEnabled: true},
 	"pendle": {Symbol: "PENDLE", Name: "Pendle", Blockchain: "eth", Decimals: 18, IsEnabled: true},
@@ -203,46 +208,46 @@ var SupportedTokens = map[string]*Token{
 // =============================================================================
 
 type UserWallet struct {
-	ID              string                `json:"id"`
-	UserID          string                `json:"userId"`
-	Mnemonic        string                `json:"mnemonic,omitempty"` // Encrypted
-	MnemonicHash    string                `json:"mnemonicHash"`
-	Addresses       map[string]*WalletAddress `json:"addresses"` // blockchain -> address
-	Balances        map[string]*Balance   `json:"balances"` // symbol -> balance
-	CreatedAt       int64                 `json:"createdAt"`
-	UpdatedAt       int64                 `json:"updatedAt"`
-	Encrypted       bool                  `json:"encrypted"`
-	WhiteLabelID    string                `json:"whiteLabelId,omitempty"`
+	ID           string                    `json:"id"`
+	UserID       string                    `json:"userId"`
+	Mnemonic     string                    `json:"mnemonic,omitempty"` // Encrypted
+	MnemonicHash string                    `json:"mnemonicHash"`
+	Addresses    map[string]*WalletAddress `json:"addresses"` // blockchain -> address
+	Balances     map[string]*Balance       `json:"balances"`  // symbol -> balance
+	CreatedAt    int64                     `json:"createdAt"`
+	UpdatedAt    int64                     `json:"updatedAt"`
+	Encrypted    bool                      `json:"encrypted"`
+	WhiteLabelID string                    `json:"whiteLabelId,omitempty"`
 }
 
 type WalletAddress struct {
-	Blockchain      string  `json:"blockchain"`
-	Address         string  `json:"address"`
-	PublicKey       string  `json:"publicKey"`
-	DerivationPath  string  `json:"derivationPath"`
+	Blockchain     string `json:"blockchain"`
+	Address        string `json:"address"`
+	PublicKey      string `json:"publicKey"`
+	DerivationPath string `json:"derivationPath"`
 }
 
 type Balance struct {
-	Symbol      string  `json:"symbol"`
-	Available   float64 `json:"available"`
-	Locked      float64 `json:"locked"`
-	Total       float64 `json:"total"`
+	Symbol    string  `json:"symbol"`
+	Available float64 `json:"available"`
+	Locked    float64 `json:"locked"`
+	Total     float64 `json:"total"`
 }
 
 type Transaction struct {
-	ID            string    `json:"id"`
-	TxHash        string    `json:"txHash"`
-	UserID        string    `json:"userId"`
-	FromAddress   string    `json:"fromAddress"`
-	ToAddress     string    `json:"toAddress"`
-	Amount        float64   `json:"amount"`
-	Symbol        string    `json:"symbol"`
-	Blockchain    string    `json:"blockchain"`
-	Fee           float64   `json:"fee"`
-	Status        string    `json:"status"` // pending, confirmed, failed
-	Timestamp     int64     `json:"timestamp"`
-	Confirmations int       `json:"confirmations"`
-	Type          string    `json:"type"` // deposit, withdrawal, transfer, swap
+	ID            string  `json:"id"`
+	TxHash        string  `json:"txHash"`
+	UserID        string  `json:"userId"`
+	FromAddress   string  `json:"fromAddress"`
+	ToAddress     string  `json:"toAddress"`
+	Amount        float64 `json:"amount"`
+	Symbol        string  `json:"symbol"`
+	Blockchain    string  `json:"blockchain"`
+	Fee           float64 `json:"fee"`
+	Status        string  `json:"status"` // pending, confirmed, failed
+	Timestamp     int64   `json:"timestamp"`
+	Confirmations int     `json:"confirmations"`
+	Type          string  `json:"type"` // deposit, withdrawal, transfer, swap
 }
 
 // =============================================================================
@@ -250,23 +255,23 @@ type Transaction struct {
 // =============================================================================
 
 type UserWalletService struct {
-	mu            sync.RWMutex
-	wallets       map[string]*UserWallet // userID -> wallet
-	transactions  map[string]*Transaction // txID -> transaction
-	balances      map[string]map[string]*Balance // userID -> (symbol -> balance)
-	
+	mu           sync.RWMutex
+	wallets      map[string]*UserWallet         // userID -> wallet
+	transactions map[string]*Transaction        // txID -> transaction
+	balances     map[string]map[string]*Balance // userID -> (symbol -> balance)
+
 	// Multi-chain support
 	blockchainClients map[string]BlockchainClient
-	
+
 	// Configuration
 	config UserWalletConfig
-	
+
 	// Statistics
 	stats UserWalletStats
-	
+
 	// Encryption key
 	encryptionKey []byte
-	
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -277,15 +282,15 @@ type UserWalletConfig struct {
 	MinConfirmations      map[string]int
 	EnableDeposits        bool
 	EnableWithdrawals     bool
-	EnableTransfers      bool
-	EnableSwap           bool
-	MaxWithdrawalDaily   float64
-	MaxTransferDaily     float64
+	EnableTransfers       bool
+	EnableSwap            bool
+	MaxWithdrawalDaily    float64
+	MaxTransferDaily      float64
 }
 
 type UserWalletStats struct {
 	TotalWallets      int64 `json:"totalWallets"`
-	TotalTransactions  int64 `json:"totalTransactions"`
+	TotalTransactions int64 `json:"totalTransactions"`
 	TotalVolume       int64 `json:"totalVolume"`
 	ActiveUsers       int64 `json:"activeUsers"`
 }
@@ -309,22 +314,22 @@ func NewUserWalletService(encryptionKey []byte) *UserWalletService {
 		},
 		EnableDeposits:     true,
 		EnableWithdrawals:  true,
-		EnableTransfers:   true,
+		EnableTransfers:    true,
 		EnableSwap:         true,
 		MaxWithdrawalDaily: 100000,
 		MaxTransferDaily:   1000000,
 	}
 
 	return &UserWalletService{
-		wallets:          make(map[string]*UserWallet),
-		transactions:     make(map[string]*Transaction),
-		balances:         make(map[string]map[string]*Balance),
+		wallets:           make(map[string]*UserWallet),
+		transactions:      make(map[string]*Transaction),
+		balances:          make(map[string]map[string]*Balance),
 		blockchainClients: make(map[string]BlockchainClient),
-		config:           config,
-		stats:            UserWalletStats{},
-		encryptionKey:   encryptionKey,
-		ctx:              ctx,
-		cancel:           cancel,
+		config:            config,
+		stats:             UserWalletStats{},
+		encryptionKey:     encryptionKey,
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 }
 
@@ -341,21 +346,31 @@ func (s *UserWalletService) CreateWallet(userID, whiteLabelID string) (*UserWall
 		return nil, errors.New("wallet already exists")
 	}
 
-	// Generate 24-word mnemonic
-	mnemonic := generateMnemonic()
+	// Generate a real BIP39 mnemonic from 256 bits of entropy.
+	mnemonic, err := generateMnemonic()
+	if err != nil {
+		return nil, err
+	}
+
+	// The seed is sealed with AES-256-GCM. Storing it in the clear put
+	// every user's funds one database leak away from being stolen.
+	sealed, err := s.encryptSeed(mnemonic)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create wallet
 	wallet := &UserWallet{
-		ID:              uuid.New().String(),
-		UserID:          userID,
-		Mnemonic:        mnemonic,
-		MnemonicHash:    hashString(mnemonic),
-		Addresses:       make(map[string]*WalletAddress),
-		Balances:        make(map[string]*Balance),
-		CreatedAt:       time.Now().UnixMilli(),
-		UpdatedAt:       time.Now().UnixMilli(),
-		Encrypted:       false,
-		WhiteLabelID:    whiteLabelID,
+		ID:           uuid.New().String(),
+		UserID:       userID,
+		Mnemonic:     sealed,
+		MnemonicHash: s.seedFingerprint(mnemonic),
+		Addresses:    make(map[string]*WalletAddress),
+		Balances:     make(map[string]*Balance),
+		CreatedAt:    time.Now().UnixMilli(),
+		UpdatedAt:    time.Now().UnixMilli(),
+		Encrypted:    true,
+		WhiteLabelID: whiteLabelID,
 	}
 
 	// Generate addresses for all supported blockchains
@@ -367,10 +382,10 @@ func (s *UserWalletService) CreateWallet(userID, whiteLabelID string) (*UserWall
 		}
 
 		wallet.Addresses[chain] = &WalletAddress{
-			Blockchain:      chain,
-			Address:         address,
-			PublicKey:       pubKey,
-			DerivationPath:  getDerivationPath(chain),
+			Blockchain:     chain,
+			Address:        address,
+			PublicKey:      pubKey,
+			DerivationPath: getDerivationPath(chain),
 		}
 	}
 
@@ -402,18 +417,23 @@ func (s *UserWalletService) ImportWallet(userID, mnemonic, whiteLabelID string) 
 		return nil, errors.New("wallet already exists")
 	}
 
+	sealed, err := s.encryptSeed(mnemonic)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create wallet
 	wallet := &UserWallet{
-		ID:              uuid.New().String(),
-		UserID:          userID,
-		Mnemonic:        mnemonic,
-		MnemonicHash:    hashString(mnemonic),
-		Addresses:       make(map[string]*WalletAddress),
-		Balances:        make(map[string]*Balance),
-		CreatedAt:       time.Now().UnixMilli(),
-		UpdatedAt:       time.Now().UnixMilli(),
-		Encrypted:       false,
-		WhiteLabelID:    whiteLabelID,
+		ID:           uuid.New().String(),
+		UserID:       userID,
+		Mnemonic:     sealed,
+		MnemonicHash: s.seedFingerprint(mnemonic),
+		Addresses:    make(map[string]*WalletAddress),
+		Balances:     make(map[string]*Balance),
+		CreatedAt:    time.Now().UnixMilli(),
+		UpdatedAt:    time.Now().UnixMilli(),
+		Encrypted:    true,
+		WhiteLabelID: whiteLabelID,
 	}
 
 	// Generate addresses
@@ -424,10 +444,10 @@ func (s *UserWalletService) ImportWallet(userID, mnemonic, whiteLabelID string) 
 		}
 
 		wallet.Addresses[chain] = &WalletAddress{
-			Blockchain:      chain,
-			Address:         address,
-			PublicKey:       pubKey,
-			DerivationPath:  getDerivationPath(chain),
+			Blockchain:     chain,
+			Address:        address,
+			PublicKey:      pubKey,
+			DerivationPath: getDerivationPath(chain),
 		}
 	}
 
@@ -616,25 +636,50 @@ func (s *UserWalletService) CreateDeposit(userID, blockchain, fromAddress, txHas
 		return nil, errors.New("unsupported blockchain")
 	}
 
+	if amount <= 0 {
+		return nil, errors.New("deposit amount must be positive")
+	}
+	if txHash == "" {
+		return nil, errors.New("deposit requires a transaction hash")
+	}
+
+	// A deposit must never be recorded against an address we do not own.
+	wallet, ok := s.wallets[userID]
+	if !ok {
+		return nil, errors.New("wallet not found")
+	}
+	addr, ok := wallet.Addresses[blockchain]
+	if !ok || addr == nil {
+		return nil, fmt.Errorf("no deposit address for %s", blockchain)
+	}
+
+	// The same on-chain transfer must not be credited twice.
+	for _, existing := range s.transactions {
+		if existing.Type == "deposit" && existing.TxHash == txHash && existing.Blockchain == blockchain {
+			return nil, errors.New("deposit with this transaction hash already exists")
+		}
+	}
+
 	tx := &Transaction{
 		ID:          uuid.New().String(),
 		TxHash:      txHash,
 		UserID:      userID,
 		FromAddress: fromAddress,
-		ToAddress:   s.wallets[userID].Addresses[blockchain].Address,
+		ToAddress:   addr.Address,
 		Amount:      amount,
 		Symbol:      token.Symbol,
 		Blockchain:  blockchain,
 		Fee:         0,
-		Status:      "pending",
-		Timestamp:   time.Now().UnixMilli(),
-		Type:        "deposit",
+		// Unconfirmed: the chain watcher credits the balance once the
+		// transaction reaches the required confirmation depth.
+		Status:    "pending",
+		Timestamp: time.Now().UnixMilli(),
+		Type:      "deposit",
 	}
 
 	s.transactions[tx.ID] = tx
 
-	// Add to balance
-	s.addToBalance(userID, token.Symbol, amount)
+	log.Printf("[INFO] Deposit recorded as pending: %s %f %s from %s", txHash, amount, token.Symbol, fromAddress)
 
 	log.Printf("[INFO] Deposit created: %s %f %s from %s", txHash, amount, token.Symbol, fromAddress)
 
@@ -797,63 +842,48 @@ func (s *UserWalletService) GetUserTransactions(userID string, limit int) []*Tra
 // =============================================================================
 
 func (s *UserWalletService) generateAddressForChain(mnemonic, blockchain string) (string, string, error) {
-	// Simplified address generation
-	// In production, would use proper BIP32/BIP44 derivation
+	return deriveAddress(mnemonic, blockchain)
+}
 
-	chain, ok := Blockchains[blockchain]
+// RevealSeed returns the plaintext seed phrase for a user.
+//
+// This is the only path that unwraps the sealed seed, and it exists so that
+// callers can implement a re-authenticated export flow. Never log its result.
+func (s *UserWalletService) RevealSeed(userID string) (string, error) {
+	s.mu.RLock()
+	wallet, ok := s.wallets[userID]
+	s.mu.RUnlock()
 	if !ok {
-		return "", "", errors.New("unsupported blockchain")
+		return "", errors.New("wallet not found")
 	}
-
-	hasher := sha256.New()
-	hasher.Write([]byte(mnemonic))
-	hasher.Write([]byte(blockchain))
-	hash := hasher.Sum(nil)
-
-	switch chain.Type {
-	case "evm":
-		// EVM address
-		address := "0x" + hex.EncodeToString(hash[12:32])
-		pubKey := hex.EncodeToString(hash[:32])
-		return address, pubKey, nil
-
-	case "utxo":
-		// Bitcoin-like address (simplified)
-		address := "1" + base58.Encode(hash[:20])
-		pubKey := hex.EncodeToString(hash[:32])
-		return address, pubKey, nil
-
-	case "account":
-		// Account-based (Solana, Aptos, etc)
-		address := base58.Encode(hash[:32])
-		pubKey := hex.EncodeToString(hash[:32])
-		return address, pubKey, nil
-
-	default:
-		return "", "", errors.New("unsupported chain type")
+	if !wallet.Encrypted {
+		// Legacy record that predates sealing; refuse rather than
+		// hand back an unprotected seed.
+		return "", errors.New("wallet seed is not sealed")
 	}
+	return s.decryptSeed(wallet.Mnemonic)
 }
 
 func getDerivationPath(blockchain string) string {
 	paths := map[string]string{
-		"eth":     "m/44'/60'/0'/0/0",
-		"bsc":     "m/44'/60'/0'/0/0",
-		"polygon": "m/44'/60'/0'/0/0",
+		"eth":      "m/44'/60'/0'/0/0",
+		"bsc":      "m/44'/60'/0'/0/0",
+		"polygon":  "m/44'/60'/0'/0/0",
 		"arbitrum": "m/44'/60'/0'/0/0",
 		"optimism": "m/44'/60'/0'/0/0",
-		"base":    "m/44'/60'/0'/0/0",
-		"avax":    "m/44'/60'/0'/0/0",
-		"sol":     "m/44'/501'/0'/0'",
-		"trx":     "m/44'/195'/0'/0/0",
-		"ton":     "m/44'/607'/0'/0'",
-		"btc":     "m/44'/0'/0'/0/0",
-		"ltc":     "m/44'/2'/0'/0/0",
-		"doge":    "m/44'/3'/0'/0/0",
-		"ada":     "m/44'/1815'/0'/0'",
-		"dot":     "m/44'/354'/0'/0/0",
-		"near":    "m/44'/397'/0'/0'",
-		"apt":     "m/44'/637'/0'/0'/0'",
-		"atom":    "m/44'/118'/0'/0/0",
+		"base":     "m/44'/60'/0'/0/0",
+		"avax":     "m/44'/60'/0'/0/0",
+		"sol":      "m/44'/501'/0'/0'",
+		"trx":      "m/44'/195'/0'/0/0",
+		"ton":      "m/44'/607'/0'/0'",
+		"btc":      "m/44'/0'/0'/0/0",
+		"ltc":      "m/44'/2'/0'/0/0",
+		"doge":     "m/44'/3'/0'/0/0",
+		"ada":      "m/44'/1815'/0'/0'",
+		"dot":      "m/44'/354'/0'/0/0",
+		"near":     "m/44'/397'/0'/0'",
+		"apt":      "m/44'/637'/0'/0'/0'",
+		"atom":     "m/44'/118'/0'/0/0",
 	}
 
 	return paths[blockchain]
@@ -862,7 +892,7 @@ func getDerivationPath(blockchain string) string {
 func getTokenForBlockchain(blockchain string) *Token {
 	// Map blockchain to default token
 	tokens := map[string]*Token{
-		"eth":       SupportedTokens["eth"],
+		"eth":      SupportedTokens["eth"],
 		"bsc":      SupportedTokens["bnb"],
 		"polygon":  SupportedTokens["matic"],
 		"arbitrum": SupportedTokens["eth"],
@@ -888,12 +918,12 @@ func getTokenForBlockchain(blockchain string) *Token {
 
 func calculateFee(blockchain string, amount float64) float64 {
 	feePercent := map[string]float64{
-		"btc":  0.0005,
-		"eth":  0.001,
-		"bsc":  0.0005,
+		"btc":     0.0005,
+		"eth":     0.001,
+		"bsc":     0.0005,
 		"polygon": 0.001,
-		"sol":  0.00025,
-		"trx":  1.0,
+		"sol":     0.00025,
+		"trx":     1.0,
 	}
 
 	fee := feePercent[blockchain]
@@ -919,32 +949,155 @@ func (s *UserWalletService) addToBalance(userID, symbol string, amount float64) 
 	balance.Total = balance.Available + balance.Locked
 }
 
-func generateMnemonic() string {
-	// Simplified - in production would use proper BIP39
-	words := strings.Fields("abandon able acid acoustic act adopt adult aero afford after again agent agree ahead aim air aisle alarm album alcohol alien alike alive alley allow alone along alter among anger angle angry animal ankle apart apple apply arena argue arise armed armor array arrow aside asset audio audit avoid awake award aware awful bacon badge bagel baggy balance baker balance")
+// generateMnemonic creates a BIP39 mnemonic backed by a real 256-bit CSPRNG.
+//
+// The previous version picked 24 words from a 64-word list with a modulo
+// biased single-byte draw, so it produced weak, repeated entropy and was
+// not a valid BIP39 phrase at all.
+func generateMnemonic() (string, error) {
+	entropy, err := bip39.NewEntropy(256)
+	if err != nil {
+		return "", err
+	}
+	return bip39.NewMnemonic(entropy)
+}
 
-	mnemonic := make([]string, 24)
-	for i := range mnemonic {
-		mnemonic[i] = words[randInt(len(words))]
+// validateMnemonic checks the BIP39 checksum, not just the word count.
+func validateMnemonic(mnemonic string) bool {
+	return bip39.IsMnemonicValid(mnemonic)
+}
+
+// deriveAddress derives a real address for a chain from the mnemonic.
+func deriveAddress(mnemonic, blockchain string) (address, pubKeyHex string, err error) {
+	chain, ok := Blockchains[blockchain]
+	if !ok {
+		return "", "", errors.New("unsupported blockchain")
 	}
 
-	return strings.Join(mnemonic, " ")
+	path := getDerivationPath(blockchain)
+	if path == "" {
+		return "", "", fmt.Errorf("no derivation path configured for %s", blockchain)
+	}
+
+	seed, err := bip39.NewSeedWithErrorChecking(mnemonic, "")
+	if err != nil {
+		return "", "", err
+	}
+	key, err := bip32.NewMasterKey(seed)
+	if err != nil {
+		return "", "", err
+	}
+	for _, index := range parseDerivationPath(path) {
+		key, err = key.NewChildKey(index)
+		if err != nil {
+			return "", "", err
+		}
+	}
+
+	switch chain.Type {
+	case "evm":
+		// key.Key is the 32 byte private scalar for a private BIP32 key.
+		if len(key.Key) != 32 {
+			return "", "", errors.New("derived key is not a 32 byte secp256k1 scalar")
+		}
+		priv, _ := btcec.PrivKeyFromBytes(key.Key)
+		pub := priv.PubKey()
+		address = crypto.PubkeyToAddress(*pub.ToECDSA()).Hex()
+		return address, hex.EncodeToString(pub.SerializeUncompressed()), nil
+
+	case "utxo":
+		if len(key.Key) != 32 {
+			return "", "", errors.New("derived key is not a 32 byte secp256k1 scalar")
+		}
+		priv, _ := btcec.PrivKeyFromBytes(key.Key)
+		compressed := priv.PubKey().SerializeCompressed()
+
+		// Legacy P2PKH: base58check of 0x00 || HASH160(pubkey).
+		hasher := ripemd160.New()
+		hasher.Write(crypto.Keccak256(compressed)[12:])
+		payload := append([]byte{0x00}, hasher.Sum(nil)...)
+		first := sha256.Sum256(payload)
+		checksum := sha256.Sum256(first[:])
+		address = base58.Encode(append(payload, checksum[:4]...))
+		return address, hex.EncodeToString(compressed), nil
+
+	default:
+		return "", "", fmt.Errorf("address derivation is not implemented for chain type %q", chain.Type)
+	}
 }
 
-func validateMnemonic(mnemonic string) bool {
-	words := strings.Fields(mnemonic)
-	return len(words) == 24
+// parseDerivationPath converts "m/44'/60'/0'/0/0" into child indices.
+func parseDerivationPath(path string) []uint32 {
+	parts := strings.Split(path, "/")
+	indices := make([]uint32, 0, len(parts))
+	for _, part := range parts {
+		if part == "" || part == "m" {
+			continue
+		}
+		hardened := strings.HasSuffix(part, "'")
+		part = strings.TrimSuffix(part, "'")
+		n, err := strconv.ParseUint(part, 10, 32)
+		if err != nil {
+			continue
+		}
+		index := uint32(n)
+		if hardened {
+			index += bip32.FirstHardenedChild
+		}
+		indices = append(indices, index)
+	}
+	return indices
 }
 
-func hashString(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:])
+// encryptSeed seals a seed phrase with AES-256-GCM under the service key.
+func (s *UserWalletService) encryptSeed(plaintext string) (string, error) {
+	block, err := aes.NewCipher(s.encryptionKey)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	sealed := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return base64.StdEncoding.EncodeToString(sealed), nil
 }
 
-func randInt(n int) int {
-	b := make([]byte, 1)
-	rand.Read(b)
-	return int(b[0]) % n
+// decryptSeed opens a seed phrase sealed by encryptSeed.
+func (s *UserWalletService) decryptSeed(encoded string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(s.encryptionKey)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) < gcm.NonceSize() {
+		return "", errors.New("sealed seed is too short")
+	}
+	plaintext, err := gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], nil)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
+}
+
+// seedFingerprint is a keyed identifier for a seed, used to detect a
+// mnemonic that is already imported. It is not a password hash.
+func (s *UserWalletService) seedFingerprint(seed string) string {
+	mac := hmac.New(sha256.New, s.encryptionKey)
+	mac.Write([]byte("tigerex-seed-fingerprint:"))
+	mac.Write([]byte(seed))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 var _ = fmt.Errorf
