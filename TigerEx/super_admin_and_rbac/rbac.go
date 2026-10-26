@@ -2,9 +2,6 @@ package rbac
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,6 +9,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // ============================================================================
@@ -23,158 +21,158 @@ type Permission string
 
 const (
 	// User Management
-	PermissionUserRead      Permission = "user:read"
-	PermissionUserWrite    Permission = "user:write"
-	PermissionUserDelete   Permission = "user:delete"
-	PermissionUserBan      Permission = "user:ban"
-	
+	PermissionUserRead   Permission = "user:read"
+	PermissionUserWrite  Permission = "user:write"
+	PermissionUserDelete Permission = "user:delete"
+	PermissionUserBan    Permission = "user:ban"
+
 	// Admin Management
-	PermissionAdminRead     Permission = "admin:read"
-	PermissionAdminWrite   Permission = "admin:write"
-	PermissionAdminDelete  Permission = "admin:delete"
-	
+	PermissionAdminRead   Permission = "admin:read"
+	PermissionAdminWrite  Permission = "admin:write"
+	PermissionAdminDelete Permission = "admin:delete"
+
 	// KYC Management
-	PermissionKYCRead      Permission = "kyc:read"
-	PermissionKYCWrite    Permission = "kyc:write"
-	PermissionKYCApprove   Permission = "kyc:approve"
-	PermissionKYCReject    Permission = "kyc:reject"
-	
+	PermissionKYCRead    Permission = "kyc:read"
+	PermissionKYCWrite   Permission = "kyc:write"
+	PermissionKYCApprove Permission = "kyc:approve"
+	PermissionKYCReject  Permission = "kyc:reject"
+
 	// Trading Pairs
-	PermissionPairsRead    Permission = "pairs:read"
-	PermissionPairsWrite   Permission = "pairs:write"
-	PermissionPairsDelete  Permission = "pairs:delete"
-	
+	PermissionPairsRead   Permission = "pairs:read"
+	PermissionPairsWrite  Permission = "pairs:write"
+	PermissionPairsDelete Permission = "pairs:delete"
+
 	// Fees Management
-	PermissionFeesRead     Permission = "fees:read"
-	PermissionFeesWrite    Permission = "fees:write"
-	
+	PermissionFeesRead  Permission = "fees:read"
+	PermissionFeesWrite Permission = "fees:write"
+
 	// Withdrawals
 	PermissionWithdrawRead    Permission = "withdraw:read"
 	PermissionWithdrawWrite   Permission = "withdraw:write"
 	PermissionWithdrawApprove Permission = "withdraw:approve"
 	PermissionWithdrawReject  Permission = "withdraw:reject"
-	
+
 	// White Label
 	PermissionWhiteLabelRead   Permission = "whitelabel:read"
 	PermissionWhiteLabelWrite  Permission = "whitelabel:write"
 	PermissionWhiteLabelDelete Permission = "whitelabel:delete"
-	
+
 	// Blockchain
 	PermissionBlockchainRead  Permission = "blockchain:read"
 	PermissionBlockchainWrite Permission = "blockchain:write"
-	
+
 	// Wallet
 	PermissionWalletRead  Permission = "wallet:read"
 	PermissionWalletWrite Permission = "wallet:write"
 	PermissionWalletAdmin Permission = "wallet:admin"
-	
+
 	// Analytics
-	PermissionAnalyticsRead Permission = "analytics:read"
+	PermissionAnalyticsRead   Permission = "analytics:read"
 	PermissionAnalyticsExport Permission = "analytics:export"
-	
+
 	// Reports
-	PermissionReportsRead   Permission = "reports:read"
+	PermissionReportsRead  Permission = "reports:read"
 	PermissionReportsWrite Permission = "reports:write"
-	
+
 	// Settings
 	PermissionSettingsRead  Permission = "settings:read"
 	PermissionSettingsWrite Permission = "settings:write"
-	
+
 	// Super Admin (all permissions)
 	PermissionSuperAdmin Permission = "*"
 )
 
 // Role represents an admin role
 type Role struct {
-	ID          string       `json:"id"`
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Permissions []Permission `json:"permissions"`
-	IsSuperAdmin bool       `json:"is_super_admin"`
-	IsSystem    bool       `json:"is_system"`
-	CreatedAt   int64       `json:"created_at"`
-	UpdatedAt   int64       `json:"updated_at"`
-	CreatedBy   string      `json:"created_by"`
+	ID           string       `json:"id"`
+	Name         string       `json:"name"`
+	Description  string       `json:"description"`
+	Permissions  []Permission `json:"permissions"`
+	IsSuperAdmin bool         `json:"is_super_admin"`
+	IsSystem     bool         `json:"is_system"`
+	CreatedAt    int64        `json:"created_at"`
+	UpdatedAt    int64        `json:"updated_at"`
+	CreatedBy    string       `json:"created_by"`
 }
 
 // Admin represents an admin user
 type Admin struct {
-	ID                string            `json:"id"`
+	ID               string            `json:"id"`
 	Email            string            `json:"email"`
 	Username         string            `json:"username"`
 	PasswordHash     string            `json:"password_hash"`
-	RoleID          string            `json:"role_id"`
-	FirstName       string            `json:"first_name"`
-	LastName        string            `json:"last_name"`
-	Phone           string            `json:"phone"`
-	Avatar          string            `json:"avatar"`
-	IsActive        bool              `json:"is_active"`
-	IsSuperAdmin    bool              `json:"is_super_admin"`
-	TwoFactorEnabled bool             `json:"two_factor_enabled"`
-	TwoFactorSecret string            `json:"two_factor_secret,omitempty"`
-	LoginAttempts   int               `json:"login_attempts"`
-	LockedUntil    *int64            `json:"locked_until,omitempty"`
-	LastLoginAt    *int64            `json:"last_login_at,omitempty"`
-	LastLoginIP    string             `json:"last_login_ip"`
-	Permissions    []Permission       `json:"permissions,omitempty"`
-	Metadata        map[string]string `json:"metadata"`
-	CreatedAt       int64             `json:"created_at"`
-	UpdatedAt       int64             `json:"updated_at"`
+	RoleID           string            `json:"role_id"`
+	FirstName        string            `json:"first_name"`
+	LastName         string            `json:"last_name"`
+	Phone            string            `json:"phone"`
+	Avatar           string            `json:"avatar"`
+	IsActive         bool              `json:"is_active"`
+	IsSuperAdmin     bool              `json:"is_super_admin"`
+	TwoFactorEnabled bool              `json:"two_factor_enabled"`
+	TwoFactorSecret  string            `json:"two_factor_secret,omitempty"`
+	LoginAttempts    int               `json:"login_attempts"`
+	LockedUntil      *int64            `json:"locked_until,omitempty"`
+	LastLoginAt      *int64            `json:"last_login_at,omitempty"`
+	LastLoginIP      string            `json:"last_login_ip"`
+	Permissions      []Permission      `json:"permissions,omitempty"`
+	Metadata         map[string]string `json:"metadata"`
+	CreatedAt        int64             `json:"created_at"`
+	UpdatedAt        int64             `json:"updated_at"`
 }
 
 // AdminSession represents an admin session
 type AdminSession struct {
-	ID           string    `json:"id"`
-	AdminID      string    `json:"admin_id"`
-	Token        string    `json:"token"`
-	IPAddress    string    `json:"ip_address"`
-	UserAgent    string    `json:"user_agent"`
-	ExpiresAt    int64     `json:"expires_at"`
-	CreatedAt    int64     `json:"created_at"`
-	LastActivity int64     `json:"last_activity"`
-	IsActive     bool      `json:"is_active"`
+	ID           string `json:"id"`
+	AdminID      string `json:"admin_id"`
+	Token        string `json:"token"`
+	IPAddress    string `json:"ip_address"`
+	UserAgent    string `json:"user_agent"`
+	ExpiresAt    int64  `json:"expires_at"`
+	CreatedAt    int64  `json:"created_at"`
+	LastActivity int64  `json:"last_activity"`
+	IsActive     bool   `json:"is_active"`
 }
 
 // AuditLog represents an admin action audit log
 type AuditLog struct {
-	ID          string            `json:"id"`
-	AdminID     string            `json:"admin_id"`
-	AdminEmail  string            `json:"admin_email"`
-	Action      string            `json:"action"`
-	Resource    string            `json:"resource"`
-	ResourceID  string            `json:"resource_id"`
-	Details     map[string]interface{} `json:"details"`
-	IPAddress   string            `json:"ip_address"`
-	UserAgent   string            `json:"user_agent"`
-	Timestamp   int64             `json:"timestamp"`
-	Result      string            `json:"result"` // success, failure
+	ID         string                 `json:"id"`
+	AdminID    string                 `json:"admin_id"`
+	AdminEmail string                 `json:"admin_email"`
+	Action     string                 `json:"action"`
+	Resource   string                 `json:"resource"`
+	ResourceID string                 `json:"resource_id"`
+	Details    map[string]interface{} `json:"details"`
+	IPAddress  string                 `json:"ip_address"`
+	UserAgent  string                 `json:"user_agent"`
+	Timestamp  int64                  `json:"timestamp"`
+	Result     string                 `json:"result"` // success, failure
 }
 
 // WhiteLabelClient represents a white label client
 type WhiteLabelClient struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Domain      string            `json:"domain"`
-	AdminEmail  string            `json:"admin_email"`
-	Status      string            `json:"status"` // active, suspended, pending
-	RoleID      string            `json:"role_id"`
-	Permissions []Permission      `json:"permissions"`
-	Config      WhiteLabelConfig  `json:"config"`
-	CreatedAt   int64             `json:"created_at"`
-	UpdatedAt   int64             `json:"updated_at"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Domain      string           `json:"domain"`
+	AdminEmail  string           `json:"admin_email"`
+	Status      string           `json:"status"` // active, suspended, pending
+	RoleID      string           `json:"role_id"`
+	Permissions []Permission     `json:"permissions"`
+	Config      WhiteLabelConfig `json:"config"`
+	CreatedAt   int64            `json:"created_at"`
+	UpdatedAt   int64            `json:"updated_at"`
 }
 
 // WhiteLabelConfig contains white label configuration
 type WhiteLabelConfig struct {
-	BrandName       string `json:"brand_name"`
-	BrandLogo       string `json:"brand_logo"`
-	BrandColor     string `json:"brand_color"`
-	SupportEmail   string `json:"support_email"`
-	SupportURL     string `json:"support_url"`
-	TermsURL       string `json:"terms_url"`
-	PrivacyURL     string `json:"privacy_url"`
-	CustomDomain   string `json:"custom_domain"`
-	SSLEnabled     bool   `json:"ssl_enabled"`
+	BrandName    string `json:"brand_name"`
+	BrandLogo    string `json:"brand_logo"`
+	BrandColor   string `json:"brand_color"`
+	SupportEmail string `json:"support_email"`
+	SupportURL   string `json:"support_url"`
+	TermsURL     string `json:"terms_url"`
+	PrivacyURL   string `json:"privacy_url"`
+	CustomDomain string `json:"custom_domain"`
+	SSLEnabled   bool   `json:"ssl_enabled"`
 }
 
 // ============================================================================
@@ -183,23 +181,23 @@ type WhiteLabelConfig struct {
 
 // RBACService manages role-based access control
 type RBACService struct {
-	roles       map[string]*Role
-	admins      map[string]*Admin
-	sessions    map[string]*AdminSession
-	auditLogs    []AuditLog
-	jwtSecret   []byte
-	config      *RBACConfig
-	
+	roles     map[string]*Role
+	admins    map[string]*Admin
+	sessions  map[string]*AdminSession
+	auditLogs []AuditLog
+	jwtSecret []byte
+	config    *RBACConfig
+
 	mu sync.RWMutex `json:"-"`
 }
 
 // RBACConfig contains RBAC configuration
 type RBACConfig struct {
-	JWTExpiration    time.Duration `json:"jwt_expiration"`
-	MaxLoginAttempts int           `json:"max_login_attempts"`
-	LockoutDuration  time.Duration `json:"lockout_duration"`
-	PasswordMinLength int          `json:"password_min_length"`
-	SessionTimeout   time.Duration `json:"session_timeout"`
+	JWTExpiration     time.Duration `json:"jwt_expiration"`
+	MaxLoginAttempts  int           `json:"max_login_attempts"`
+	LockoutDuration   time.Duration `json:"lockout_duration"`
+	PasswordMinLength int           `json:"password_min_length"`
+	SessionTimeout    time.Duration `json:"session_timeout"`
 }
 
 // NewRBACService creates a new RBAC service
@@ -219,19 +217,19 @@ func NewRBACService(jwtSecret string, config RBACConfig) *RBACService {
 	if config.SessionTimeout == 0 {
 		config.SessionTimeout = 8 * time.Hour
 	}
-	
+
 	service := &RBACService{
-		roles:    make(map[string]*Role),
-		admins:   make(map[string]*Admin),
-		sessions: make(map[string]*AdminSession),
+		roles:     make(map[string]*Role),
+		admins:    make(map[string]*Admin),
+		sessions:  make(map[string]*AdminSession),
 		auditLogs: make([]AuditLog, 0),
 		jwtSecret: []byte(jwtSecret),
-		config:   &config,
+		config:    &config,
 	}
-	
+
 	// Initialize default roles
 	service.initializeDefaultRoles()
-	
+
 	return service
 }
 
@@ -239,16 +237,16 @@ func NewRBACService(jwtSecret string, config RBACConfig) *RBACService {
 func (s *RBACService) initializeDefaultRoles() {
 	// Super Admin role - all permissions
 	superAdminRole := &Role{
-		ID:          "role_super_admin",
-		Name:        "Super Admin",
-		Description: "Full system access - can manage all aspects of the platform",
-		Permissions: []Permission{PermissionSuperAdmin},
+		ID:           "role_super_admin",
+		Name:         "Super Admin",
+		Description:  "Full system access - can manage all aspects of the platform",
+		Permissions:  []Permission{PermissionSuperAdmin},
 		IsSuperAdmin: true,
-		IsSystem:    true,
-		CreatedAt:   time.Now().UnixMilli(),
+		IsSystem:     true,
+		CreatedAt:    time.Now().UnixMilli(),
 	}
 	s.roles[superAdminRole.ID] = superAdminRole
-	
+
 	// Platform Admin - all operations except user deletion
 	platformAdminRole := &Role{
 		ID:          "role_platform_admin",
@@ -268,11 +266,11 @@ func (s *RBACService) initializeDefaultRoles() {
 			PermissionReportsRead, PermissionReportsWrite,
 			PermissionSettingsRead, PermissionSettingsWrite,
 		},
-		IsSystem: true,
+		IsSystem:  true,
 		CreatedAt: time.Now().UnixMilli(),
 	}
 	s.roles[platformAdminRole.ID] = platformAdminRole
-	
+
 	// KYC Reviewer
 	kycReviewerRole := &Role{
 		ID:          "role_kyc_reviewer",
@@ -281,11 +279,11 @@ func (s *RBACService) initializeDefaultRoles() {
 		Permissions: []Permission{
 			PermissionKYCRead, PermissionKYCWrite, PermissionKYCApprove, PermissionKYCReject,
 		},
-		IsSystem: true,
+		IsSystem:  true,
 		CreatedAt: time.Now().UnixMilli(),
 	}
 	s.roles[kycReviewerRole.ID] = kycReviewerRole
-	
+
 	// Support Agent
 	supportRole := &Role{
 		ID:          "role_support",
@@ -298,11 +296,11 @@ func (s *RBACService) initializeDefaultRoles() {
 			PermissionWalletRead,
 			PermissionReportsRead,
 		},
-		IsSystem: true,
+		IsSystem:  true,
 		CreatedAt: time.Now().UnixMilli(),
 	}
 	s.roles[supportRole.ID] = supportRole
-	
+
 	// Finance Admin
 	financeRole := &Role{
 		ID:          "role_finance",
@@ -314,11 +312,11 @@ func (s *RBACService) initializeDefaultRoles() {
 			PermissionAnalyticsRead, PermissionAnalyticsExport,
 			PermissionReportsRead, PermissionReportsWrite,
 		},
-		IsSystem: true,
+		IsSystem:  true,
 		CreatedAt: time.Now().UnixMilli(),
 	}
 	s.roles[financeRole.ID] = financeRole
-	
+
 	// White Label Admin
 	whiteLabelAdminRole := &Role{
 		ID:          "role_whitelabel_admin",
@@ -331,7 +329,7 @@ func (s *RBACService) initializeDefaultRoles() {
 			PermissionWalletRead, PermissionWalletWrite,
 			PermissionAnalyticsRead,
 		},
-		IsSystem: true,
+		IsSystem:  true,
 		CreatedAt: time.Now().UnixMilli(),
 	}
 	s.roles[whiteLabelAdminRole.ID] = whiteLabelAdminRole
@@ -341,25 +339,25 @@ func (s *RBACService) initializeDefaultRoles() {
 func (s *RBACService) CreateRole(ctx context.Context, role *Role, createdBy string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	// Check if role name exists
 	for _, r := range s.roles {
 		if strings.EqualFold(r.Name, role.Name) {
 			return fmt.Errorf("role with name '%s' already exists", role.Name)
 		}
 	}
-	
+
 	// Generate ID if not provided
 	if role.ID == "" {
 		role.ID = fmt.Sprintf("role_%s", uuid.New().String()[:8])
 	}
-	
+
 	role.CreatedAt = time.Now().UnixMilli()
 	role.UpdatedAt = time.Now().UnixMilli()
 	role.CreatedBy = createdBy
-	
+
 	s.roles[role.ID] = role
-	
+
 	// Log audit
 	s.auditLogs = append(s.auditLogs, AuditLog{
 		ID:         fmt.Sprintf("audit_%s", uuid.New().String()[:8]),
@@ -369,9 +367,9 @@ func (s *RBACService) CreateRole(ctx context.Context, role *Role, createdBy stri
 		ResourceID: role.ID,
 		Details:    map[string]interface{}{"name": role.Name},
 		Timestamp:  time.Now().UnixMilli(),
-		Result:    "success",
+		Result:     "success",
 	})
-	
+
 	return nil
 }
 
@@ -379,16 +377,16 @@ func (s *RBACService) CreateRole(ctx context.Context, role *Role, createdBy stri
 func (s *RBACService) UpdateRole(ctx context.Context, roleID string, updates map[string]interface{}, updatedBy string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	role, exists := s.roles[roleID]
 	if !exists {
 		return fmt.Errorf("role not found: %s", roleID)
 	}
-	
-	if role.IsSystem && !isSuperAdmin(updatedBy) {
+
+	if role.IsSystem && !s.isSuperAdmin(updatedBy) {
 		return fmt.Errorf("cannot modify system role")
 	}
-	
+
 	// Apply updates
 	if name, ok := updates["name"].(string); ok {
 		role.Name = name
@@ -402,9 +400,9 @@ func (s *RBACService) UpdateRole(ctx context.Context, roleID string, updates map
 			role.Permissions[i] = Permission(p.(string))
 		}
 	}
-	
+
 	role.UpdatedAt = time.Now().UnixMilli()
-	
+
 	// Log audit
 	s.auditLogs = append(s.auditLogs, AuditLog{
 		ID:         fmt.Sprintf("audit_%s", uuid.New().String()[:8]),
@@ -413,10 +411,10 @@ func (s *RBACService) UpdateRole(ctx context.Context, roleID string, updates map
 		Resource:   "role",
 		ResourceID: roleID,
 		Details:    updates,
-		Timestamp: time.Now().UnixMilli(),
-		Result:    "success",
+		Timestamp:  time.Now().UnixMilli(),
+		Result:     "success",
 	})
-	
+
 	return nil
 }
 
@@ -424,25 +422,25 @@ func (s *RBACService) UpdateRole(ctx context.Context, roleID string, updates map
 func (s *RBACService) DeleteRole(ctx context.Context, roleID, deletedBy string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	role, exists := s.roles[roleID]
 	if !exists {
 		return fmt.Errorf("role not found: %s", roleID)
 	}
-	
+
 	if role.IsSystem {
 		return fmt.Errorf("cannot delete system role")
 	}
-	
+
 	// Check if any admin uses this role
 	for _, admin := range s.admins {
 		if admin.RoleID == roleID {
 			return fmt.Errorf("cannot delete role: %d admins assigned", 1)
 		}
 	}
-	
+
 	delete(s.roles, roleID)
-	
+
 	// Log audit
 	s.auditLogs = append(s.auditLogs, AuditLog{
 		ID:         fmt.Sprintf("audit_%s", uuid.New().String()[:8]),
@@ -450,10 +448,10 @@ func (s *RBACService) DeleteRole(ctx context.Context, roleID, deletedBy string) 
 		Action:     "delete_role",
 		Resource:   "role",
 		ResourceID: roleID,
-		Timestamp: time.Now().UnixMilli(),
-		Result:    "success",
+		Timestamp:  time.Now().UnixMilli(),
+		Result:     "success",
 	})
-	
+
 	return nil
 }
 
@@ -461,12 +459,12 @@ func (s *RBACService) DeleteRole(ctx context.Context, roleID, deletedBy string) 
 func (s *RBACService) GetRole(roleID string) (*Role, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	role, exists := s.roles[roleID]
 	if !exists {
 		return nil, fmt.Errorf("role not found")
 	}
-	
+
 	return role, nil
 }
 
@@ -474,12 +472,12 @@ func (s *RBACService) GetRole(roleID string) (*Role, error) {
 func (s *RBACService) GetAllRoles() []*Role {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	roles := make([]*Role, 0, len(s.roles))
 	for _, role := range s.roles {
 		roles = append(roles, role)
 	}
-	
+
 	return roles
 }
 
@@ -491,44 +489,48 @@ func (s *RBACService) GetAllRoles() []*Role {
 func (s *RBACService) RegisterAdmin(ctx context.Context, admin *Admin, registeredBy string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	// Validate email
 	if admin.Email == "" {
 		return fmt.Errorf("email is required")
 	}
-	
+
 	// Check if email exists
 	for _, a := range s.admins {
 		if strings.EqualFold(a.Email, admin.Email) {
 			return fmt.Errorf("email already registered")
 		}
 	}
-	
+
 	// Check role exists
 	if _, exists := s.roles[admin.RoleID]; !exists {
 		return fmt.Errorf("role not found: %s", admin.RoleID)
 	}
-	
+
 	// Generate ID if not provided
 	if admin.ID == "" {
 		admin.ID = fmt.Sprintf("admin_%s", uuid.New().String()[:8])
 	}
-	
+
 	// Hash password
-	admin.PasswordHash = s.hashPassword(admin.PasswordHash)
-	
+	hashed, err := s.hashPassword(admin.PasswordHash)
+	if err != nil {
+		return fmt.Errorf("hashing password: %w", err)
+	}
+	admin.PasswordHash = hashed
+
 	admin.CreatedAt = time.Now().UnixMilli()
 	admin.UpdatedAt = time.Now().UnixMilli()
 	admin.IsActive = true
-	
+
 	// Check if super admin role
 	role := s.roles[admin.RoleID]
 	if role.IsSuperAdmin {
 		admin.IsSuperAdmin = true
 	}
-	
+
 	s.admins[admin.ID] = admin
-	
+
 	// Log audit
 	s.auditLogs = append(s.auditLogs, AuditLog{
 		ID:         fmt.Sprintf("audit_%s", uuid.New().String()[:8]),
@@ -537,10 +539,10 @@ func (s *RBACService) RegisterAdmin(ctx context.Context, admin *Admin, registere
 		Resource:   "admin",
 		ResourceID: admin.ID,
 		Details:    map[string]interface{}{"email": admin.Email, "role": admin.RoleID},
-		Timestamp: time.Now().UnixMilli(),
-		Result:    "success",
+		Timestamp:  time.Now().UnixMilli(),
+		Result:     "success",
 	})
-	
+
 	return nil
 }
 
@@ -548,7 +550,7 @@ func (s *RBACService) RegisterAdmin(ctx context.Context, admin *Admin, registere
 func (s *RBACService) AuthenticateAdmin(ctx context.Context, email, password, ipAddress string) (*AdminSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	// Find admin by email
 	var admin *Admin
 	var adminID string
@@ -559,26 +561,26 @@ func (s *RBACService) AuthenticateAdmin(ctx context.Context, email, password, ip
 			break
 		}
 	}
-	
+
 	if admin == nil {
 		return nil, fmt.Errorf("invalid credentials")
 	}
-	
+
 	// Check if locked
 	if admin.LockedUntil != nil && *admin.LockedUntil > time.Now().UnixMilli() {
 		return nil, fmt.Errorf("account locked until %s", time.UnixMilli(*admin.LockedUntil).Format(time.RFC3339))
 	}
-	
+
 	// Verify password
 	if !s.verifyPassword(password, admin.PasswordHash) {
 		admin.LoginAttempts++
-		
+
 		// Lock account after max attempts
 		if admin.LoginAttempts >= s.config.MaxLoginAttempts {
 			lockedUntil := time.Now().Add(s.config.LockoutDuration).UnixMilli()
 			admin.LockedUntil = &lockedUntil
 		}
-		
+
 		// Log failed attempt
 		s.auditLogs = append(s.auditLogs, AuditLog{
 			ID:         fmt.Sprintf("audit_%s", uuid.New().String()[:8]),
@@ -588,21 +590,21 @@ func (s *RBACService) AuthenticateAdmin(ctx context.Context, email, password, ip
 			ResourceID: adminID,
 			Details:    map[string]interface{}{"reason": "invalid_password", "attempts": admin.LoginAttempts},
 			IPAddress:  ipAddress,
-			Timestamp: time.Now().UnixMilli(),
-			Result:    "failure",
+			Timestamp:  time.Now().UnixMilli(),
+			Result:     "failure",
 		})
-		
+
 		return nil, fmt.Errorf("invalid credentials")
 	}
-	
+
 	// Reset login attempts
 	admin.LoginAttempts = 0
 	admin.LockedUntil = nil
-	
+
 	now := time.Now().UnixMilli()
 	admin.LastLoginAt = &now
 	admin.LastLoginIP = ipAddress
-	
+
 	// Create session
 	session := &AdminSession{
 		ID:           fmt.Sprintf("session_%s", uuid.New().String()[:12]),
@@ -614,9 +616,9 @@ func (s *RBACService) AuthenticateAdmin(ctx context.Context, email, password, ip
 		LastActivity: now,
 		IsActive:     true,
 	}
-	
+
 	s.sessions[session.Token] = session
-	
+
 	// Log successful login
 	s.auditLogs = append(s.auditLogs, AuditLog{
 		ID:         fmt.Sprintf("audit_%s", uuid.New().String()[:8]),
@@ -626,9 +628,9 @@ func (s *RBACService) AuthenticateAdmin(ctx context.Context, email, password, ip
 		ResourceID: adminID,
 		IPAddress:  ipAddress,
 		Timestamp:  now,
-		Result:    "success",
+		Result:     "success",
 	})
-	
+
 	return session, nil
 }
 
@@ -637,11 +639,11 @@ func (s *RBACService) ValidateSession(ctx context.Context, token string) (*Admin
 	s.mu.RLock()
 	session, exists := s.sessions[token]
 	s.mu.RUnlock()
-	
+
 	if !exists || !session.IsActive {
 		return nil, fmt.Errorf("invalid session")
 	}
-	
+
 	// Check expiration
 	if session.ExpiresAt < time.Now().UnixMilli() {
 		s.mu.Lock()
@@ -649,19 +651,19 @@ func (s *RBACService) ValidateSession(ctx context.Context, token string) (*Admin
 		s.mu.Unlock()
 		return nil, fmt.Errorf("session expired")
 	}
-	
+
 	// Update last activity
 	session.LastActivity = time.Now().UnixMilli()
-	
+
 	// Get admin
 	s.mu.RLock()
 	admin := s.admins[session.AdminID]
 	s.mu.RUnlock()
-	
+
 	if admin == nil || !admin.IsActive {
 		return nil, fmt.Errorf("admin not found or inactive")
 	}
-	
+
 	return admin, nil
 }
 
@@ -669,15 +671,15 @@ func (s *RBACService) ValidateSession(ctx context.Context, token string) (*Admin
 func (s *RBACService) Logout(ctx context.Context, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	session, exists := s.sessions[token]
 	if !exists {
 		return fmt.Errorf("session not found")
 	}
-	
+
 	session.IsActive = false
 	delete(s.sessions, token)
-	
+
 	return nil
 }
 
@@ -686,44 +688,44 @@ func (s *RBACService) HasPermission(ctx context.Context, adminID string, permiss
 	s.mu.RLock()
 	admin, exists := s.admins[adminID]
 	s.mu.RUnlock()
-	
+
 	if !exists || !admin.IsActive {
 		return false
 	}
-	
+
 	// Super admin has all permissions
 	if admin.IsSuperAdmin {
 		return true
 	}
-	
+
 	// Get role
 	s.mu.RLock()
 	role, roleExists := s.roles[admin.RoleID]
 	s.mu.RUnlock()
-	
+
 	if !roleExists {
 		return false
 	}
-	
+
 	// Super admin role has all permissions
 	if role.IsSuperAdmin {
 		return true
 	}
-	
+
 	// Check if permission exists in role
 	for _, p := range role.Permissions {
 		if p == PermissionSuperAdmin || p == permission {
 			return true
 		}
 	}
-	
+
 	// Check custom permissions
 	for _, p := range admin.Permissions {
 		if p == PermissionSuperAdmin || p == permission {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -731,12 +733,12 @@ func (s *RBACService) HasPermission(ctx context.Context, adminID string, permiss
 func (s *RBACService) GetAdmin(adminID string) (*Admin, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	admin, exists := s.admins[adminID]
 	if !exists {
 		return nil, fmt.Errorf("admin not found")
 	}
-	
+
 	return admin, nil
 }
 
@@ -744,12 +746,12 @@ func (s *RBACService) GetAdmin(adminID string) (*Admin, error) {
 func (s *RBACService) UpdateAdmin(ctx context.Context, adminID string, updates map[string]interface{}, updatedBy string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	admin, exists := s.admins[adminID]
 	if !exists {
 		return fmt.Errorf("admin not found")
 	}
-	
+
 	// Apply updates
 	if firstName, ok := updates["first_name"].(string); ok {
 		admin.FirstName = firstName
@@ -767,9 +769,9 @@ func (s *RBACService) UpdateAdmin(ctx context.Context, adminID string, updates m
 		}
 		admin.RoleID = roleID
 	}
-	
+
 	admin.UpdatedAt = time.Now().UnixMilli()
-	
+
 	// Log audit
 	s.auditLogs = append(s.auditLogs, AuditLog{
 		ID:         fmt.Sprintf("audit_%s", uuid.New().String()[:8]),
@@ -778,10 +780,10 @@ func (s *RBACService) UpdateAdmin(ctx context.Context, adminID string, updates m
 		Resource:   "admin",
 		ResourceID: adminID,
 		Details:    updates,
-		Timestamp: time.Now().UnixMilli(),
-		Result:    "success",
+		Timestamp:  time.Now().UnixMilli(),
+		Result:     "success",
 	})
-	
+
 	return nil
 }
 
@@ -789,15 +791,15 @@ func (s *RBACService) UpdateAdmin(ctx context.Context, adminID string, updates m
 func (s *RBACService) DeactivateAdmin(ctx context.Context, adminID, deactivatedBy string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	admin, exists := s.admins[adminID]
 	if !exists {
 		return fmt.Errorf("admin not found")
 	}
-	
+
 	admin.IsActive = false
 	admin.UpdatedAt = time.Now().UnixMilli()
-	
+
 	// Log audit
 	s.auditLogs = append(s.auditLogs, AuditLog{
 		ID:         fmt.Sprintf("audit_%s", uuid.New().String()[:8]),
@@ -805,10 +807,10 @@ func (s *RBACService) DeactivateAdmin(ctx context.Context, adminID, deactivatedB
 		Action:     "deactivate_admin",
 		Resource:   "admin",
 		ResourceID: adminID,
-		Timestamp: time.Now().UnixMilli(),
-		Result:    "success",
+		Timestamp:  time.Now().UnixMilli(),
+		Result:     "success",
 	})
-	
+
 	return nil
 }
 
@@ -816,17 +818,17 @@ func (s *RBACService) DeactivateAdmin(ctx context.Context, adminID, deactivatedB
 func (s *RBACService) GetAuditLogs(ctx context.Context, adminID string, limit int) []AuditLog {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	logs := make([]AuditLog, 0)
 	count := 0
-	
+
 	for i := len(s.auditLogs) - 1; i >= 0 && count < limit; i-- {
 		if adminID == "" || s.auditLogs[i].AdminID == adminID {
 			logs = append(logs, s.auditLogs[i])
 			count++
 		}
 	}
-	
+
 	return logs
 }
 
@@ -841,17 +843,17 @@ var whiteLabelClients = make(map[string]*WhiteLabelClient)
 func (s *RBACService) CreateWhiteLabelClient(ctx context.Context, client *WhiteLabelClient, createdBy string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	if client.ID == "" {
 		client.ID = fmt.Sprintf("wl_%s", uuid.New().String()[:8])
 	}
-	
+
 	client.CreatedAt = time.Now().UnixMilli()
 	client.UpdatedAt = time.Now().UnixMilli()
 	client.Status = "pending"
-	
+
 	whiteLabelClients[client.ID] = client
-	
+
 	// Log audit
 	s.auditLogs = append(s.auditLogs, AuditLog{
 		ID:         fmt.Sprintf("audit_%s", uuid.New().String()[:8]),
@@ -860,10 +862,10 @@ func (s *RBACService) CreateWhiteLabelClient(ctx context.Context, client *WhiteL
 		Resource:   "whitelabel",
 		ResourceID: client.ID,
 		Details:    map[string]interface{}{"name": client.Name, "domain": client.Domain},
-		Timestamp: time.Now().UnixMilli(),
-		Result:    "success",
+		Timestamp:  time.Now().UnixMilli(),
+		Result:     "success",
 	})
-	
+
 	return nil
 }
 
@@ -871,12 +873,12 @@ func (s *RBACService) CreateWhiteLabelClient(ctx context.Context, client *WhiteL
 func (s *RBACService) GetWhiteLabelClient(clientID string) (*WhiteLabelClient, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	client, exists := whiteLabelClients[clientID]
 	if !exists {
 		return nil, fmt.Errorf("white label client not found")
 	}
-	
+
 	return client, nil
 }
 
@@ -884,12 +886,12 @@ func (s *RBACService) GetWhiteLabelClient(clientID string) (*WhiteLabelClient, e
 func (s *RBACService) UpdateWhiteLabelClient(ctx context.Context, clientID string, updates map[string]interface{}, updatedBy string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	client, exists := whiteLabelClients[clientID]
 	if !exists {
 		return fmt.Errorf("white label client not found")
 	}
-	
+
 	// Apply updates
 	if name, ok := updates["name"].(string); ok {
 		client.Name = name
@@ -900,9 +902,9 @@ func (s *RBACService) UpdateWhiteLabelClient(ctx context.Context, clientID strin
 	if status, ok := updates["status"].(string); ok {
 		client.Status = status
 	}
-	
+
 	client.UpdatedAt = time.Now().UnixMilli()
-	
+
 	return nil
 }
 
@@ -910,15 +912,24 @@ func (s *RBACService) UpdateWhiteLabelClient(ctx context.Context, clientID strin
 // HELPER METHODS
 // ============================================================================
 
-// hashPassword creates a hash of the password
-func (s *RBACService) hashPassword(password string) string {
-	hash := sha256.Sum256([]byte(password))
-	return hex.EncodeToString(hash[:])
+// bcryptCost is the work factor for admin password hashing.
+const bcryptCost = 12
+
+// hashPassword creates a bcrypt hash of the password.
+//
+// The previous version used a bare SHA-256, which is fast and unsalted,
+// so admin credentials were trivially crackable from a dump.
+func (s *RBACService) hashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hash), nil
 }
 
-// verifyPassword verifies a password against its hash
+// verifyPassword verifies a password against its bcrypt hash.
 func (s *RBACService) verifyPassword(password, hash string) bool {
-	return s.hashPassword(password) == hash
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
 // generateToken generates a JWT token
@@ -928,17 +939,23 @@ func (s *RBACService) generateToken(adminID string) string {
 		"exp":      time.Now().Add(s.config.JWTExpiration).Unix(),
 		"iat":      time.Now().Unix(),
 	}
-	
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, _ := token.SignedString(s.jwtSecret)
-	
+
 	return tokenString
 }
 
-// isSuperAdmin checks if admin is super admin (simplified)
-func isSuperAdmin(adminID string) bool {
-	// In production, would check admin role/permissions
-	return adminID == "admin_super"
+// isSuperAdmin reports whether an admin id holds super admin rights.
+//
+// The previous version returned true for the literal id "admin_super",
+// so the check was a hardcoded backdoor rather than an authorization
+// decision.
+func (s *RBACService) isSuperAdmin(adminID string) bool {
+	s.mu.RLock()
+	admin, ok := s.admins[adminID]
+	s.mu.RUnlock()
+	return ok && admin.IsActive && admin.IsSuperAdmin
 }
 
 // ============================================================================
