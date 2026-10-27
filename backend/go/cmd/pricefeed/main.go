@@ -1,9 +1,12 @@
-// TigerEx Price Feed Service Main Entry Point
-// Standalone service for real-time price generation
-
+// TigerEx Price Feed Service entry point.
+//
+// Serves the exchange's market data over HTTP by reading through to the
+// authoritative market data service. It refuses to start without a configured
+// upstream rather than serving invented prices.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -11,84 +14,61 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"tigerex/backend/services/pricefeed"
 )
 
 var (
-	port    = flag.Int("port", 8080, "Server port")
-	host    = flag.String("host", "0.0.0.0", "Server host")
-	verbose = flag.Bool("v", false, "Verbose logging")
+	port   = flag.Int("port", 8080, "Server port")
+	host   = flag.String("host", "0.0.0.0", "Server host")
+	source = flag.String("source-url", os.Getenv("TIGEREX_MARKETDATA_URL"),
+		"Base URL of the TigerEx market data service (env TIGEREX_MARKETDATA_URL)")
 )
 
 func main() {
 	flag.Parse()
 
-	log.Printf("🐯 Starting TigerEx Price Feed Service...")
-	log.Printf("📊 Independent price generation system")
-
-	// Initialize price feed service
-	pfs := pricefeed.NewPriceFeedService()
-
-	// Start price updates
-	pfs.Start()
-	log.Printf("✅ Price feed service started")
-
-	// Create HTTP handler
-	handler := pricefeed.NewHandler(pfs)
-	mux := http.NewServeMux()
-
-	// Register routes
-	handler.RegisterRoutes(mux)
-
-	// Add health check endpoint
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"healthy","service":"pricefeed"}`))
-	})
-
-	// Add root endpoint
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
-			"name": "TigerEx Price Feed API",
-			"version": "1.0.0",
-			"description": "Independent price generation service",
-			"endpoints": {
-				"/api/v1/ticker/24hr": "24h price ticker",
-				"/api/v1/ticker/price": "Current price",
-				"/api/v1/depth": "Market depth",
-				"/api/v1/trades": "Recent trades",
-				"/api/v1/klines": "Kline/candlestick data",
-				"/api/v1/orderbook": "Order book",
-				"/api/v1/exchangeInfo": "Exchange configuration",
-				"/api/v1/market/summary": "Market summary"
-			}
-		}`))
-	})
-
-	// Create server
-	addr := fmt.Sprintf("%s:%d", *host, *port)
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+	if *source == "" {
+		log.Fatal("no market data source configured: set -source-url or TIGEREX_MARKETDATA_URL to the TigerEx market data service")
 	}
 
-	// Handle graceful shutdown
+	log.Printf("Starting TigerEx Price Feed Service")
+	log.Printf("Market data source: %s", *source)
+
+	svc := pricefeed.NewPriceFeedService(pricefeed.NewHTTPSource(*source))
+	svc.Start()
+	defer svc.Stop()
+
+	handler := pricefeed.NewHandler(svc)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	server := &http.Server{
+		Addr:              fmt.Sprintf("%s:%d", *host, *port),
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("🚀 Server running on http://%s", addr)
-		log.Printf("📡 Price feed available at /api/v1/*")
+		log.Printf("Server running on http://%s", server.Addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
 		}
 	}()
 
 	<-quit
-	log.Println("🛑 Shutting down price feed service...")
+	log.Println("Shutting down price feed service")
 
-	pfs.Stop()
-	log.Println("✅ Price feed service stopped")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("Shutdown error: %v", err)
+	}
 }
