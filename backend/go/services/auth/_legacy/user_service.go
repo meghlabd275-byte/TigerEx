@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	ErrEmailExists       = errors.New("email already exists")
-	ErrUsernameExists    = errors.New("username already exists")
-	ErrInvalidReferral  = errors.New("invalid referral code")
+	ErrEmailExists     = errors.New("email already exists")
+	ErrUsernameExists  = errors.New("username already exists")
+	ErrInvalidReferral = errors.New("invalid referral code")
 )
 
 // UserRepository handles database operations for users
@@ -214,7 +214,7 @@ func (r *UserRepository) UpdateUser(ctx context.Context, user *User) error {
 // CheckEmailExists checks if an email already exists
 func (r *UserRepository) CheckEmailExists(ctx context.Context, email string) (bool, error) {
 	var count int
-	err := r.db.QueryRowContext(ctx, 
+	err := r.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM users WHERE email = $1", email).Scan(&count)
 	return count > 0, err
 }
@@ -222,7 +222,7 @@ func (r *UserRepository) CheckEmailExists(ctx context.Context, email string) (bo
 // CheckUsernameExists checks if a username already exists
 func (r *UserRepository) CheckUsernameExists(ctx context.Context, username string) (bool, error) {
 	var count int
-	err := r.db.QueryRowContext(ctx, 
+	err := r.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM users WHERE username = $1", username).Scan(&count)
 	return count > 0, err
 }
@@ -232,11 +232,11 @@ func (r *UserRepository) ValidateReferralCode(ctx context.Context, code string) 
 	var userID string
 	err := r.db.QueryRowContext(ctx,
 		"SELECT id FROM users WHERE referral_code = $1", code).Scan(&userID)
-	
+
 	if err == sql.ErrNoRows {
 		return "", ErrInvalidReferral
 	}
-	
+
 	return userID, err
 }
 
@@ -279,14 +279,14 @@ func (r *UserRepository) ResetLoginAttempts(ctx context.Context, userID string) 
 // =============================================================================
 
 type UserService struct {
-	repo       *UserRepository
+	repo        *UserRepository
 	authService *AuthService
 }
 
 // NewUserService creates a new user service
 func NewUserService(db *sql.DB, authService *AuthService) *UserService {
 	return &UserService{
-		repo:       NewUserRepository(db),
+		repo:        NewUserRepository(db),
 		authService: authService,
 	}
 }

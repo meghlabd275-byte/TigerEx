@@ -20,6 +20,10 @@ CREATE TABLE users (
     theme VARCHAR(20) DEFAULT 'dark',
     currency VARCHAR(10) DEFAULT 'USD',
     anti_phishing_code VARCHAR(20),
+    -- security_version is bumped on every credential or account-security change.
+    -- Access tokens carry the version they were issued at, so a change
+    -- invalidates sessions that predate it.
+    security_version BIGINT NOT NULL DEFAULT 1,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     last_login_at TIMESTAMP WITH TIME ZONE,

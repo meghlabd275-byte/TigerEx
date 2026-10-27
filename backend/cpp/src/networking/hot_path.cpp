@@ -132,9 +132,15 @@ public:
         return sent;
     }
 
-    // Get statistics
+    // Get statistics. The counters are atomic, so each is read individually;
+    // the snapshot is not globally consistent, which is acceptable for
+    // telemetry and avoids putting a lock on the packet path.
     void getStats(NetworkStats& outStats) {
-        outStats = stats;
+        outStats.packetsReceived.store(stats.packetsReceived.load());
+        outStats.packetsSent.store(stats.packetsSent.load());
+        outStats.bytesReceived.store(stats.bytesReceived.load());
+        outStats.bytesSent.store(stats.bytesSent.load());
+        outStats.errors.store(stats.errors.load());
     }
 
     // Zero-copy send

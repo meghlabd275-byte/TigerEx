@@ -47,36 +47,36 @@ var (
 // =============================================================================
 
 type User struct {
-	ID                string    `json:"id"`
-	Email             string    `json:"email"`
-	Username          string    `json:"username"`
-	PasswordHash      string    `json:"-"`
-	PasswordSalt      string    `json:"-"`
-	TwoFactorSecret   string    `json:"two_factor_secret,omitempty"`
-	TwoFactorEnabled  bool      `json:"two_factor_enabled"`
-	KYCLevel          int       `json:"kyc_level"`
-	Status            string    `json:"status"` // active, suspended, locked, closed
-	FailedAttempts    int       `json:"failed_attempts"`
-	LockedUntil       time.Time `json:"locked_until,omitempty"`
-	EmailVerified     bool      `json:"email_verified"`
-	PhoneVerified     bool      `json:"phone_verified"`
+	ID               string    `json:"id"`
+	Email            string    `json:"email"`
+	Username         string    `json:"username"`
+	PasswordHash     string    `json:"-"`
+	PasswordSalt     string    `json:"-"`
+	TwoFactorSecret  string    `json:"two_factor_secret,omitempty"`
+	TwoFactorEnabled bool      `json:"two_factor_enabled"`
+	KYCLevel         int       `json:"kyc_level"`
+	Status           string    `json:"status"` // active, suspended, locked, closed
+	FailedAttempts   int       `json:"failed_attempts"`
+	LockedUntil      time.Time `json:"locked_until,omitempty"`
+	EmailVerified    bool      `json:"email_verified"`
+	PhoneVerified    bool      `json:"phone_verified"`
 	ReferralCode     string    `json:"referral_code"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type Session struct {
-	ID             string    `json:"id"`
-	UserID         string    `json:"user_id"`
-	AccessToken    string    `json:"access_token"`
-	RefreshToken   string    `json:"refresh_token"`
-	IPAddress      string    `json:"ip_address"`
-	UserAgent      string    `json:"user_agent"`
-	DeviceID       string    `json:"device_id"`
-	Trusted        bool      `json:"trusted"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	CreatedAt      time.Time `json:"created_at"`
-	LastActiveAt   time.Time `json:"last_active_at"`
+	ID           string    `json:"id"`
+	UserID       string    `json:"user_id"`
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	IPAddress    string    `json:"ip_address"`
+	UserAgent    string    `json:"user_agent"`
+	DeviceID     string    `json:"device_id"`
+	Trusted      bool      `json:"trusted"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	CreatedAt    time.Time `json:"created_at"`
+	LastActiveAt time.Time `json:"last_active_at"`
 }
 
 type LoginRequest struct {
@@ -89,19 +89,19 @@ type LoginRequest struct {
 }
 
 type RegisterRequest struct {
-	Email       string `json:"email"`
-	Password    string `json:"password"`
-	Username    string `json:"username"`
-	Phone       string `json:"phone,omitempty"`
+	Email        string `json:"email"`
+	Password     string `json:"password"`
+	Username     string `json:"username"`
+	Phone        string `json:"phone,omitempty"`
 	ReferralCode string `json:"referral_code,omitempty"`
 }
 
 type AuthResponse struct {
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token"`
-	ExpiresAt    int64     `json:"expires_at"`
-	TokenType    string    `json:"token_type"`
-	User         *User     `json:"user,omitempty"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresAt    int64  `json:"expires_at"`
+	TokenType    string `json:"token_type"`
+	User         *User  `json:"user,omitempty"`
 }
 
 type TokenClaims struct {
@@ -290,16 +290,16 @@ func (s *AuthService) CreateSession(ctx context.Context, user *User, req *LoginR
 
 	session := &Session{
 		ID:           uuid.New().String(),
-		UserID:        user.ID,
-		AccessToken:   accessToken,
-		RefreshToken:  refreshToken,
-		IPAddress:     req.IPAddress,
-		UserAgent:     req.UserAgent,
-		DeviceID:      req.DeviceID,
-		Trusted:       false,
-		ExpiresAt:     time.Now().Add(SessionExpiry),
-		CreatedAt:     time.Now(),
-		LastActiveAt:  time.Now(),
+		UserID:       user.ID,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		IPAddress:    req.IPAddress,
+		UserAgent:    req.UserAgent,
+		DeviceID:     req.DeviceID,
+		Trusted:      false,
+		ExpiresAt:    time.Now().Add(SessionExpiry),
+		CreatedAt:    time.Now(),
+		LastActiveAt: time.Now(),
 	}
 
 	return session, nil
@@ -391,19 +391,19 @@ func (s *AuthService) CreateUser(ctx context.Context, req *RegisterRequest) (*Us
 	referralCode := s.generateReferralCode()
 
 	user := &User{
-		ID:            userID,
-		Email:         req.Email,
-		Username:      req.Username,
-		PasswordHash:  passwordHash,
-		PasswordSalt:  salt,
-		KYCLevel:      0,
-		Status:        "active",
+		ID:             userID,
+		Email:          req.Email,
+		Username:       req.Username,
+		PasswordHash:   passwordHash,
+		PasswordSalt:   salt,
+		KYCLevel:       0,
+		Status:         "active",
 		FailedAttempts: 0,
-		EmailVerified: false,
-		PhoneVerified: false,
-		ReferralCode:  referralCode,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		EmailVerified:  false,
+		PhoneVerified:  false,
+		ReferralCode:   referralCode,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	return user, nil

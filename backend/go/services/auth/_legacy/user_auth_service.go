@@ -17,29 +17,29 @@ import (
 )
 
 const (
-	StatusActive   = "active"
-	StatusPending = "pending"
+	StatusActive    = "active"
+	StatusPending   = "pending"
 	StatusSuspended = "suspended"
-	StatusBanned  = "banned"
+	StatusBanned    = "banned"
 )
 
 type User struct {
-	ID                string    `json:"id"`
-	Email            string    `json:"email"`
-	Username         string    `json:"username"`
-	PasswordHash     string    `json:"-"`
-	TwoFASecret     string    `json:"two_fa_secret,omitempty"`
-	TwoFAEnabled    bool      `json:"two_fa_enabled"`
-	Phone           string    `json:"phone,omitempty"`
-	Status          string    `json:"status"`
-	EmailVerified   bool      `json:"email_verified"`
-	PhoneVerified   bool      `json:"phone_verified"`
-	KYCLevel        int       `json:"kyc_level"`
-	ReferrerID      string    `json:"referrer_id,omitempty"`
-	RegistrationIP  string    `json:"registration_ip"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	LastLoginAt     time.Time `json:"last_login_at"`
+	ID             string    `json:"id"`
+	Email          string    `json:"email"`
+	Username       string    `json:"username"`
+	PasswordHash   string    `json:"-"`
+	TwoFASecret    string    `json:"two_fa_secret,omitempty"`
+	TwoFAEnabled   bool      `json:"two_fa_enabled"`
+	Phone          string    `json:"phone,omitempty"`
+	Status         string    `json:"status"`
+	EmailVerified  bool      `json:"email_verified"`
+	PhoneVerified  bool      `json:"phone_verified"`
+	KYCLevel       int       `json:"kyc_level"`
+	ReferrerID     string    `json:"referrer_id,omitempty"`
+	RegistrationIP string    `json:"registration_ip"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	LastLoginAt    time.Time `json:"last_login_at"`
 }
 
 type Session struct {
@@ -63,22 +63,22 @@ type LoginAttempt struct {
 }
 
 type AuthManager struct {
-	mu           sync.RWMutex
-	users        map[string]*User
-	emailIndex   map[string]string // email -> userID
+	mu            sync.RWMutex
+	users         map[string]*User
+	emailIndex    map[string]string // email -> userID
 	usernameIndex map[string]string // username -> userID
-	sessions     map[string]*Session
-	userSessions map[string][]string // userID -> sessionIDs
+	sessions      map[string]*Session
+	userSessions  map[string][]string // userID -> sessionIDs
 	loginAttempts map[string][]LoginAttempt
 }
 
 func NewAuthManager() *AuthManager {
 	return &AuthManager{
-		users:          make(map[string]*User),
+		users:         make(map[string]*User),
 		emailIndex:    make(map[string]string),
 		usernameIndex: make(map[string]string),
-		sessions:     make(map[string]*Session),
-		userSessions: make(map[string][]string),
+		sessions:      make(map[string]*Session),
+		userSessions:  make(map[string][]string),
 		loginAttempts: make(map[string][]LoginAttempt),
 	}
 }
@@ -110,17 +110,17 @@ func (am *AuthManager) Register(email, username, password, ip string) (*User, er
 
 	now := time.Now()
 	user := &User{
-		ID:               fmt.Sprintf("USR%d%d", now.Unix(), now.Nanosecond()),
-		Email:            email,
-		Username:         username,
-		PasswordHash:     string(hash),
-		Status:           StatusPending,
-		EmailVerified:   false,
-		PhoneVerified:   false,
-		KYCLevel:        0,
-		RegistrationIP:  ip,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:             fmt.Sprintf("USR%d%d", now.Unix(), now.Nanosecond()),
+		Email:          email,
+		Username:       username,
+		PasswordHash:   string(hash),
+		Status:         StatusPending,
+		EmailVerified:  false,
+		PhoneVerified:  false,
+		KYCLevel:       0,
+		RegistrationIP: ip,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	am.users[user.ID] = user
@@ -186,15 +186,15 @@ func (am *AuthManager) createSession(userID, ip, userAgent, deviceID string) (*S
 
 	now := time.Now()
 	session := &Session{
-		ID:            sessionID,
-		UserID:        userID,
-		Token:         token,
-		RefreshToken:  refreshToken,
-		IPAddress:     ip,
-		UserAgent:     userAgent,
-		DeviceID:      deviceID,
-		ExpiresAt:     now.Add(24 * time.Hour),
-		CreatedAt:     now,
+		ID:           sessionID,
+		UserID:       userID,
+		Token:        token,
+		RefreshToken: refreshToken,
+		IPAddress:    ip,
+		UserAgent:    userAgent,
+		DeviceID:     deviceID,
+		ExpiresAt:    now.Add(24 * time.Hour),
+		CreatedAt:    now,
 		LastActivity: now,
 	}
 

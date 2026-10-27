@@ -36,7 +36,7 @@ private:
 
 public:
     void add_trade(const TradeReport& tr) {
-        trades.push_back(trade);
+        trades.push_back(tr);
     }
 
     std::string generate_daily_report() {

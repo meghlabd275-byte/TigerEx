@@ -11,96 +11,124 @@ import (
 )
 
 var (
-	ErrAdNotFound = errors.New("ad not found")
+	ErrAdNotFound    = errors.New("ad not found")
 	ErrOrderNotFound = errors.New("order not found")
 	ErrInvalidAmount = errors.New("invalid amount")
 	ErrPriceMismatch = errors.New("price mismatch")
 	ErrStatusInvalid = errors.New("invalid status")
+	// ErrPriceUnavailable is returned when a floating-price ad needs a market
+	// price and no oracle is configured, or the oracle has no price for the pair.
+	ErrPriceUnavailable = errors.New("reference price is unavailable")
 )
+
+// Price types for an advertisement.
+const (
+	// PriceFixed means the ad carries its own price.
+	PriceFixed = "fixed"
+	// PriceFloating means the ad tracks a reference market price plus a margin.
+	PriceFloating = "floating"
+)
+
+// PriceOracle returns the current market price of one unit of base in quote.
+//
+// A floating-price ad cannot be priced without a real reference price. The
+// implementation is injected by the deployment and reads the exchange's own
+// mark price; there is no default because inventing a price would fill a real
+// order at a rate nobody quoted.
+type PriceOracle interface {
+	ReferencePrice(ctx context.Context, base, quote string) (float64, error)
+}
 
 // Config holds P2P configuration
 type Config struct {
-	MinOrderAmount float64
-	MaxOrderAmount float64
+	MinOrderAmount       float64
+	MaxOrderAmount       float64
 	PaymentWindowMinutes int
-	DisputeWindowHours int
+	DisputeWindowHours   int
 }
 
 // Ad represents a P2P advertisement
 type Ad struct {
-	ID            string    `json:"id"`
-	UserID       string    `json:"userId"`
-	Type         string    `json:"type"` // "buy" or "sell"
-	Asset        string    `json:"asset"`
-	FiatCurrency string    `json:"fiatCurrency"`
-	PriceType    string    `json:"priceType"` // "fixed" or "浮动"
-	PriceMargin  float64   `json:"priceMargin"` // percentage
-	FixedPrice   float64   `json:"fixedPrice"`
-	MinAmount    float64   `json:"minAmount"`
-	MaxAmount    float64   `json:"maxAmount"`
-	PaymentMethods []string `json:"paymentMethods"`
-	Terms        string    `json:"terms"`
-	Status       string    `json:"status"` // "active", "paused", "closed"
-	CompletedOrders int     `json:"completedOrders"`
-	AvgCompletionTime float64 `json:"avgCompletionTime"`
-	Rating        float64   `json:"rating"`
-	CreatedAt     int64     `json:"createdAt"`
-	UpdatedAt     int64     `json:"updatedAt"`
+	ID                string   `json:"id"`
+	UserID            string   `json:"userId"`
+	Type              string   `json:"type"` // "buy" or "sell"
+	Asset             string   `json:"asset"`
+	FiatCurrency      string   `json:"fiatCurrency"`
+	PriceType         string   `json:"priceType"`   // PriceFixed or PriceFloating
+	PriceMargin       float64  `json:"priceMargin"` // percentage
+	FixedPrice        float64  `json:"fixedPrice"`
+	MinAmount         float64  `json:"minAmount"`
+	MaxAmount         float64  `json:"maxAmount"`
+	PaymentMethods    []string `json:"paymentMethods"`
+	Terms             string   `json:"terms"`
+	Status            string   `json:"status"` // "active", "paused", "closed"
+	CompletedOrders   int      `json:"completedOrders"`
+	AvgCompletionTime float64  `json:"avgCompletionTime"`
+	Rating            float64  `json:"rating"`
+	CreatedAt         int64    `json:"createdAt"`
+	UpdatedAt         int64    `json:"updatedAt"`
 }
 
 // Order represents a P2P order
 type Order struct {
-	ID              string    `json:"id"`
-	AdID           string    `json:"adId"`
-	CreatorID      string    `json:"creatorId"`
-	CounterpartyID string    `json:"counterpartyId"`
-	Asset          string    `json:"asset"`
-	Amount         float64   `json:"amount"`
-	FiatAmount     float64   `json:"fiatAmount"`
-	FiatCurrency  string    `json:"fiatCurrency"`
-	Price          float64   `json:"price"`
-	Status         string    `json:"status"` // "pending", "waiting_payment", "paid", "released", "cancelled", "disputed"
-	PaymentMethod  string    `json:"paymentMethod"`
-	PaymentProof   string    `json:"paymentProof"`
-	Remark         string    `json:"remark"`
-	DisputeReason  string    `json:"disputeReason"`
-	DisputeResult string    `json:"disputeResult"`
-	CreatedAt      int64     `json:"createdAt"`
-	PaidAt         int64     `json:"paidAt"`
-	ReleasedAt     int64     `json:"releasedAt"`
-	CancelledAt    int64     `json:"cancelledAt"`
+	ID             string  `json:"id"`
+	AdID           string  `json:"adId"`
+	CreatorID      string  `json:"creatorId"`
+	CounterpartyID string  `json:"counterpartyId"`
+	Asset          string  `json:"asset"`
+	Amount         float64 `json:"amount"`
+	FiatAmount     float64 `json:"fiatAmount"`
+	FiatCurrency   string  `json:"fiatCurrency"`
+	Price          float64 `json:"price"`
+	Status         string  `json:"status"` // "pending", "waiting_payment", "paid", "released", "cancelled", "disputed"
+	PaymentMethod  string  `json:"paymentMethod"`
+	PaymentProof   string  `json:"paymentProof"`
+	Remark         string  `json:"remark"`
+	DisputeReason  string  `json:"disputeReason"`
+	DisputeResult  string  `json:"disputeResult"`
+	CreatedAt      int64   `json:"createdAt"`
+	PaidAt         int64   `json:"paidAt"`
+	ReleasedAt     int64   `json:"releasedAt"`
+	CancelledAt    int64   `json:"cancelledAt"`
 }
 
 // Dispute represents a dispute
 type Dispute struct {
-	ID            string    `json:"id"`
-	OrderID       string    `json:"orderId"`
-	ReporterID    string    `json:"reporterId"`
-	Reason        string    `json:"reason"`
-	Description   string    `json:"description"`
-	Evidence      []string  `json:"evidence"`
-	Status        string    `json:"status"` // "open", "appealed", "resolved", "cancelled"
-	Resolution    string    `json:"resolution"`
-	ResolvedBy    string    `json:"resolvedBy"`
-	CreatedAt     int64     `json:"createdAt"`
-	ResolvedAt    int64     `json:"resolvedAt"`
+	ID          string   `json:"id"`
+	OrderID     string   `json:"orderId"`
+	ReporterID  string   `json:"reporterId"`
+	Reason      string   `json:"reason"`
+	Description string   `json:"description"`
+	Evidence    []string `json:"evidence"`
+	Status      string   `json:"status"` // "open", "appealed", "resolved", "cancelled"
+	Resolution  string   `json:"resolution"`
+	ResolvedBy  string   `json:"resolvedBy"`
+	CreatedAt   int64    `json:"createdAt"`
+	ResolvedAt  int64    `json:"resolvedAt"`
 }
 
 // Service handles P2P operations
 type Service struct {
-	config    Config
+	config   Config
 	ads      map[string]*Ad
 	orders   map[string]*Order
 	disputes map[string]*Dispute
+	oracle   PriceOracle
 }
 
 func NewService(config Config) *Service {
 	return &Service{
-		config: config,
-		ads: make(map[string]*Ad),
-		orders: make(map[string]*Order),
+		config:   config,
+		ads:      make(map[string]*Ad),
+		orders:   make(map[string]*Order),
 		disputes: make(map[string]*Dispute),
 	}
+}
+
+// WithPriceOracle returns the service with a reference-price oracle attached.
+func (s *Service) WithPriceOracle(oracle PriceOracle) *Service {
+	s.oracle = oracle
+	return s
 }
 
 // CreateAd creates a new P2P advertisement
@@ -218,16 +246,34 @@ func (s *Service) CreateOrder(ctx context.Context, userID, adID string, amount f
 	if amount < ad.MinAmount || amount > ad.MaxAmount {
 		return nil, ErrInvalidAmount
 	}
-
-	// Calculate fiat amount
-	fiatAmount := amount * ad.FixedPrice
-	if ad.PriceType == "浮动" {
-		// Would need current market price
-		fiatAmount = amount * 45000 // placeholder
+	if userID == ad.UserID {
+		return nil, errors.New("cannot take your own advertisement")
+	}
+	if len(ad.PaymentMethods) == 0 {
+		return nil, errors.New("advertisement has no payment method")
 	}
 
+	// Calculate the fiat amount. A floating ad is priced against the exchange's
+	// own reference price; when that price is unavailable the order is refused
+	// rather than filled at a made-up rate.
+	unitPrice := ad.FixedPrice
+	if ad.PriceType == PriceFloating {
+		if s.oracle == nil {
+			return nil, ErrPriceUnavailable
+		}
+		reference, err := s.oracle.ReferencePrice(ctx, ad.Asset, ad.FiatCurrency)
+		if err != nil || reference <= 0 {
+			return nil, ErrPriceUnavailable
+		}
+		unitPrice = reference * (1 + ad.PriceMargin/100)
+	}
+	if unitPrice <= 0 {
+		return nil, ErrPriceUnavailable
+	}
+	fiatAmount := amount * unitPrice
+
 	order := &Order{
-		ID:              uuid.New().String(),
+		ID:             uuid.New().String(),
 		AdID:           adID,
 		CreatorID:      userID,
 		CounterpartyID: ad.UserID,
@@ -235,15 +281,10 @@ func (s *Service) CreateOrder(ctx context.Context, userID, adID string, amount f
 		Amount:         amount,
 		FiatAmount:     fiatAmount,
 		FiatCurrency:   ad.FiatCurrency,
-		Price:          ad.FixedPrice,
+		Price:          unitPrice,
 		Status:         "pending",
 		PaymentMethod:  ad.PaymentMethods[0],
 		CreatedAt:      api.Now(),
-	}
-
-	// If creator is buyer, swap roles
-	if ad.Type == "buy" {
-		order.CounterpartyID = ad.UserID
 	}
 
 	s.orders[order.ID] = order

@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -107,6 +109,12 @@ public:
     // Add order to book
     bool AddOrder(Order& order);
 
+    // Rest an order and immediately match it against the opposite side
+    std::vector<Trade> AddOrderAndMatch(Order& order);
+
+    // Match an order against the opposite side of the book
+    std::vector<Trade> MatchOrder(uint64_t order_id);
+
     // Cancel order
     bool CancelOrder(uint64_t order_id);
 
@@ -134,18 +142,19 @@ public:
 private:
     std::string symbol_;
     std::unordered_map<uint64_t, std::shared_ptr<Order>> orders_;
-    
+
     // Price-time priority queues
     std::multimap<uint64_t, std::deque<std::shared_ptr<Order>>> bids_;      // Price -> Orders (ascending)
     std::multimap<uint64_t, std::deque<std::shared_ptr<Order>>> asks_;     // Price -> Orders (ascending)
-    
+
     // Quick lookup by order ID
     std::unordered_map<uint64_t, std::multimap<uint64_t, std::deque<std::shared_ptr<Order>>>::iterator> bid_iterators_;
     std::unordered_map<uint64_t, std::multimap<uint64_t, std::deque<std::shared_ptr<Order>>>::iterator> ask_iterators_;
-    
+
     mutable std::shared_mutex mutex_;
     std::vector<Trade> recent_trades_;
     std::atomic<uint64_t> last_trade_id_{0};
+    std::atomic<uint64_t> last_order_id_{0};
 };
 
 // Matching engine
@@ -180,7 +189,6 @@ public:
 
 private:
     std::unordered_map<std::string, std::shared_ptr<OrderBook>> books_;
-    std::atomic<uint64_t> last_order_id_{0};
     mutable std::shared_mutex mutex_;
 };
 

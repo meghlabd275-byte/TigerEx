@@ -16,10 +16,11 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 
 	"tigerex/backend/internal/api"
+	"tigerex/backend/internal/totp"
 )
 
 var (
-	ErrInvalidKey   = errors.New("invalid key")
+	ErrInvalidKey    = errors.New("invalid key")
 	ErrNotAuthorized = errors.New("not authorized")
 )
 
@@ -30,40 +31,74 @@ type Config struct {
 
 // ColdWallet represents a cold wallet
 type ColdWallet struct {
-	ID        string `json:"id"`
-	Asset    string `json:"asset"`
-	Address  string `json:"address"`
-	Network  string `json:"network"`
-	Balance  float64 `json:"balance"`
+	ID        string  `json:"id"`
+	Asset     string  `json:"asset"`
+	Address   string  `json:"address"`
+	Network   string  `json:"network"`
+	Balance   float64 `json:"balance"`
 	Threshold float64 `json:"threshold"`
-	Status   string `json:"status"`
+	Status    string  `json:"status"`
 }
 
 // MultiSigTx represents a multi-signature transaction
 type MultiSigTx struct {
-	ID          string   `json:"id"`
+	ID         string   `json:"id"`
 	FromWallet string   `json:"fromWallet"`
 	ToAddress  string   `json:"toAddress"`
-	Amount    float64  `json:"amount"`
-	Asset     string   `json:"asset"`
-	Signers   []string `json:"signers"`
-	Required  int     `json:"required"`
-	SignedBy  []string `json:"signedBy"`
-	Status   string   `json:"status"`
-	CreatedAt int64   `json:"createdAt"`
+	Amount     float64  `json:"amount"`
+	Asset      string   `json:"asset"`
+	Signers    []string `json:"signers"`
+	Required   int      `json:"required"`
+	SignedBy   []string `json:"signedBy"`
+	Status     string   `json:"status"`
+	CreatedAt  int64    `json:"createdAt"`
 }
+
+// AddressDeriver produces a real custody address for a multisig policy. The
+// deployment wires this to the HD wallet and script builder; there is no
+// default because an address that does not correspond to a spendable script
+// would strand any funds sent to it.
+type AddressDeriver interface {
+	DeriveMultisigAddress(ctx context.Context, signers []string, threshold int) (string, error)
+}
+
+// ApprovalStore persists withdrawal approval requests.
+type ApprovalStore interface {
+	Create(ctx context.Context, withdrawalID string, approvers []string) error
+	Status(ctx context.Context, withdrawalID string) (approved bool, found bool, err error)
+}
+
+// ErrNotConfigured is returned when an operation needs a provider that the
+// deployment has not wired.
+var ErrNotConfigured = errors.New("required provider is not configured")
 
 // Service handles security operations
 type Service struct {
-	config  Config
-	cipher  cipher.AEAD
+	config    Config
+	cipher    cipher.AEAD
+	deriver   AddressDeriver
+	approvals ApprovalStore
+}
+
+// WithAddressDeriver returns the service with a custody address deriver
+// attached.
+func (s *Service) WithAddressDeriver(d AddressDeriver) *Service {
+	s.deriver = d
+	return s
+}
+
+// WithApprovalStore returns the service with a withdrawal approval store
+// attached.
+func (s *Service) WithApprovalStore(a ApprovalStore) *Service {
+	s.approvals = a
+	return s
 }
 
 // NewService creates a new security service
 func NewService(config Config) *Service {
 	block, _ := aes.NewCipher(config.MasterKey[:])
 	gcm, _ := cipher.NewGCM(block)
-	
+
 	return &Service{
 		config: config,
 		cipher: gcm,
@@ -84,80 +119,92 @@ func HashPassword(password, salt []byte) []byte {
 }
 
 // GenerateSalt generates a random salt
-func GenerateSalt(size int) []byte {
+func GenerateSalt(size int) ([]byte, error) {
+	if size <= 0 {
+		return nil, errors.New("salt size must be positive")
+	}
 	salt := make([]byte, size)
-	rand.Read(salt)
-	return salt
+	if _, err := rand.Read(salt); err != nil {
+		return nil, fmt.Errorf("generating salt: %w", err)
+	}
+	return salt, nil
 }
 
-// GenerateOTP generates a one-time password
+// GenerateOTP returns the TOTP code for a base32 secret at a given time.
+//
+// The previous implementation hashed the secret with SHA-256 and the time step
+// and took the first four bytes. That is not the RFC 4226 truncation, so the
+// codes did not match any authenticator app. It now delegates to the shared
+// RFC 6238 implementation.
 func GenerateOTP(secret string, timestamp int64) string {
-	// TOTP implementation
-	// This is a simplified version - real implementation would use RFC 6238
-	
-	secretHash := sha256.Sum256([]byte(secret))
-	totpSteps := timestamp / 30
-	
-	// Combine secret hash with step
-	data := append(secretHash[:], []byte(fmt.Sprintf("%d", totpSteps))...)
-	hash := sha256.Sum256(data)
-	
-	// Generate 6-digit code
-	code := 0
-	for _, b := range hash[:4] {
-		code = code*256 + int(b)
+	key, err := totp.DecodeSecret(secret)
+	if err != nil {
+		return ""
 	}
-	code = code % 1000000
-	
-	return fmt.Sprintf("%06d", code)
+	code, err := totp.Generate(totp.Config{Secret: key}, time.Unix(timestamp, 0))
+	if err != nil {
+		return ""
+	}
+	return code
 }
 
-// VerifyOTP verifies a one-time password
+// VerifyOTP checks a TOTP code against the secret, allowing the given number of
+// periods of clock drift.
 func VerifyOTP(secret, code string, timestamp int64, window int) bool {
-	// Check current and previous windows
-	for offset := 0; offset <= window; offset++ {
-		expected := GenerateOTP(secret, timestamp-int64(offset*30))
-		if expected == code {
-			return true
-		}
+	key, err := totp.DecodeSecret(secret)
+	if err != nil {
+		return false
 	}
-	return false
+	if window < 0 {
+		window = 0
+	}
+	return totp.ValidateWithSkew(totp.Config{Secret: key}, code, time.Unix(timestamp, 0), window)
 }
 
 // GenerateAntiPhishingCode generates an anti-phishing code
-func GenerateAntiPhishingCode() string {
-	bytes := make([]byte, 8)
-	rand.Read(bytes)
-	return hex.EncodeToString(bytes)[:8]
+func GenerateAntiPhishingCode() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating anti-phishing code: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // Encrypt encrypts sensitive data
 func (s *Service) Encrypt(plaintext string) (string, error) {
+	if s.cipher == nil {
+		return "", ErrInvalidKey
+	}
 	nonce := make([]byte, s.cipher.NonceSize())
-	rand.Read(nonce)
-	
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("generating nonce: %w", err)
+	}
+
 	ciphertext := s.cipher.Seal(nonce, nonce, []byte(plaintext), nil)
 	return hex.EncodeToString(ciphertext), nil
 }
 
 // Decrypt decrypts sensitive data
 func (s *Service) Decrypt(ciphertextHex string) (string, error) {
+	if s.cipher == nil {
+		return "", ErrInvalidKey
+	}
 	ciphertext, err := hex.DecodeString(ciphertextHex)
 	if err != nil {
-		return "", err
+		return "", ErrInvalidKey
 	}
-	
+
 	nonceSize := s.cipher.NonceSize()
 	if len(ciphertext) < nonceSize {
 		return "", ErrInvalidKey
 	}
-	
-	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	plaintext, err := s.cipher.Open(nil, nonce, ciphertext, nil)
+
+	nonce, body := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plaintext, err := s.cipher.Open(nil, nonce, body, nil)
 	if err != nil {
-		return "", err
+		return "", ErrInvalidKey
 	}
-	
+
 	return string(plaintext), nil
 }
 
@@ -166,21 +213,28 @@ func (s *Service) CreateMultiSigWallet(ctx context.Context, signers []string, th
 	if len(signers) < threshold || threshold < 2 {
 		return nil, errors.New("invalid threshold")
 	}
-	
-	// Generate wallet address
-	// This is a placeholder - real implementation would use HD wallet
-	bytes := make([]byte, 20)
-	rand.Read(bytes)
-	
-	wallet := &ColdWallet{
-		ID:        fmt.Sprintf("cold-%d", time.Now().Unix()),
-		Asset:     "BTC",
-		Address:  "bc1" + hex.EncodeToString(bytes)[:39],
-		Network:  "Bitcoin",
-		Balance:  0,
-		Status:   "active",
+
+	// The address must be derived from the signer set and threshold. The
+	// previous version built "bc1" plus 39 hex characters from random bytes,
+	// which is not a valid bech32 address: any deposit to it would have been
+	// unrecoverable.
+	if s.deriver == nil {
+		return nil, ErrNotConfigured
 	}
-	
+	address, err := s.deriver.DeriveMultisigAddress(ctx, signers, threshold)
+	if err != nil {
+		return nil, err
+	}
+
+	wallet := &ColdWallet{
+		ID:      fmt.Sprintf("cold-%d", time.Now().Unix()),
+		Asset:   "BTC",
+		Address: address,
+		Network: "Bitcoin",
+		Balance: 0,
+		Status:  "active",
+	}
+
 	return wallet, nil
 }
 
@@ -189,7 +243,7 @@ func (s *Service) SignMultiSigTx(ctx context.Context, tx *MultiSigTx, signerID s
 	if tx == nil || signerID == "" {
 		return ErrNotAuthorized
 	}
-	
+
 	// Check if signer is authorized
 	for _, s := range tx.Signers {
 		if s == signerID {
@@ -199,18 +253,18 @@ func (s *Service) SignMultiSigTx(ctx context.Context, tx *MultiSigTx, signerID s
 					return errors.New("already signed")
 				}
 			}
-			
+
 			tx.SignedBy = append(tx.SignedBy, signerID)
-			
+
 			// Check if threshold reached
 			if len(tx.SignedBy) >= tx.Required {
 				tx.Status = "approved"
 			}
-			
+
 			return nil
 		}
 	}
-	
+
 	return ErrNotAuthorized
 }
 
@@ -219,24 +273,24 @@ func (s *Service) VerifySignature(tx *MultiSigTx) bool {
 	if tx == nil {
 		return false
 	}
-	
+
 	// Check if enough signatures
 	if len(tx.SignedBy) < tx.Required {
 		return false
 	}
-	
+
 	// Verify each signature is from an authorized signer
 	signerSet := make(map[string]bool)
 	for _, s := range tx.Signers {
 		signerSet[s] = true
 	}
-	
+
 	for _, signed := range tx.SignedBy {
 		if !signerSet[signed] {
 			return false
 		}
 	}
-	
+
 	return true
 }
 
@@ -245,13 +299,13 @@ func (s *Service) CreateWithdrawalApproval(ctx context.Context, withdrawal *api.
 	if withdrawal == nil {
 		return ErrInvalidKey
 	}
-	
-	// This is a placeholder - real implementation would:
-	// 1. Create approval request
-	// 2. Send to approvers
-	// 3. Wait for threshold signatures
-	
-	return nil
+	if len(approvers) == 0 {
+		return errors.New("at least one approver is required")
+	}
+	if s.approvals == nil {
+		return ErrNotConfigured
+	}
+	return s.approvals.Create(ctx, withdrawal.ID, approvers)
 }
 
 // CheckWithdrawalApproval checks if withdrawal is approved
@@ -259,9 +313,17 @@ func (s *Service) CheckWithdrawalApproval(ctx context.Context, withdrawalID stri
 	if withdrawalID == "" {
 		return false, ErrInvalidKey
 	}
-	
-	// This is a placeholder - real implementation would check approval status
-	return false, nil
+	if s.approvals == nil {
+		return false, ErrNotConfigured
+	}
+	approved, found, err := s.approvals.Status(ctx, withdrawalID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, ErrInvalidKey
+	}
+	return approved, nil
 }
 
 // RateLimiter provides rate limiting
@@ -275,15 +337,15 @@ type RateLimiter struct {
 func NewRateLimiter(limit int, windowSeconds int) *RateLimiter {
 	return &RateLimiter{
 		requests: make(map[string][]int64),
-		limit:   limit,
-		window:  int64(windowSeconds),
+		limit:    limit,
+		window:   int64(windowSeconds),
 	}
 }
 
 // Allow checks if request is allowed
 func (rl *RateLimiter) Allow(key string) bool {
 	now := time.Now().Unix()
-	
+
 	// Clean old requests
 	requests := rl.requests[key]
 	var valid []int64
@@ -292,17 +354,17 @@ func (rl *RateLimiter) Allow(key string) bool {
 			valid = append(valid, ts)
 		}
 	}
-	
+
 	// Check limit
 	if len(valid) >= rl.limit {
 		rl.requests[key] = valid
 		return false
 	}
-	
+
 	// Add new request
 	valid = append(valid, now)
 	rl.requests[key] = valid
-	
+
 	return true
 }
 
@@ -340,7 +402,7 @@ func (bl *IPBlockList) IsBlocked(ip string) bool {
 		}
 		delete(bl.blocked, ip)
 	}
-	
+
 	// Check temporary block
 	if exp, ok := bl.tempBlock[ip]; ok {
 		if time.Now().Unix() < exp {
@@ -348,7 +410,7 @@ func (bl *IPBlockList) IsBlocked(ip string) bool {
 		}
 		delete(bl.tempBlock, ip)
 	}
-	
+
 	return false
 }
 
@@ -360,21 +422,21 @@ func (bl *IPBlockList) TempBlock(ip string, durationSeconds int) {
 // AuditLog provides audit logging
 type AuditLog struct {
 	UserID    string `json:"userId"`
-	Action   string `json:"action"`
-	IP       string `json:"ip"`
+	Action    string `json:"action"`
+	IP        string `json:"ip"`
 	UserAgent string `json:"userAgent"`
 	Timestamp int64  `json:"timestamp"`
-	Details  string `json:"details"`
+	Details   string `json:"details"`
 }
 
 // LogAction logs an action for audit
 func LogAction(userID, action, ip, userAgent, details string) *AuditLog {
 	return &AuditLog{
 		UserID:    userID,
-		Action:   action,
-		IP:       ip,
+		Action:    action,
+		IP:        ip,
 		UserAgent: userAgent,
 		Timestamp: api.Now(),
-		Details:  details,
+		Details:   details,
 	}
 }

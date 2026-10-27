@@ -1,88 +1,195 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import Link from "next/link";
-import { ArrowDownLeft, ArrowUpRight, ArrowRightLeft, Download, Upload, Clock } from "lucide-react";
+import React, { useMemo, useState } from 'react';
+import { Search, Download, ArrowUpRight, ArrowDownLeft, ArrowLeftRight, Clock } from 'lucide-react';
+import { useMergedResource } from '@/lib/useApiResource';
 
-const TRANSACTIONS = [
-  { id: 1, type: "deposit", coin: "USDT", amount: 1000, time: "2024-06-10 14:30", status: "completed", tx: "0x123...abc" },
-  { id: 2, type: "withdraw", coin: "BTC", amount: 0.05, time: "2024-06-09 10:15", status: "completed", tx: "0x456...def" },
-  { id: 3, type: "transfer", coin: "ETH", amount: 1.5, time: "2024-06-08 16:45", status: "completed", user: "john@example.com" },
-  { id: 4, type: "trade", coin: "USDT", amount: -250, time: "2024-06-07 09:20", status: "completed", pair: "BTC/USDT" },
-  { id: 5, type: "deposit", coin: "ETH", amount: 2.0, time: "2024-06-06 11:00", status: "pending", tx: "0x789...ghi" },
+interface Transaction {
+  id: string;
+  type?: string;
+  symbol?: string;
+  coin?: string;
+  asset?: string;
+  amount?: number | string;
+  status?: string;
+  network?: string;
+  created_at?: string;
+  time?: string;
+  txid?: string;
+  hash?: string;
+}
+
+const SOURCES = [
+  { path: '/api/deposit/history', type: 'deposit' },
+  { path: '/api/withdraw/history', type: 'withdraw' },
+  { path: '/api/trades/history', type: 'trade' },
+  { path: '/api/wallet/transfers', type: 'transfer' },
 ];
 
-export default function HistoryPage() {
-  const [filter, setFilter] = useState("all");
+function txSymbol(tx: Transaction): string {
+  return tx.symbol || tx.coin || tx.asset || '—';
+}
 
-  const filtered = filter === "all" ? TRANSACTIONS : TRANSACTIONS.filter(t => t.type === filter);
+function txAmount(tx: Transaction): string {
+  if (tx.amount === undefined || tx.amount === null) return '—';
+  const numeric = typeof tx.amount === 'string' ? parseFloat(tx.amount) : tx.amount;
+  if (!Number.isFinite(numeric)) return String(tx.amount);
+  return numeric.toLocaleString(undefined, { maximumFractionDigits: 8 });
+}
+
+function txDate(tx: Transaction): string {
+  const raw = tx.created_at || tx.time;
+  if (!raw) return '—';
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleString();
+}
+
+export default function WalletHistoryPage() {
+  const [filter, setFilter] = useState('all');
+  const [search, setSearch] = useState('');
+
+  const history = useMergedResource<Transaction>(SOURCES.map((s) => s.path));
+
+  const transactions = useMemo(() => {
+    const list = history.data ?? [];
+    return list.map((tx, index) => ({
+      ...tx,
+      id: tx.id || tx.txid || tx.hash || `tx-${index}`,
+      _type: (tx.type || 'unknown').toLowerCase(),
+    }));
+  }, [history.data]);
+
+  const filtered = transactions.filter((tx) => {
+    const matchesFilter = filter === 'all' || tx._type === filter;
+    const symbol = txSymbol(tx).toLowerCase();
+    return matchesFilter && (search === '' || symbol.includes(search.toLowerCase()));
+  });
 
   const getIcon = (type: string) => {
-    switch(type) {
-      case "deposit": return <ArrowDownLeft className="h-4 w-4 text-green-400" />;
-      case "withdraw": return <ArrowUpRight className="h-4 w-4 text-red-400" />;
-      case "transfer": return <ArrowRightLeft className="h-4 w-4 text-blue-400" />;
-      default: return <Download className="h-4 w-4 text-tiger-orange" />;
+    switch (type) {
+      case 'deposit':
+        return <ArrowDownLeft className="h-4 w-4 text-green-400" />;
+      case 'withdraw':
+        return <ArrowUpRight className="h-4 w-4 text-red-400" />;
+      case 'transfer':
+        return <ArrowLeftRight className="h-4 w-4 text-blue-400" />;
+      default:
+        return <Clock className="h-4 w-4 text-[#FF6B35]" />;
     }
+  };
+
+  const exportCsv = () => {
+    const header = ['id', 'type', 'symbol', 'amount', 'status', 'network', 'date'];
+    const rows = filtered.map((tx) => [
+      tx.id,
+      tx._type,
+      txSymbol(tx),
+      txAmount(tx),
+      tx.status ?? '',
+      tx.network ?? '',
+      txDate(tx),
+    ]);
+    const csv = [header, ...rows]
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'tigerex-wallet-history.csv';
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-tiger-black to-[#0d0d1a]">
-      <header className="sticky top-0 z-50 border-b border-white/10 bg-tiger-black/80 backdrop-blur-md">
-        <div className="container mx-auto flex h-16 items-center justify-between px-4">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-tiger-orange">
-              <span className="text-xl font-bold text-white">T</span>
-            </div>
-            <span className="text-xl font-bold text-white">TigerEx</span>
-          </Link>
-        </div>
-      </header>
-
       <div className="container mx-auto px-4 py-6">
-        <h1 className="text-3xl font-bold text-white mb-2">Transaction History</h1>
-        <p className="text-gray-400 mb-6">View all your transactions</p>
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="mb-1 text-2xl font-bold text-white">Transaction History</h1>
+            <p className="text-sm text-gray-400">
+              {history.loading ? 'Loading…' : `${filtered.length} transactions`}
+            </p>
+          </div>
+          <button
+            onClick={exportCsv}
+            disabled={filtered.length === 0}
+            className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-white hover:bg-white/10 disabled:opacity-50"
+          >
+            <Download className="h-4 w-4" /> Export CSV
+          </button>
+        </div>
 
-        <div className="mb-4 flex gap-2">
-          {["all", "deposit", "withdraw", "transfer", "trade"].map((f) => (
-            <button key={f} onClick={() => setFilter(f)}
-              className={`rounded-lg px-4 py-2 text-sm ${filter === f ? "bg-tiger-orange text-white" : "bg-white/5 text-gray-300"}`}>
-              {f.charAt(0).toUpperCase() + f.slice(1)}
+        {history.error && (
+          <div className="mb-4 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
+            Could not load transaction history: {history.error}
+          </div>
+        )}
+
+        <div className="relative mb-4">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by coin..."
+            className="w-full rounded-lg border border-white/10 bg-white/5 py-2.5 pl-9 pr-4 text-sm text-white focus:border-tiger-orange focus:outline-none"
+          />
+        </div>
+
+        <div className="mb-4 flex gap-2 overflow-x-auto pb-2">
+          {['all', 'deposit', 'withdraw', 'trade', 'transfer'].map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm capitalize ${
+                filter === f ? 'bg-tiger-orange text-white' : 'bg-white/5 text-gray-300'
+              }`}
+            >
+              {f}
             </button>
           ))}
         </div>
 
-        <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
-          <div className="grid grid-cols-5 border-b border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-gray-400">
-            <div>Type</div>
-            <div>Asset</div>
-            <div className="text-right">Amount</div>
-            <div className="text-right">Date</div>
-            <div className="text-right">Status</div>
-          </div>
+        <div className="space-y-2">
           {filtered.map((tx) => (
-            <div key={tx.id} className="grid grid-cols-5 items-center border-b border-white/5 px-4 py-4 hover:bg-white/5">
-              <div className="flex items-center gap-2">
-                {getIcon(tx.type)}
-                <span className="text-white capitalize">{tx.type}</span>
+            <div
+              key={tx.id}
+              className="rounded-xl border border-white/10 bg-white/5 p-4 transition hover:bg-white/10"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-tiger-black">
+                    {getIcon(tx._type)}
+                  </div>
+                  <div>
+                    <p className="font-medium capitalize text-white">
+                      {tx._type} {txSymbol(tx)}
+                    </p>
+                    <p className="text-xs text-gray-500">{txDate(tx)}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="font-medium text-white">{txAmount(tx)}</p>
+                  <span className="text-xs text-gray-400">{tx.status ?? 'unknown'}</span>
+                </div>
               </div>
-              <div className="font-medium text-white">{tx.coin}</div>
-              <div className={`text-right font-mono ${tx.amount >= 0 ? "text-green-400" : "text-red-400"}`}>
-                {tx.amount >= 0 ? "+" : ""}{tx.amount}
-              </div>
-              <div className="text-right text-gray-400">{tx.time}</div>
-              <div className="text-right">
-                <span className={`rounded-full px-2 py-1 text-xs ${tx.status === "completed" ? "bg-green-600/20 text-green-400" : "bg-yellow-600/20 text-yellow-400"}`}>
-                  {tx.status}
-                </span>
-              </div>
+              {(tx.network || tx.txid || tx.hash) && (
+                <div className="mt-2 flex items-center justify-between border-t border-white/5 pt-2 text-sm text-gray-500">
+                  <span>{tx.network ? `Network: ${tx.network}` : ''}</span>
+                  {(tx.txid || tx.hash) && <span className="font-mono">{tx.txid || tx.hash}</span>}
+                </div>
+              )}
             </div>
           ))}
         </div>
 
-        <button className="mt-4 w-full rounded-lg border border-white/10 py-3 text-gray-400 hover:text-white">
-          Load More
-        </button>
+        {!history.loading && !history.error && filtered.length === 0 && (
+          <div className="py-12 text-center text-gray-500">
+            <Clock className="mx-auto mb-3 h-12 w-12 opacity-50" />
+            <p>No transactions found</p>
+          </div>
+        )}
       </div>
     </div>
   );

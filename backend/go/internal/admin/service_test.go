@@ -11,8 +11,8 @@ import (
 
 func TestAdminOperationsFailClosedWithoutPersistence(t *testing.T) {
 	s := NewAdminService(&MasterWallet{
-		ID: uuid.New(),
-		Balance: big.NewInt(1000),
+		ID:       uuid.New(),
+		Balance:  big.NewInt(1000),
 		IsActive: true,
 	})
 	ctx := context.Background()

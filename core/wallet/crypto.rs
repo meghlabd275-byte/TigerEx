@@ -135,7 +135,11 @@ pub fn verify(message: &[u8], signature: &Signature, verifying_key: &VerifyingKe
 // MNEMONIC & SEED PHRASE (BIP39)
 // ============================================================================
 
-/// Word list for BIP39 (first 100 words for demo - full list has 2048)
+/// Word list for BIP39. This is only the first 100 of the 2048 words, so it is
+/// NOT sufficient to generate or validate a mnemonic. Use the `bip39` crate
+/// (see backend/rust/cmd/wallet_service) for real key material. The list is
+/// kept here only for the length check in the generators below, which refuse
+/// to produce a phrase.
 const BIP39_WORDS: &[&str] = &[
     "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract", "absurd", "abuse",
     "access", "accident", "account", "accuse", "achieve", "acid", "acoustic", "acquire", "across", "act",
@@ -149,51 +153,33 @@ const BIP39_WORDS: &[&str] = &[
     "area", "arena", "argue", "arm", "armed", "armor", "army", "around", "arrange", "arrest",
 ];
 
-/// Generate mnemonic phrase (12-24 words)
+/// Generate mnemonic phrase (12-24 words).
+///
+/// Always fails: this module does not ship the full 2048-word BIP39 list, and
+/// a partial list cannot produce a valid mnemonic. Returning an error is
+/// deliberate. Use `bip39::Mnemonic::generate` in the wallet service.
 pub fn generate_mnemonic(words: usize) -> Result<Vec<String>, String> {
     if words < 12 || words > 24 || words % 3 != 0 {
         return Err("Mnemonic must be 12, 15, 18, 21, or 24 words".to_string());
     }
-    
-    let entropy_bits = (words / 3) * 32 * 4;
-    let mut entropy = vec![0u8; entropy_bits / 8];
-    OsRng.fill_bytes(&mut entropy);
-    
-    let checksum = Sha256::digest(&entropy);
-    let checksum_bits = entropy_bits / 32;
-    
-    let mut bits = Vec::new();
-    for byte in &entropy {
-        for i in (0..8).rev() {
-            bits.push((*byte >> i) & 1);
-        }
-    }
-    
-    for i in 0..checksum_bits {
-        bits.push((checksum[i / 8] >> (7 - (i % 8))) & 1);
-    }
-    
-    let mut mnemonic = Vec::new();
-    for chunk in bits.chunks(11) {
-        let index = chunk.iter().fold(0, |acc, &b| (acc << 1) | b);
-        if (index as usize) < BIP39_WORDS.len() {
-            mnemonic.push(BIP39_WORDS[index as usize].to_string());
-        }
-    }
-    
-    Ok(mnemonic)
+    Err(
+        "refusing to generate a mnemonic: this module only has 100 of the 2048 BIP39 words. \
+         Use the wallet service, which uses the bip39 crate."
+            .to_string(),
+    )
 }
 
-/// Derive seed from mnemonic (BIP39)
-pub fn mnemonic_to_seed(mnemonic: &[String], passphrase: &str) -> Vec<u8> {
-    let phrase = mnemonic.join(" ");
-    let salt = format!("mnemonic{}", passphrase);
-    
-    // Use PBKDF2 with 2048 iterations
-    let mut seed = vec![0u8; 64];
-    pbkdf2_simple(phrase.as_bytes(), salt.as_bytes(), 2048, &mut seed);
-    
-    seed
+/// Derive seed from mnemonic (BIP39).
+///
+/// Always fails for the same reason as `generate_mnemonic`: a phrase built from
+/// a truncated word list is not a real BIP39 phrase. Use the `bip39` crate.
+pub fn mnemonic_to_seed(mnemonic: &[String], passphrase: &str) -> Result<Vec<u8>, String> {
+    let _ = (mnemonic, passphrase);
+    Err(
+        "refusing to derive a seed: this module only has 100 of the 2048 BIP39 words. \
+         Use the wallet service, which uses the bip39 crate."
+            .to_string(),
+    )
 }
 
 /// Simple PBKDF2 implementation

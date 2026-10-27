@@ -81,6 +81,15 @@ jobs:
       - name: Compile matching engine with warnings
         run: cmake --build build/matching-engine --parallel 2
 
+      - name: Configure order book core and tests
+        run: cmake -S backend/cpp -B build/order-book -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compile order book core and tests
+        run: cmake --build build/order-book --parallel 2
+
+      - name: Run order book regression tests
+        run: ctest --test-dir build/order-book --output-on-failure
+
       - name: Compile and run C++ order-book regression tests
         run: |
           c++ -std=c++20 -O2 -Wall -Wextra -Werror \

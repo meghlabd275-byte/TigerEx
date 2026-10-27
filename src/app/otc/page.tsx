@@ -1,113 +1,198 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { useApiResource, toArray } from '@/lib/useApiResource';
 
-interface OTCOffer {
+interface OTCQuote {
   id: string;
-  type: 'buy' | 'sell';
-  asset: string;
-  fiat: string;
-  price: number;
-  limit: string;
-  paymentMethods: string[];
-  trader: string;
-  trades: number;
-  completion: number;
+  asset?: string;
+  side?: string;
+  amount?: number;
+  quotePrice?: number;
+  quote_price?: number;
+  finalPrice?: number;
+  fee?: number;
+  status?: string;
+  expiresAt?: number;
+  createdAt?: number;
+}
+
+interface OTCQuoteResponse {
+  success?: boolean;
+  error?: string;
+}
+
+function formatPrice(value: number | undefined): string {
+  if (value === undefined || value === null || Number.isNaN(value)) return '—';
+  return value.toLocaleString(undefined, { maximumFractionDigits: 8 });
+}
+
+function formatTime(value: number | undefined): string {
+  if (!value) return '—';
+  // Unix seconds are the convention used by the institutional service.
+  const ms = value < 1e12 ? value * 1000 : value;
+  const parsed = new Date(ms);
+  return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleString();
 }
 
 export default function OTCPage() {
-  const [offers, setOffers] = useState<OTCOffer[]>([
-    { id: '1', type: 'buy', asset: 'USDT', fiat: 'USD', price: 1.002, limit: '$1,000-$50,000', paymentMethods: ['Bank Transfer'], trader: 'TraderJohn', trades: 450, completion: 98 },
-    { id: '2', type: 'sell', asset: 'BTC', fiat: 'USD', price: 43200, limit: '$100-$10,000', paymentMethods: ['PayPal', 'Bank Transfer'], trader: 'CryptoPro', trades: 1200, completion: 99 },
-    { id: '3', type: 'buy', asset: 'ETH', fiat: 'USD', price: 2285, limit: '$500-$25,000', paymentMethods: ['Bank Transfer'], trader: 'EthTrader', trades: 320, completion: 95 },
-  ]);
+  const history = useApiResource<unknown>('/api/otc/history');
+  const quotes = useMemo(() => toArray<OTCQuote>(history.data), [history.data]);
+
+  const [asset, setAsset] = useState('BTC');
+  const [side, setSide] = useState<'buy' | 'sell'>('buy');
+  const [amount, setAmount] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const requestQuote = async () => {
+    setResult(null);
+    setSubmitting(true);
+    try {
+      const token =
+        typeof window !== 'undefined'
+          ? window.localStorage.getItem('token') || window.localStorage.getItem('auth_token')
+          : null;
+      const response = await fetch(
+        `/api/otc/quote?symbol=${encodeURIComponent(asset)}&amount=${encodeURIComponent(amount)}`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        }
+      );
+      const data = (await response.json()) as OTCQuoteResponse & Partial<OTCQuote>;
+      if (response.ok && data.success !== false) {
+        setResult({
+          ok: true,
+          message: `Quote received: ${formatPrice(data.quotePrice ?? data.quote_price)} ${
+            data.id ? `(id ${data.id})` : ''
+          }`,
+        });
+        history.reload();
+      } else {
+        setResult({ ok: false, message: data.error || 'Could not obtain a quote.' });
+      }
+    } catch (error) {
+      setResult({
+        ok: false,
+        message: error instanceof Error ? error.message : 'Could not obtain a quote.',
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="p-6">
-        <h1 className="text-2xl font-bold mb-6">OTC Trading</h1>
-        
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">Total OTC Volume (24h)</div>
-            <div className="text-2xl font-bold">$12.5M</div>
+    <div className="min-h-screen bg-[#0A0A0F] text-white p-4">
+      <div className="max-w-4xl mx-auto">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold">OTC Trading</h1>
+            <p className="text-gray-400">
+              Request block quotes for large orders without moving the book
+            </p>
           </div>
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">Active Traders</div>
-            <div className="text-2xl font-bold">1,245</div>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">Completed Trades</div>
-            <div className="text-2xl font-bold">8,920</div>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">Avg. Trade Size</div>
-            <div className="text-2xl font-bold">$15,000</div>
-          </div>
+          <button
+            onClick={history.reload}
+            className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-white"
+          >
+            <RefreshCw className="w-3 h-3" /> Refresh
+          </button>
         </div>
 
-        <div className="flex gap-4 mb-6">
-          <select className="px-4 py-2 border rounded-lg">
-            <option value="all">All Assets</option>
-            <option value="BTC">BTC</option>
-            <option value="ETH">ETH</option>
-            <option value="USDT">USDT</option>
-          </select>
-          <select className="px-4 py-2 border rounded-lg">
-            <option value="all">All Fiat</option>
-            <option value="USD">USD</option>
-            <option value="EUR">EUR</option>
-          </select>
+        {/* Quote request */}
+        <div className="bg-[#14141A] rounded-xl p-6 mb-6">
+          <h2 className="text-lg font-semibold mb-4">Request a Quote</h2>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <select
+              value={asset}
+              onChange={(e) => setAsset(e.target.value)}
+              className="rounded-lg border border-white/10 bg-[#0A0A0F] px-4 py-2.5 text-sm"
+            >
+              <option value="BTC">BTC</option>
+              <option value="ETH">ETH</option>
+              <option value="USDT">USDT</option>
+              <option value="USDC">USDC</option>
+            </select>
+            <select
+              value={side}
+              onChange={(e) => setSide(e.target.value as 'buy' | 'sell')}
+              className="rounded-lg border border-white/10 bg-[#0A0A0F] px-4 py-2.5 text-sm"
+            >
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+            <input
+              type="number"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="Amount"
+              className="rounded-lg border border-white/10 bg-[#0A0A0F] px-4 py-2.5 text-sm"
+            />
+            <button
+              onClick={requestQuote}
+              disabled={submitting || !(Number(amount) > 0)}
+              className="rounded-lg bg-[#FF6B35] px-4 py-2.5 text-sm font-bold disabled:opacity-50"
+            >
+              {submitting ? 'Requesting…' : 'Get Quote'}
+            </button>
+          </div>
+
+          {result && (
+            <div
+              className={`mt-4 rounded-lg px-4 py-3 text-sm ${
+                result.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'
+              }`}
+            >
+              {result.message}
+            </div>
+          )}
         </div>
 
-        <div className="bg-white rounded-lg shadow">
-          <table className="min-w-full">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Asset</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Limit</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Payment</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Trader</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Trades</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {offers.map((offer) => (
-                <tr key={offer.id}>
-                  <td className="px-6 py-4">
-                    <span className={`px-2 py-1 text-xs rounded-full ${
-                      offer.type === 'buy' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                    }`}>
-                      {offer.type.toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 font-medium">{offer.asset}/{offer.fiat}</td>
-                  <td className="px-6 py-4 text-right">${offer.price.toLocaleString()}</td>
-                  <td className="px-6 py-4">{offer.limit}</td>
-                  <td className="px-6 py-4">
-                    <div className="flex gap-1">
-                      {offer.paymentMethods.map((method, i) => (
-                        <span key={i} className="px-2 py-1 text-xs bg-gray-100 rounded">{method}</span>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="font-medium">{offer.trader}</div>
-                    <div className="text-sm text-gray-500">{offer.completion}% completion</div>
-                  </td>
-                  <td className="px-6 py-4 text-right">{offer.trades}</td>
-                  <td className="px-6 py-4 text-right">
-                    <button className="px-4 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
-                      Trade
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {/* Quote history */}
+        <div className="bg-[#14141A] rounded-xl p-6">
+          <h2 className="text-lg font-semibold mb-4">Quote History</h2>
+          {history.loading && <p className="text-sm text-gray-500">Loading quotes…</p>}
+          {history.error && (
+            <p className="text-sm text-red-400">Could not load quotes: {history.error}</p>
+          )}
+          {!history.loading && !history.error && quotes.length === 0 && (
+            <p className="text-sm text-gray-500">No OTC quotes requested yet.</p>
+          )}
+          {quotes.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-[rgba(255,255,255,0.1)]">
+                    <th className="text-left py-3 px-4 text-gray-400 font-medium">Side</th>
+                    <th className="text-left py-3 px-4 text-gray-400 font-medium">Asset</th>
+                    <th className="text-right py-3 px-4 text-gray-400 font-medium">Amount</th>
+                    <th className="text-right py-3 px-4 text-gray-400 font-medium">Quote Price</th>
+                    <th className="text-right py-3 px-4 text-gray-400 font-medium">Fee</th>
+                    <th className="text-left py-3 px-4 text-gray-400 font-medium">Status</th>
+                    <th className="text-left py-3 px-4 text-gray-400 font-medium">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {quotes.map((quote) => (
+                    <tr key={quote.id} className="border-b border-[rgba(255,255,255,0.05)]">
+                      <td className="py-3 px-4 capitalize">{quote.side ?? '—'}</td>
+                      <td className="py-3 px-4">{quote.asset ?? '—'}</td>
+                      <td className="py-3 px-4 text-right">
+                        {quote.amount?.toLocaleString() ?? '—'}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        {formatPrice(quote.quotePrice ?? quote.quote_price)}
+                      </td>
+                      <td className="py-3 px-4 text-right">{formatPrice(quote.fee)}</td>
+                      <td className="py-3 px-4 capitalize text-gray-400">{quote.status ?? '—'}</td>
+                      <td className="py-3 px-4 text-gray-400">{formatTime(quote.createdAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>

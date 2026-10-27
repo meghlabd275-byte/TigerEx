@@ -27,3 +27,15 @@ target/
 
 # TypeScript build info
 *.tsbuildinfo
+
+# Next.js build output
+.next/
+out/
+
+# Local SQLite databases
+tigerex.db
+tigerex.db-shm
+tigerex.db-wal
+*.db
+*.db-shm
+*.db-wal

@@ -7,85 +7,90 @@ import (
 
 // User represents a user account
 type User struct {
-	ID               string    `json:"id"`
-	Email            string    `json:"email"`
-	Username         string    `json:"username"`
-	Password         string    `json:"-"`
-	Phone           string    `json:"phone,omitempty"`
-	TwoFactorEnabled bool      `json:"twoFactorEnabled"`
-	TwoFactorSecret  string    `json:"-"`
-	KYCLevel        int       `json:"kycLevel"`
-	IsAdmin         bool      `json:"isAdmin"`
-	RefCode        string    `json:"refCode,omitempty"`
-	ReferrerID     string    `json:"referrerId,omitempty"`
-	CreatedAt      int64     `json:"createdAt"`
-	UpdatedAt      int64     `json:"updatedAt"`
-	LastLoginAt    int64     `json:"lastLoginAt,omitempty"`
-	LockedUntil   int64     `json:"lockedUntil,omitempty"`
+	ID               string `json:"id"`
+	Email            string `json:"email"`
+	Username         string `json:"username"`
+	Password         string `json:"-"`
+	Phone            string `json:"phone,omitempty"`
+	TwoFactorEnabled bool   `json:"twoFactorEnabled"`
+	TwoFactorSecret  string `json:"-"`
+	KYCLevel         int    `json:"kycLevel"`
+	IsAdmin          bool   `json:"isAdmin"`
+	RefCode          string `json:"refCode,omitempty"`
+	ReferrerID       string `json:"referrerId,omitempty"`
+	CreatedAt        int64  `json:"createdAt"`
+	UpdatedAt        int64  `json:"updatedAt"`
+	LastLoginAt      int64  `json:"lastLoginAt,omitempty"`
+	LockedUntil      int64  `json:"lockedUntil,omitempty"`
+	// SecurityVersion increments whenever a credential or account-security
+	// setting changes. Tokens carry the version they were issued at, so
+	// changing a password, enabling 2FA, or rotating a whitelist invalidates
+	// every session that predates the change.
+	SecurityVersion int64 `json:"-"`
 }
 
 // Order represents a trading order
 type Order struct {
-	ID              string    `json:"id"`
-	UserID          string    `json:"userId"`
-	Symbol         string    `json:"symbol"`
-	Side           string    `json:"side"`
-	Type           string    `json:"type"`
-	Price          float64   `json:"price,omitempty"`
-	StopPrice      float64   `json:"stopPrice,omitempty"`
+	ID               string  `json:"id"`
+	UserID           string  `json:"userId"`
+	Symbol           string  `json:"symbol"`
+	Side             string  `json:"side"`
+	Type             string  `json:"type"`
+	Price            float64 `json:"price,omitempty"`
+	StopPrice        float64 `json:"stopPrice,omitempty"`
 	TrailingDistance float64 `json:"trailingDistance,omitempty"`
-	Quantity      float64   `json:"quantity"`
-	FilledQuantity float64   `json:"filledQuantity"`
-	Status         string    `json:"status"`
-	TimeInForce   string    `json:"timeInForce"`
-	ClientOrderID string   `json:"clientOrderId,omitempty"`
-	CreatedAt     int64     `json:"createdAt"`
-	UpdatedAt     int64     `json:"updatedAt"`
-	ExpiresAt     int64     `json:"expiresAt,omitempty"`
+	Quantity         float64 `json:"quantity"`
+	FilledQuantity   float64 `json:"filledQuantity"`
+	Status           string  `json:"status"`
+	TimeInForce      string  `json:"timeInForce"`
+	ClientOrderID    string  `json:"clientOrderId,omitempty"`
+	CreatedAt        int64   `json:"createdAt"`
+	UpdatedAt        int64   `json:"updatedAt"`
+	ExpiresAt        int64   `json:"expiresAt,omitempty"`
 }
 
 // Trade represents a trade execution
 type Transfer struct {
-	ID string `json:"id"`
-	FromUserID string `json:"fromUserId"`
-	ToUserID string `json:"toUserId"`
-	Asset string `json:"asset"`
-	Amount float64 `json:"amount"`
-	Status string `json:"status"`
-	CreatedAt int64 `json:"createdAt"`
+	ID         string  `json:"id"`
+	FromUserID string  `json:"fromUserId"`
+	ToUserID   string  `json:"toUserId"`
+	Asset      string  `json:"asset"`
+	Amount     float64 `json:"amount"`
+	Status     string  `json:"status"`
+	CreatedAt  int64   `json:"createdAt"`
 }
 
 // StakingPosition represents a persisted user staking position.
 type StakingPosition struct {
-	ID string `json:"id"`
-	UserID string `json:"userId"`
-	ProductID string `json:"productId"`
-	Asset string `json:"asset"`
-	Amount float64 `json:"amount"`
-	Reward float64 `json:"reward"`
-	Status string `json:"status"`
-	StartedAt int64 `json:"startedAt"`
-	UnlockAt int64 `json:"unlockAt,omitempty"`
+	ID        string  `json:"id"`
+	UserID    string  `json:"userId"`
+	ProductID string  `json:"productId"`
+	Asset     string  `json:"asset"`
+	Amount    float64 `json:"amount"`
+	Reward    float64 `json:"reward"`
+	Status    string  `json:"status"`
+	StartedAt int64   `json:"startedAt"`
+	UnlockAt  int64   `json:"unlockAt,omitempty"`
 }
 
 // Trade represents an executed trade.
 type Trade struct {
-	ID            string  `json:"id"`
-	OrderID       string  `json:"orderId"`
-	Symbol        string  `json:"symbol"`
-	Side          string  `json:"side"`
-	Price         float64 `json:"price"`
-	Quantity     float64 `json:"quantity"`
-	Fee          float64 `json:"fee"`
-	FeeAsset     string  `json:"feeAsset"`
-	Maker        bool    `json:"maker"`
-	Timestamp    int64   `json:"timestamp"`
+	ID        string  `json:"id"`
+	OrderID   string  `json:"orderId"`
+	Symbol    string  `json:"symbol"`
+	Side      string  `json:"side"`
+	Price     float64 `json:"price"`
+	Quantity  float64 `json:"quantity"`
+	Fee       float64 `json:"fee"`
+	FeeAsset  string  `json:"feeAsset"`
+	Maker     bool    `json:"maker"`
+	Timestamp int64   `json:"timestamp"`
 }
 
 // Market represents a trading market
 type Market struct {
-	Symbol        string  `json:"symbol"`
-	BaseAsset    string  `json:"baseAsset"`
+	Symbol      string  `json:"symbol"`
+	BaseAsset   string  `json:"baseAsset"`
 	QuoteAsset  string  `json:"quoteAsset"`
 	Status      string  `json:"status"`
 	MinPrice    float64 `json:"minPrice"`
@@ -99,9 +104,9 @@ type Market struct {
 
 // Ticker represents 24h ticker data
 type Ticker struct {
-	Symbol           string  `json:"symbol"`
-	Price           float64 `json:"price"`
-	PriceChange     float64 `json:"priceChange"`
+	Symbol         string  `json:"symbol"`
+	Price          float64 `json:"price"`
+	PriceChange    float64 `json:"priceChange"`
 	PriceChangePct float64 `json:"priceChangePct"`
 	Volume         float64 `json:"volume"`
 	QuoteVolume    float64 `json:"quoteVolume"`
@@ -112,70 +117,70 @@ type Ticker struct {
 
 // OrderBook represents order book depth
 type OrderBook struct {
-	LastUpdateID int64       `json:"lastUpdateId"`
-	Bids        [][]string `json:"bids"`
-	Asks        [][]string `json:"asks"`
+	LastUpdateID int64      `json:"lastUpdateId"`
+	Bids         [][]string `json:"bids"`
+	Asks         [][]string `json:"asks"`
 }
 
 // KLine represents candlestick data
 type KLine struct {
 	OpenTime  int64   `json:"openTime"`
-	Open     float64 `json:"open"`
-	High     float64 `json:"high"`
-	Low      float64 `json:"low"`
-	Close    float64 `json:"close"`
-	Volume   float64 `json:"volume"`
+	Open      float64 `json:"open"`
+	High      float64 `json:"high"`
+	Low       float64 `json:"low"`
+	Close     float64 `json:"close"`
+	Volume    float64 `json:"volume"`
 	CloseTime int64   `json:"closeTime"`
 }
 
 // ExchangeInfo represents exchange configuration
 type ExchangeInfo struct {
-	Timezone        string   `json:"timezone"`
+	Timezone       string   `json:"timezone"`
 	ServerTime     int64    `json:"serverTime"`
 	ExchangeStatus string   `json:"exchangeStatus"`
-	Symbols       []Market `json:"symbols"`
+	Symbols        []Market `json:"symbols"`
 }
 
 // Wallet represents a user wallet
 type Wallet struct {
-	UserID     string  `json:"userId"`
+	UserID    string  `json:"userId"`
 	Asset     string  `json:"asset"`
 	Network   string  `json:"network"`
 	Available float64 `json:"available"`
-	Locked   float64 `json:"locked"`
-	Total    float64 `json:"total"`
+	Locked    float64 `json:"locked"`
+	Total     float64 `json:"total"`
 }
 
 // StakingProduct represents a staking product
 type StakingProduct struct {
-	ID             string  `json:"id"`
-	Asset         string  `json:"asset"`
-	APY           float64 `json:"apy"`
-	MinStake      float64 `json:"minStake"`
-	LockPeriod   int     `json:"lockPeriod"`
-	Status       string  `json:"status"`
+	ID         string  `json:"id"`
+	Asset      string  `json:"asset"`
+	APY        float64 `json:"apy"`
+	MinStake   float64 `json:"minStake"`
+	LockPeriod int     `json:"lockPeriod"`
+	Status     string  `json:"status"`
 }
 
 // SavingsProduct represents a savings product
 type SavingsProduct struct {
 	ID        string  `json:"id"`
-	Asset    string  `json:"asset"`
-	APY      float64 `json:"apy"`
-	Type     string  `json:"type"`
+	Asset     string  `json:"asset"`
+	APY       float64 `json:"apy"`
+	Type      string  `json:"type"`
 	MinAmount float64 `json:"minAmount"`
-	Status   string  `json:"status"`
+	Status    string  `json:"status"`
 }
 
 // LendingProduct represents a lending product
 type LendingProduct struct {
-	ID           string  `json:"id"`
-	Asset        string  `json:"asset"`
-	BorrowAPY    float64 `json:"borrowApy"`
-	LendAPY     float64 `json:"lendApy"`
-	Collateral  []string `json:"collateral"`
-	MinAmount  float64 `json:"minAmount"`
-	MaxAmount float64 `json:"maxAmount"`
-	Status    string  `json:"status"`
+	ID         string   `json:"id"`
+	Asset      string   `json:"asset"`
+	BorrowAPY  float64  `json:"borrowApy"`
+	LendAPY    float64  `json:"lendApy"`
+	Collateral []string `json:"collateral"`
+	MinAmount  float64  `json:"minAmount"`
+	MaxAmount  float64  `json:"maxAmount"`
+	Status     string   `json:"status"`
 }
 
 // APIKey represents an API key
@@ -187,57 +192,72 @@ type APIKey struct {
 	Permissions []string `json:"permissions"`
 	ExpiresAt   int64    `json:"expiresAt,omitempty"`
 	CreatedAt   int64    `json:"createdAt"`
-	LastUsed   int64    `json:"lastUsed,omitempty"`
-	Enabled    bool     `json:"enabled"`
+	LastUsed    int64    `json:"lastUsed,omitempty"`
+	Enabled     bool     `json:"enabled"`
 	IPWhitelist []string `json:"ipWhitelist,omitempty"`
 }
 
 // Deposit represents a deposit
 type Deposit struct {
-	ID          string  `json:"id"`
-	UserID     string  `json:"userId"`
-	Asset      string  `json:"asset"`
-	Amount     float64 `json:"amount"`
-	Address    string  `json:"address"`
-	TXID       string  `json:"txId,omitempty"`
-	Confirmations int    `json:"confirmations"`
-	Status     string  `json:"status"`
-	Timestamp  int64   `json:"timestamp"`
+	ID            string  `json:"id"`
+	UserID        string  `json:"userId"`
+	Asset         string  `json:"asset"`
+	Amount        float64 `json:"amount"`
+	Address       string  `json:"address"`
+	TXID          string  `json:"txId,omitempty"`
+	Confirmations int     `json:"confirmations"`
+	Status        string  `json:"status"`
+	Timestamp     int64   `json:"timestamp"`
 }
 
 // Withdrawal represents a withdrawal
 type Withdrawal struct {
 	ID          string  `json:"id"`
-	UserID     string  `json:"userId"`
-	Asset      string  `json:"asset"`
-	Amount     float64 `json:"amount"`
-	Fee        float64 `json:"fee"`
-	NetAmount float64 `json:"netAmount"`
-	Address    string  `json:"address"`
-	TXID       string  `json:"txId,omitempty"`
-	Status     string  `json:"status"`
-	Timestamp  int64   `json:"timestamp"`
-	ProcessedAt int64  `json:"processedAt,omitempty"`
+	UserID      string  `json:"userId"`
+	Asset       string  `json:"asset"`
+	Amount      float64 `json:"amount"`
+	Fee         float64 `json:"fee"`
+	NetAmount   float64 `json:"netAmount"`
+	Address     string  `json:"address"`
+	TXID        string  `json:"txId,omitempty"`
+	Status      string  `json:"status"`
+	Timestamp   int64   `json:"timestamp"`
+	ProcessedAt int64   `json:"processedAt,omitempty"`
 }
 
 // SubAccount represents a sub-account
 type SubAccount struct {
-	ID        string  `json:"id"`
-	UserID    string  `json:"userId"`
-	Name      string  `json:"name"`
-	Email     string  `json:"email"`
+	ID        string   `json:"id"`
+	UserID    string   `json:"userId"`
+	Name      string   `json:"name"`
+	Email     string   `json:"email"`
 	APIKeys   []APIKey `json:"apiKeys"`
-	CreatedAt int64   `json:"createdAt"`
+	CreatedAt int64    `json:"createdAt"`
 }
 
-// UserSettings represents user settings
+// UserSettings holds per-user display and security preferences.
 type UserSettings struct {
-	UserID          string `json:"userId"`
-	Language        string `json:"language"`
-	Timezone       string `json:"timezone"`
-	Theme          string `json:"theme"`
-	Currency       string `json:"currency"`
+	UserID           string `json:"userId"`
+	Language         string `json:"language"`
+	Timezone         string `json:"timezone"`
+	Theme            string `json:"theme"`
+	Currency         string `json:"currency"`
 	AntiPhishingCode string `json:"antiPhishingCode,omitempty"`
+}
+
+// WithdrawalAddress is an address that a user has approved for withdrawals.
+// Once a user has at least one entry, withdrawals to any other address are
+// refused: this is the control that stops a stolen session from draining funds
+// to an attacker's address.
+type WithdrawalAddress struct {
+	ID        string `json:"id"`
+	UserID    string `json:"userId"`
+	Asset     string `json:"asset"`
+	Network   string `json:"network"`
+	Address   string `json:"address"`
+	Memo      string `json:"memo,omitempty"`
+	Label     string `json:"label,omitempty"`
+	CreatedAt int64  `json:"createdAt"`
 }
 
 // Now returns current timestamp

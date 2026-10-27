@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -648,6 +649,31 @@ func (s *EarnService) CreateRedPacket(creatorID, asset, packetType, message stri
 	return packet, nil
 }
 
+func (s *EarnService) GetRedPacket(packetID string) (*RedPacket, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	packet, ok := s.redPackets[packetID]
+	return packet, ok
+}
+
+// GetRedPacketsByCreator returns every red packet created by a user, newest first.
+func (s *EarnService) GetRedPacketsByCreator(creatorID string) []*RedPacket {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]*RedPacket, 0)
+	for _, packet := range s.redPackets {
+		if packet.CreatorID == creatorID {
+			result = append(result, packet)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+	return result
+}
+
 func (s *EarnService) ClaimRedPacket(userID, packetID string) (*RedPacketClaim, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -856,6 +882,68 @@ func (s *EarnService) ClaimRedPacketHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": claim})
 }
 
+// GetUserCouponsHandler lists the coupons owned by a user.
+func (s *EarnService) GetUserCouponsHandler(c *gin.Context) {
+	userID := c.Param("user_id")
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "user_id is required"}})
+		return
+	}
+	coupons := s.GetUserCoupons(userID)
+	if coupons == nil {
+		coupons = []*Coupon{}
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": coupons})
+}
+
+// RedeemCouponHandler redeems a coupon code for a user.
+func (s *EarnService) RedeemCouponHandler(c *gin.Context) {
+	var req struct {
+		UserID string `json:"user_id" binding:"required"`
+		Code   string `json:"code" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
+		return
+	}
+
+	coupon, err := s.RedeemCoupon(req.UserID, req.Code)
+	if err != nil {
+		if apiErr, ok := err.(APIError); ok {
+			c.JSON(apiErr.Code, gin.H{"success": false, "error": gin.H{"code": apiErr.Code, "message": apiErr.Message}})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": coupon})
+}
+
+// GetUserRedPacketsHandler lists the red packets created by a user.
+func (s *EarnService) GetUserRedPacketsHandler(c *gin.Context) {
+	userID := c.Param("user_id")
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "user_id is required"}})
+		return
+	}
+	packets := s.GetRedPacketsByCreator(userID)
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": packets})
+}
+
+// GetRedPacketHandler returns a red packet by ID so a client can preview it
+// before claiming. Claim codes are the packet ID.
+func (s *EarnService) GetRedPacketHandler(c *gin.Context) {
+	packetID := c.Param("id")
+	packet, ok := s.GetRedPacket(packetID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Red packet not found"}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": packet})
+}
+
 func (s *EarnService) HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":    "healthy",
@@ -926,8 +1014,14 @@ func main() {
 		api.POST("/launchpool/stake", svc.StakeLaunchpoolHandler)
 		api.POST("/launchpool/claim/:id", svc.ClaimLaunchpoolRewardHandler)
 
+		// Coupons
+		api.GET("/users/:user_id/coupons", svc.GetUserCouponsHandler)
+		api.POST("/coupons/redeem", svc.RedeemCouponHandler)
+
 		// Red Packets
 		api.POST("/red-packet", svc.CreateRedPacketHandler)
+		api.GET("/red-packet/:id", svc.GetRedPacketHandler)
+		api.GET("/users/:user_id/red-packets", svc.GetUserRedPacketsHandler)
 		api.POST("/red-packet/claim/:id", svc.ClaimRedPacketHandler)
 	}
 

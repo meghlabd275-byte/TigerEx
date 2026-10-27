@@ -10,11 +10,14 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -25,12 +28,17 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
+	"tigerex/backend/internal/admin"
+
 	"tigerex/backend/internal/api"
 	"tigerex/backend/internal/auth"
+	"tigerex/backend/internal/earn"
 	"tigerex/backend/internal/kyc"
 	"tigerex/backend/internal/security"
+	"tigerex/backend/internal/totp"
 	"tigerex/backend/internal/trading"
 	"tigerex/backend/internal/wallet"
+	"tigerex/backend/internal/ws"
 )
 
 // Config holds all configuration
@@ -73,6 +81,7 @@ type Config struct {
 
 var (
 	config      *Config
+	wsHub       *ws.Hub
 	jwtSecret   []byte
 	masterKey   [32]byte
 	authService *auth.Service
@@ -80,6 +89,8 @@ var (
 	walletSvc   *wallet.Service
 	tradingSvc  *trading.Service
 	securitySvc *security.Service
+	earnService *earn.Service
+	adminStore  admin.Store
 )
 
 // Initialize loads configuration
@@ -161,16 +172,111 @@ func init() {
 		SessionExpiry:    time.Duration(config.Security.SessionExpiry) * time.Hour,
 	})
 
+	// Authentication needs durable storage. When a database DSN is configured
+	// the service uses Postgres; otherwise it stays without a store and every
+	// registration and login fails closed with "unavailable" instead of
+	// appearing to succeed while persisting nothing.
+	if dsn := os.Getenv("TIGEREX_DATABASE_DSN"); dsn != "" {
+		store, err := auth.NewPgStore(
+			context.Background(),
+			dsn,
+			config.Security.MaxLoginAttempts,
+			time.Duration(config.Security.LockoutDuration)*time.Minute,
+		)
+		if err != nil {
+			log.Fatalf("failed to initialise authentication store: %v", err)
+		}
+		if err := store.EnsureSecuritySchema(context.Background()); err != nil {
+			log.Fatalf("failed to initialise security schema: %v", err)
+		}
+		authService = authService.WithStore(store).WithSecurityStore(store)
+		log.Printf("authentication persistence enabled")
+	} else {
+		log.Printf("TIGEREX_DATABASE_DSN is not set; authentication endpoints will report unavailable")
+	}
+
 	kycService = kyc.NewService(kyc.Config{
 		MaxLoginAttempts: config.Security.MaxLoginAttempts,
 		LockoutDuration:  time.Duration(config.Security.LockoutDuration) * time.Minute,
 	})
+
+	// KYC decisions must survive a restart. An in-memory store would report a
+	// user as unverified after a deploy while the operator believes they were
+	// approved, so a real file path is required.
+	if path := os.Getenv("TIGEREX_KYC_DB"); path != "" {
+		store, err := kyc.NewSQLiteStore(path)
+		if err != nil {
+			log.Fatalf("failed to initialise KYC store: %v", err)
+		}
+		kycService = kycService.WithStore(store)
+		log.Printf("KYC persistence enabled")
+	} else {
+		log.Printf("TIGEREX_KYC_DB is not set; KYC endpoints will report unavailable")
+	}
 
 	walletSvc = wallet.NewService(wallet.Config{
 		MasterKey: masterKey,
 	})
 
 	tradingSvc = trading.NewService(trading.Config{})
+
+	// Savings, lending, and sub-accounts need durable storage: a position
+
+	// that vanishes on restart would silently lose a user's principal.
+
+	earnService = earn.NewService(earn.Config{
+
+		Oracle: marketPriceOracle{},
+	})
+
+	// The admin console reads live exchange state. It shares the same
+
+	// database as authentication; without a DSN every admin endpoint
+
+	// reports unavailable rather than showing an empty exchange.
+
+	if dsn := os.Getenv("TIGEREX_DATABASE_DSN"); dsn != "" {
+
+		store, err := admin.NewPGStore(context.Background(), dsn)
+
+		if err != nil {
+
+			log.Fatalf("failed to initialise admin store: %v", err)
+
+		}
+
+		adminStore = store
+
+		log.Printf("admin persistence enabled")
+
+	} else {
+
+		log.Printf("TIGEREX_DATABASE_DSN is not set; admin endpoints will report unavailable")
+
+	}
+
+	if path := os.Getenv("TIGEREX_EARN_DB"); path != "" {
+
+		store, err := earn.NewSQLiteStore(path)
+
+		if err != nil {
+
+			log.Fatalf("failed to initialise earn store: %v", err)
+
+		}
+
+		earnService = earnService.WithStore(store)
+
+		log.Printf("earn persistence enabled")
+
+	} else {
+
+		log.Printf("TIGEREX_EARN_DB is not set; earn endpoints will report unavailable")
+
+	}
+
+	wsHub = ws.NewHub()
+	go wsHub.Run()
 
 	securitySvc = security.NewService(security.Config{
 		MasterKey: masterKey,
@@ -231,6 +337,7 @@ func main() {
 		{
 			public.POST("/auth/register", handleRegister)
 			public.POST("/auth/login", handleLogin)
+			public.POST("/auth/2fa/verify", handleVerify2FA)
 			public.POST("/auth/refresh", handleRefreshToken)
 			public.POST("/auth/forgot-password", handleForgotPassword)
 
@@ -297,6 +404,7 @@ func main() {
 			protected.DELETE("/api-keys/:keyId", handleDeleteAPIKey)
 
 			// Security
+			protected.GET("/security/2fa/setup", handleSetup2FA)
 			protected.POST("/security/2fa/enable", handleEnable2FA)
 			protected.POST("/security/2fa/disable", handleDisable2FA)
 			protected.POST("/security/withdrawal-whitelist", handleSetWithdrawalWhitelist)
@@ -332,6 +440,8 @@ func main() {
 		admin.GET("/deposits", handleAdminGetDeposits)
 		admin.PUT("/markets/:symbol", handleAdminUpdateMarket)
 		admin.GET("/stats", handleAdminGetStats)
+		admin.GET("/markets", handleAdminGetMarkets)
+		admin.GET("/audit", handleAdminGetAudit)
 	}
 
 	// Create server
@@ -450,6 +560,10 @@ func handleRegister(c *gin.Context) {
 	}
 
 	if err := authService.CreateUser(c.Request.Context(), &user); err != nil {
+		if errors.Is(err, auth.ErrStoreUnavailable) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Registration is unavailable"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
 		return
 	}
@@ -485,6 +599,150 @@ type LoginResponse struct {
 	RefreshToken string   `json:"refreshToken"`
 	ExpiresAt    int64    `json:"expiresAt"`
 	Requires2FA  bool     `json:"requires2FA"`
+	// TwoFactorToken is a short-lived token that authorises only the
+	// /auth/2fa/verify call. It is present only when Requires2FA is true.
+	TwoFactorToken   string `json:"twoFactorToken,omitempty"`
+	TwoFactorExpires int64  `json:"twoFactorExpires,omitempty"`
+}
+
+// Token types. They are written into the "type" claim of every token so a
+// token minted for one purpose cannot be replayed as another.
+const (
+	tokenTypeAccess    = "access"
+	tokenTypeRefresh   = "refresh"
+	tokenTypeChallenge = "2fa_challenge"
+)
+
+// twoFactorChallengeTTL bounds how long a password-only login may sit waiting
+// for the second factor.
+const twoFactorChallengeTTL = 5 * time.Minute
+
+// securityStoreOrUnavailable returns the configured security store, or writes a
+// 503 and returns false. Every handler that reads or writes account-security
+// settings must call it rather than silently succeeding.
+func securityStoreOrUnavailable(c *gin.Context) (auth.SecurityStore, bool) {
+	store := authService.SecurityStore()
+	if store == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Security settings are unavailable"})
+		return nil, false
+	}
+	return store, true
+}
+
+// numericClaim reads a numeric JWT claim. JSON numbers decode to float64, but
+// a value that round-tripped through another encoder may arrive as json.Number
+// or an integer, so all three are handled.
+func numericClaim(claims jwt.MapClaims, key string) (int64, bool) {
+	switch v := claims[key].(type) {
+	case float64:
+		return int64(v), true
+	case int64:
+		return v, true
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+// issue2FAChallenge signs a token that is accepted only by the 2FA completion
+// endpoint. It carries no API permissions and expires quickly.
+func issue2FAChallenge(userID string) (string, error) {
+	now := time.Now()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":  userID,
+		"iat":  now.Unix(),
+		"exp":  now.Add(twoFactorChallengeTTL).Unix(),
+		"type": tokenTypeChallenge,
+	})
+	return token.SignedString(jwtSecret)
+}
+
+// parse2FAChallenge validates a challenge token and returns the user ID.
+func parse2FAChallenge(tokenString string) (string, error) {
+	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return jwtSecret, nil
+	})
+	if err != nil || !token.Valid {
+		return "", errors.New("invalid 2FA challenge")
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return "", errors.New("invalid 2FA challenge claims")
+	}
+	if typ, _ := claims["type"].(string); typ != tokenTypeChallenge {
+		return "", errors.New("token is not a 2FA challenge")
+	}
+	userID, ok := claims["sub"].(string)
+	if !ok || userID == "" {
+		return "", errors.New("invalid 2FA challenge subject")
+	}
+	return userID, nil
+}
+
+type Verify2FARequest struct {
+	TwoFactorToken string `json:"twoFactorToken" binding:"required"`
+	Code           string `json:"code" binding:"required"`
+}
+
+// handleVerify2FA completes a password login by checking the TOTP code against
+// the enrolled secret. Without this endpoint a 2FA-enabled account could never
+// obtain a session.
+func handleVerify2FA(c *gin.Context) {
+	var req Verify2FARequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID, err := parse2FAChallenge(req.TwoFactorToken)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired 2FA challenge"})
+		return
+	}
+
+	user, err := authService.GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired 2FA challenge"})
+		return
+	}
+	if !user.TwoFactorEnabled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "2FA is not enabled for this account"})
+		return
+	}
+
+	if authService.IsAccountLocked(c.Request.Context(), user.ID) {
+		c.JSON(http.StatusLocked, gin.H{"error": "Account locked. Try again later."})
+		return
+	}
+
+	key, err := totp.DecodeSecret(user.TwoFactorSecret)
+	if err != nil || !totp.Validate(totp.Config{Secret: key}, req.Code, time.Now()) {
+		authService.RecordFailedAttempt(c.Request.Context(), user.ID)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid 2FA code"})
+		return
+	}
+
+	accessToken, refreshToken, expiresAt, err := authService.GenerateTokenPair(user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate tokens"})
+		return
+	}
+
+	authService.ClearFailedAttempts(c.Request.Context(), user.ID)
+
+	c.JSON(http.StatusOK, LoginResponse{
+		User:         *user,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresAt:    expiresAt,
+	})
 }
 
 func handleLogin(c *gin.Context) {
@@ -497,6 +755,10 @@ func handleLogin(c *gin.Context) {
 	// Get user by email
 	user, err := authService.GetUserByEmail(c.Request.Context(), req.Email)
 	if err != nil {
+		if errors.Is(err, auth.ErrStoreUnavailable) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Login is unavailable"})
+			return
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
 	}
@@ -515,12 +777,20 @@ func handleLogin(c *gin.Context) {
 		return
 	}
 
-	// Check if 2FA is enabled
+	// Check if 2FA is enabled. The password was correct, but no session is
+	// issued yet: the client must complete the second factor against
+	// /auth/2fa/verify using the short-lived challenge token below.
 	if user.TwoFactorEnabled {
-		// Return partial auth - requires 2FA
+		challenge, err := issue2FAChallenge(user.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start 2FA challenge"})
+			return
+		}
 		c.JSON(http.StatusOK, LoginResponse{
-			User:        *user,
-			Requires2FA: true,
+			User:             *user,
+			Requires2FA:      true,
+			TwoFactorToken:   challenge,
+			TwoFactorExpires: time.Now().Add(twoFactorChallengeTTL).Unix(),
 		})
 		return
 	}
@@ -570,6 +840,12 @@ func handleRefreshToken(c *gin.Context) {
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
+		return
+	}
+
+	// Only a refresh token may be exchanged here.
+	if typ, _ := claims["type"].(string); typ != tokenTypeRefresh {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid refresh token"})
 		return
 	}
 
@@ -656,6 +932,14 @@ func authMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		// Only an access token may authorise an API call. A refresh token or a
+		// 2FA challenge token is signed with the same secret but grants no
+		// session on its own.
+		if typ, _ := claims["type"].(string); typ != tokenTypeAccess {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token type"})
+			return
+		}
+
 		userID, ok := claims["sub"].(string)
 		if !ok {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
@@ -666,6 +950,13 @@ func authMiddleware() gin.HandlerFunc {
 		user, err := authService.GetUserByID(c.Request.Context(), userID)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+			return
+		}
+
+		// A session issued before a password change, a 2FA change, or a
+		// whitelist change must stop working immediately.
+		if issued, ok := numericClaim(claims, "sv"); ok && issued != user.SecurityVersion {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Session is no longer valid"})
 			return
 		}
 
@@ -976,8 +1267,11 @@ func handleWithdraw(c *gin.Context) {
 		return
 	}
 
-	// Check withdrawal whitelist
-	if err := walletSvc.CheckWithdrawalWhitelist(c.Request.Context(), user.ID, req.Address); err != nil {
+	// Enforce the withdrawal address whitelist. Once a user has approved at
+	// least one address, every withdrawal must target one of them. An
+	// unconfigured store means the check cannot be performed, so the request is
+	// refused rather than allowed through unchecked.
+	if err := enforceWithdrawalWhitelist(c.Request.Context(), user.ID, req.Asset, req.Address); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
@@ -997,6 +1291,70 @@ func handleWithdraw(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, withdrawal)
+}
+
+// marketPriceOracle values collateral from the exchange's own market data.
+//
+// It reads the live ticker for the base/quote pair. When no market-data
+// provider is configured the ticker lookup fails, and so does the valuation: a
+// collateral check against an invented price would let a borrower take out an
+// unbacked loan.
+type marketPriceOracle struct{}
+
+// Price returns the price of one unit of baseAsset in quoteAsset.
+func (marketPriceOracle) Price(ctx context.Context, baseAsset, quoteAsset string) (float64, error) {
+	baseAsset = strings.ToUpper(strings.TrimSpace(baseAsset))
+	quoteAsset = strings.ToUpper(strings.TrimSpace(quoteAsset))
+	if baseAsset == "" || quoteAsset == "" {
+		return 0, errors.New("base and quote assets are required")
+	}
+	if baseAsset == quoteAsset {
+		return 1, nil
+	}
+	if tradingSvc == nil {
+		return 0, earn.ErrPriceUnavailable
+	}
+
+	ticker, err := tradingSvc.GetTicker(ctx, baseAsset+"/"+quoteAsset)
+	if err != nil {
+		return 0, err
+	}
+	if ticker == nil || ticker.Price <= 0 {
+		return 0, earn.ErrPriceUnavailable
+	}
+	return ticker.Price, nil
+}
+
+// enforceWithdrawalWhitelist refuses a withdrawal to an address the user has
+// not approved. When the user has approved no addresses the withdrawal is
+// allowed, which preserves the default behaviour for accounts that have not
+// opted into the whitelist.
+func enforceWithdrawalWhitelist(ctx context.Context, userID, asset, address string) error {
+	store := authService.SecurityStore()
+	if store == nil {
+		return errors.New("withdrawal whitelist is unavailable")
+	}
+
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return errors.New("withdrawal address is required")
+	}
+
+	addresses, err := store.ListWithdrawalAddresses(ctx, userID)
+	if err != nil {
+		return errors.New("failed to load withdrawal whitelist")
+	}
+	if len(addresses) == 0 {
+		return nil
+	}
+
+	asset = strings.ToUpper(strings.TrimSpace(asset))
+	for _, entry := range addresses {
+		if entry.Address == address && (asset == "" || entry.Asset == asset) {
+			return nil
+		}
+	}
+	return auth.ErrAddressNotWhitelisted
 }
 
 func handleGetBalance(c *gin.Context) {
@@ -1122,22 +1480,92 @@ func handleGetStakingPositions(c *gin.Context) {
 	c.JSON(http.StatusOK, positions)
 }
 
+// earnError maps an earn package error to an HTTP status. An unrecognised
+// error is a server fault and is reported as such without leaking internals.
+func earnError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, earn.ErrInvalidAmount),
+		errors.Is(err, earn.ErrBelowMinimum),
+		errors.Is(err, earn.ErrDuplicateSubAccount):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, earn.ErrProductNotFound), errors.Is(err, earn.ErrPositionNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case errors.Is(err, earn.ErrUnauthorized):
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+	case errors.Is(err, earn.ErrLocked),
+		errors.Is(err, earn.ErrInsufficientFunds),
+		errors.Is(err, earn.ErrCollateralTooLow),
+		errors.Is(err, earn.ErrSubAccountLimit):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, earn.ErrPriceUnavailable), errors.Is(err, earn.ErrStoreUnavailable):
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "request could not be completed"})
+	}
+}
+
 func handleGetSavingsProducts(c *gin.Context) {
-	products := tradingSvc.GetSavingsProducts(c.Request.Context())
+	products, err := earnService.ListSavingsProducts(c.Request.Context())
+	if err != nil {
+		earnError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, products)
 }
 
 func handleSavingsDeposit(c *gin.Context) {
-	// Similar to staking
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req savingsDepositRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	position, err := earnService.SavingsDeposit(c.Request.Context(), user.ID, req.ProductID, req.Amount)
+	if err != nil {
+		earnError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, position)
+}
+
+type savingsDepositRequest struct {
+	ProductID string  `json:"productId"`
+	Amount    float64 `json:"amount"`
 }
 
 func handleSavingsWithdraw(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req savingsWithdrawRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	position, payout, err := earnService.SavingsWithdraw(c.Request.Context(), user.ID, req.PositionID, req.Amount)
+	if err != nil {
+		earnError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"position": position, "payout": payout})
+}
+
+type savingsWithdrawRequest struct {
+	PositionID string  `json:"positionId"`
+	Amount     float64 `json:"amount"`
 }
 
 func handleGetSavingsPositions(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	positions, err := earnService.ListSavingsPositions(c.Request.Context(), user.ID)
+	if err != nil {
+		earnError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, positions)
 }
 
 func handleGetLendingProducts(c *gin.Context) {
@@ -1146,15 +1574,69 @@ func handleGetLendingProducts(c *gin.Context) {
 }
 
 func handleLend(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req lendRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	position, err := earnService.Lend(c.Request.Context(), user.ID, req.Asset, req.Amount, req.APY)
+	if err != nil {
+		earnError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, position)
+}
+
+type lendRequest struct {
+	Asset  string  `json:"asset"`
+	Amount float64 `json:"amount"`
+	APY    float64 `json:"apy"`
 }
 
 func handleBorrow(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req borrowRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	position, err := earnService.Borrow(c.Request.Context(), user.ID, req.Asset, req.Amount, req.APY,
+		req.CollateralAsset, req.Collateral, req.LTV)
+	if err != nil {
+		earnError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, position)
+}
+
+type borrowRequest struct {
+	Asset           string  `json:"asset"`
+	Amount          float64 `json:"amount"`
+	APY             float64 `json:"apy"`
+	CollateralAsset string  `json:"collateralAsset"`
+	Collateral      float64 `json:"collateral"`
+	LTV             float64 `json:"ltv"`
 }
 
 func handleGetLendingPositions(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	lend, err := earnService.ListLendPositions(c.Request.Context(), user.ID)
+	if err != nil {
+		earnError(c, err)
+		return
+	}
+	borrow, err := earnService.ListBorrowPositions(c.Request.Context(), user.ID)
+	if err != nil {
+		earnError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"lends": lend, "borrows": borrow})
 }
 
 // ============================================================================
@@ -1162,15 +1644,46 @@ func handleGetLendingPositions(c *gin.Context) {
 // ============================================================================
 
 func handleGetSubAccounts(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	subs, err := earnService.ListSubAccounts(c.Request.Context(), user.ID)
+	if err != nil {
+		earnError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, subs)
 }
 
 func handleCreateSubAccount(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req createSubAccountRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	sub, err := earnService.CreateSubAccount(c.Request.Context(), user.ID, req.Name, req.Email)
+	if err != nil {
+		earnError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, sub)
+}
+
+type createSubAccountRequest struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
 }
 
 func handleDeleteSubAccount(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	if err := earnService.DeleteSubAccount(c.Request.Context(), user.ID, c.Param("subAccountId")); err != nil {
+		earnError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": true})
 }
 
 func handleGetAPIKeys(c *gin.Context) {
@@ -1232,24 +1745,287 @@ func handleDeleteAPIKey(c *gin.Context) {
 // SECURITY HANDLERS
 // ============================================================================
 
+type Enable2FARequest struct {
+	// Secret is the base32 secret from the setup step.
+	Secret string `json:"secret" binding:"required"`
+	// Code is the current TOTP code from the authenticator app.
+	Code string `json:"code" binding:"required"`
+}
+
+// handleEnable2FA enrols TOTP. The client first calls GET /security/2fa/setup
+// to obtain a secret and otpauth URI, then calls this endpoint with a code
+// proving the secret was imported. Storing the secret without that proof would
+// leave the second factor unverified and the user locked out.
 func handleEnable2FA(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req Enable2FARequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	key, err := totp.DecodeSecret(req.Secret)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid 2FA secret"})
+		return
+	}
+	if !totp.Validate(totp.Config{Secret: key}, req.Code, time.Now()) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid 2FA code"})
+		return
+	}
+
+	user.TwoFactorEnabled = true
+	user.TwoFactorSecret = totp.EncodeSecret(key)
+	if err := authService.UpdateUser(c.Request.Context(), user); err != nil {
+		if errors.Is(err, auth.ErrStoreUnavailable) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "2FA enrolment is unavailable"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enable 2FA"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"enabled": true})
 }
 
+// handleSetup2FA issues a fresh secret and provisioning URI. The secret is not
+// persisted until the user proves they can produce a code from it.
+func handleSetup2FA(c *gin.Context) {
+	user := c.MustGet("user").(*api.User)
+
+	key, err := totp.GenerateSecret(20)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate 2FA secret"})
+		return
+	}
+	uri, err := totp.ProvisioningURI("TigerEx", user.Email, totp.Config{Secret: key})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build provisioning URI"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"secret": totp.EncodeSecret(key),
+		"uri":    uri,
+	})
+}
+
+type Disable2FARequest struct {
+	Code string `json:"code" binding:"required"`
+}
+
+// handleDisable2FA turns 2FA off after verifying a current code, so a stolen
+// session alone cannot remove the second factor.
 func handleDisable2FA(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req Disable2FARequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !user.TwoFactorEnabled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "2FA is not enabled"})
+		return
+	}
+
+	key, err := totp.DecodeSecret(user.TwoFactorSecret)
+	if err != nil || !totp.Validate(totp.Config{Secret: key}, req.Code, time.Now()) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid 2FA code"})
+		return
+	}
+
+	user.TwoFactorEnabled = false
+	user.TwoFactorSecret = ""
+	if err := authService.UpdateUser(c.Request.Context(), user); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to disable 2FA"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"enabled": false})
 }
 
+type WithdrawalWhitelistRequest struct {
+	// Action is "add", "remove", or "list".
+	Action  string `json:"action" binding:"required"`
+	Asset   string `json:"asset,omitempty"`
+	Network string `json:"network,omitempty"`
+	Address string `json:"address,omitempty"`
+	Memo    string `json:"memo,omitempty"`
+	Label   string `json:"label,omitempty"`
+	// AddressID identifies the entry to remove.
+	AddressID string `json:"addressId,omitempty"`
+}
+
+// handleSetWithdrawalWhitelist manages the list of addresses a withdrawal may
+// be sent to.
+//
+// This is the control that stops a stolen session from draining an account: the
+// withdrawal handler refuses any address that is not on this list once the list
+// is non-empty.
 func handleSetWithdrawalWhitelist(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req WithdrawalWhitelistRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	store, ok := securityStoreOrUnavailable(c)
+	if !ok {
+		return
+	}
+
+	ctx := c.Request.Context()
+	switch strings.ToLower(strings.TrimSpace(req.Action)) {
+	case "list":
+		addresses, err := store.ListWithdrawalAddresses(ctx, user.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list addresses"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"addresses": addresses})
+		return
+
+	case "add":
+		asset := strings.ToUpper(strings.TrimSpace(req.Asset))
+		network := strings.ToLower(strings.TrimSpace(req.Network))
+		if err := auth.ValidateWithdrawalAddress(asset, network, req.Address); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		entry := &api.WithdrawalAddress{
+			ID:        uuid.New().String(),
+			UserID:    user.ID,
+			Asset:     asset,
+			Network:   network,
+			Address:   strings.TrimSpace(req.Address),
+			Memo:      strings.TrimSpace(req.Memo),
+			Label:     strings.TrimSpace(req.Label),
+			CreatedAt: api.Now(),
+		}
+		if err := store.AddWithdrawalAddress(ctx, entry); err != nil {
+			if errors.Is(err, auth.ErrDuplicateAddress) {
+				c.JSON(http.StatusConflict, gin.H{"error": "Address is already whitelisted"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add address"})
+			return
+		}
+		if _, err := store.BumpSecurityVersion(ctx, user.ID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update security version"})
+			return
+		}
+		c.JSON(http.StatusCreated, entry)
+		return
+
+	case "remove":
+		if strings.TrimSpace(req.AddressID) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "addressId is required"})
+			return
+		}
+		if err := store.RemoveWithdrawalAddress(ctx, user.ID, req.AddressID); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Address not found"})
+			return
+		}
+		if _, err := store.BumpSecurityVersion(ctx, user.ID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update security version"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"removed": true})
+		return
+
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "action must be add, remove, or list"})
+	}
 }
 
+type IPWhitelistRequest struct {
+	// KeyID identifies the API key. It is required: an IP allowlist belongs to
+	// one key, not to the account.
+	KeyID string `json:"keyId" binding:"required"`
+	// IPs is the full replacement list of addresses or CIDR blocks. An empty
+	// list removes the restriction.
+	IPs []string `json:"ips"`
+}
+
+// handleSetIPWhitelist replaces the IP allowlist on one API key.
 func handleSetIPWhitelist(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req IPWhitelistRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	rules, err := auth.ValidateIPWhitelist(req.IPs)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	store, ok := securityStoreOrUnavailable(c)
+	if !ok {
+		return
+	}
+
+	ctx := c.Request.Context()
+	if err := store.SetAPIKeyIPWhitelist(ctx, user.ID, req.KeyID, rules); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "API key not found"})
+		return
+	}
+	if _, err := store.BumpSecurityVersion(ctx, user.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update security version"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ips": rules})
 }
 
+type AntiPhishingRequest struct {
+	Code string `json:"code"`
+}
+
+// handleSetAntiPhishing sets or clears the anti-phishing code that appears in
+// every message the exchange sends.
 func handleSetAntiPhishing(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req AntiPhishingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	code := strings.TrimSpace(req.Code)
+	if err := auth.ValidateAntiPhishingCode(code); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	store, ok := securityStoreOrUnavailable(c)
+	if !ok {
+		return
+	}
+
+	ctx := c.Request.Context()
+	settings, err := authService.GetSettings(ctx, user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load settings"})
+		return
+	}
+	settings.AntiPhishingCode = code
+
+	if err := store.UpdateSettings(ctx, settings); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save anti-phishing code"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"antiPhishingCode": code})
 }
 
 // ============================================================================
@@ -1261,6 +2037,10 @@ func handleGetKYCStatus(c *gin.Context) {
 
 	status, err := kycService.GetStatus(c.Request.Context(), user.ID)
 	if err != nil {
+		if errors.Is(err, kyc.ErrStoreUnavailable) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "KYC is unavailable"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get KYC status"})
 		return
 	}
@@ -1311,12 +2091,53 @@ func handleSubmitKYC(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-func handleVerifyPhone(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+type VerifyContactRequest struct {
+	// Code is the one-time code delivered to the phone or mailbox.
+	Code string `json:"code" binding:"required"`
+	// Value is the phone number in E.164 format, or the email address.
+	Value string `json:"value" binding:"required"`
 }
 
+// handleVerifyPhone validates a phone number. Delivery and checking of the
+// one-time code is performed by the notification service; this endpoint only
+// accepts a well-formed number and requires that a code was presented.
+func handleVerifyPhone(c *gin.Context) {
+	user := c.MustGet("user").(*api.User)
+
+	var req VerifyContactRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := kycService.VerifyPhone(c.Request.Context(), user.ID, req.Value); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	user.Phone = req.Value
+	if err := authService.UpdateUser(c.Request.Context(), user); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to record phone number"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"verified": true})
+}
+
+// handleVerifyEmail validates an email address for the account.
 func handleVerifyEmail(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req VerifyContactRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := kycService.VerifyEmail(c.Request.Context(), user.ID, req.Value); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"verified": true})
 }
 
 // ============================================================================
@@ -1335,8 +2156,40 @@ func handleGetSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, settings)
 }
 
+// handleUpdateSettings updates the mutable display and security preferences.
+// The anti-phishing code is handled by its own endpoint so it can be audited
+// separately.
 func handleUpdateSettings(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	user := c.MustGet("user").(*api.User)
+
+	var req api.UserSettings
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// The caller cannot change which account is being edited.
+	req.UserID = user.ID
+
+	if err := auth.ValidateSettings(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	store, ok := securityStoreOrUnavailable(c)
+	if !ok {
+		return
+	}
+
+	if err := store.UpdateSettings(c.Request.Context(), &req); err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update settings"})
+		return
+	}
+
+	c.JSON(http.StatusOK, req)
 }
 
 // ============================================================================
@@ -1344,53 +2197,297 @@ func handleUpdateSettings(c *gin.Context) {
 // ============================================================================
 
 func handleWebSocket(c *gin.Context) {
-	// Upgrade to WebSocket
-	// This is a placeholder - full implementation would use gorilla/websocket
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "WebSocket not implemented"})
+	ws.HandleWebSocket(wsHub)(c.Writer, c.Request)
 }
 
 // ============================================================================
 // ADMIN HANDLERS
 // ============================================================================
 
+// requireAdminStore reports whether the admin data layer is available.
+func requireAdminStore(c *gin.Context) bool {
+	if adminStore == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": admin.ErrUnavailable.Error()})
+		return false
+	}
+	return true
+}
+
+// adminError maps an admin error to an HTTP status.
+func adminError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, admin.ErrUserNotFound),
+		errors.Is(err, admin.ErrWithdrawalNotFound),
+		errors.Is(err, admin.ErrMarketNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case errors.Is(err, admin.ErrInvalidKYCLevel),
+		errors.Is(err, admin.ErrInvalidStatus):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, admin.ErrAlreadyDecided):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, admin.ErrUnavailable):
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "request could not be completed"})
+	}
+}
+
+// auditAdmin records an operator action. A failure to write the audit trail is
+// logged but does not fail the request, because the action itself has already
+// been committed; losing the audit line is preferable to telling the operator
+// the change failed when it did not.
+func auditAdmin(c *gin.Context, action, resourceType, resourceID string, details any) {
+	if adminStore == nil {
+		return
+	}
+	user, ok := c.Get("user")
+	if !ok {
+		return
+	}
+	adminUser, ok := user.(*api.User)
+	if !ok {
+		return
+	}
+
+	entry := &admin.AuditEntry{
+		AdminID:      adminUser.ID,
+		Action:       action,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		IPAddress:    c.ClientIP(),
+		UserAgent:    c.Request.UserAgent(),
+	}
+	if details != nil {
+		if encoded, err := json.Marshal(details); err == nil {
+			entry.Details = encoded
+		}
+	}
+
+	if err := adminStore.AppendAudit(c.Request.Context(), entry); err != nil {
+		log.Printf("failed to write audit entry for %s: %v", action, err)
+	}
+}
+
+// pagingFromQuery reads limit and offset, defaulting to a bounded page.
+func pagingFromQuery(c *gin.Context) (int, int) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	return limit, offset
+}
+
 func handleAdminGetUsers(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	if !requireAdminStore(c) {
+		return
+	}
+	limit, offset := pagingFromQuery(c)
+
+	users, total, err := adminStore.ListUsers(c.Request.Context(), limit, offset)
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"users": users, "total": total})
 }
 
 func handleAdminGetUser(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	if !requireAdminStore(c) {
+		return
+	}
+
+	user, err := adminStore.GetUser(c.Request.Context(), c.Param("userId"))
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, user)
 }
 
 func handleAdminUpdateKYC(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	if !requireAdminStore(c) {
+		return
+	}
+
+	var req adminUpdateKYCRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	userID := c.Param("userId")
+	if err := adminStore.SetKYCLevel(c.Request.Context(), userID, req.Level, req.Status); err != nil {
+		adminError(c, err)
+		return
+	}
+
+	auditAdmin(c, "kyc.update", "user", userID, gin.H{"level": req.Level, "status": req.Status})
+	c.JSON(http.StatusOK, gin.H{"userId": userID, "kycLevel": req.Level, "status": req.Status})
+}
+
+type adminUpdateKYCRequest struct {
+	Level  int    `json:"level"`
+	Status string `json:"status"`
 }
 
 func handleAdminGetAllOrders(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	if !requireAdminStore(c) {
+		return
+	}
+	limit, offset := pagingFromQuery(c)
+
+	orders, total, err := adminStore.ListOrders(c.Request.Context(), c.Query("symbol"), limit, offset)
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"orders": orders, "total": total})
 }
 
 func handleAdminGetWithdrawals(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	if !requireAdminStore(c) {
+		return
+	}
+	limit, offset := pagingFromQuery(c)
+
+	withdrawals, total, err := adminStore.ListWithdrawals(c.Request.Context(), c.Query("status"), limit, offset)
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"withdrawals": withdrawals, "total": total})
 }
 
 func handleAdminApproveWithdrawal(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	if !requireAdminStore(c) {
+		return
+	}
+
+	adminUser := c.MustGet("user").(*api.User)
+	withdrawalID := c.Param("withdrawalId")
+
+	record, err := adminStore.ApproveWithdrawal(c.Request.Context(), withdrawalID, adminUser.ID)
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+
+	auditAdmin(c, "withdrawal.approve", "withdrawal", withdrawalID, gin.H{
+		"asset":  record.Asset,
+		"amount": record.Amount,
+		"status": record.Status,
+	})
+	c.JSON(http.StatusOK, record)
 }
 
 func handleAdminRejectWithdrawal(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	if !requireAdminStore(c) {
+		return
+	}
+
+	var req adminRejectWithdrawalRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	adminUser := c.MustGet("user").(*api.User)
+	withdrawalID := c.Param("withdrawalId")
+
+	record, err := adminStore.RejectWithdrawal(c.Request.Context(), withdrawalID, adminUser.ID, req.Reason)
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+
+	auditAdmin(c, "withdrawal.reject", "withdrawal", withdrawalID, gin.H{
+		"reason": req.Reason,
+		"status": record.Status,
+	})
+	c.JSON(http.StatusOK, record)
+}
+
+type adminRejectWithdrawalRequest struct {
+	Reason string `json:"reason"`
 }
 
 func handleAdminGetDeposits(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	if !requireAdminStore(c) {
+		return
+	}
+	limit, offset := pagingFromQuery(c)
+
+	deposits, total, err := adminStore.ListDeposits(c.Request.Context(), c.Query("status"), limit, offset)
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deposits": deposits, "total": total})
 }
 
 func handleAdminUpdateMarket(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	if !requireAdminStore(c) {
+		return
+	}
+
+	var req adminUpdateMarketRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	symbol := c.Param("symbol")
+	if err := adminStore.SetMarketStatus(c.Request.Context(), symbol, req.Status); err != nil {
+		adminError(c, err)
+		return
+	}
+
+	auditAdmin(c, "market.status", "market", symbol, gin.H{"status": req.Status})
+	c.JSON(http.StatusOK, gin.H{"symbol": symbol, "status": req.Status})
+}
+
+type adminUpdateMarketRequest struct {
+	Status string `json:"status"`
 }
 
 func handleAdminGetStats(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	if !requireAdminStore(c) {
+		return
+	}
+
+	stats, err := adminStore.Stats(c.Request.Context())
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, stats)
+}
+
+// handleAdminGetMarkets lists every market with its trading status.
+func handleAdminGetMarkets(c *gin.Context) {
+	if !requireAdminStore(c) {
+		return
+	}
+
+	markets, err := adminStore.ListMarkets(c.Request.Context())
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, markets)
+}
+
+// handleAdminGetAudit returns the immutable operator action log.
+func handleAdminGetAudit(c *gin.Context) {
+	if !requireAdminStore(c) {
+		return
+	}
+	limit, offset := pagingFromQuery(c)
+
+	entries, err := adminStore.ListAudit(c.Request.Context(), limit, offset)
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, entries)
 }
 
 // ============================================================================

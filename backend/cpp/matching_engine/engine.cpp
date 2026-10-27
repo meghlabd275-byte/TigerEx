@@ -65,6 +65,21 @@ struct Market {
     double max_price = 1000000.0;
 };
 
+// Process-wide order/trade id sequence and wall-clock helper. These are free
+// functions so both the book and the engine can use them.
+namespace {
+int64_t generate_id() {
+    static std::atomic<int64_t> cnt{0};
+    return ++cnt;
+}
+
+int64_t current_time() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+}
+}  // namespace
+
 // Order Book Class
 class OrderBook {
 private:
@@ -105,7 +120,9 @@ public:
         last_update_.fetch_add(1);
     }
 
-    std::vector<Trade> match(double market_price) {
+    // Cross the book while the best bid and best ask overlap. A positive
+    // limit_price caps the aggressor price; zero means unlimited (market).
+    std::vector<Trade> match(double limit_price = 0.0) {
         std::lock_guard<std::mutex> lock(mtx_);
         std::vector<Trade> trades;
 
@@ -117,6 +134,7 @@ public:
             double best_ask = ask->first;
 
             if (best_bid < best_ask) break;
+            if (limit_price > 0.0 && best_ask > limit_price) break;
 
             PriceLevel& bid_level = bid->second;
             PriceLevel& ask_level = ask->second;
@@ -171,6 +189,21 @@ public:
 
     double spread() const { return best_ask() - best_bid(); }
     int64_t last_update() const { return last_update_.load(); }
+
+    // Snapshot of resting depth, best price first.
+    void depth(int levels,
+               std::vector<std::pair<double, double>>& bids,
+               std::vector<std::pair<double, double>>& asks) const {
+        std::lock_guard<std::mutex> lock(mtx_);
+        int count = 0;
+        for (auto it = bids_.begin(); it != bids_.end() && count < levels; ++it, ++count) {
+            bids.emplace_back(it->first, it->second.quantity);
+        }
+        count = 0;
+        for (auto it = asks_.begin(); it != asks_.end() && count < levels; ++it, ++count) {
+            asks.emplace_back(it->first, it->second.quantity);
+        }
+    }
 };
 
 // Matching Engine
@@ -248,17 +281,7 @@ public:
         s.spread = book->spread();
         s.last_update = book->last_update();
 
-        int count = 0;
-        for (auto& p : book->bids_) {
-            if (count++ >= levels) break;
-            s.bids.emplace_back(p.first, p.second.quantity);
-        }
-
-        count = 0;
-        for (auto& p : book->asks_) {
-            if (count++ >= levels) break;
-            s.asks.emplace_back(p.first, p.second.quantity);
-        }
+        book->depth(levels, s.bids, s.asks);
 
         return s;
     }
@@ -290,16 +313,6 @@ private:
         }
     }
 
-    static int64_t generate_id() {
-        static std::atomic<int64_t> cnt{0};
-        return ++cnt;
-    }
-
-    static int64_t current_time() {
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()
-        ).count();
-    }
 };
 
 int main() {

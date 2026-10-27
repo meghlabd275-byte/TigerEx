@@ -6,6 +6,7 @@
 #include <iostream>
 #include <vector>
 #include <map>
+#include <cstdint>
 #include <algorithm>
 #include <cmath>
 
@@ -96,9 +97,13 @@ public:
         return std::max(MIN_SPREAD, std::min(MAX_SPREAD, base_spread + volume_factor));
     }
 
-    static double calculate_quote Prices(double mid, double spread) {
-        return mid * (1 - spread / 2);  // Bid
-        return mid * (1 + spread / 2);   // Ask
+    // A quote is two-sided: the bid and the ask sit symmetric around mid.
+    static double calculate_bid(double mid, double spread) {
+        return mid * (1 - spread / 2);
+    }
+
+    static double calculate_ask(double mid, double spread) {
+        return mid * (1 + spread / 2);
     }
 };
 

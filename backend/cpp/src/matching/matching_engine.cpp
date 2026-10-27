@@ -146,6 +146,37 @@ public:
         return bestAsk() - bestBid();
     }
 
+    // Cancel an order. Returns true when the order was open and is now
+    // cancelled; the id is dropped from its level so it cannot match again.
+    bool cancelOrder(uint64_t orderId) {
+        std::lock_guard<std::mutex> lock(bookMutex);
+
+        auto it = orders.find(orderId);
+        if (it == orders.end()) return false;
+        if (it->second.status == OrderStatus::FILLED ||
+            it->second.status == OrderStatus::CANCELLED) {
+            return false;
+        }
+
+        double remaining = it->second.quantity - it->second.filled;
+        it->second.status = OrderStatus::CANCELLED;
+
+        for (auto* levels : {&bidLevels, &askLevels}) {
+            for (auto& level : *levels) {
+                auto pos = std::find(level.orderIds.begin(), level.orderIds.end(), orderId);
+                if (pos == level.orderIds.end()) continue;
+                level.quantity -= remaining;
+                if (level.quantity < 0) level.quantity = 0;
+                level.orderIds.erase(pos);
+            }
+            levels->erase(
+                std::remove_if(levels->begin(), levels->end(),
+                    [](const Level& l) { return l.orderIds.empty(); }),
+                levels->end());
+        }
+        return true;
+    }
+
 private:
     void addLevel(std::vector<Level>& levels, double price, double qty, uint64_t orderId) {
         for (auto& level : levels) {
@@ -213,9 +244,7 @@ public:
         std::lock_guard<std::mutex> lock(engineMutex);
         
         for (auto& [symbol, book] : books) {
-            auto& orders = book->orders; // Would need accessor
-            if (orders.find(orderId) != orders.end()) {
-                orders[orderId].status = OrderStatus::CANCELLED;
+            if (book->cancelOrder(orderId)) {
                 return true;
             }
         }
