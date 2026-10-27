@@ -695,8 +695,10 @@ func (s *WalletService) createSolanaWallet(ctx context.Context, req *CreateWalle
 	var privateKey ed25519.PrivKey
 
 	if req.SeedPhrase != "" {
-		// Derive from seed phrase
-		key := deriveSolanaKeyFromSeed(req.SeedPhrase, req.UserID)
+		key, err := deriveSolanaKeyFromSeed(req.SeedPhrase, req.UserID)
+		if err != nil {
+			return nil, err
+		}
 		privateKey = key
 	} else if req.PrivateKey != "" {
 		// Import existing key
@@ -732,16 +734,29 @@ func (s *WalletService) createTONWallet(ctx context.Context, req *CreateWalletRe
 	var privateKey []byte
 
 	if req.SeedPhrase != "" {
-		privateKey = deriveTONKeyFromSeed(req.SeedPhrase, req.UserID)
+		derived, err := deriveTONKeyFromSeed(req.SeedPhrase, req.UserID)
+		if err != nil {
+			return nil, err
+		}
+		privateKey = derived
 	} else if req.PrivateKey != "" {
-		privateKey, _ = hex.DecodeString(req.PrivateKey)
+		decoded, err := hex.DecodeString(req.PrivateKey)
+		if err != nil || len(decoded) != 32 {
+			return nil, errors.New("invalid private key")
+		}
+		privateKey = decoded
 	} else {
 		privateKey = make([]byte, 32)
-		rand.Read(privateKey)
+		if _, err := rand.Read(privateKey); err != nil {
+			return nil, err
+		}
 	}
 
-	publicKey := sha256.Sum256(privateKey)
-	address := fmt.Sprintf("EQ%s", base58.Encode(publicKey[:]))
+	publicKey := tonPublicKey(privateKey)
+	address, err := tonV4R2Address(publicKey)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Wallet{
 		UserID:     req.UserID,
@@ -761,23 +776,37 @@ func (s *WalletService) createCosmosWallet(ctx context.Context, req *CreateWalle
 	var privateKey []byte
 
 	if req.SeedPhrase != "" {
-		privateKey = deriveCosmosKeyFromSeed(req.SeedPhrase, req.UserID)
+		derived, err := deriveCosmosKeyFromSeed(req.SeedPhrase, req.UserID)
+		if err != nil {
+			return nil, err
+		}
+		privateKey = derived
 	} else if req.PrivateKey != "" {
-		privateKey, _ = hex.DecodeString(req.PrivateKey)
+		decoded, err := hex.DecodeString(req.PrivateKey)
+		if err != nil || len(decoded) != 32 {
+			return nil, errors.New("invalid private key")
+		}
+		privateKey = decoded
 	} else {
 		privateKey = make([]byte, 32)
-		rand.Read(privateKey)
+		if _, err := rand.Read(privateKey); err != nil {
+			return nil, err
+		}
 	}
 
-	publicKey := sha256.Sum256(privateKey)
-	address := "cosmos1" + base58.Encode(publicKey[:20])
+	priv, _ := btcec.PrivKeyFromBytes(privateKey)
+	publicKey := priv.PubKey().SerializeCompressed()
+	address, err := cosmosAddress(priv, "cosmos")
+	if err != nil {
+		return nil, err
+	}
 
 	return &Wallet{
 		UserID:     req.UserID,
 		Type:       req.Type,
 		Blockchain: req.Blockchain,
 		Address:    address,
-		PublicKey:  hex.EncodeToString(publicKey[:]),
+		PublicKey:  hex.EncodeToString(publicKey),
 		PrivateKey: hex.EncodeToString(privateKey),
 		Status:     WalletStatusActive,
 		Balance:    make(map[string]Balance),
@@ -790,50 +819,53 @@ func (s *WalletService) createCosmosWallet(ctx context.Context, req *CreateWalle
 // HD WALLET DERIVATION
 // ============================================================================
 
+// deriveEVmKeyFromSeed derives an EVM key at m/44'/60'/0'/0/<userID>.
 func deriveEVmKeyFromSeed(seed string, userID uint64) (*ecdsa.PrivateKey, error) {
-	// BIP44 derivation path: m/44'/60'/0'/0/0
 	path := fmt.Sprintf("m/44'/60'/0'/0/%d", userID)
-
-	// Simplified derivation (in production, use proper BIP39/BIP44)
-	hash := sha256.Sum256([]byte(seed + path))
-	privateKey, err := crypto.ToECDSA(hash[:32])
+	priv, err := DeriveBIP32PrivateKey(seed, "", path)
 	if err != nil {
 		return nil, err
 	}
-
-	return privateKey, nil
+	return priv.ToECDSA(), nil
 }
 
+// deriveBitcoinKeyFromSeed derives a Bitcoin key at m/44'/0'/0'/0/<userID>.
 func deriveBitcoinKeyFromSeed(seed string, userID uint64) (*btcutil.WIF, error) {
 	path := fmt.Sprintf("m/44'/0'/0'/0/%d", userID)
-
-	hash := sha256.Sum256([]byte(seed + path))
-
-	privKey, _ := btcec.PrivKeyFromBytes(hash[:32])
-
-	return btcutil.NewWIF(privKey, &chaincfg.MainNetParams, true)
+	priv, err := DeriveBIP32PrivateKey(seed, "", path)
+	if err != nil {
+		return nil, err
+	}
+	return btcutil.NewWIF(priv, &chaincfg.MainNetParams, true)
 }
 
-func deriveSolanaKeyFromSeed(seed string, userID uint64) ed25519.PrivKey {
+// deriveSolanaKeyFromSeed derives a Solana key at m/44'/501'/<userID>'/0' using
+// SLIP-0010, which Solana wallets follow.
+func deriveSolanaKeyFromSeed(seed string, userID uint64) (ed25519.PrivKey, error) {
 	path := fmt.Sprintf("m/44'/501'/%d'/0'", userID)
-
-	hash := sha256.Sum256([]byte(seed + path))
-
+	raw, err := DeriveSlip10Ed25519(seed, "", path)
+	if err != nil {
+		return nil, err
+	}
 	var key ed25519.PrivKey
-	copy(key[:], hash[:32])
-	return key
+	copy(key[:], raw)
+	return key, nil
 }
 
-func deriveTONKeyFromSeed(seed string, userID uint64) []byte {
-	path := fmt.Sprintf("m/44'/607'/0'/0/%d", userID)
-	hash := sha256.Sum256([]byte(seed + path))
-	return hash[:32]
+// deriveTONKeyFromSeed derives a TON key. TON does not use BIP39 seed
+// expansion; it hashes the phrase directly.
+func deriveTONKeyFromSeed(seed string, userID uint64) ([]byte, error) {
+	return tonPrivateKeyFromMnemonic(seed)
 }
 
-func deriveCosmosKeyFromSeed(seed string, userID uint64) []byte {
+// deriveCosmosKeyFromSeed derives a Cosmos key at m/44'/118'/0'/0/<userID>.
+func deriveCosmosKeyFromSeed(seed string, userID uint64) ([]byte, error) {
 	path := fmt.Sprintf("m/44'/118'/0'/0/%d", userID)
-	hash := sha256.Sum256([]byte(seed + path))
-	return hash[:32]
+	priv, err := DeriveBIP32PrivateKey(seed, "", path)
+	if err != nil {
+		return nil, err
+	}
+	return priv.Serialize(), nil
 }
 
 // ============================================================================
