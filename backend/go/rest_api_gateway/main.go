@@ -1,7 +1,18 @@
-// TigerEx REST API Gateway - Production-Grade
-// Ultra-low latency, high security, Binance-level functionality
-// Language: Go for maximum performance and concurrency
-// Features: Spot, Margin, Futures, OCO, Trailing Stop, Stop-Loss
+// TigerEx REST API Gateway.
+//
+// This gateway is an authentication and routing shell in front of the trading
+// backends. It owns no market data, no order book, no balances, and no order
+// state. Every read is proxied to the service that owns the data, and every
+// write is proxied to the service that owns the operation. When an upstream is
+// not configured or is unreachable, the endpoint answers 503 rather than
+// inventing a response.
+//
+// The previous implementation did the opposite. It returned a hardcoded BTC
+// price of 50000.00 from the ticker endpoint, a fixed deposit address, made-up
+// balances of "1.0 BTC / 10000.00 USDT" for every caller, and it accepted an
+// order, assigned it an id, and returned status NEW without sending it
+// anywhere. A client could not tell a real fill from a fabricated one, which is
+// the most dangerous thing an exchange API can do.
 
 package main
 
@@ -9,16 +20,21 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"math/big"
+	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -29,401 +45,271 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// ============================================================================
-// ADVANCED ORDER TYPES - OCO, Trailing Stop, Stop-Loss
-// ============================================================================
-
-// OCOOrder - One Cancels Other order (Bracket Order)
-type OCOOrder struct {
-	ID                string    `json:"orderListId"`
-	Symbol            string    `json:"symbol"`
-	Orders            []OCOOrderItem `json:"orderReports"`
-	ContingencyType   string    `json:"contingencyType"` // ONE_CANCELS_ONE
-	ListOrderType    string    `json:"listOrderType"` // OCO
-	Total            int       `json:"listOrdersStatus"`
-	ListStatus      string    `json:"listStatus"` // EXEC_STARTED, ALL_DONE, OCO_CANCELLED
-	Pending          int       `json:"listPendingOrders,omitempty"`
-	ContractID      int64     `json:"listNoOfOrders"`
-	DisplayID       int64     `json:"listClientOrderId"`
-	DateTime        int64     `json:"datetime"`
-	DateTimeStr    string    `json:"datetimeStr,omitempty"`
-}
-
-// OCOOrderItem - Individual order in OCO
-type OCOOrderItem struct {
-	Symbol            string  `json:"symbol"`
-	OrderID           int64   `json:"orderId"`
-	ClientOrderID     string  `json:"clientOrderId"`
-	Side             string  `json:"side"`
-	OrderType        string  `json:"orderType"`
-	TimeInForce      string  `json:"timeInForce,omitempty"`
-	Price           float64 `json:"price"`
-	StopPrice        float64 `json:"stopPrice,omitempty"`
-	IcebergQty       float64 `json:"icebergQty,omitempty"`
-	OrigQty         float64 `json:"origQty"`
-	ExecutedQty      float64 `json:"executedQty"`
-	OrigQuoteQty    float64 `json:"origQuoteQty"`
-	ExecutedQuoteQty float64 `json:"executedQuoteQty"`
-	Status          string  `json:"status"`
-}
-
-// TrailingStopOrder - Trailing Stop Order
-type TrailingStopOrder struct {
-	OrderID          int64   `json:"orderId"`
-	Symbol          string  `json:"symbol"`
-	Side            string  `json:"side"`
-	Type            string  `json:"orderType"` // TRAILING_STOP, TRAILING_STOP_LIMIT
-	Quantity        float64 `json:"quantity"`
-	Price           float64 `json:"price,omitempty"`
-	StopPrice       float64 `json:"stopPrice"`
-	TrailingDelta   float64 `json:"trailingDelta"`
-	ActivationTime int64   `json:"activationTime,omitempty"`
-	TimeInForce    string  `json:"timeInForce"` // GTC, IOC, FOK
-	Status         string  `json:"status"`
-	CreatedAt      int64   `json:"createTime"`
-	UpdatedAt      int64   `json:"updateTime"`
-}
-
-// SOROrder - Smart Order Routing
-type SOROrder struct {
-	OrderID            int64       `json:"orderId"`
-	Symbol             string      `json:"symbol"`
-	Side               string      `json:"side"`
-	Type               string      `json:"type"`
-	Quantity          float64     `json:"quantity"`
-	Price             float64     `json:"price"`
-	SORResults         []SORResult `json:"sorResults"`
-	TotalExecutedQty   float64    `json:"totalExecutedQty"`
-	TotalExecutedQuote float64    `json:"totalExecutedQuote"`
-	CommissionAsset   string      `json:"commissionAsset"`
-	Commission       float64     `json:"commission"`
-	TimeInForce      string      `json:"timeInForce"`
-	Status           string      `json:"status"`
-}
-
-// SORResult - Smart Order Routing result
-type SORResult struct {
-	Exchange string  `json:"exchange"`
-	Side    string  `json:"side"`
-	Price   float64 `json:"price"`
-	Quantity float64 `json:"quantity"`
-}
-
-// MarginCallOrder - Margin call order
-type MarginCallOrder struct {
-	OrderID     int64   `json:"orderId"`
-	MarginCallID int64   `json:"marginCallId"`
-	AccountID  int64   `json:"accountId"`
-	PositionID int64   `json:"positionId"`
-	Symbol     string `json:"symbol"`
-	Side       string `json:"side"`
-	Quantity  float64 `json:"quantity"`
-	Type      string `json:"type"`
-	Status    string `json:"status"`
-	CreatedAt  int64  `json:"createTime"`
-}
-
-// LiquidationOrder - Forced liquidation order
-type LiquidationOrder struct {
-	OrderID       int64   `json:"orderId"`
-	Symbol         string  `json:"symbol"`
-	Side           string  `json:"side"`
-	Type           string  `json:"type"`
-	Price          float64 `json:"price"`
-	OriginalQty    float64 `json:"originalQty"`
-	ExecutedQty    float64 `json:"executedQty"`
-	RemainingQty  float64 `json:"remainingQty"`
-	Status        string  `json:"status"`
-	LiquidationPrice float64 `json:"liquidationPrice"`
-	MarginCall    bool    `json:"marginCall"`
-	CreatedAt    int64   `json:"createTime"`
-	UpdatedAt    int64   `json:"updateTime"`
-}
-
-// BlvtToken - Leveraged Token (BLVT)
-type BlvtToken struct {
-	Symbol          string  `json:"symbol"`
-	TokenName       string  `json:"tokenName"`
-	Network        string  `json:"network"`
-	TotalSupply    float64 `json:"totalSupply"`
-	CirculatingSupply float64 `json:"circulatingSupply"`
-	LockedSupply   float64 `json:"lockedSupply"`
-	MaxSupply     float64 `json:"maxSupply"`
-	NAV           float64 `json:"nav"`
-	NAVChange     float64 `json:"navChange"`
-	NAVChangePct  float64 `json:"navChangePct"`
-	MaxDailyDown  float64 `json:"maxDailyDown"`
-	MaxDailyUp    float64 `json:"maxDailyUp"`
-	TotalStaked   float64 `json:"totalStaked"`
-}
-
-// BlvtSubscribe - BLVT subscription
-type BlvtSubscribe struct {
-	ID              int64   `json:"id"`
-	TokenSymbol     string  `json:"tokenSymbol"`
-	Amount         float64 `json:"amount"`
-	Cost           float64 `json:"cost"`
-	Status         string  `json:"status"`
-	Reference      string  `json:"reference"`
-	CreatedAt      int64   `json:"createTime"`
-	ProcessedAt    int64   `json:"processedTime"`
-}
-
-// BlvtRedeem - BLVT redemption
-type BlvtRedeem struct {
-	ID              int64   `json:"id"`
-	TokenSymbol     string  `json:"tokenSymbol"`
-	Amount         float64 `json:"amount"`
-	ReceivedAsset string  `json:"receivedAsset"`
-	ReceivedQty   float64 `json:"receivedQty"`
-	Status        string  `json:"status"`
-	Reference     string  `json:"reference"`
-	CreatedAt     int64   `json:"createTime"`
-	ProcessedAt   int64   `json:"processedTime"`
-}
-
-// ============================================================================
-// CONFIGURATION & CONSTANTS
-// ============================================================================
-
 const (
 	ApiVersion = "v1.0.0"
 	ApiName    = "TigerEx REST API Gateway"
 
-	// Rate Limiting
+	// RequestsPerSecond and BurstLimit bound the per-key request rate.
 	RequestsPerSecond = 1000
-	BurstLimit      = 2000
+	BurstLimit        = 2000
 
-	// Timeouts
-	ReadTimeout     = 15 * time.Second
-	WriteTimeout   = 15 * time.Second
-	IdleTimeout    = 60 * time.Second
+	ReadTimeout  = 15 * time.Second
+	WriteTimeout = 15 * time.Second
+	IdleTimeout  = 60 * time.Second
+
+	// MaxRequestSize caps the request body the gateway will read.
 	MaxRequestSize = 10 * 1024 * 1024
 
-	// Security
+	// MaxConcurrentReqs caps in-flight requests.
 	MaxConcurrentReqs = 100000
+
+	// maxUpstreamBody caps how much of an upstream response the gateway will
+	// buffer. The gateway streams or rejects anything larger.
+	maxUpstreamBody = 32 * 1024 * 1024
+
+	// signatureWindow is how far a request timestamp may drift from now.
+	signatureWindow = 5 * time.Second
+
 	ApiKeyHeader    = "X-TigerEx-API-Key"
 	SignatureHeader = "X-TigerEx-Signature"
 	TimestampHeader = "X-TigerEx-Timestamp"
 )
+
+// Config is the gateway's runtime configuration. Every upstream is required;
+// there are no defaults that point at a fabricated source.
+type Config struct {
+	HTTPAddr    string
+	TLSAddr     string
+	CertFile    string
+	KeyFile     string
+	MarketData  string
+	Order       string
+	Account     string
+	Wallet      string
+	AdminSecret string
+	HMACSecret  string
+	WSOrigins   []string
+}
+
+func loadConfig() (*Config, error) {
+	cfg := &Config{
+		HTTPAddr:    getEnv("TIGEREX_HTTP_ADDR", ":8080"),
+		TLSAddr:     getEnv("TIGEREX_TLS_ADDR", ":8443"),
+		CertFile:    os.Getenv("TIGEREX_TLS_CERT_FILE"),
+		KeyFile:     os.Getenv("TIGEREX_TLS_KEY_FILE"),
+		MarketData:  os.Getenv("TIGEREX_MARKETDATA_URL"),
+		Order:       os.Getenv("TIGEREX_ORDER_SERVICE_URL"),
+		Account:     os.Getenv("TIGEREX_ACCOUNT_SERVICE_URL"),
+		Wallet:      os.Getenv("TIGEREX_WALLET_SERVICE_URL"),
+		AdminSecret: os.Getenv("TIGEREX_ADMIN_TOKEN"),
+		HMACSecret:  os.Getenv("TIGEREX_API_HMAC_SECRET"),
+	}
+
+	// TLS is mandatory: the previous server called ListenAndServeTLS("", ""),
+	// which fails, and then fell through to plaintext on :8080 with no TLS at
+	// all.
+	if cfg.CertFile == "" || cfg.KeyFile == "" {
+		return nil, errors.New("TIGEREX_TLS_CERT_FILE and TIGEREX_TLS_KEY_FILE are required")
+	}
+	if _, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile); err != nil {
+		return nil, fmt.Errorf("loading TLS key pair: %w", err)
+	}
+
+	// A shared secret is required to verify request signatures. Without it the
+	// gateway could not authenticate any write.
+	if len(cfg.HMACSecret) < 32 {
+		return nil, errors.New("TIGEREX_API_HMAC_SECRET must be at least 32 bytes")
+	}
+
+	for _, origin := range strings.Split(os.Getenv("TIGEREX_CORS_ORIGINS"), ",") {
+		origin = strings.TrimSpace(origin)
+		if origin != "" && origin != "*" {
+			cfg.WSOrigins = append(cfg.WSOrigins, origin)
+		}
+	}
+
+	return cfg, nil
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
 
 // ============================================================================
 // GLOBAL STATE
 // ============================================================================
 
 var (
-	server         *http.Server
-	wsUpgrader     = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
-		ReadBufferSize:  4096,
-		WriteBufferSize: 4096,
-	}
-
 	rateLimiters   = make(map[string]*rate.Limiter)
 	rateLimitersMu sync.RWMutex
 
-	totalRequests  uint64
+	totalRequests uint64
 	activeConns   uint64
-	rejectedReqs uint64
+	rejectedReqs  uint64
 )
 
 // ============================================================================
-// REQUEST & RESPONSE STRUCTURES
+// RESPONSE SHAPES
 // ============================================================================
 
-type (
-	APIResponse struct {
-		Code    int64       `json:"code"`
-		Message string      `json:"msg"`
-		Data   interface{} `json:"data,omitempty"`
-	}
-
-	NewOrderRequest struct {
-		Symbol      string `json:"symbol"`
-		Side        string `json:"side"`
-		Type        string `json:"type"`
-		TimeInForce string `json:"timeInForce,omitempty"`
-		Quantity   string `json:"quantity"`
-		Price      string `json:"price,omitempty"`
-		StopPrice  string `json:"stopPrice,omitempty"`
-	}
-
-	OrderResponse struct {
-		Symbol             string `json:"symbol"`
-		OrderId            int64  `json:"orderId"`
-		ClientOrderId      string `json:"clientOrderId"`
-		TransactionTime   int64  `json:"transactionTime"`
-		Price             string `json:"price"`
-		OrigQty           string `json:"origQty"`
-		ExecutedQty        string `json:"executedQty"`
-		CummulativeQuoteQty string `json:"cummulativeQuoteQty"`
-		Status            string `json:"status"`
-		TimeInForce       string `json:"timeInForce"`
-		Type             string `json:"type"`
-		Side             string `json:"side"`
-		StopPrice         string `json:"stopPrice,omitempty"`
-	}
-
-	AccountResponse struct {
-		MakerCommission  int64    `json:"makerCommission"`
-		TakerCommission int64  `json:"takerCommission"`
-		CanTrade      bool    `json:"canTrade"`
-		CanWithdraw  bool    `json:"canWithdraw"`
-		CanDeposit   bool    `json:"canDeposit"`
-		UpdateTime   int64   `json:"updateTime"`
-		AccountType string   `json:"accountType"`
-		Balances    []Balance `json:"balances"`
-	}
-
-	Balance struct {
-		Asset  string `json:"asset"`
-		Free   string `json:"free"`
-		Locked string `json:"locked"`
-	}
-
-	DepositAddressResponse struct {
-		Coin    string `json:"coin"`
-		Address string `json:"address"`
-		Memo   string `json:"memo"`
-	}
-
-	TickerResponse struct {
-		Symbol             string `json:"symbol"`
-		PriceChange        string `json:"priceChange"`
-		PriceChangePercent string `json:"priceChangePercent"`
-		LastPrice         string `json:"lastPrice"`
-		HighPrice         string `json:"highPrice"`
-		LowPrice         string `json:"lowPrice"`
-		Volume           string `json:"volume"`
-		QuoteVolume     string `json:"quoteVolume"`
-	}
-
-	FundingRateResponse struct {
-		Symbol           string `json:"symbol"`
-		FundingRate      string `json:"fundingRate"`
-		NextFundingTime int64  `json:"nextFundingTime"`
-		MarkPrice       string `json:"markPrice"`
-		IndexPrice      string `json:"indexPrice"`
-	}
-
-	OpenInterestResponse struct {
-		Symbol          string `json:"symbol"`
-		OpenInterest    string `json:"openInterest"`
-		Timestamp      int64  `json:"timestamp"`
-		PairOpenInterest string `json:"pairOpenInterest"`
-	}
-
-	LeverageResponse struct {
-		Symbol     string `json:"symbol"`
-		Leverage   int    `json:"leverage"`
-		MaxLeverage int    `json:"maxLeverage"`
-	}
-
-	MarginAccountResponse struct {
-		IsMarginalEnable bool      `json:"isMarginalEnable"`
-		Enabled        bool      `json:"enabled"`
-		TotalNetAsset  string    `json:"totalNetAsset"`
-		Borrowed      string    `json:"borrowed"`
-		Available     string    `json:"available"`
-		UserAssets    []Asset  `json:"userAssets"`
-	}
-
-	Asset struct {
-		Asset     string `json:"asset"`
-		Borrowed string `json:"borrowed"`
-		Free    string `json:"free"`
-		Locked  string `json:"locked"`
-		NetAsset string `json:"netAsset"`
-	}
-
-	PositionResponse struct {
-		Symbol            string `json:"symbol"`
-		PositionSide      string `json:"positionSide"`
-		PositionAmt      string `json:"positionAmt"`
-		EntryPrice      string `json:"entryPrice"`
-		MarkPrice       string `json:"markPrice"`
-		UnrealizedProfit string `json:"unrealizedProfit"`
-		Margin           string `json:"margin"`
-	}
-
-	WSubscribeRequest struct {
-		Streams []string `json:"streams"`
-	}
-)
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-func generateOrderIDInt() int64 {
-	return time.Now().UnixNano() / 1000000
+// APIResponse is the gateway's envelope. It deliberately mirrors the common
+// exchange shape so existing clients keep working.
+type APIResponse struct {
+	Code    int64       `json:"code"`
+	Message string      `json:"msg"`
+	Data    interface{} `json:"data,omitempty"`
 }
-
-func generateClientOrderID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
-}
-
-func generateSignature(secret, params string) string {
-	h := hmac.New(sha256.New, []byte(secret))
-	h.Write([]byte(params))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func parseQuantity(qty string) (*big.Float, error) {
-	f := new(big.Float)
-	f.SetString(qty)
-	return f, nil
-}
-
-func validateQuantity(qty string) bool {
-	f, err := parseQuantity(qty)
-	if err != nil { return false }
-	return f.Sign() > 0 && f.Cmp(big.NewFloat(1e-8)) > 0
-}
-
-func validatePrice(price string) bool {
-	if price == "" { return true }
-	f, err := parseQuantity(price)
-	if err != nil { return false }
-	return f.Sign() > 0
-}
-
-func currentTimestamp() int64 {
-	return time.Now().UnixMilli()
-}
-
-func checkRateLimit(apiKey string) bool {
-	rateLimitersMu.Lock()
-	defer rateLimitersMu.Unlock()
-	
-	limiter, exists := rateLimiters[apiKey]
-	if !exists {
-		limiter = rate.NewLimiter(rate.Limit(RequestsPerSecond), BurstLimit)
-		rateLimiters[apiKey] = limiter
-	}
-	return limiter.Allow()
-}
-
-// ============================================================================
-// RESPONSE HELPERS
-// ============================================================================
 
 func writeSuccess(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-API-Version", ApiVersion)
-	
-	resp := APIResponse{Code: 0, Message: "OK", Data: data}
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(APIResponse{Code: 0, Message: "OK", Data: data})
 }
 
-func writeError(w http.ResponseWriter, code int64, message string) {
+func writeError(w http.ResponseWriter, status int, code int64, message string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-API-Version", ApiVersion)
-	
-	resp := APIResponse{Code: code, Message: message}
-	w.WriteHeader(int(code))
-	json.NewEncoder(w).Encode(resp)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(APIResponse{Code: code, Message: message})
+}
+
+// ============================================================================
+// UPSTREAM CLIENT
+// ============================================================================
+
+// Upstream is a single backend the gateway proxies to.
+type Upstream struct {
+	Name string
+	base *url.URL
+}
+
+// newUpstream validates a configured base URL. A malformed URL is a
+// configuration error, not a runtime surprise.
+func newUpstream(name, raw string) (*Upstream, error) {
+	if raw == "" {
+		return nil, fmt.Errorf("%s upstream URL is not configured", name)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s upstream URL is invalid: %w", name, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("%s upstream URL must be http or https", name)
+	}
+	if u.Host == "" {
+		return nil, fmt.Errorf("%s upstream URL has no host", name)
+	}
+	return &Upstream{Name: name, base: u}, nil
+}
+
+// resolve joins the upstream base with a path. It rejects a path that would
+// escape the base (for example one containing ".." or "//"), so a caller cannot
+// redirect the gateway at an arbitrary host.
+func (u *Upstream) resolve(path string) (string, error) {
+	if !strings.HasPrefix(path, "/") {
+		return "", errors.New("upstream path must be absolute")
+	}
+	if strings.Contains(path, "..") || strings.Contains(path, "//") {
+		return "", errors.New("upstream path contains a traversal segment")
+	}
+	ref, err := url.Parse(path)
+	if err != nil {
+		return "", err
+	}
+	return u.base.ResolveReference(ref).String(), nil
+}
+
+// ErrUpstreamNotConfigured is returned when an endpoint has no upstream.
+var ErrUpstreamNotConfigured = errors.New("upstream service is not configured")
+
+// Gateway holds the configured upstreams and the HTTP client used to reach
+// them.
+type Gateway struct {
+	marketData *Upstream
+	order      *Upstream
+	account    *Upstream
+	wallet     *Upstream
+	client     *http.Client
+}
+
+// NewGateway builds a gateway. A nil upstream leaves the endpoints that need it
+// answering 503.
+func NewGateway(marketData, order, account, wallet *Upstream) *Gateway {
+	return &Gateway{
+		marketData: marketData,
+		order:      order,
+		account:    account,
+		wallet:     wallet,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}
+}
+
+// proxy forwards the request to the given upstream and streams the response
+// back. It never synthesises a body: on any failure the client receives 502 or
+// 503 with an explicit message.
+func (g *Gateway) proxy(up *Upstream, path string, w http.ResponseWriter, r *http.Request) {
+	if up == nil {
+		writeError(w, http.StatusServiceUnavailable, 503, ErrUpstreamNotConfigured.Error())
+		return
+	}
+
+	target, err := up.resolve(path)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, "invalid upstream path")
+		return
+	}
+
+	var body io.Reader
+	if r.Body != nil {
+		body = io.LimitReader(r.Body, MaxRequestSize)
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, target, body)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, "could not build upstream request")
+		return
+	}
+	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+	req.Header.Set("Accept", "application/json")
+	// Pass through the credential headers the upstream also verifies. The
+	// gateway does not mint identities.
+	for _, h := range []string{ApiKeyHeader, SignatureHeader, TimestampHeader, "Authorization"} {
+		if v := r.Header.Get(h); v != "" {
+			req.Header.Set(h, v)
+		}
+	}
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		// A timeout or connection failure is reported as unavailable rather
+		// than as an empty success.
+		writeError(w, http.StatusServiceUnavailable, 503, "upstream "+up.Name+" is unavailable")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 500 {
+		writeError(w, http.StatusServiceUnavailable, 503, "upstream "+up.Name+" returned an error")
+		return
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, io.LimitReader(resp.Body, maxUpstreamBody))
 }
 
 // ============================================================================
@@ -434,20 +320,20 @@ func securityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		
+		w.Header().Set("Referrer-Policy", "no-referrer")
+
 		if r.ContentLength > MaxRequestSize {
-			writeError(w, 400, "Request too large")
+			writeError(w, http.StatusRequestEntityTooLarge, 413, "Request too large")
 			return
 		}
-		
+
 		if atomic.LoadUint64(&activeConns) >= uint64(MaxConcurrentReqs) {
 			atomic.AddUint64(&rejectedReqs, 1)
-			writeError(w, 429, "Too many requests")
+			writeError(w, http.StatusTooManyRequests, 429, "Too many requests")
 			return
 		}
-		
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -457,304 +343,414 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		atomic.AddUint64(&totalRequests, 1)
-		_ = start
+		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
 	})
 }
 
 func recoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
-			if err := recover(); err != nil {
-				writeError(w, 500, "Internal server error")
-				fmt.Printf("PANIC: %v\n", err)
+			if rec := recover(); rec != nil {
+				writeError(w, http.StatusInternalServerError, 500, "Internal server error")
+				log.Printf("PANIC: %v", rec)
 			}
 		}()
 		next.ServeHTTP(w, r)
 	})
 }
 
+// rateLimitMiddleware applies a per-identity token bucket.
+func rateLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get(ApiKeyHeader)
+		if key == "" {
+			key = r.RemoteAddr
+		}
+		if !checkRateLimit(key) {
+			atomic.AddUint64(&rejectedReqs, 1)
+			writeError(w, http.StatusTooManyRequests, 429, "Rate limit exceeded")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func checkRateLimit(key string) bool {
+	rateLimitersMu.RLock()
+	limiter, exists := rateLimiters[key]
+	rateLimitersMu.RUnlock()
+	if exists {
+		return limiter.Allow()
+	}
+
+	rateLimitersMu.Lock()
+	defer rateLimitersMu.Unlock()
+	if limiter, exists = rateLimiters[key]; exists {
+		return limiter.Allow()
+	}
+	limiter = rate.NewLimiter(rate.Limit(RequestsPerSecond), BurstLimit)
+	rateLimiters[key] = limiter
+	return limiter.Allow()
+}
+
 // ============================================================================
-// API HANDLERS
+// AUTHENTICATION
 // ============================================================================
 
-func pingHandler(w http.ResponseWriter, r *http.Request) {
+// authContext carries the verified identity for the request.
+type authContext struct {
+	APIKey string
+	UserID string
+}
+
+type ctxKey int
+
+const authCtxKey ctxKey = 0
+
+// verifyRequest authenticates a signed request:
+//
+//   - the API key header is present,
+//   - the timestamp header is present and within the drift window,
+//   - the signature is HMAC-SHA256 over "timestamp.method.path.body",
+//   - the signature matches in constant time.
+//
+// The timestamp is inside the signed material, so a captured request cannot be
+// replayed later with a fresh timestamp.
+func verifyRequest(r *http.Request, secret []byte) (*authContext, error) {
+	apiKey := r.Header.Get(ApiKeyHeader)
+	sig := r.Header.Get(SignatureHeader)
+	tsRaw := r.Header.Get(TimestampHeader)
+	if apiKey == "" || sig == "" || tsRaw == "" {
+		return nil, errors.New("missing authentication headers")
+	}
+
+	ts, err := strconv.ParseInt(tsRaw, 10, 64)
+	if err != nil {
+		return nil, errors.New("invalid timestamp header")
+	}
+	drift := time.Since(time.UnixMilli(ts))
+	if drift < -signatureWindow || drift > signatureWindow {
+		return nil, errors.New("request timestamp outside the allowed window")
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxRequestSize))
+	if err != nil {
+		return nil, errors.New("could not read request body")
+	}
+	// Restore the body so the proxy can forward it.
+	r.Body = io.NopCloser(strings.NewReader(string(body)))
+
+	mac := hmac.New(sha256.New, secret)
+	fmt.Fprintf(mac, "%s\n%s\n%s\n", tsRaw, r.Method, r.URL.Path)
+	mac.Write(body)
+	expected := hex.EncodeToString(mac.Sum(nil))
+
+	if subtle.ConstantTimeCompare([]byte(expected), []byte(strings.ToLower(sig))) != 1 {
+		return nil, errors.New("signature verification failed")
+	}
+
+	return &authContext{APIKey: apiKey}, nil
+}
+
+// requireSignature wraps a handler that must be signed. It is applied to every
+// endpoint that reads private data or moves funds.
+func (g *Gateway) requireSignature(secret []byte, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth, err := verifyRequest(r, secret)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, 401, "unauthorized")
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), authCtxKey, auth)))
+	}
+}
+
+// requireAdmin gates operational endpoints on a bearer token compared in
+// constant time.
+func requireAdmin(token string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if token == "" {
+			writeError(w, http.StatusServiceUnavailable, 503, "admin token is not configured")
+			return
+		}
+		header := r.Header.Get("Authorization")
+		presented := strings.TrimPrefix(header, "Bearer ")
+		if presented == header || subtle.ConstantTimeCompare([]byte(presented), []byte(token)) != 1 {
+			writeError(w, http.StatusUnauthorized, 401, "unauthorized")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// ============================================================================
+// PUBLIC HANDLERS
+// ============================================================================
+
+func (g *Gateway) pingHandler(w http.ResponseWriter, _ *http.Request) {
 	writeSuccess(w, map[string]interface{}{})
 }
 
-func timeHandler(w http.ResponseWriter, r *http.Request) {
-	writeSuccess(w, map[string]interface{}{"serverTime": currentTimestamp()})
+func (g *Gateway) timeHandler(w http.ResponseWriter, _ *http.Request) {
+	writeSuccess(w, map[string]interface{}{"serverTime": time.Now().UnixMilli()})
 }
 
-func exchangeInfoHandler(w http.ResponseWriter, r *http.Request) {
-	data := map[string]interface{}{
-		"timezone":        "UTC",
-		"serverTime":      currentTimestamp(),
-		"rateLimits": []map[string]interface{}{
-			{"rateLimitType": "REQUEST_WEIGHT", "interval": "MINUTE", "limit": 1200},
-			{"rateLimitType": "ORDERS", "interval": "SECOND", "limit": 100},
-		},
-		"symbols": []map[string]interface{}{
-			{
-				"symbol": "BTCUSDT",
-				"status": "TRADING",
-				"baseAsset": "BTC",
-				"quoteAsset": "USDT",
-				"quotePrecision": 8,
-				"orderTypes": []string{"LIMIT", "MARKET", "STOP_LOSS", "STOP_LOSS_LIMIT"},
-				"icebergAllowed": true,
-				"ocoAllowed": true,
-				"isTrading": true,
-			},
-		},
-	}
-	writeSuccess(w, data)
+func (g *Gateway) exchangeInfoHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.marketData, "/api/v3/exchangeInfo", w, r)
 }
 
-func newOrderHandler(w http.ResponseWriter, r *http.Request) {
-	var req NewOrderRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, 400, "Invalid request body")
+func (g *Gateway) ticker24Handler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.marketData, "/api/v3/ticker/24hr", w, r)
+}
+
+func (g *Gateway) depthHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.marketData, "/api/v3/depth", w, r)
+}
+
+func (g *Gateway) tradesHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.marketData, "/api/v3/trades", w, r)
+}
+
+func (g *Gateway) klinesHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.marketData, "/api/v3/klines", w, r)
+}
+
+func (g *Gateway) fundingRateHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.marketData, "/fapi/v1/fundingRate", w, r)
+}
+
+func (g *Gateway) openInterestHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.marketData, "/fapi/v1/openInterest", w, r)
+}
+
+// ============================================================================
+// PRIVATE HANDLERS
+// ============================================================================
+
+func (g *Gateway) newOrderHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.order, "/api/v3/order", w, r)
+}
+
+func (g *Gateway) cancelOrderHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.order, "/api/v3/order", w, r)
+}
+
+func (g *Gateway) openOrdersHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.order, "/api/v3/openOrders", w, r)
+}
+
+func (g *Gateway) accountHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.account, "/api/v3/account", w, r)
+}
+
+func (g *Gateway) marginAccountHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.account, "/sapi/v1/margin/account", w, r)
+}
+
+func (g *Gateway) marginPositionHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.account, "/sapi/v1/margin/positionRisk", w, r)
+}
+
+func (g *Gateway) depositAddressHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.wallet, "/api/v3/capital/deposit/address", w, r)
+}
+
+func (g *Gateway) withdrawHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	g.proxy(g.wallet, "/api/v3/capital/withdraw/history", w, r)
+}
+
+// ============================================================================
+// WEBSOCKET
+// ============================================================================
+
+// wsHandler upgrades a client connection and forwards the subscription to the
+// market data websocket. The gateway does not generate events of its own.
+func (g *Gateway) wsHandler(w http.ResponseWriter, r *http.Request) {
+	if g.marketData == nil {
+		writeError(w, http.StatusServiceUnavailable, 503, ErrUpstreamNotConfigured.Error())
 		return
 	}
-	
-	if req.Symbol == "" || req.Side == "" || req.Type == "" || req.Quantity == "" {
-		writeError(w, 400, "Missing required fields")
-		return
-	}
-	
-	if !validateQuantity(req.Quantity) {
-		writeError(w, 400, "Invalid quantity")
-		return
-	}
-	
-	order := OrderResponse{
-		Symbol:           req.Symbol,
-		OrderId:          generateOrderIDInt(),
-		ClientOrderId:     generateClientOrderID(),
-		TransactionTime:  currentTimestamp(),
-		Price:           req.Price,
-		OrigQty:         req.Quantity,
-		ExecutedQty:      "0",
-		CummulativeQuoteQty: "0",
-		Status:          "NEW",
-		TimeInForce:     req.TimeInForce,
-		Type:           req.Type,
-		Side:           req.Side,
-	}
-	
-	writeSuccess(w, order)
-}
 
-func cancelOrderHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Symbol      string `json:"symbol"`
-		OrderId     int64  `json:"orderId"`
-		RecvWindow  int64  `json:"recvWindow,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, 400, "Invalid request body")
+	target, err := g.marketData.resolve("/ws/" + mux.Vars(r)["stream"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, 400, "invalid stream")
 		return
 	}
-	
-	order := OrderResponse{
-		Symbol:          req.Symbol,
-		OrderId:        req.OrderId,
-		TransactionTime: currentTimestamp(),
-		Status:         "CANCELED",
-	}
-	
-	writeSuccess(w, order)
-}
 
-func accountHandler(w http.ResponseWriter, r *http.Request) {
-	account := AccountResponse{
-		MakerCommission:  10,
-		TakerCommission:  20,
-		CanTrade:       true,
-		CanWithdraw:   true,
-		CanDeposit:    true,
-		UpdateTime:    currentTimestamp(),
-		AccountType: "SPOT",
-		Balances: []Balance{
-			{Asset: "BTC", Free: "1.0", Locked: "0.5"},
-			{Asset: "USDT", Free: "10000.00", Locked: "5000.00"},
+	upstreamURL, err := url.Parse(target)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, 500, "invalid upstream stream")
+		return
+	}
+	switch upstreamURL.Scheme {
+	case "http":
+		upstreamURL.Scheme = "ws"
+	case "https":
+		upstreamURL.Scheme = "wss"
+	default:
+		writeError(w, http.StatusInternalServerError, 500, "unsupported upstream scheme")
+		return
+	}
+
+	upgrader := websocket.Upgrader{
+		HandshakeTimeout: 10 * time.Second,
+		ReadBufferSize:   4096,
+		WriteBufferSize:  4096,
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				// Non-browser clients do not send Origin; browsers always do.
+				return true
+			}
+			for _, allowed := range allowedOrigins() {
+				if origin == allowed {
+					return true
+				}
+			}
+			return false
 		},
 	}
-	writeSuccess(w, account)
-}
 
-func depositAddressHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	coin := vars["coin"]
-	
-	address := DepositAddressResponse{
-		Coin:    coin,
-		Address: "0x742d35Cc6634C0532925a3b00BcF12fA2a5d5aE1",
-		Memo:    "",
-	}
-	writeSuccess(w, address)
-}
-
-func ticker24Handler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	symbol := vars["symbol"]
-	
-	ticker := TickerResponse{
-		Symbol:             symbol,
-		PriceChange:        "100.00",
-		PriceChangePercent: "0.20",
-		LastPrice:         "50000.00",
-		HighPrice:         "50100.00",
-		LowPrice:          "49800.00",
-		Volume:            "10000.00",
-		QuoteVolume:       "500000000.00",
-	}
-	writeSuccess(w, ticker)
-}
-
-func futuresFundingRateHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	symbol := vars["symbol"]
-	
-	resp := FundingRateResponse{
-		Symbol:           symbol,
-		FundingRate:      "0.0001",
-		NextFundingTime: currentTimestamp() + 28800000,
-		MarkPrice:       "50000.00",
-		IndexPrice:      "49999.50",
-	}
-	writeSuccess(w, resp)
-}
-
-func futuresOpenInterestHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	symbol := vars["symbol"]
-	
-	resp := OpenInterestResponse{
-		Symbol:          symbol,
-		OpenInterest:   "1000000",
-		Timestamp:      currentTimestamp(),
-		PairOpenInterest: "1000000",
-	}
-	writeSuccess(w, resp)
-}
-
-func marginLeverageHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	symbol := vars["symbol"]
-	leverage := r.URL.Query().Get("leverage")
-	
-	lev, _ := strconv.Atoi(leverage)
-	if lev < 1 || lev > 125 {
-		writeError(w, 400, "Invalid leverage")
-		return
-	}
-	
-	resp := LeverageResponse{
-		Symbol:     symbol,
-		Leverage:  lev,
-		MaxLeverage: 125,
-	}
-	writeSuccess(w, resp)
-}
-
-func marginPositionHandler(w http.ResponseWriter, r *http.Request) {
-	position := []PositionResponse{
-		{
-			Symbol:            "BTCUSDT",
-			PositionSide:     "BOTH",
-			PositionAmt:      "0",
-			EntryPrice:       "0",
-			MarkPrice:        "50000.00",
-			UnrealizedProfit: "0",
-			Margin:           "0",
-		},
-	}
-	writeSuccess(w, position)
-}
-
-func marginAccountHandler(w http.ResponseWriter, r *http.Request) {
-	account := MarginAccountResponse{
-		IsMarginalEnable: true,
-		Enabled:        true,
-		TotalNetAsset: "10000.00",
-		Borrowed:     "0.00",
-		Available:    "10000.00",
-		UserAssets: []Asset{
-			{Asset: "USDT", Free: "10000.00", Locked: "0", NetAsset: "10000.00"},
-		},
-	}
-	writeSuccess(w, account)
-}
-
-func wsHandler(w http.ResponseWriter, r *http.Request) {
-	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	clientConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
-	
+	defer clientConn.Close()
+
+	upstreamConn, _, err := websocket.DefaultDialer.Dial(upstreamURL.String(), nil)
+	if err != nil {
+		_ = clientConn.WriteMessage(websocket.TextMessage, []byte(`{"error":"market data stream unavailable"}`))
+		return
+	}
+	defer upstreamConn.Close()
+
 	atomic.AddUint64(&activeConns, 1)
 	defer atomic.AddUint64(&activeConns, ^uint64(0))
-	
-	for {
-		msgType, msg, err := conn.ReadMessage()
-		if err != nil {
-			break
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Client to upstream.
+	go func() {
+		defer wg.Done()
+		defer cancel()
+		for {
+			msgType, msg, err := clientConn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := upstreamConn.WriteMessage(msgType, msg); err != nil {
+				return
+			}
 		}
-		
-		if msgType == websocket.TextMessage {
-			var sub WSubscribeRequest
-			if err := json.Unmarshal(msg, &sub); err != nil {
-				conn.WriteMessage(websocket.TextMessage, []byte(`{"error":"invalid message"}`))
-				continue
+	}()
+
+	// Upstream to client.
+	go func() {
+		defer wg.Done()
+		defer cancel()
+		for {
+			msgType, msg, err := upstreamConn.ReadMessage()
+			if err != nil {
+				return
 			}
-			
-			ack := map[string]interface{}{
-				"event":     "subscribe",
-				"eventTime": currentTimestamp(),
+			if err := clientConn.WriteMessage(msgType, msg); err != nil {
+				return
 			}
-			ackBytes, _ := json.Marshal(ack)
-			conn.WriteMessage(websocket.TextMessage, ackBytes)
+		}
+	}()
+
+	<-ctx.Done()
+	_ = clientConn.Close()
+	_ = upstreamConn.Close()
+	wg.Wait()
+}
+
+func allowedOrigins() []string {
+	var origins []string
+	for _, origin := range strings.Split(os.Getenv("TIGEREX_CORS_ORIGINS"), ",") {
+		origin = strings.TrimSpace(origin)
+		if origin != "" && origin != "*" {
+			origins = append(origins, origin)
 		}
 	}
-	conn.Close()
+	return origins
 }
 
 // ============================================================================
-// ROUTER SETUP
+// ROUTER
 // ============================================================================
 
-func setupRouter() *mux.Router {
+func (g *Gateway) setupRouter(cfg *Config) *mux.Router {
 	router := mux.NewRouter()
 	router.Use(loggingMiddleware)
 	router.Use(securityMiddleware)
 	router.Use(recoveryMiddleware)
-	
-	// Market Data
-	router.HandleFunc("/api/v3/ping", pingHandler)
-	router.HandleFunc("/api/v3/time", timeHandler)
-	router.HandleFunc("/api/v3/exchangeInfo", exchangeInfoHandler)
-	router.HandleFunc("/api/v3/ticker/24hr", ticker24Handler)
-	
-	// Spot Trading
-	router.HandleFunc("/api/v3/order", newOrderHandler).Methods("POST")
-	router.HandleFunc("/api/v3/order", cancelOrderHandler).Methods("DELETE")
-	router.HandleFunc("/api/v3/account", accountHandler)
-	router.HandleFunc("/api/v3/capital/deposit/address/{coin}", depositAddressHandler)
-	
-	// Margin Trading
-	router.HandleFunc("/sapi/v1/margin/account", marginAccountHandler)
-	router.HandleFunc("/sapi/v1/margin/leverage", marginLeverageHandler).Methods("POST")
-	router.HandleFunc("/sapi/v1/margin/positionRisk", marginPositionHandler)
-	
-	// Futures Trading
-	router.HandleFunc("/fapi/v1/fundingRate", futuresFundingRateHandler)
-	router.HandleFunc("/fapi/v1/openInterest", futuresOpenInterestHandler)
-	
-	// WebSocket
-	router.HandleFunc("/ws/{stream}", wsHandler)
-	
+	router.Use(rateLimitMiddleware)
+
+	// Market data: public, proxied to the market data service.
+	router.HandleFunc("/api/v3/ping", g.pingHandler).Methods("GET")
+	router.HandleFunc("/api/v3/time", g.timeHandler).Methods("GET")
+	router.HandleFunc("/api/v3/exchangeInfo", g.exchangeInfoHandler).Methods("GET")
+	router.HandleFunc("/api/v3/ticker/24hr", g.ticker24Handler).Methods("GET")
+	router.HandleFunc("/api/v3/depth", g.depthHandler).Methods("GET")
+	router.HandleFunc("/api/v3/trades", g.tradesHandler).Methods("GET")
+	router.HandleFunc("/api/v3/klines", g.klinesHandler).Methods("GET")
+	router.HandleFunc("/fapi/v1/fundingRate", g.fundingRateHandler).Methods("GET")
+	router.HandleFunc("/fapi/v1/openInterest", g.openInterestHandler).Methods("GET")
+
+	// Private endpoints: signed.
+	secret := []byte(cfg.HMACSecret)
+	router.HandleFunc("/api/v3/order", g.requireSignature(secret, g.newOrderHandler)).Methods("POST")
+	router.HandleFunc("/api/v3/order", g.requireSignature(secret, g.cancelOrderHandler)).Methods("DELETE")
+	router.HandleFunc("/api/v3/openOrders", g.requireSignature(secret, g.openOrdersHandler)).Methods("GET")
+	router.HandleFunc("/api/v3/account", g.requireSignature(secret, g.accountHandler)).Methods("GET")
+	router.HandleFunc("/sapi/v1/margin/account", g.requireSignature(secret, g.marginAccountHandler)).Methods("GET")
+	router.HandleFunc("/sapi/v1/margin/positionRisk", g.requireSignature(secret, g.marginPositionHandler)).Methods("GET")
+	router.HandleFunc("/api/v3/capital/deposit/address/{coin}", g.requireSignature(secret, g.depositAddressHandler)).Methods("GET")
+	router.HandleFunc("/api/v3/capital/withdraw/history", g.requireSignature(secret, g.withdrawHistoryHandler)).Methods("GET")
+
+	// Websocket.
+	router.HandleFunc("/ws/{stream}", g.wsHandler)
+
+	// Operational endpoints.
+	router.HandleFunc("/healthz", g.healthHandler).Methods("GET")
+	router.HandleFunc("/metrics", requireAdmin(cfg.AdminSecret, g.metricsHandler)).Methods("GET")
+
 	return router
+}
+
+func (g *Gateway) healthHandler(w http.ResponseWriter, _ *http.Request) {
+	status := map[string]string{
+		"status":     "ok",
+		"marketData": upstreamState(g.marketData),
+		"order":      upstreamState(g.order),
+		"account":    upstreamState(g.account),
+		"wallet":     upstreamState(g.wallet),
+	}
+	writeSuccess(w, status)
+}
+
+func upstreamState(u *Upstream) string {
+	if u == nil {
+		return "not_configured"
+	}
+	return "configured"
+}
+
+func (g *Gateway) metricsHandler(w http.ResponseWriter, _ *http.Request) {
+	writeSuccess(w, map[string]interface{}{
+		"totalRequests":  atomic.LoadUint64(&totalRequests),
+		"activeConns":    atomic.LoadUint64(&activeConns),
+		"rejectedReqs":   atomic.LoadUint64(&rejectedReqs),
+		"goroutines":     runtime.NumGoroutine(),
+		"rateLimiters":   len(rateLimiters),
+		"apiVersion":     ApiVersion,
+		"runtimeVersion": runtime.Version(),
+	})
 }
 
 // ============================================================================
@@ -762,61 +758,76 @@ func setupRouter() *mux.Router {
 // ============================================================================
 
 func main() {
-	fmt.Printf("Starting %s v%s\n", ApiName, ApiVersion)
-	
-	router := setupRouter()
-	
+	log.SetFlags(log.LstdFlags | log.LUTC)
+
+	cfg, err := loadConfig()
+	if err != nil {
+		log.Fatalf("Refusing to start: %v", err)
+	}
+
+	// An upstream that is not configured is logged, not defaulted. The
+	// endpoints that need it answer 503.
+	build := func(name, raw string) *Upstream {
+		if raw == "" {
+			log.Printf("%s upstream is not configured; its endpoints will answer 503", name)
+			return nil
+		}
+		up, err := newUpstream(name, raw)
+		if err != nil {
+			log.Fatalf("Refusing to start: %v", err)
+		}
+		return up
+	}
+
+	gw := NewGateway(
+		build("market data", cfg.MarketData),
+		build("order", cfg.Order),
+		build("account", cfg.Account),
+		build("wallet", cfg.Wallet),
+	)
+
+	router := gw.setupRouter(cfg)
+
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		CipherSuites: []uint16{
 			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
 			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
 		},
 	}
-	
-	server = &http.Server{
-		Addr:         ":8443",
+
+	server := &http.Server{
+		Addr:         cfg.TLSAddr,
 		Handler:      router,
-		ReadTimeout:   ReadTimeout,
+		ReadTimeout:  ReadTimeout,
 		WriteTimeout: WriteTimeout,
 		IdleTimeout:  IdleTimeout,
 		TLSConfig:    tlsConfig,
 	}
-	
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	
-	fmt.Printf("Server starting on %s\n", server.Addr)
-	fmt.Printf("API Version: %s\n", ApiVersion)
-	fmt.Printf("Runtime: %s\n", runtime.Version())
-	fmt.Printf("NumCPU: %d\n", runtime.NumCPU())
-	
+
+	log.Printf("Starting %s v%s", ApiName, ApiVersion)
+	log.Printf("TLS listening on %s", server.Addr)
+
 	go func() {
-		if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("Server error: %v\n", err)
+		if err := server.ListenAndServeTLS(cfg.CertFile, cfg.KeyFile); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("TLS server error: %v", err)
 		}
 	}()
-	
-	// HTTP redirect
-	go func() {
-		httpServer := &http.Server{Addr: ":8080", Handler: router}
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("HTTP server error: %v\n", err)
-		}
-	}()
-	
+
 	<-stop
-	fmt.Println("\nShutting down...")
-	
+	log.Println("Shutting down...")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
 	if err := server.Shutdown(ctx); err != nil {
-		fmt.Printf("Server shutdown error: %v\n", err)
+		log.Printf("Server shutdown error: %v", err)
 	}
-	
-	fmt.Println("Server stopped")
-	fmt.Printf("Total requests: %d\n", atomic.LoadUint64(&totalRequests))
-	fmt.Printf("Rejected requests: %d\n", atomic.LoadUint64(&rejectedReqs))
+	log.Println("Server stopped")
 }
