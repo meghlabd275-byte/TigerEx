@@ -1,62 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
+import { checkOtp } from '@/lib/security/otp-verify-request';
+import { readJson } from '@/lib/security/otp-request';
 
-/**
- * Verify Email - Production Implementation
- * Verifies email OTP from database
- */
+/** Verify an email address with the registration code sent to it. */
 export async function POST(request: NextRequest) {
+  const body = await readJson(request);
+  const result = checkOtp('register', body.email ?? body.emailOrPhone, body.code);
+  if ('response' in result) return result.response;
+
   try {
-    const body = await request.json();
-    const { email, code } = body;
-    
-    if (!email || !code) {
-      return NextResponse.json(
-        { success: false, error: { code: 'INVALID_INPUT', message: 'Email and code are required' } },
-        { status: 400 }
-      );
-    }
-    
     const db = getDb();
-    
-    // Find OTP record
-    const otpRecord = db.prepare(`
-      SELECT * FROM otp_codes 
-      WHERE email = ? AND code = ? AND purpose = 'register' AND verified_at IS NULL
-    `).get(email.toLowerCase(), code);
-    
-    if (!otpRecord) {
-      return NextResponse.json(
-        { success: false, error: { code: 'INVALID_CODE', message: 'Invalid verification code' } },
-        { status: 400 }
-      );
-    }
-    
-    // Check if expired
-    const expiresAt = new Date((otpRecord as any).expires_at);
-    if (expiresAt < new Date()) {
-      return NextResponse.json(
-        { success: false, error: { code: 'OTP_EXPIRED', message: 'Verification code has expired' } },
-        { status: 400 }
-      );
-    }
-    
-    // Mark as verified
-    db.prepare(`
-      UPDATE otp_codes 
-      SET verified_at = datetime('now')
-      WHERE otp_id = ?
-    `).run((otpRecord as any).otp_id);
-    
-    return NextResponse.json({
-      success: true,
-      message: 'Email verified successfully',
-    });
-  } catch (error: any) {
+    db.prepare(
+      `UPDATE users SET email_verified = 1, updated_at = datetime('now') WHERE email = ?`,
+    ).run(result.destination.email);
+    return NextResponse.json({ success: true, data: { verified: true } });
+  } catch (error) {
     console.error('Verify email error:', error);
     return NextResponse.json(
       { success: false, error: { code: 'INTERNAL_ERROR', message: 'Verification failed' } },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

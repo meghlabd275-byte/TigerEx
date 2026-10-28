@@ -1,113 +1,69 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, hashPassword } from '@/lib/db';
+import { isOtpVerified } from '@/lib/security/otp';
+import { parseDestination, readJson } from '@/lib/security/otp-request';
 
 /**
- * Reset Password - Production Implementation
- * Verifies OTP and resets password
+ * Complete a password reset.
+ *
+ * Requires a password_reset code that was verified for this exact account
+ * within the last 15 minutes, so a consumed code cannot be replayed and an
+ * unverified request cannot change a password. All existing sessions are
+ * revoked once the password changes.
  */
 export async function POST(request: NextRequest) {
+  const body = await readJson(request);
+  const destination = parseDestination(body.emailOrPhone);
+  const newPassword = String(body.newPassword ?? '');
+
+  if (!destination || !newPassword) {
+    return NextResponse.json(
+      { success: false, error: { code: 'INVALID_INPUT', message: 'Email/phone and a new password are required' } },
+      { status: 400 },
+    );
+  }
+  if (newPassword.length < 8) {
+    return NextResponse.json(
+      { success: false, error: { code: 'WEAK_PASSWORD', message: 'Password must be at least 8 characters' } },
+      { status: 400 },
+    );
+  }
+
+  if (!isOtpVerified('password_reset', destination)) {
+    return NextResponse.json(
+      { success: false, error: { code: 'NOT_VERIFIED', message: 'Verify the reset code before setting a new password' } },
+      { status: 400 },
+    );
+  }
+
   try {
-    const body = await request.json();
-    const { emailOrPhone, code, newPassword } = body;
-    
-    if (!emailOrPhone || !code || !newPassword) {
-      return NextResponse.json(
-        { success: false, error: { code: 'INVALID_INPUT', message: 'All fields are required' } },
-        { status: 400 }
-      );
-    }
-    
-    // Verify password requirements
-    if (newPassword.length < 8) {
-      return NextResponse.json(
-        { success: false, error: { code: 'WEAK_PASSWORD', message: 'Password must be at least 8 characters' } },
-        { status: 400 }
-      );
-    }
-    
     const db = getDb();
-    
-    // Determine if input is email or phone
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const isEmail = emailRegex.test(emailOrPhone);
-    
-    // Find user
-    let user = null;
-    if (isEmail) {
-      user = db.prepare('SELECT * FROM users WHERE email = ?').get(emailOrPhone.toLowerCase());
-    } else {
-      const normalizedPhone = emailOrPhone.replace(/[^0-9+]/g, '');
-      user = db.prepare('SELECT * FROM users WHERE phone = ?').get(normalizedPhone);
-    }
-    
+    const user = destination.email
+      ? (db.prepare('SELECT user_id FROM users WHERE email = ?').get(destination.email) as { user_id: string } | undefined)
+      : (db.prepare('SELECT user_id FROM users WHERE phone = ?').get(destination.phone) as { user_id: string } | undefined);
+
     if (!user) {
       return NextResponse.json(
-        { success: false, error: { code: 'USER_NOT_FOUND', message: 'User not found' } },
-        { status: 404 }
+        { success: false, error: { code: 'NOT_FOUND', message: 'User not found' } },
+        { status: 404 },
       );
     }
-    
-    // Find OTP record
-    let otpRecord = null;
-    if (isEmail) {
-      otpRecord = db.prepare(`
-        SELECT * FROM otp_codes 
-        WHERE email = ? AND code = ? AND purpose = 'password_reset' AND verified_at IS NULL
-      `).get(emailOrPhone.toLowerCase(), code);
-    } else {
-      otpRecord = db.prepare(`
-        SELECT * FROM otp_codes 
-        WHERE phone = ? AND code = ? AND purpose = 'password_reset' AND verified_at IS NULL
-      `).get(emailOrPhone, code);
-    }
-    
-    if (!otpRecord) {
-      return NextResponse.json(
-        { success: false, error: { code: 'INVALID_CODE', message: 'Invalid verification code' } },
-        { status: 400 }
+
+    const apply = db.transaction(() => {
+      db.prepare(`UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE user_id = ?`).run(
+        hashPassword(newPassword),
+        user.user_id,
       );
-    }
-    
-    // Check if expired
-    const expiresAt = new Date((otpRecord as any).expires_at);
-    if (expiresAt < new Date()) {
-      return NextResponse.json(
-        { success: false, error: { code: 'OTP_EXPIRED', message: 'Verification code has expired' } },
-        { status: 400 }
-      );
-    }
-    
-    // Hash new password
-    const passwordHash = hashPassword(newPassword);
-    
-    // Update password
-    db.prepare(`
-      UPDATE users 
-      SET password_hash = ?, password_changed_at = datetime('now'), updated_at = datetime('now')
-      WHERE user_id = ?
-    `).run(passwordHash, (user as any).user_id);
-    
-    // Mark OTP as verified
-    db.prepare(`
-      UPDATE otp_codes 
-      SET verified_at = datetime('now')
-      WHERE otp_id = ?
-    `).run((otpRecord as any).otp_id);
-    
-    // Invalidate all sessions
-    db.prepare(`
-      DELETE FROM sessions WHERE user_id = ?
-    `).run((user as any).user_id);
-    
-    return NextResponse.json({
-      success: true,
-      message: 'Password reset successfully',
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.user_id);
     });
-  } catch (error: any) {
+    apply();
+
+    return NextResponse.json({ success: true, data: { reset: true } });
+  } catch (error) {
     console.error('Password reset error:', error);
     return NextResponse.json(
       { success: false, error: { code: 'INTERNAL_ERROR', message: 'Password reset failed' } },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

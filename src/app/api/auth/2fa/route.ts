@@ -1,83 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
+import { requireSession } from '@/lib/db/session';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
+/** Report the authenticated user's current 2FA state. */
+export async function GET(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-// Enable 2FA
-export async function POST(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+    const db = getDb();
+    const row = db
+      .prepare('SELECT two_factor_enabled, two_factor_type FROM users WHERE user_id = ?')
+      .get(auth.user.userId) as { two_factor_enabled: number; two_factor_type: string } | undefined;
 
-    const response = await fetch(`${API_BASE_URL}/auth/2fa/enable`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to enable 2FA' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('2FA enable API error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      {
+        success: true,
+        data: {
+          enabled: !!row?.two_factor_enabled,
+          type: row?.two_factor_type ?? 'totp',
+        },
+      },
+      { headers: { 'Cache-Control': 'no-store' } },
     );
-  }
-}
-
-// Disable 2FA
-export async function DELETE(request: NextRequest) {
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/auth/2fa/disable`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to disable 2FA' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('2FA disable API error:', error);
+  } catch (error) {
+    console.error('2FA status error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+      { status: 500 },
     );
   }
 }

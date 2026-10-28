@@ -1,176 +1,92 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb, generateId } from '@/lib/db';
-import { randomBytes } from 'crypto';
+import { getDb } from '@/lib/db';
+import { checkOtp } from '@/lib/security/otp-verify-request';
+import { readJson } from '@/lib/security/otp-request';
+import { issueSession } from '@/lib/security/session-issue';
+import { decryptSecret, verifyTotp } from '@/lib/security/totp';
 
 /**
- * Verify OTP - Production Implementation
- * Verifies OTP for login or 2FA
+ * Second-factor verification for an in-progress login.
+ *
+ * A temporary session is created by the login route when the password is
+ * correct but 2FA is required. This route accepts either an authenticator code
+ * (TOTP) or a delivered one-time code, and promotes the temporary session to a
+ * full session only after a code is confirmed.
  */
 export async function POST(request: NextRequest) {
+  const body = await readJson(request);
+  const credential = String(body.credential ?? '').trim();
+  const otp = String(body.otp ?? '').trim();
+  const tempToken = String(body.tempToken ?? '').trim();
+
+  if (!credential || !otp || !tempToken) {
+    return NextResponse.json(
+      { success: false, error: { code: 'INVALID_INPUT', message: 'Credential, code and temporary token are required' } },
+      { status: 400 },
+    );
+  }
+
   try {
-    const body = await request.json();
-    const { credential, otp, type, tempToken } = body;
-    
-    if (!credential || !otp) {
-      return NextResponse.json(
-        { success: false, message: 'Credential and OTP are required' },
-        { status: 400 }
-      );
-    }
-    
     const db = getDb();
-    
-    // Determine if input is email or phone
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const isEmail = emailRegex.test(credential);
-    
-    // Find OTP record - try login purpose first, then 2fa
-    let otpRecord = null;
-    if (isEmail) {
-      otpRecord = db.prepare(`
-        SELECT * FROM otp_codes 
-        WHERE email = ? AND code = ? AND (purpose = 'login' OR purpose = '2fa') AND verified_at IS NULL
-      `).get(credential.toLowerCase(), otp);
-    } else {
-      otpRecord = db.prepare(`
-        SELECT * FROM otp_codes 
-        WHERE phone = ? AND code = ? AND (purpose = 'login' OR purpose = '2fa') AND verified_at IS NULL
-      `).get(credential, otp);
-    }
-    
-    if (!otpRecord) {
+    const session = db
+      .prepare(
+        `SELECT session_id, user_id FROM sessions WHERE access_token = ? AND expires_at > datetime('now')`,
+      )
+      .get(tempToken) as { session_id: string; user_id: string } | undefined;
+
+    if (!session) {
       return NextResponse.json(
-        { success: false, message: 'Invalid verification code' },
-        { status: 400 }
+        { success: false, error: { code: 'SESSION_EXPIRED', message: 'Login session has expired. Sign in again.' } },
+        { status: 400 },
       );
     }
-    
-    // Check if expired
-    const expiresAt = new Date((otpRecord as any).expires_at);
-    if (expiresAt < new Date()) {
+
+    const user = db
+      .prepare('SELECT two_factor_secret, two_factor_enabled, email, phone FROM users WHERE user_id = ?')
+      .get(session.user_id) as
+      | { two_factor_secret: string | null; two_factor_enabled: number; email: string | null; phone: string | null }
+      | undefined;
+    if (!user) {
       return NextResponse.json(
-        { success: false, message: 'Verification code has expired' },
-        { status: 400 }
+        { success: false, error: { code: 'NOT_FOUND', message: 'User not found' } },
+        { status: 404 },
       );
     }
-    
-    // Check attempts
-    if ((otpRecord as any).attempts >= (otpRecord as any).max_attempts) {
-      return NextResponse.json(
-        { success: false, message: 'Too many attempts. Please request a new code.' },
-        { status: 400 }
-      );
-    }
-    
-    // Mark OTP as verified
-    db.prepare(`
-      UPDATE otp_codes 
-      SET verified_at = datetime('now'), attempts = attempts + 1
-      WHERE otp_id = ?
-    `).run((otpRecord as any).otp_id);
-    
-    // If this was a 2FA verification from temp token, complete the login
-    if (type === '2fa' && tempToken) {
-      const session = db.prepare(`
-        SELECT * FROM sessions WHERE access_token = ? AND expires_at > datetime('now')
-      `).get(tempToken);
-      
-      if (!session) {
-        return NextResponse.json(
-          { success: false, message: 'Session expired' },
-          { status: 400 }
-        );
-      }
-      
-      // Get user
-      const user = db.prepare('SELECT * FROM users WHERE user_id = ?').get((session as any).user_id);
-      
-      if (!user) {
-        return NextResponse.json(
-          { success: false, message: 'User not found' },
-          { status: 404 }
-        );
-      }
-      
-      // Generate new access token
-      const accessToken = randomBytes(32).toString('hex');
-      const refreshToken = randomBytes(32).toString('hex');
-      const tokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-      
-      // Update session with new token
-      db.prepare(`
-        UPDATE sessions 
-        SET access_token = ?, refresh_token = ?, expires_at = ?
-        WHERE session_id = ?
-      `).run(accessToken, refreshToken, tokenExpiry, (session as any).session_id);
-      
-      return NextResponse.json({
-        success: true,
-        accessToken,
-        refreshToken,
-        user: {
-          userId: user.user_id,
-          email: user.email,
-          phone: user.phone,
-          username: user.username,
-          kycLevel: user.kyc_level,
-          kycStatus: user.kyc_status,
-          twoFactorEnabled: !!user.two_factor_enabled,
-        },
-      });
-    }
-    
-    // For login OTP without 2FA
-    if ((otpRecord as any).user_id) {
-      const user = db.prepare('SELECT * FROM users WHERE user_id = ?').get((otpRecord as any).user_id);
-      
-      if (user) {
-        // Generate tokens
-        const accessToken = randomBytes(32).toString('hex');
-        const refreshToken = randomBytes(32).toString('hex');
-        const tokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-        
-        // Create session
-        const sessionId = generateId();
-        db.prepare(`
-          INSERT INTO sessions (session_id, user_id, access_token, refresh_token, expires_at, ip_address, user_agent)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          sessionId,
-          (otpRecord as any).user_id,
-          accessToken,
-          refreshToken,
-          tokenExpiry,
-          request.headers.get('x-forwarded-for') || 'unknown',
-          request.headers.get('user-agent') || 'unknown'
-        );
-        
-        return NextResponse.json({
-          success: true,
-          accessToken,
-          refreshToken,
-          user: {
-            userId: (user as any).user_id,
-            email: (user as any).email,
-            phone: (user as any).phone,
-            username: (user as any).username,
-            kycLevel: (user as any).kyc_level,
-            kycStatus: (user as any).kyc_status,
-            twoFactorEnabled: !!(user as any).two_factor_enabled,
-          },
-        });
+
+    // Authenticator (TOTP) path.
+    let totpOk = false;
+    if (user.two_factor_enabled && user.two_factor_secret) {
+      try {
+        totpOk = verifyTotp(decryptSecret(user.two_factor_secret), otp);
+      } catch {
+        totpOk = false;
       }
     }
-    
+
+    // Delivered one-time code path.
+    if (!totpOk) {
+      const delivered = checkOtp('login', credential, otp);
+      if ('response' in delivered) {
+        return delivered.response;
+      }
+    }
+
+    // Consume the temporary session and issue a full one.
+    db.prepare('DELETE FROM sessions WHERE session_id = ?').run(session.session_id);
+    const full = issueSession(request, session.user_id);
+
     return NextResponse.json({
       success: true,
-      message: 'Verification successful',
+      accessToken: full.accessToken,
+      refreshToken: full.refreshToken,
+      expiresIn: 86400,
+      user: full.user,
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Verify OTP error:', error);
     return NextResponse.json(
-      { success: false, message: 'Internal server error' },
-      { status: 500 }
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Verification failed' } },
+      { status: 500 },
     );
   }
 }

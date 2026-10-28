@@ -21,26 +21,10 @@ import OtpInput from '@/components/auth/OtpInput';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 // Steps
-type ResetStep = 'identity' | 'email-otp' | 'phone-otp' | 'liveness' | 'success';
-
-interface LivenessInstruction {
-  id: number;
-  text: string;
-  icon: string;
-}
-
-const livenessInstructions: LivenessInstruction[] = [
-  { id: 1, text: "Look straight at the camera", icon: "👀" },
-  { id: 2, text: "Turn your face slightly left", icon: "↩️" },
-  { id: 3, text: "Turn your face slightly right", icon: "↪️" },
-  { id: 4, text: "Smile briefly", icon: "😊" },
-  { id: 5, text: "Blink your eyes slowly", icon: "👁️" },
-];
+type ResetStep = 'identity' | 'email-otp' | 'phone-otp' | 'reset-confirm' | 'success';
 
 export default function TwoFactorResetPage() {
   const router = useRouter();
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   
   // Form state
   const [identity, setIdentity] = useState('');
@@ -54,12 +38,6 @@ export default function TwoFactorResetPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   
-  // Liveness state
-  const [livenessStep, setLivenessStep] = useState(0);
-  const [livenessProgress, setLivenessProgress] = useState(0);
-  const [isLivenessComplete, setIsLivenessComplete] = useState(false);
-  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
-  const [isVerifying, setIsVerifying] = useState(false);
   
   // OTP timer
   const [otpTimer, setOtpTimer] = useState(0);
@@ -153,8 +131,8 @@ export default function TwoFactorResetPage() {
         setOtp('');
         startOtpTimer();
       } else if (currentStep === 'phone-otp') {
-        // Start liveness verification
-        startLivenessVerification();
+        // Both codes are confirmed; the final reset runs server-side.
+        setStep('reset-confirm');
       }
     } catch (err) {
       setError('Verification failed. Please try again.');
@@ -183,59 +161,6 @@ export default function TwoFactorResetPage() {
       setLoading(false);
     }
   };
-
-  // Start liveness verification
-  const startLivenessVerification = async () => {
-    setStep('liveness');
-    setLivenessStep(0);
-    setLivenessProgress(0);
-    setIsLivenessComplete(false);
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'user', width: 640, height: 480 } 
-      });
-      setCameraStream(stream);
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-    } catch (err) {
-      console.error('Camera access error:', err);
-      setError('Please allow camera access for identity verification');
-    }
-  };
-
-  // Simulate liveness check
-  const handleLivenessCapture = useCallback(() => {
-    if (isVerifying) return;
-    
-    setIsVerifying(true);
-    
-    // Simulate processing time
-    setTimeout(() => {
-      const nextStep = livenessStep + 1;
-      const progress = (nextStep / livenessInstructions.length) * 100;
-      
-      setLivenessStep(nextStep);
-      setLivenessProgress(progress);
-      
-      if (nextStep >= livenessInstructions.length) {
-        // Liveness complete
-        setIsLivenessComplete(true);
-        
-        // Stop camera
-        if (cameraStream) {
-          cameraStream.getTracks().forEach(track => track.stop());
-        }
-        
-        // Proceed to 2FA reset
-        complete2FAReset();
-      } else {
-        setIsVerifying(false);
-      }
-    }, 2000);
-  }, [livenessStep, cameraStream, isVerifying]);
 
   // Complete 2FA reset
   const complete2FAReset = async () => {
@@ -277,15 +202,6 @@ export default function TwoFactorResetPage() {
       });
     }, 1000);
   };
-
-  // Cleanup camera on unmount
-  useEffect(() => {
-    return () => {
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [cameraStream]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
@@ -497,91 +413,27 @@ export default function TwoFactorResetPage() {
               </div>
             )}
 
-            {/* Step 4: Liveness Verification */}
-            {step === 'liveness' && (
+            {/* Step 4: Confirm reset */}
+            {step === 'reset-confirm' && (
               <div>
                 <div className="text-center mb-8">
                   <div className="w-16 h-16 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Camera className="w-8 h-8 text-purple-500" />
+                    <Shield className="w-8 h-8 text-purple-500" />
                   </div>
                   <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                    Face Verification
+                    Reset Two-Factor Authentication
                   </h1>
                   <p className="text-gray-600 dark:text-gray-400">
-                    Follow the instructions below for identity verification
+                    Your email and phone were verified. Confirm to remove the existing authenticator
+                    from this account.
                   </p>
                 </div>
 
-                <div className="space-y-6">
-                  {/* Progress */}
-                  <div className="mb-4">
-                    <div className="flex justify-between text-sm text-gray-600 dark:text-gray-400 mb-1">
-                      <span>Verification Progress</span>
-                      <span>{Math.round(livenessProgress)}%</span>
-                    </div>
-                    <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-gradient-to-r from-orange-500 to-red-500 transition-all duration-500"
-                        style={{ width: `${livenessProgress}%` }}
-                      />
-                    </div>
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20 p-4 text-sm text-amber-800 dark:text-amber-300">
+                    For your security, every active session will be signed out. Sign in again and
+                    enrol a new authenticator afterwards.
                   </div>
-
-                  {/* Camera */}
-                  <div className="relative rounded-lg overflow-hidden bg-gray-900 aspect-video">
-                    <video
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="w-full h-full object-cover"
-                    />
-                    <canvas ref={canvasRef} className="hidden" />
-                    
-                    {/* Instructions overlay */}
-                    {livenessStep < livenessInstructions.length && !isLivenessComplete && (
-                      <div className="absolute bottom-4 left-4 right-4 bg-black/70 rounded-lg p-4 text-white">
-                        <div className="flex items-center gap-3">
-                          <span className="text-3xl">{livenessInstructions[livenessStep].icon}</span>
-                          <div>
-                            <p className="font-medium">{livenessInstructions[livenessStep].text}</p>
-                            <p className="text-sm text-gray-300">{livenessStep + 1} of {livenessInstructions.length}</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {isLivenessComplete && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                        <div className="text-white text-center">
-                          <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-2" />
-                          <p className="font-medium">Verification Complete!</p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Capture button */}
-                  {!isLivenessComplete && (
-                    <button
-                      type="button"
-                      onClick={handleLivenessCapture}
-                      disabled={isVerifying}
-                      className="w-full flex items-center justify-center px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-lg hover:from-orange-600 hover:to-red-600 transition-all disabled:opacity-50"
-                    >
-                      {isVerifying ? (
-                        <>
-                          <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                          Verifying...
-                        </>
-                      ) : (
-                        <>
-                          <Camera className="w-5 h-5 mr-2" />
-                          Capture
-                        </>
-                      )}
-                    </button>
-                  )}
 
                   {error && (
                     <div className="flex items-center p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
@@ -589,6 +441,22 @@ export default function TwoFactorResetPage() {
                       <span className="text-sm text-red-600 dark:text-red-400">{error}</span>
                     </div>
                   )}
+
+                  <button
+                    type="button"
+                    onClick={() => void complete2FAReset()}
+                    disabled={loading}
+                    className="w-full flex items-center justify-center px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-lg hover:from-orange-600 hover:to-red-600 transition-all disabled:opacity-50"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                        Resetting...
+                      </>
+                    ) : (
+                      'Confirm Reset'
+                    )}
+                  </button>
                 </div>
               </div>
             )}
