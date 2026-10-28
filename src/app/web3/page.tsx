@@ -112,8 +112,10 @@ export default function Web3WalletPage() {
   // Fetch wallet data
   const fetchWalletData = useCallback(async () => {
     if (!accessToken) {
-      // Use demo address if not authenticated
-      setWalletAddress('0x742d35Cc6634C0532925a3b844Bc9e7595f4B2E1');
+      // Signed-out visitors see an empty state, never a placeholder address.
+      setWalletAddress('');
+      setTokens([]);
+      setTransactions([]);
       setLoading(false);
       return;
     }
@@ -131,7 +133,7 @@ export default function Web3WalletPage() {
       
       if (walletResponse.ok) {
         const walletData = await walletResponse.json();
-        setWalletAddress(walletData.address || '0x742d35Cc6634C0532925a3b844Bc9e7595f4B2E1');
+        setWalletAddress(walletData.address || '');
       }
 
       // Fetch token balances
@@ -160,8 +162,7 @@ export default function Web3WalletPage() {
     } catch (err) {
       console.error('Error fetching wallet data:', err);
       setError('Failed to load wallet data');
-      // Fallback to demo address
-      setWalletAddress('0x742d35Cc6634C0532925a3b844Bc9e7595f4B2E1');
+      setWalletAddress('');
     } finally {
       setLoading(false);
     }
@@ -191,6 +192,8 @@ export default function Web3WalletPage() {
 
   // Format address
   const formatAddress = (addr: string): string => {
+    if (!addr) return 'Not connected';
+    if (addr.length <= 12) return addr;
     return addr.slice(0, 6) + '...' + addr.slice(-4);
   };
 

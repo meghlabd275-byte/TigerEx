@@ -1,106 +1,70 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireSession } from '@/lib/db/session';
+import { ConvertError, executeConvert, listConvertHistory } from '@/lib/db/convert';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
+const MAX_LIMIT = 100;
 
-// Execute convert trade
+/** Execute a real conversion for the authenticated user. */
 export async function POST(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  let body: { fromAsset?: unknown; toAsset?: unknown; amount?: unknown };
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const { fromAsset, toAsset, amount, fromAddress, toAddress } = body;
-
-    if (!fromAsset || !toAsset || !amount) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: fromAsset, toAsset, amount' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/convert/trade`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        fromAsset,
-        toAsset,
-        amount,
-        fromAddress,
-        toAddress,
-      }),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to execute convert trade' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Convert trade API error:', error);
+    body = await request.json();
+  } catch {
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      { success: false, error: { code: 'INVALID_BODY', message: 'Invalid JSON body' } },
+      { status: 400 },
+    );
+  }
+
+  const fromAsset = String(body.fromAsset ?? '').toUpperCase();
+  const toAsset = String(body.toAsset ?? '').toUpperCase();
+  const amount = typeof body.amount === 'number' ? body.amount : parseFloat(String(body.amount ?? ''));
+
+  if (!fromAsset || !toAsset || fromAsset === toAsset) {
+    return NextResponse.json(
+      { success: false, error: { code: 'INVALID_PARAMS', message: 'fromAsset and toAsset must differ' } },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const result = executeConvert(auth.user.userId, fromAsset, toAsset, amount);
+    return NextResponse.json({ success: true, data: result });
+  } catch (error) {
+    if (error instanceof ConvertError) {
+      return NextResponse.json(
+        { success: false, error: { code: error.code, message: error.message } },
+        { status: error.status },
+      );
+    }
+    console.error('Convert trade error:', error);
+    return NextResponse.json(
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+      { status: 500 },
     );
   }
 }
 
-// Get convert trade history
+/** Conversion history for the authenticated user. */
 export async function GET(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const { searchParams } = new URL(request.url);
+  const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '50', 10) || 50, 1), MAX_LIMIT);
+  const offset = Math.max(parseInt(searchParams.get('offset') || '0', 10) || 0, 0);
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const startTime = searchParams.get('startTime');
-    const endTime = searchParams.get('endTime');
-    const limit = searchParams.get('limit') || '100';
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    let url = `${API_BASE_URL}/convert/trade?limit=${limit}`;
-    if (startTime) url += `&startTime=${startTime}`;
-    if (endTime) url += `&endTime=${endTime}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch convert trade history' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Convert trade history API error:', error);
+    const history = listConvertHistory(auth.user.userId, limit, offset);
+    return NextResponse.json({ success: true, data: history }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('Convert history error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+      { status: 500 },
     );
   }
 }

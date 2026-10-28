@@ -1,42 +1,60 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
-
-// Get fiat payment methods
-export async function GET(request: NextRequest) {
+/**
+ * Available fiat on/off-ramp providers.
+ *
+ * Providers are read from the database, which the operator populates when a
+ * ramp contract is live. An empty list is returned honestly when no provider
+ * has been configured, rather than a hardcoded set of brand names.
+ */
+export async function GET() {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const db = getDb();
+    const rows = db
+      .prepare(
+        `SELECT provider_id, name, logo, payment_methods, min_limit, max_limit, fee_percent
+           FROM fiat_providers WHERE status = 'active' ORDER BY name`,
+      )
+      .all() as Array<{
+      provider_id: string;
+      name: string;
+      logo: string | null;
+      payment_methods: string;
+      min_limit: number;
+      max_limit: number;
+      fee_percent: number;
+    }>;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/fiat/paymentMethods`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch payment methods' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Fiat payment methods API error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      {
+        success: true,
+        data: rows.map((p) => {
+          let methods: string[] = [];
+          try {
+            const parsed = JSON.parse(p.payment_methods);
+            if (Array.isArray(parsed)) methods = parsed.map(String);
+          } catch {
+            methods = [];
+          }
+          return {
+            id: p.provider_id,
+            name: p.name,
+            logo: p.logo,
+            paymentMethods: methods,
+            minLimit: p.min_limit,
+            maxLimit: p.max_limit,
+            feePercent: p.fee_percent,
+          };
+        }),
+      },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
+  } catch (error) {
+    console.error('Fiat payment methods error:', error);
+    return NextResponse.json(
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+      { status: 500 },
     );
   }
 }

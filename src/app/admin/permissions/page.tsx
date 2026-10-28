@@ -1,99 +1,120 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { useApiResource } from '@/lib/useApiResource';
 
-interface Permission {
+interface Role {
+  role: string;
+  permissions: string[];
+}
+
+interface AdminUser {
   id: string;
-  name: string;
-  description: string;
-  category: string;
+  email: string;
+  username: string;
+  role: string;
+  status: string;
+  permissions: string[];
+}
+
+interface PermissionsPayload {
+  success?: boolean;
+  data?: { roles?: Role[]; admins?: AdminUser[] };
 }
 
 export default function AdminPermissionsPage() {
-  const [permissions, setPermissions] = useState<Permission[]>([
-    { id: '1', name: 'users.read', description: 'View user list', category: 'users' },
-    { id: '2', name: 'users.write', description: 'Create/update users', category: 'users' },
-    { id: '3', name: 'users.delete', description: 'Delete users', category: 'users' },
-    { id: '4', name: 'trading.view', description: 'View trading data', category: 'trading' },
-    { id: '5', name: 'trading.execute', description: 'Execute trades', category: 'trading' },
-    { id: '6', name: 'wallet.view', description: 'View wallet data', category: 'wallet' },
-    { id: '7', name: 'wallet.withdraw', description: 'Process withdrawals', category: 'wallet' },
-    { id: '8', name: 'admin.full', description: 'Full admin access', category: 'admin' },
-  ]);
-  const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
+  const permissions = useApiResource<PermissionsPayload>('/api/admin/permissions');
 
-  const togglePermission = (permId: string) => {
-    setSelectedPermissions(prev => 
-      prev.includes(permId) 
-        ? prev.filter(id => id !== permId)
-        : [...prev, permId]
-    );
-  };
+  const roles = useMemo(() => permissions.data?.data?.roles ?? [], [permissions.data]);
+  const admins = useMemo(() => permissions.data?.data?.admins ?? [], [permissions.data]);
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="p-6">
-        <h1 className="text-2xl font-bold mb-6">Permission Management</h1>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold mb-4">Available Permissions</h2>
-            <div className="space-y-3">
-              {permissions.map((perm) => (
-                <div 
-                  key={perm.id} 
-                  className="p-3 border rounded-lg hover:bg-gray-50 cursor-pointer"
-                  onClick={() => togglePermission(perm.id)}
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-medium">{perm.name}</div>
-                      <div className="text-sm text-gray-500">{perm.description}</div>
-                    </div>
-                    <input 
-                      type="checkbox" 
-                      checked={selectedPermissions.includes(perm.id)}
-                      onChange={() => togglePermission(perm.id)}
-                    />
-                  </div>
-                  <div className="mt-2">
-                    <span className="text-xs px-2 py-1 bg-gray-100 rounded">{perm.category}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold mb-4">Role Configuration</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Role Name</label>
-                <input type="text" className="w-full px-3 py-2 border rounded-lg" placeholder="Enter role name" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Description</label>
-                <textarea className="w-full px-3 py-2 border rounded-lg" rows={3} placeholder="Enter description" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Selected Permissions ({selectedPermissions.length})</label>
-                <div className="flex flex-wrap gap-2">
-                  {selectedPermissions.map(id => {
-                    const perm = permissions.find(p => p.id === id);
-                    return perm ? (
-                      <span key={id} className="px-2 py-1 bg-blue-100 text-blue-800 text-sm rounded">
-                        {perm.name}
-                      </span>
-                    ) : null;
-                  })}
-                </div>
-              </div>
-              <button className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">
-                Create Role
-              </button>
-            </div>
-          </div>
+        <div className="mb-6 flex items-center justify-between">
+          <h1 className="text-2xl font-bold">Roles &amp; Permissions</h1>
+          <button
+            onClick={permissions.reload}
+            className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"
+          >
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </button>
         </div>
+
+        {permissions.loading && <p className="text-sm text-gray-500">Loading permissions…</p>}
+        {permissions.error && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Permissions are unavailable: {permissions.error}
+          </div>
+        )}
+
+        {!permissions.loading && !permissions.error && (
+          <>
+            <h2 className="mb-3 text-lg font-semibold">Role Catalogue</h2>
+            {roles.length === 0 ? (
+              <div className="mb-8 rounded-lg border bg-white px-4 py-8 text-center text-gray-500">
+                No roles are defined.
+              </div>
+            ) : (
+              <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2">
+                {roles.map((role) => (
+                  <div key={role.role} className="rounded-lg bg-white p-4 shadow">
+                    <div className="mb-2 font-semibold">{role.role}</div>
+                    <div className="flex flex-wrap gap-2">
+                      {role.permissions.length === 0 ? (
+                        <span className="text-sm text-gray-500">No permissions</span>
+                      ) : (
+                        role.permissions.map((permission) => (
+                          <span
+                            key={permission}
+                            className="rounded bg-gray-100 px-2 py-1 font-mono text-xs text-gray-700"
+                          >
+                            {permission}
+                          </span>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <h2 className="mb-3 text-lg font-semibold">Administrators</h2>
+            {admins.length === 0 ? (
+              <div className="rounded-lg border bg-white px-4 py-8 text-center text-gray-500">
+                No administrators are registered.
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-lg bg-white shadow">
+                <table className="min-w-full">
+                  <thead className="bg-gray-50">
+                    <tr className="text-left text-xs uppercase text-gray-500">
+                      <th className="px-6 py-3">Email</th>
+                      <th className="px-6 py-3">Username</th>
+                      <th className="px-6 py-3">Role</th>
+                      <th className="px-6 py-3">Status</th>
+                      <th className="px-6 py-3">Permissions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {admins.map((admin) => (
+                      <tr key={admin.id}>
+                        <td className="px-6 py-4">{admin.email}</td>
+                        <td className="px-6 py-4">{admin.username}</td>
+                        <td className="px-6 py-4">{admin.role}</td>
+                        <td className="px-6 py-4">{admin.status}</td>
+                        <td className="px-6 py-4 font-mono text-xs">
+                          {admin.permissions.join(', ') || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

@@ -38,6 +38,8 @@ var (
 	ErrInvalidKYCLevel = errors.New("kyc level must be between 0 and 3")
 	// ErrInvalidStatus is returned for an unrecognised status value.
 	ErrInvalidStatus = errors.New("invalid status")
+	// ErrAPIKeyNotFound is returned for an unknown API key.
+	ErrAPIKeyNotFound = errors.New("api key not found")
 )
 
 // Store is the operator data-access seam.
@@ -53,6 +55,9 @@ type Store interface {
 
 	ListDeposits(ctx context.Context, status string, limit, offset int) ([]DepositRecord, int, error)
 	ListOrders(ctx context.Context, symbol string, limit, offset int) ([]OrderRecord, int, error)
+
+	ListAPIKeys(ctx context.Context, limit, offset int) ([]APIKeyRecord, int, error)
+	SetAPIKeyEnabled(ctx context.Context, keyID string, enabled bool) error
 
 	ListMarkets(ctx context.Context) ([]MarketRecord, error)
 	SetMarketStatus(ctx context.Context, symbol, status string) error
@@ -83,6 +88,20 @@ type UserDetail struct {
 	KYCRejectionReason string `json:"kycRejectionReason,omitempty"`
 	KYCSubmittedAt     int64  `json:"kycSubmittedAt,omitempty"`
 	KYCReviewedAt      int64  `json:"kycReviewedAt,omitempty"`
+}
+
+// APIKeyRecord is an operator view of a user API key. Secret material is never
+// included: the stored hash is not readable and the plaintext is not retained.
+type APIKeyRecord struct {
+	ID          string   `json:"id"`
+	UserID      string   `json:"userId"`
+	Label       string   `json:"name"`
+	Permissions []string `json:"permissions"`
+	IPWhitelist []string `json:"ipWhitelist"`
+	ExpiresAt   int64    `json:"expiresAt,omitempty"`
+	CreatedAt   int64    `json:"createdAt"`
+	LastUsed    int64    `json:"lastUsedAt,omitempty"`
+	Enabled     bool     `json:"enabled"`
 }
 
 // WithdrawalRecord is an operator view of a withdrawal request.
@@ -567,6 +586,64 @@ func (s *PGStore) ListOrders(ctx context.Context, symbol string, limit, offset i
 }
 
 // --- markets ---------------------------------------------------------------
+
+func (s *PGStore) ListAPIKeys(ctx context.Context, limit, offset int) ([]APIKeyRecord, int, error) {
+	limit, offset = clampPaging(limit, offset)
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM api_keys`).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("counting api keys: %w", err)
+	}
+
+	const q = `
+		SELECT id, user_id, COALESCE(label, ''), COALESCE(permissions::text, '[]'),
+		       COALESCE(ip_whitelist::text, '[]'),
+		       COALESCE(EXTRACT(EPOCH FROM expires_at)::bigint, 0),
+		       EXTRACT(EPOCH FROM created_at)::bigint,
+		       COALESCE(EXTRACT(EPOCH FROM last_used_at)::bigint, 0),
+		       enabled
+		FROM api_keys ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+	rows, err := s.pool.Query(ctx, q, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("listing api keys: %w", err)
+	}
+	defer rows.Close()
+
+	keys := make([]APIKeyRecord, 0, limit)
+	for rows.Next() {
+		var (
+			key                    APIKeyRecord
+			permissions, whitelist string
+		)
+		if err := rows.Scan(&key.ID, &key.UserID, &key.Label, &permissions, &whitelist,
+			&key.ExpiresAt, &key.CreatedAt, &key.LastUsed, &key.Enabled); err != nil {
+			return nil, 0, fmt.Errorf("scanning api key: %w", err)
+		}
+		_ = json.Unmarshal([]byte(permissions), &key.Permissions)
+		_ = json.Unmarshal([]byte(whitelist), &key.IPWhitelist)
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterating api keys: %w", err)
+	}
+	return keys, total, nil
+}
+
+// SetAPIKeyEnabled enables or revokes a key. Revocation disables the key rather
+// than deleting the row so the audit trail keeps its reference.
+func (s *PGStore) SetAPIKeyEnabled(ctx context.Context, keyID string, enabled bool) error {
+	if !isUUID(keyID) {
+		return ErrAPIKeyNotFound
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE api_keys SET enabled = $2 WHERE id = $1`, keyID, enabled)
+	if err != nil {
+		return fmt.Errorf("updating api key: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrAPIKeyNotFound
+	}
+	return nil
+}
 
 func (s *PGStore) ListMarkets(ctx context.Context) ([]MarketRecord, error) {
 	const q = `

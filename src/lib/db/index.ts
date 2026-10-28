@@ -70,7 +70,11 @@ function initializeSchema() {
       updated_at TEXT DEFAULT (datetime('now')),
       last_login_at TEXT,
       email_verified INTEGER DEFAULT 0,
-      phone_verified INTEGER DEFAULT 0
+      phone_verified INTEGER DEFAULT 0,
+
+      -- Referral program
+      referral_code TEXT UNIQUE,
+      referred_by TEXT
     );
 
     -- User wallets
@@ -352,8 +356,127 @@ function initializeSchema() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Referral program: one row per invited user, with the commission earned
+    CREATE TABLE IF NOT EXISTS referrals (
+      referral_id TEXT PRIMARY KEY,
+      referrer_id TEXT NOT NULL,
+      referee_id TEXT NOT NULL,
+      referral_code TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      tier TEXT NOT NULL DEFAULT 'Bronze',
+      commission_earned REAL NOT NULL DEFAULT 0,
+      commission_currency TEXT NOT NULL DEFAULT 'USDT',
+      created_at TEXT DEFAULT (datetime('now')),
+      activated_at TEXT,
+      UNIQUE(referee_id),
+      FOREIGN KEY (referrer_id) REFERENCES users(user_id) ON DELETE CASCADE,
+      FOREIGN KEY (referee_id) REFERENCES users(user_id) ON DELETE CASCADE
+    );
+
+    -- Commission ledger: every fee share credited to a referrer
+    CREATE TABLE IF NOT EXISTS referral_commissions (
+      commission_id TEXT PRIMARY KEY,
+      referral_id TEXT NOT NULL,
+      referrer_id TEXT NOT NULL,
+      referee_id TEXT NOT NULL,
+      trade_volume REAL NOT NULL DEFAULT 0,
+      amount REAL NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'USDT',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT DEFAULT (datetime('now')),
+      paid_at TEXT,
+      FOREIGN KEY (referral_id) REFERENCES referrals(referral_id) ON DELETE CASCADE
+    );
+
+    -- Cards issued to a user (virtual or physical)
+    CREATE TABLE IF NOT EXISTS cards (
+      card_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      card_type TEXT NOT NULL,
+      brand TEXT NOT NULL DEFAULT 'Visa',
+      last4 TEXT,
+      currency TEXT NOT NULL DEFAULT 'USDT',
+      status TEXT NOT NULL DEFAULT 'requested',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    );
+    -- Card transactions: real spend records imported from the card issuer
+    CREATE TABLE IF NOT EXISTS card_transactions (
+      transaction_id TEXT PRIMARY KEY,
+      card_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      merchant TEXT NOT NULL,
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      cashback REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'completed',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (card_id) REFERENCES cards(card_id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    );
+
+    -- Configured fiat on/off-ramp providers. Populated by the operator when a
+    -- provider contract is live; an empty table means no fiat ramp is available.
+    CREATE TABLE IF NOT EXISTS fiat_providers (
+      provider_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      logo TEXT,
+      payment_methods TEXT NOT NULL DEFAULT '[]',
+      min_limit REAL NOT NULL DEFAULT 0,
+      max_limit REAL NOT NULL DEFAULT 0,
+      fee_percent REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Fiat buy/sell orders placed by users
+    CREATE TABLE IF NOT EXISTS fiat_orders (
+      order_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      provider_id TEXT,
+      direction TEXT NOT NULL,
+      fiat_currency TEXT NOT NULL,
+      crypto_currency TEXT NOT NULL,
+      fiat_amount REAL NOT NULL,
+      crypto_amount REAL,
+      rate REAL,
+      fee REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    );
+
+    -- Per-user notification and preference settings, stored as a JSON document
+    CREATE TABLE IF NOT EXISTS user_settings (
+      user_id TEXT PRIMARY KEY,
+      notifications TEXT NOT NULL DEFAULT '{}',
+      preferences TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    );
+
+    -- Institutional / OTC enquiries submitted from the institutional landing page
+    CREATE TABLE IF NOT EXISTS institution_inquiries (
+      inquiry_id TEXT PRIMARY KEY,
+      user_id TEXT,
+      company_name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      phone TEXT,
+      inquiry_type TEXT NOT NULL,
+      message TEXT,
+      status TEXT NOT NULL DEFAULT 'received',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
+    );
+
     -- Create indexes
     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+    CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
+    CREATE INDEX IF NOT EXISTS idx_referrals_code ON referrals(referral_code);
+    CREATE INDEX IF NOT EXISTS idx_referral_commissions_referrer ON referral_commissions(referrer_id);
+    CREATE INDEX IF NOT EXISTS idx_cards_user ON cards(user_id);
+    CREATE INDEX IF NOT EXISTS idx_card_transactions_user ON card_transactions(user_id);
     CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email);
@@ -367,6 +490,12 @@ function initializeSchema() {
   `);
 
   // Do not seed fabricated markets or prices. Market metadata and prices must come from the configured live market-data service.
+
+  // `CREATE TABLE IF NOT EXISTS` cannot add columns to a database created by an
+  // earlier schema, so additive columns are applied explicitly. Each ALTER is
+  // guarded by a column existence check because SQLite has no `ADD COLUMN IF
+  // NOT EXISTS`.
+  applyColumnMigrations(database);
 
   // Optional one-time bootstrap. No default admin account or password is ever created.
   const bootstrapAdminEmail = process.env.TIGEREX_BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
@@ -388,6 +517,29 @@ function initializeSchema() {
   }
 
   console.log('✅ Database schema initialized');
+}
+
+// Additive column migrations for databases created before a column existed.
+function applyColumnMigrations(database: Database.Database) {
+  const migrations: Array<{ table: string; column: string; definition: string }> = [
+    { table: 'users', column: 'referral_code', definition: 'TEXT' },
+    { table: 'users', column: 'referred_by', definition: 'TEXT' },
+  ];
+
+  for (const { table, column, definition } of migrations) {
+    const columns = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((c) => c.name === column)) {
+      database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
+
+  // The unique index on users.referral_code is created after the migration so it
+  // also applies to pre-existing databases. A partial index excludes the NULL
+  // values of accounts that have not been assigned a code yet.
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code
+      ON users(referral_code) WHERE referral_code IS NOT NULL;
+  `);
 }
 
 // Encryption utilities
@@ -435,6 +587,19 @@ export function generateOTP(): string {
 // UUID generation
 export function generateId(): string {
   return uuidv4();
+}
+
+// Referral codes are human-shareable: an uppercase alphabet without visually
+// ambiguous characters (0/O, 1/I) so a code read aloud or copied by hand still
+// resolves to the right account.
+const REFERRAL_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+export function generateReferralCode(length = 8): string {
+  let code = '';
+  for (let i = 0; i < length; i += 1) {
+    code += REFERRAL_ALPHABET[randomInt(0, REFERRAL_ALPHABET.length)];
+  }
+  return code;
 }
 
 // Close database connection

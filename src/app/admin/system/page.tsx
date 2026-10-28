@@ -1,116 +1,98 @@
 'use client';
 
-import { useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { useApiResource } from '@/lib/useApiResource';
 
-interface Service {
-  name: string;
-  status: 'healthy' | 'degraded' | 'down';
-  uptime: string;
-  latency: string;
-  requests: string;
+interface SystemStatus {
+  success?: boolean;
+  data?: {
+    status?: string;
+    service?: string;
+    timestamp?: string;
+    uptime?: string;
+    goroutines?: number;
+    heap_bytes?: number;
+    counters?: Record<string, number>;
+  };
+}
+
+function formatBytes(value: number | undefined): string {
+  if (value === undefined || value === null) return '—';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size.toFixed(1)} ${units[unit]}`;
 }
 
 export default function AdminSystemPage() {
-  const [services, setServices] = useState<Service[]>([
-    { name: 'API Gateway', status: 'healthy', uptime: '99.99%', latency: '12ms', requests: '2.4M/min' },
-    { name: 'Trading Engine', status: 'healthy', uptime: '99.99%', latency: '2ms', requests: '850K/min' },
-    { name: 'Order Matching', status: 'healthy', uptime: '99.99%', latency: '1ms', requests: '1.2M/min' },
-    { name: 'Wallet Service', status: 'healthy', uptime: '99.95%', latency: '8ms', requests: '450K/min' },
-    { name: 'Database', status: 'healthy', uptime: '99.99%', latency: '5ms', requests: '1.8M/min' },
-    { name: 'Redis Cache', status: 'healthy', uptime: '99.99%', latency: '1ms', requests: '5.2M/min' },
-    { name: 'WebSocket', status: 'degraded', uptime: '99.50%', latency: '25ms', requests: '890K/min' },
-    { name: 'KYC Service', status: 'healthy', uptime: '99.90%', latency: '150ms', requests: '12K/min' },
-  ]);
+  const status = useApiResource<SystemStatus>('/api/admin/system/status');
+  const data = status.data?.data;
+
+  const metrics: { label: string; value: string }[] = data
+    ? [
+        { label: 'Service', value: data.service ?? '—' },
+        { label: 'Status', value: data.status ?? '—' },
+        { label: 'Uptime', value: data.uptime ?? '—' },
+        { label: 'Goroutines', value: data.goroutines?.toLocaleString() ?? '—' },
+        { label: 'Heap', value: formatBytes(data.heap_bytes) },
+        { label: 'Timestamp', value: data.timestamp ?? '—' },
+      ]
+    : [];
+
+  const counters = Object.entries(data?.counters ?? {});
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="p-6">
-        <h1 className="text-2xl font-bold mb-6">System Status</h1>
-        
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">Total Services</div>
-            <div className="text-2xl font-bold">{services.length}</div>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">Healthy</div>
-            <div className="text-2xl font-bold text-green-600">{services.filter(s => s.status === 'healthy').length}</div>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">Degraded</div>
-            <div className="text-2xl font-bold text-yellow-600">{services.filter(s => s.status === 'degraded').length}</div>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow">
-            <div className="text-sm text-gray-500">Down</div>
-            <div className="text-2xl font-bold text-red-600">{services.filter(s => s.status === 'down').length}</div>
-          </div>
+        <div className="mb-6 flex items-center justify-between">
+          <h1 className="text-2xl font-bold">System Status</h1>
+          <button
+            onClick={status.reload}
+            className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"
+          >
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </button>
         </div>
 
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="min-w-full">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Uptime</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Latency</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Requests</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {services.map((service) => (
-                <tr key={service.name}>
-                  <td className="px-6 py-4 font-medium">{service.name}</td>
-                  <td className="px-6 py-4">
-                    <span className={`px-2 py-1 text-xs rounded-full ${
-                      service.status === 'healthy' ? 'bg-green-100 text-green-800' :
-                      service.status === 'degraded' ? 'bg-yellow-100 text-yellow-800' :
-                      'bg-red-100 text-red-800'
-                    }`}>
-                      {service.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-right">{service.uptime}</td>
-                  <td className="px-6 py-4 text-right">{service.latency}</td>
-                  <td className="px-6 py-4 text-right">{service.requests}</td>
-                </tr>
+        {status.loading && <p className="text-sm text-gray-500">Loading system status…</p>}
+        {status.error && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            System status is unavailable: {status.error}
+          </div>
+        )}
+
+        {!status.loading && !status.error && (
+          <>
+            <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+              {metrics.map((metric) => (
+                <div key={metric.label} className="rounded-lg bg-white p-4 shadow">
+                  <div className="text-sm text-gray-500">{metric.label}</div>
+                  <div className="break-words text-lg font-bold">{metric.value}</div>
+                </div>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </div>
 
-        <div className="mt-6 bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-semibold mb-4">System Resources</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span>CPU Usage</span>
-                <span>45%</span>
+            <h2 className="mb-3 text-lg font-semibold">Record Counters</h2>
+            {counters.length === 0 ? (
+              <div className="rounded-lg border bg-white px-4 py-8 text-center text-gray-500">
+                No counters are reported.
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div className="bg-blue-600 h-2 rounded-full" style={{ width: '45%' }}></div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                {counters.map(([key, value]) => (
+                  <div key={key} className="rounded-lg bg-white p-4 shadow">
+                    <div className="text-sm text-gray-500">{key.replace(/_/g, ' ')}</div>
+                    <div className="text-2xl font-bold">{value.toLocaleString()}</div>
+                  </div>
+                ))}
               </div>
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span>Memory Usage</span>
-                <span>68%</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div className="bg-green-600 h-2 rounded-full" style={{ width: '68%' }}></div>
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span>Disk Usage</span>
-                <span>32%</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div className="bg-yellow-600 h-2 rounded-full" style={{ width: '32%' }}></div>
-              </div>
-            </div>
-          </div>
-        </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

@@ -1,38 +1,52 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
-
-// Get exchange stats
-export async function GET(request: NextRequest) {
+/**
+ * Exchange-wide statistics.
+ *
+ * Every figure is aggregated from TigerEx's own database. Nothing is
+ * extrapolated or hardcoded: if the exchange has no trading history yet, the
+ * counters are genuinely zero rather than an illustrative placeholder.
+ */
+export async function GET() {
   try {
-    const { searchParams } = new URL(request.url);
-    const type = searchParams.get('type'); // 24h, 7d, 30d
+    const db = getDb();
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-    let url = `${API_BASE_URL}/stats`;
-    if (type) url += `?type=${type}`;
+    const pairs = db
+      .prepare(`SELECT COUNT(*) AS n FROM trading_pairs WHERE status = 'active'`)
+      .get() as { n: number };
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
+    const users = db.prepare(`SELECT COUNT(*) AS n FROM users`).get() as { n: number };
+
+    const volume = db
+      .prepare(
+        `SELECT COALESCE(SUM(filled_quantity * COALESCE(average_price, price, 0)), 0) AS v,
+                COUNT(*) AS trades
+           FROM orders
+          WHERE created_at >= ? AND status IN ('filled', 'partially_filled')`,
+      )
+      .get(since) as { v: number; trades: number };
+
+    return NextResponse.json(
+      {
+        success: true,
+        data: {
+          dailyVolume: volume.v,
+          tradingPairs: pairs.n,
+          totalUsers: users.n,
+          trades24h: volume.trades,
+          window: '24h',
+          asOf: new Date().toISOString(),
+        },
       },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch stats' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
+  } catch (error) {
     console.error('Stats API error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+      { status: 500 },
     );
   }
 }

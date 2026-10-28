@@ -1,95 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const ADMIN_API_URL = process.env.TIGEREX_ADMIN_API_URL?.replace(/\/$/, '');
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
 
-function unavailable() {
-  return NextResponse.json(
-    { success: false, error: 'TIGEREX_ADMIN_API_URL is not configured; withdrawal operations are disabled.' },
-    { status: 503 },
-  );
+function getBearer(request: NextRequest): string | null {
+  const header = request.headers.get('authorization');
+  return header && /^Bearer\s+\S+$/i.test(header) ? header : null;
 }
 
-function authHeader(request: NextRequest): string | null {
-  const value = request.headers.get('authorization');
-  if (!value || !/^Bearer\s+\S+$/i.test(value)) return null;
-  return value;
-}
-
-async function backendRequest(path: string, token: string, init: RequestInit = {}) {
-  if (!ADMIN_API_URL) return unavailable();
-  try {
-    const headers = new Headers(init.headers);
-    headers.set('Accept', 'application/json');
-    headers.set('Authorization', token);
-    if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-    const response = await fetch(`${ADMIN_API_URL}${path}`, {
-      ...init,
-      headers,
-      cache: 'no-store',
-    });
-    const body = await response.json().catch(() => ({ success: false, error: 'Invalid backend response' }));
-    return NextResponse.json(body, { status: response.status });
-  } catch {
-    return NextResponse.json(
-      { success: false, error: 'Admin backend is unavailable; no withdrawal state was changed.' },
-      { status: 502 },
-    );
-  }
-}
-
-// Proxy live withdrawal records to the authenticated durable admin backend.
+// List withdrawal requests from the API service, which owns the ledger.
 export async function GET(request: NextRequest) {
-  const token = authHeader(request);
+  const token = getBearer(request);
   if (!token) {
     return NextResponse.json({ success: false, error: 'Authorization required' }, { status: 401 });
   }
+
   const { searchParams } = new URL(request.url);
   const query = new URLSearchParams();
-  for (const key of ['status', 'currency']) {
+  for (const key of ['status', 'limit', 'offset']) {
     const value = searchParams.get(key);
     if (value) query.set(key, value);
   }
-  const queryString = query.toString();
-  const suffix = queryString ? `?${queryString}` : '';
-  return backendRequest(`/admin/withdrawals${suffix}`, token);
-}
+  const suffix = query.toString() ? `?${query.toString()}` : '';
 
-// Process a single withdrawal only through the backend's persisted state transition.
-export async function PUT(request: NextRequest) {
-  const token = authHeader(request);
-  if (!token) {
-    return NextResponse.json({ success: false, error: 'Authorization required' }, { status: 401 });
-  }
-
-  let body: { withdrawalId?: string; action?: string; reason?: string; txHash?: string };
   try {
-    body = await request.json();
+    const upstream = await fetch(`${API_BASE_URL}/admin/withdrawals${suffix}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: token },
+      cache: 'no-store',
+    });
+    const payload = await upstream
+      .json()
+      .catch(() => ({ success: false, error: 'Invalid API response' }));
+    return NextResponse.json(payload, { status: upstream.status });
   } catch {
-    return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
+    return NextResponse.json(
+      { success: false, error: 'API service is unavailable; withdrawals could not be loaded.' },
+      { status: 502 },
+    );
   }
-
-  const withdrawalId = body.withdrawalId?.trim();
-  if (!withdrawalId || !/^[a-zA-Z0-9_-]{1,128}$/.test(withdrawalId)) {
-    return NextResponse.json({ success: false, error: 'A valid withdrawalId is required' }, { status: 400 });
-  }
-  if (!body.action || !['approve', 'reject', 'process'].includes(body.action)) {
-    return NextResponse.json({ success: false, error: 'Invalid action' }, { status: 400 });
-  }
-  return backendRequest(`/admin/withdrawals/${encodeURIComponent(withdrawalId)}`, token, {
-    method: 'PUT',
-    body: JSON.stringify({ action: body.action, txHash: body.txHash }),
-  });
-}
-
-// Bulk operations are deliberately disabled until the backend offers an atomic bulk endpoint.
-export async function POST(request: NextRequest) {
-  const token = authHeader(request);
-  if (!token) {
-    return NextResponse.json({ success: false, error: 'Authorization required' }, { status: 401 });
-  }
-  if (!ADMIN_API_URL) return unavailable();
-  return NextResponse.json(
-    { success: false, error: 'Bulk withdrawal processing is not supported by the backend; use the single-withdrawal endpoint.' },
-    { status: 501 },
-  );
 }

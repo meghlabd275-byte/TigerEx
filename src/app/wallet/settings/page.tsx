@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { useApiResource } from '@/lib/useApiResource';
 import { 
   Settings, 
   User, 
@@ -19,6 +20,8 @@ import {
 
 export default function WalletSettings() {
   const [activeSection, setActiveSection] = useState('profile');
+  const profile = useApiResource<unknown>('/api/auth/me');
+  const referral = useApiResource<unknown>('/api/referral/info');
   const [darkMode, setDarkMode] = useState(true);
   const [notifications, setNotifications] = useState({
     push: true,
@@ -34,16 +37,41 @@ export default function WalletSettings() {
     withdrawalWhitelist: false,
   });
 
+  const profileUser = useMemo(() => {
+    const payload = profile.data;
+    if (payload && typeof payload === 'object') {
+      const record = payload as Record<string, unknown>;
+      return (record.user ?? record.data ?? record) as Record<string, unknown>;
+    }
+    return null;
+  }, [profile.data]);
+
+  const referralCode = useMemo(() => {
+    const payload = referral.data;
+    if (payload && typeof payload === 'object') {
+      const record = payload as Record<string, unknown>;
+      const inner = (record.data ?? record) as Record<string, unknown>;
+      return typeof inner.code === 'string' ? inner.code : null;
+    }
+    return null;
+  }, [referral.data]);
+
+  const profileValue = (value: unknown): string => {
+    if (profile.loading) return '…';
+    if (value === null || value === undefined || value === '') return 'Not set';
+    return String(value);
+  };
+
   const sections = [
     {
       id: 'profile',
       title: 'Profile',
       icon: <User className="w-5 h-5" />,
       items: [
-        { id: 'username', label: 'Username', type: 'info', value: 'tiger_user' },
-        { id: 'email', label: 'Email', type: 'info', value: 'user@example.com' },
-        { id: 'phone', label: 'Phone', type: 'link', value: '+1 *** *** **89' },
-        { id: 'referral', label: 'Referral Code', type: 'link', value: 'TGR123456' },
+        { id: 'username', label: 'Username', type: 'info', value: profileValue(profileUser?.username) },
+        { id: 'email', label: 'Email', type: 'info', value: profileValue(profileUser?.email) },
+        { id: 'phone', label: 'Phone', type: 'link', value: profileValue(profileUser?.phone) },
+        { id: 'referral', label: 'Referral Code', type: 'link', value: profile.loading || referral.loading ? '…' : referralCode ?? 'Not set' },
       ],
     },
     {
@@ -99,6 +127,17 @@ export default function WalletSettings() {
   ];
 
   const renderItem = (item: any) => {
+    if (item.type === 'info') {
+      return <span className="text-sm text-gray-400">{item.value}</span>;
+    }
+    if (item.type === 'link' && item.value !== undefined) {
+      return (
+        <span className="flex items-center gap-2 text-sm text-gray-400">
+          {item.value}
+          <ChevronRight className="w-5 h-5 text-gray-500" />
+        </span>
+      );
+    }
     if (item.type === 'toggle') {
       return (
         <button onClick={() => {

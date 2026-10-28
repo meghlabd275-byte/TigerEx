@@ -1,96 +1,121 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { useApiResource, toArray } from '@/lib/useApiResource';
 
 interface Contract {
+  id: string;
   symbol: string;
-  type: 'USDT-M' | 'USDC-M' | 'COIN-M';
-  size: string;
-  pricePrecision: number;
-  quantityPrecision: number;
-  minQty: number;
-  maxQty: number;
-  leverage: string;
+  contract_type?: string;
+  contract_size?: number;
+  price_precision?: number;
+  quantity_precision?: number;
+  min_quantity?: number;
+  max_quantity?: number;
+  max_leverage?: number;
+  status?: string;
+}
+
+function formatNumber(value: number | undefined | null, digits = 8): string {
+  if (value === undefined || value === null || Number.isNaN(value)) return '—';
+  return value.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
 export default function FuturesContractsPage() {
+  const contracts = useApiResource<unknown>('/api/futures/contracts');
+  const list = useMemo(() => toArray<Contract>(contracts.data), [contracts.data]);
   const [selectedType, setSelectedType] = useState('all');
-  const [contracts, setContracts] = useState<Contract[]>([
-    { symbol: 'BTCUSDT', type: 'USDT-M', size: '0.001BTC', pricePrecision: 2, quantityPrecision: 3, minQty: 0.001, maxQty: 100, leverage: '1-125x' },
-    { symbol: 'ETHUSDT', type: 'USDT-M', size: '0.01ETH', pricePrecision: 2, quantityPrecision: 3, minQty: 0.01, maxQty: 1000, leverage: '1-100x' },
-    { symbol: 'BNBUSDT', type: 'USDT-M', size: '0.01BNB', pricePrecision: 2, quantityPrecision: 2, minQty: 0.01, maxQty: 10000, leverage: '1-75x' },
-  ]);
 
-  const filteredContracts = selectedType === 'all' 
-    ? contracts 
-    : contracts.filter(c => c.type === selectedType);
+  const types = useMemo(() => {
+    const found = new Set<string>();
+    for (const contract of list) {
+      if (contract.contract_type) found.add(contract.contract_type);
+    }
+    return ['all', ...Array.from(found)];
+  }, [list]);
+
+  const filtered =
+    selectedType === 'all' ? list : list.filter((c) => c.contract_type === selectedType);
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
       <div className="p-6">
-        <h1 className="text-2xl font-bold mb-6">Futures Contract Specifications</h1>
-        
-        <div className="flex gap-4 mb-6">
+        <div className="mb-6 flex items-center justify-between">
+          <h1 className="text-2xl font-bold">Futures Contract Specifications</h1>
           <button
-            onClick={() => setSelectedType('all')}
-            className={`px-4 py-2 rounded-lg ${selectedType === 'all' ? 'bg-blue-600' : 'bg-gray-700'}`}
+            onClick={contracts.reload}
+            className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white"
           >
-            All Contracts
-          </button>
-          <button
-            onClick={() => setSelectedType('USDT-M')}
-            className={`px-4 py-2 rounded-lg ${selectedType === 'USDT-M' ? 'bg-blue-600' : 'bg-gray-700'}`}
-          >
-            USDT-M
-          </button>
-          <button
-            onClick={() => setSelectedType('USDC-M')}
-            className={`px-4 py-2 rounded-lg ${selectedType === 'USDC-M' ? 'bg-blue-600' : 'bg-gray-700'}`}
-          >
-            USDC-M
-          </button>
-          <button
-            onClick={() => setSelectedType('COIN-M')}
-            className={`px-4 py-2 rounded-lg ${selectedType === 'COIN-M' ? 'bg-blue-600' : 'bg-gray-700'}`}
-          >
-            COIN-M
+            <RefreshCw className="h-4 w-4" /> Refresh
           </button>
         </div>
 
-        <div className="bg-gray-800 rounded-lg overflow-hidden">
-          <table className="min-w-full">
-            <thead className="bg-gray-700">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Symbol</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Type</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Contract Size</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Price Precision</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Quantity Precision</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Min Qty</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Max Qty</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Leverage</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-700">
-              {filteredContracts.map((c) => (
-                <tr key={c.symbol} className="hover:bg-gray-750">
-                  <td className="px-6 py-4 font-medium">{c.symbol}</td>
-                  <td className="px-6 py-4">
-                    <span className={`px-2 py-1 text-xs rounded ${c.type === 'USDT-M' ? 'bg-green-900 text-green-300' : c.type === 'USDC-M' ? 'bg-blue-900 text-blue-300' : 'bg-purple-900 text-purple-300'}`}>
-                      {c.type}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">{c.size}</td>
-                  <td className="px-6 py-4 text-right">{c.pricePrecision}</td>
-                  <td className="px-6 py-4 text-right">{c.quantityPrecision}</td>
-                  <td className="px-6 py-4 text-right">{c.minQty}</td>
-                  <td className="px-6 py-4 text-right">{c.maxQty.toLocaleString()}</td>
-                  <td className="px-6 py-4">{c.leverage}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        {contracts.loading && <p className="text-sm text-gray-400">Loading contracts…</p>}
+        {contracts.error && (
+          <div className="rounded-lg border border-amber-700 bg-amber-900/30 px-4 py-3 text-sm text-amber-200">
+            Contracts are unavailable: {contracts.error}
+          </div>
+        )}
+
+        {!contracts.loading && !contracts.error && (
+          <>
+            {list.length > 0 && (
+              <div className="mb-6 flex flex-wrap gap-4">
+                {types.map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setSelectedType(type)}
+                    className={`rounded-lg px-4 py-2 ${
+                      selectedType === type ? 'bg-blue-600' : 'bg-gray-700'
+                    }`}
+                  >
+                    {type === 'all' ? 'All Contracts' : type}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {filtered.length === 0 ? (
+              <div className="rounded-lg bg-gray-800 px-6 py-10 text-center text-gray-400">
+                No futures contracts are listed. Contracts appear here once an admin lists them.
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-lg bg-gray-800">
+                <table className="min-w-full">
+                  <thead className="bg-gray-700">
+                    <tr>
+                      {['Symbol', 'Type', 'Contract Size', 'Price Precision', 'Quantity Precision', 'Min Qty', 'Max Qty', 'Max Leverage'].map(
+                        (heading) => (
+                          <th
+                            key={heading}
+                            className="px-6 py-3 text-left text-xs font-medium uppercase text-gray-300"
+                          >
+                            {heading}
+                          </th>
+                        )
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-700">
+                    {filtered.map((c) => (
+                      <tr key={c.id || c.symbol} className="hover:bg-gray-750">
+                        <td className="px-6 py-4 font-medium">{c.symbol}</td>
+                        <td className="px-6 py-4">{c.contract_type || '—'}</td>
+                        <td className="px-6 py-4">{formatNumber(c.contract_size)}</td>
+                        <td className="px-6 py-4">{c.price_precision ?? '—'}</td>
+                        <td className="px-6 py-4">{c.quantity_precision ?? '—'}</td>
+                        <td className="px-6 py-4">{formatNumber(c.min_quantity)}</td>
+                        <td className="px-6 py-4">{formatNumber(c.max_quantity)}</td>
+                        <td className="px-6 py-4">{c.max_leverage ? `${c.max_leverage}x` : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

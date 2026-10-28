@@ -85,29 +85,70 @@ export default function SettingsPage() {
     fiatCurrency: 'USD',
   });
 
-  // Load user data
+  // Load the profile from the server rather than a cached localStorage copy.
   useEffect(() => {
-    const token = localStorage.getItem('tigerex_token');
+    const token =
+      localStorage.getItem('tigerex_access_token') || localStorage.getItem('admin_token');
     if (!token) {
       router.push('/login');
       return;
     }
 
-    const userStr = localStorage.getItem('tigerex_user');
-    if (userStr) {
-      try {
-        const userData = JSON.parse(userStr);
-        setUser(userData);
-        setProfileData({
-          username: userData.username || '',
-          email: userData.email || '',
-          phone: userData.phone || '',
+    let cancelled = false;
+
+    fetch('/api/user/profile', { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (response) => {
+        const body = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(body?.error?.message || 'Failed to load profile');
+        }
+        return body.user as Record<string, unknown>;
+      })
+      .then((u) => {
+        if (cancelled || !u) return;
+        setUser({
+          id: String(u.userId ?? ''),
+          email: String(u.email ?? ''),
+          username: String(u.username ?? ''),
+          kyc_level: Number(u.kycLevel ?? 0),
+          phone: u.phone ? String(u.phone) : undefined,
+          created_at: u.createdAt ? String(u.createdAt) : undefined,
         });
-      } catch (e) {
-        console.error('Failed to parse user data');
-      }
-    }
+        setProfileData({
+          username: u.username ? String(u.username) : '',
+          email: u.email ? String(u.email) : '',
+          phone: u.phone ? String(u.phone) : '',
+        });
+        setTwoFactorEnabled(!!u.twoFactorEnabled);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load profile');
+      });
+
+    fetch('/api/user/settings', { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (cancelled || !body?.data) return;
+        if (body.data.notifications) {
+          setNotifications((prev) => ({ ...prev, ...body.data.notifications }));
+        }
+        if (body.data.preferences) {
+          setPreferences((prev) => ({ ...prev, ...body.data.preferences }));
+        }
+      })
+      .catch(() => {
+        // Preferences fall back to defaults; the profile above already reports load errors.
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
+
+  const authToken = () =>
+    typeof window === 'undefined'
+      ? ''
+      : localStorage.getItem('tigerex_access_token') || localStorage.getItem('admin_token') || '';
 
   // Handle profile update
   const handleProfileUpdate = async (e: React.FormEvent) => {
@@ -116,11 +157,25 @@ export default function SettingsPage() {
     setError('');
     setSuccess('');
 
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    setSuccess('Profile updated successfully!');
-    setLoading(false);
+    try {
+      const response = await fetch('/api/user/profile', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken()}`,
+        },
+        body: JSON.stringify({ username: profileData.username }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(body?.error?.message || 'Failed to update profile');
+      }
+      setSuccess('Profile updated successfully.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update profile');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Handle password change
@@ -140,22 +195,34 @@ export default function SettingsPage() {
     }
 
     setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    setSuccess('Password changed successfully!');
-    setPasswords({ current: '', new: '', confirm: '' });
-    setLoading(false);
+    try {
+      const response = await fetch('/api/user/password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken()}`,
+        },
+        body: JSON.stringify({ currentPassword: passwords.current, newPassword: passwords.new }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(body?.error?.message || 'Failed to change password');
+      }
+      setSuccess('Password changed successfully.');
+      setPasswords({ current: '', new: '', confirm: '' });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to change password');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Handle 2FA toggle
-  const handle2FAToggle = async () => {
-    if (!twoFactorEnabled) {
-      // Would redirect to 2FA setup
-      setSuccess('2FA setup initiated. Please use your authenticator app.');
-    } else {
-      setSuccess('2FA has been disabled.');
-    }
-    setTwoFactorEnabled(!twoFactorEnabled);
+  // Handle 2FA toggle. Enrolment requires an authenticator code, so this
+  // directs the user to the security page instead of flipping a local flag.
+  const handle2FAToggle = () => {
+    setError('');
+    setSuccess('');
+    router.push('/security');
   };
 
   // Handle logout

@@ -1,45 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireSession } from '@/lib/db/session';
+import { listCommissions } from '@/lib/db/referral';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
+const MAX_LIMIT = 100;
 
-// Get referral earnings
+/** Alias of the commission ledger, presented as earnings for the referrer. */
 export async function GET(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const { searchParams } = new URL(request.url);
+  const page = Math.max(parseInt(searchParams.get('page') || '1', 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '20', 10) || 20, 1), MAX_LIMIT);
+  const offset = (page - 1) * limit;
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const page = searchParams.get('page') || '1';
-    const limit = searchParams.get('limit') || '20';
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/referral/earnings?page=${page}&limit=${limit}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch referral earnings' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Referral earnings API error:', error);
+    const commissions = listCommissions(auth.user.userId, limit, offset);
+    const total = commissions.reduce((sum, c) => sum + c.amount, 0);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      { success: true, data: commissions, page, limit, pageTotal: total },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
+  } catch (error) {
+    console.error('Referral earnings error:', error);
+    return NextResponse.json(
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+      { status: 500 },
     );
   }
 }

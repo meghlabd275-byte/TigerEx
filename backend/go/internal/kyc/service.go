@@ -162,6 +162,32 @@ type Store interface {
 	RecordAudit(ctx context.Context, entry *AuditEntry) error
 }
 
+// ListFilter narrows an operator review queue.
+type ListFilter struct {
+	Status string
+	Limit  int
+	Offset int
+}
+
+// ApplicationLister is implemented by stores that can enumerate applications
+// for the operator review queue. Stores that cannot are simply not consulted;
+// the queue endpoint then reports unavailability instead of an empty queue.
+type ApplicationLister interface {
+	ListApplications(ctx context.Context, filter ListFilter) ([]Application, int, error)
+}
+
+// ListApplications returns applications for operator review.
+func (s *Service) ListApplications(ctx context.Context, filter ListFilter) ([]Application, int, error) {
+	if s.store == nil {
+		return nil, 0, ErrStoreUnavailable
+	}
+	lister, ok := s.store.(ApplicationLister)
+	if !ok {
+		return nil, 0, ErrStoreUnavailable
+	}
+	return lister.ListApplications(ctx, filter)
+}
+
 // Service handles KYC verification.
 type Service struct {
 	config Config

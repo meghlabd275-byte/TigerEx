@@ -2,6 +2,19 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+/**
+ * Resolve the bearer token for API calls. The admin console stores its session
+ * under `tigerex_admin_token`; trader sessions use `tigerex_access_token`.
+ */
+function readAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return (
+    localStorage.getItem('tigerex_admin_token') ||
+    localStorage.getItem('tigerex_access_token') ||
+    localStorage.getItem('admin_token')
+  );
+}
+
 export interface ResourceState<T> {
   data: T | null;
   loading: boolean;
@@ -46,7 +59,7 @@ export function useApiResource<T>(path: string | null): ResourceState<T> {
 
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('tigerex_access_token');
+      const token = readAuthToken();
       if (token) headers.Authorization = `Bearer ${token}`;
     }
 
@@ -117,7 +130,7 @@ export function useMergedResource<T>(paths: string[]): ResourceState<T[]> {
 
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('tigerex_access_token');
+      const token = readAuthToken();
       if (token) headers.Authorization = `Bearer ${token}`;
     }
 

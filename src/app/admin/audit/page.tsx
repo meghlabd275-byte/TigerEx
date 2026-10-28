@@ -1,82 +1,98 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { useApiResource, toArray } from '@/lib/useApiResource';
 
 interface AuditLog {
   id: string;
-  action: string;
-  user: string;
-  ip: string;
-  timestamp: string;
-  status: 'success' | 'failed';
-  details: string;
+  action?: string;
+  admin_id?: string;
+  resource?: string;
+  resource_id?: string;
+  details?: string;
+  ip_address?: string;
+  created_at?: string;
 }
 
 export default function AdminAuditPage() {
-  const [logs, setLogs] = useState<AuditLog[]>([
-    { id: '1', action: 'User Login', user: 'john@example.com', ip: '192.168.1.1', timestamp: '2024-01-15 14:30:00', status: 'success', details: 'Login successful' },
-    { id: '2', action: 'Withdrawal', user: 'jane@example.com', ip: '192.168.1.2', timestamp: '2024-01-15 14:25:00', status: 'success', details: 'Withdrew 1.5 BTC' },
-    { id: '3', action: 'KYC Submission', user: 'bob@example.com', ip: '192.168.1.3', timestamp: '2024-01-15 14:20:00', status: 'success', details: 'Level 2 KYC submitted' },
-    { id: '4', action: 'Failed Login', user: 'hacker@example.com', ip: '10.0.0.1', timestamp: '2024-01-15 14:15:00', status: 'failed', details: 'Invalid password' },
-    { id: '5', action: 'API Key Created', user: 'alice@example.com', ip: '192.168.1.5', timestamp: '2024-01-15 14:10:00', status: 'success', details: 'New API key generated' },
-  ]);
-  const [filter, setFilter] = useState('all');
+  const logs = useApiResource<unknown>('/api/admin/audit');
+  const [action, setAction] = useState('');
 
-  const filteredLogs = filter === 'all' 
-    ? logs 
-    : logs.filter(log => log.status === filter);
+  const allLogs = useMemo(() => toArray<AuditLog>(logs.data), [logs.data]);
+  const filtered = useMemo(() => {
+    if (!action.trim()) return allLogs;
+    const needle = action.trim().toLowerCase();
+    return allLogs.filter((log) => (log.action || '').toLowerCase().includes(needle));
+  }, [allLogs, action]);
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="p-6">
-        <h1 className="text-2xl font-bold mb-6">Audit Logs</h1>
-        
-        <div className="flex gap-4 mb-6">
-          <select
-            className="px-4 py-2 border rounded-lg"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+        <div className="mb-6 flex items-center justify-between">
+          <h1 className="text-2xl font-bold">Audit Logs</h1>
+          <button
+            onClick={logs.reload}
+            className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"
           >
-            <option value="all">All Logs</option>
-            <option value="success">Successful</option>
-            <option value="failed">Failed</option>
-          </select>
+            <RefreshCw className="h-4 w-4" /> Refresh
+          </button>
         </div>
 
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="min-w-full">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Timestamp</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">IP Address</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Details</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {filteredLogs.map((log) => (
-                <tr key={log.id}>
-                  <td className="px-6 py-4 text-sm text-gray-500">{log.timestamp}</td>
-                  <td className="px-6 py-4 font-medium">{log.action}</td>
-                  <td className="px-6 py-4 text-sm">{log.user}</td>
-                  <td className="px-6 py-4 text-sm font-mono">{log.ip}</td>
-                  <td className="px-6 py-4">
-                    <span className={`px-2 py-1 text-xs rounded-full ${
-                      log.status === 'success' 
-                        ? 'bg-green-100 text-green-800' 
-                        : 'bg-red-100 text-red-800'
-                    }`}>
-                      {log.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{log.details}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="mb-6">
+          <input
+            type="text"
+            value={action}
+            onChange={(e) => setAction(e.target.value)}
+            placeholder="Filter by action"
+            className="w-full max-w-sm rounded-lg border px-4 py-2"
+          />
         </div>
+
+        {logs.loading && <p className="text-sm text-gray-500">Loading audit logs…</p>}
+        {logs.error && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Audit logs are unavailable: {logs.error}
+          </div>
+        )}
+
+        {!logs.loading && !logs.error && filtered.length === 0 && (
+          <div className="rounded-lg border bg-white px-4 py-8 text-center text-gray-500">
+            No audit log entries.
+          </div>
+        )}
+
+        {filtered.length > 0 && (
+          <div className="overflow-hidden rounded-lg bg-white shadow">
+            <table className="min-w-full">
+              <thead className="bg-gray-50">
+                <tr className="text-left text-xs uppercase text-gray-500">
+                  <th className="px-6 py-3">Timestamp</th>
+                  <th className="px-6 py-3">Action</th>
+                  <th className="px-6 py-3">Admin</th>
+                  <th className="px-6 py-3">Resource</th>
+                  <th className="px-6 py-3">IP Address</th>
+                  <th className="px-6 py-3">Details</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {filtered.map((log) => (
+                  <tr key={log.id}>
+                    <td className="px-6 py-4 text-sm text-gray-500">{log.created_at || '—'}</td>
+                    <td className="px-6 py-4 font-medium">{log.action || '—'}</td>
+                    <td className="px-6 py-4 text-sm">{log.admin_id || '—'}</td>
+                    <td className="px-6 py-4 text-sm">
+                      {log.resource || '—'}
+                      {log.resource_id ? ` (${log.resource_id})` : ''}
+                    </td>
+                    <td className="px-6 py-4 font-mono text-sm">{log.ip_address || '—'}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500">{log.details || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

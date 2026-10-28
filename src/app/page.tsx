@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import LiveStats from "@/components/LiveStats";
 import { 
   TrendingUp, 
   Wallet, 
@@ -98,24 +99,7 @@ export default function HomePage() {
           </div>
 
           {/* Stats */}
-          <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-8">
-            <div className="text-center">
-              <div className="text-3xl font-bold text-white">$2.5B+</div>
-              <div className="text-sm text-gray-400">Daily Volume</div>
-            </div>
-            <div className="text-center">
-              <div className="text-3xl font-bold text-white">200+</div>
-              <div className="text-sm text-gray-400">Trading Pairs</div>
-            </div>
-            <div className="text-center">
-              <div className="text-3xl font-bold text-white">99.9%</div>
-              <div className="text-sm text-gray-400">Uptime</div>
-            </div>
-            <div className="text-center">
-              <div className="text-3xl font-bold text-white">0.1s</div>
-              <div className="text-sm text-gray-400">Execution</div>
-            </div>
-          </div>
+          <LiveStats />
         </div>
       </section>
 

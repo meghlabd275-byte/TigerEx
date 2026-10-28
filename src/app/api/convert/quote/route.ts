@@ -1,50 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { quoteConvert } from '@/lib/db/convert';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
-
-// Get convert quote
+/** Live conversion quote derived from real market data. Public (no session needed). */
 export async function GET(request: NextRequest) {
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const fromAsset = searchParams.get('fromAsset');
-    const toAsset = searchParams.get('toAsset');
-    const amount = searchParams.get('amount');
+  const { searchParams } = new URL(request.url);
+  const fromAsset = (searchParams.get('fromAsset') || '').toUpperCase();
+  const toAsset = (searchParams.get('toAsset') || '').toUpperCase();
+  const amount = parseFloat(searchParams.get('amount') || '0');
 
-    if (!fromAsset || !toAsset || !amount) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: fromAsset, toAsset, amount' },
-        { status: 400 }
-      );
-    }
-
-    let url = `${API_BASE_URL}/convert/quote?fromAsset=${fromAsset}&toAsset=${toAsset}&amount=${amount}`;
-    if (token) {
-      url += `&token=${token}`;
-    }
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch convert quote' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Convert quote API error:', error);
+  if (!fromAsset || !toAsset || !Number.isFinite(amount) || amount <= 0) {
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      { success: false, error: { code: 'INVALID_PARAMS', message: 'fromAsset, toAsset and a positive amount are required' } },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const quote = quoteConvert(fromAsset, toAsset, amount);
+    if (!quote) {
+      return NextResponse.json(
+        { success: false, error: { code: 'RATE_UNAVAILABLE', message: 'No market price is available for this pair' } },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json({ success: true, data: quote }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('Convert quote error:', error);
+    return NextResponse.json(
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+      { status: 500 },
     );
   }
 }

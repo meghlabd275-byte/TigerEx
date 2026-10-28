@@ -192,54 +192,57 @@ func NewEarnService() *EarnService {
 	return svc
 }
 
+// initProducts seeds the product catalogue. Usage counters (TotalDeposited,
+// TotalRewards) start at zero and only change when a real subscription is
+// recorded, so the numbers shown to operators are never invented.
 func (s *EarnService) initProducts() {
 	products := []*EarnProduct{
 		{
 			ID: "eth-flexible", Name: "Ethereum Flexible", Asset: "ETH", Network: "Ethereum",
 			ProductType: ProductTypeFlexible, APY: 4.5, MinAmount: 0.01, MaxAmount: 100,
-			Duration: 0, LockPeriod: 0, TotalDeposited: 25000, Status: "active",
+			Duration: 0, LockPeriod: 0, Status: "active",
 			EarlyRedemption: true, AutoRenew: true, CreatedAt: time.Now().AddDate(0, -2, 0),
 		},
 		{
 			ID: "usdt-fixed-30", Name: "USDT Fixed 30 Days", Asset: "USDT", Network: "Ethereum",
 			ProductType: ProductTypeFixed, APY: 8.5, MinAmount: 100, MaxAmount: 100000,
-			Duration: 30, LockPeriod: 30, TotalDeposited: 5000000, Status: "active",
+			Duration: 30, LockPeriod: 30, Status: "active",
 			EarlyRedemption: false, AutoRenew: false, CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 		{
 			ID: "usdt-fixed-60", Name: "USDT Fixed 60 Days", Asset: "USDT", Network: "Ethereum",
 			ProductType: ProductTypeFixed, APY: 10.2, MinAmount: 100, MaxAmount: 100000,
-			Duration: 60, LockPeriod: 60, TotalDeposited: 3500000, Status: "active",
+			Duration: 60, LockPeriod: 60, Status: "active",
 			EarlyRedemption: false, AutoRenew: false, CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 		{
 			ID: "usdt-fixed-90", Name: "USDT Fixed 90 Days", Asset: "USDT", Network: "Ethereum",
 			ProductType: ProductTypeFixed, APY: 12.5, MinAmount: 100, MaxAmount: 100000,
-			Duration: 90, LockPeriod: 90, TotalDeposited: 8000000, Status: "active",
+			Duration: 90, LockPeriod: 90, Status: "active",
 			EarlyRedemption: false, AutoRenew: false, CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 		{
 			ID: "bnb-flexible", Name: "BNB Flexible", Asset: "BNB", Network: "BSC",
 			ProductType: ProductTypeFlexible, APY: 3.8, MinAmount: 0.01, MaxAmount: 500,
-			Duration: 0, LockPeriod: 0, TotalDeposited: 15000, Status: "active",
+			Duration: 0, LockPeriod: 0, Status: "active",
 			EarlyRedemption: true, AutoRenew: true, CreatedAt: time.Now().AddDate(0, -2, 0),
 		},
 		{
 			ID: "sol-flexible", Name: "Solana Flexible", Asset: "SOL", Network: "Solana",
 			ProductType: ProductTypeFlexible, APY: 6.5, MinAmount: 1, MaxAmount: 10000,
-			Duration: 0, LockPeriod: 0, TotalDeposited: 85000, Status: "active",
+			Duration: 0, LockPeriod: 0, Status: "active",
 			EarlyRedemption: true, AutoRenew: true, CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 		{
 			ID: "dot-fixed-30", Name: "Polkadot Fixed 30 Days", Asset: "DOT", Network: "Polkadot",
 			ProductType: ProductTypeFixed, APY: 15.0, MinAmount: 50, MaxAmount: 50000,
-			Duration: 30, LockPeriod: 30, TotalDeposited: 250000, Status: "active",
+			Duration: 30, LockPeriod: 30, Status: "active",
 			EarlyRedemption: false, AutoRenew: false, CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 		{
 			ID: "avax-fixed-30", Name: "Avalanche Fixed 30 Days", Asset: "AVAX", Network: "Avalanche",
 			ProductType: ProductTypeFixed, APY: 11.0, MinAmount: 25, MaxAmount: 25000,
-			Duration: 30, LockPeriod: 30, TotalDeposited: 180000, Status: "active",
+			Duration: 30, LockPeriod: 30, Status: "active",
 			EarlyRedemption: false, AutoRenew: false, CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 	}
@@ -249,6 +252,8 @@ func (s *EarnService) initProducts() {
 	}
 }
 
+// initLaunchpools seeds the campaign catalogue. Participation counters start at
+// zero and only change when a real stake is recorded.
 func (s *EarnService) initLaunchpools() {
 	projects := []*LaunchpoolProject{
 		{
@@ -256,14 +261,12 @@ func (s *EarnService) initLaunchpools() {
 			RewardToken: "NEW", StakeToken: "USDT", TotalRewards: 1000000, Duration: 7,
 			MinStake: 100, APY: 250.0, Status: "active",
 			StartTime: time.Now().AddDate(0, 0, -3), EndTime: time.Now().AddDate(0, 0, 4),
-			Participants: 5000, TotalStaked: 25000000,
 		},
 		{
 			ID: "defi-token-launch", Name: "DeFi Token Launch", Description: "Stake ETH to earn DeFi tokens",
 			RewardToken: "DEFI", StakeToken: "ETH", TotalRewards: 50000, Duration: 14,
 			MinStake: 0.1, APY: 180.0, Status: "active",
 			StartTime: time.Now().AddDate(0, 0, -5), EndTime: time.Now().AddDate(0, 0, 9),
-			Participants: 2500, TotalStaked: 5000,
 		},
 	}
 
@@ -795,6 +798,16 @@ func (s *EarnService) GetLaunchpoolsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": pools})
 }
 
+func (s *EarnService) GetUserLaunchpoolStakesHandler(c *gin.Context) {
+	userID := c.Param("user_id")
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "user_id is required"})
+		return
+	}
+	stakes := s.GetUserLaunchpoolStakes(userID)
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": stakes})
+}
+
 func (s *EarnService) StakeLaunchpoolHandler(c *gin.Context) {
 	var req struct {
 		UserID    string  `json:"user_id" binding:"required"`
@@ -1011,6 +1024,7 @@ func main() {
 
 		// Launchpools
 		api.GET("/launchpools", svc.GetLaunchpoolsHandler)
+		api.GET("/users/:user_id/launchpool-stakes", svc.GetUserLaunchpoolStakesHandler)
 		api.POST("/launchpool/stake", svc.StakeLaunchpoolHandler)
 		api.POST("/launchpool/claim/:id", svc.ClaimLaunchpoolRewardHandler)
 

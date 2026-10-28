@@ -1,6 +1,10 @@
 package admin
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+)
 
 // TestIsUUIDGuardsTypedColumns covers the check that runs before a value is
 // bound to a uuid column. Every query parameter is bound, so this is not the
@@ -58,6 +62,18 @@ func TestClampPagingBoundsOperatorInput(t *testing.T) {
 		if gotLimit != tc.wantLimit || gotOffset != tc.wantOffset {
 			t.Errorf("clampPaging(%d, %d) = (%d, %d), want (%d, %d)",
 				tc.inLimit, tc.inOffset, gotLimit, gotOffset, tc.wantLimit, tc.wantOffset)
+		}
+	}
+}
+
+// TestSetAPIKeyEnabledRejectsMalformedIDs covers the guard that runs before the
+// key id reaches the uuid column. A malformed id must be reported as a missing
+// key so the handler answers 404 instead of surfacing a database type error.
+func TestSetAPIKeyEnabledRejectsMalformedIDs(t *testing.T) {
+	store := &PGStore{}
+	for _, id := range []string{"", "not-a-uuid", "' OR 1=1 --", "../../etc/passwd"} {
+		if err := store.SetAPIKeyEnabled(context.Background(), id, false); !errors.Is(err, ErrAPIKeyNotFound) {
+			t.Errorf("SetAPIKeyEnabled(%q) error = %v, want ErrAPIKeyNotFound", id, err)
 		}
 	}
 }

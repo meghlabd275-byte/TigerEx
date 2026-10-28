@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -133,15 +134,17 @@ type SystemSetting struct {
 // =============================================================================
 
 type AdminService struct {
-	admins       map[string]*Admin
-	sessions     map[string]*AdminSession
-	auditLogs    map[string]*AuditLog
-	whiteLabels  map[string]*WhiteLabelClient
-	tradingPairs map[string]*TradingPairConfig
-	feeConfigs   map[string]*FeeConfig
-	settings     map[string]*SystemSetting
-	config       *AdminConfig
-	mu           sync.RWMutex
+	admins        map[string]*Admin
+	sessions      map[string]*AdminSession
+	auditLogs     map[string]*AuditLog
+	whiteLabels   map[string]*WhiteLabelClient
+	tradingPairs  map[string]*TradingPairConfig
+	feeConfigs    map[string]*FeeConfig
+	settings      map[string]*SystemSetting
+	banners       map[string]*Banner
+	announcements map[string]*Announcement
+	config        *AdminConfig
+	mu            sync.RWMutex
 }
 
 type AdminConfig struct {
@@ -152,13 +155,15 @@ type AdminConfig struct {
 
 func NewAdminService() *AdminService {
 	svc := &AdminService{
-		admins:       make(map[string]*Admin),
-		sessions:     make(map[string]*AdminSession),
-		auditLogs:    make(map[string]*AuditLog),
-		whiteLabels:  make(map[string]*WhiteLabelClient),
-		tradingPairs: make(map[string]*TradingPairConfig),
-		feeConfigs:   make(map[string]*FeeConfig),
-		settings:     make(map[string]*SystemSetting),
+		admins:        make(map[string]*Admin),
+		sessions:      make(map[string]*AdminSession),
+		auditLogs:     make(map[string]*AuditLog),
+		whiteLabels:   make(map[string]*WhiteLabelClient),
+		tradingPairs:  make(map[string]*TradingPairConfig),
+		feeConfigs:    make(map[string]*FeeConfig),
+		settings:      make(map[string]*SystemSetting),
+		banners:       make(map[string]*Banner),
+		announcements: make(map[string]*Announcement),
 		config: &AdminConfig{
 			SessionDuration:  24 * time.Hour,
 			MaxLoginAttempts: 5,
@@ -721,6 +726,81 @@ func (s *AdminService) HealthCheck(c *gin.Context) {
 	})
 }
 
+// GetPermissionsHandler returns the authoritative role/permission catalogue.
+// The console renders exactly this list; it never invents permission names.
+func (s *AdminService) GetPermissionsHandler(c *gin.Context) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	admins := make([]*Admin, 0, len(s.admins))
+	seen := make(map[string]struct{}, len(s.admins))
+	for _, admin := range s.admins {
+		if _, dup := seen[admin.ID]; dup {
+			continue
+		}
+		seen[admin.ID] = struct{}{}
+		copyAdmin := *admin
+		copyAdmin.PasswordHash = ""
+		copyAdmin.Permissions = append([]string(nil), admin.Permissions...)
+		admins = append(admins, &copyAdmin)
+	}
+
+	rolePermissions := map[AdminRole][]string{
+		RoleSuperAdmin:      {"*"},
+		RoleWhiteLabelAdmin: {"white_label:manage", "users:read", "trading:read"},
+		RoleKYCAdmin:        {"kyc:review", "users:read"},
+		RoleTradingAdmin:    {"trading:manage", "markets:manage", "users:read"},
+		RoleFinanceAdmin:    {"fees:manage", "withdrawals:approve", "treasury:read"},
+		RoleSupportAdmin:    {"users:read", "tickets:manage"},
+		RoleViewer:          {"*:read"},
+	}
+
+	roles := make([]gin.H, 0, len(rolePermissions))
+	for _, role := range []AdminRole{
+		RoleSuperAdmin, RoleWhiteLabelAdmin, RoleKYCAdmin, RoleTradingAdmin,
+		RoleFinanceAdmin, RoleSupportAdmin, RoleViewer,
+	} {
+		roles = append(roles, gin.H{"role": role, "permissions": rolePermissions[role]})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"roles": roles, "admins": admins}})
+}
+
+// GetSystemStatusHandler reports runtime state the admin service can actually
+// observe. Unmeasured resource metrics are omitted rather than fabricated.
+func (s *AdminService) GetSystemStatusHandler(c *gin.Context) {
+	s.mu.RLock()
+	admins := len(s.admins)
+	sessions := len(s.sessions)
+	auditLogs := len(s.auditLogs)
+	settings := len(s.settings)
+	s.mu.RUnlock()
+
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"status":     "healthy",
+			"service":    "admin-service",
+			"timestamp":  time.Now().UTC().Format(time.RFC3339),
+			"uptime":     time.Since(processStart).Round(time.Second).String(),
+			"goroutines": runtime.NumGoroutine(),
+			"heap_bytes": mem.HeapAlloc,
+			"counters": gin.H{
+				"admins":          admins,
+				"active_sessions": sessions,
+				"audit_logs":      auditLogs,
+				"system_settings": settings,
+			},
+		},
+	})
+}
+
+// processStart anchors uptime reporting to process start.
+var processStart = time.Now()
+
 // =============================================================================
 // HELPERS
 // =============================================================================
@@ -775,6 +855,7 @@ func main() {
 	// Login is the only unauthenticated admin endpoint.
 	api := r.Group("/api/v1/admin")
 	api.POST("/login", svc.LoginHandler)
+	api.GET("/public/content", svc.GetPublicContentHandler)
 	protected := api.Group("")
 	protected.Use(svc.AuthMiddleware())
 	protected.POST("/logout", svc.LogoutHandler)
@@ -788,6 +869,15 @@ func main() {
 	protected.GET("/settings", svc.GetSettingsHandler)
 	protected.PUT("/settings", svc.UpdateSettingHandler)
 	protected.GET("/audit-logs", svc.GetAuditLogsHandler)
+	protected.GET("/permissions", svc.GetPermissionsHandler)
+	protected.GET("/system/status", svc.GetSystemStatusHandler)
+	protected.GET("/banners", svc.GetBannersHandler)
+	protected.POST("/banners", svc.CreateBannerHandler)
+	protected.PUT("/banners/:id", svc.UpdateBannerHandler)
+	protected.DELETE("/banners/:id", svc.DeleteBannerHandler)
+	protected.GET("/announcements", svc.GetAnnouncementsHandler)
+	protected.POST("/announcements", svc.CreateAnnouncementHandler)
+	protected.DELETE("/announcements/:id", svc.DeleteAnnouncementHandler)
 
 	fmt.Println("Starting Admin Service on :8089")
 	r.Run(":8089")

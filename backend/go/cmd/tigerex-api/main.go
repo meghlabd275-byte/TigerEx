@@ -442,6 +442,11 @@ func main() {
 		admin.GET("/stats", handleAdminGetStats)
 		admin.GET("/markets", handleAdminGetMarkets)
 		admin.GET("/audit", handleAdminGetAudit)
+		admin.PUT("/users/:userId/status", handleAdminSetUserStatus)
+		admin.GET("/kyc/submissions", handleAdminListKYC)
+		admin.POST("/kyc/:userId/review", handleAdminReviewKYC)
+		admin.GET("/api-keys", handleAdminListAPIKeys)
+		admin.PUT("/api-keys/:keyId/revoke", handleAdminRevokeAPIKey)
 	}
 
 	// Create server
@@ -2488,6 +2493,129 @@ func handleAdminGetAudit(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, entries)
+}
+
+// handleAdminListAPIKeys returns every registered API key without secrets.
+func handleAdminListAPIKeys(c *gin.Context) {
+	if !requireAdminStore(c) {
+		return
+	}
+	limit, offset := pagingFromQuery(c)
+	keys, total, err := adminStore.ListAPIKeys(c.Request.Context(), limit, offset)
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": keys, "total": total})
+}
+
+// handleAdminRevokeAPIKey disables a key so it can no longer authenticate.
+func handleAdminRevokeAPIKey(c *gin.Context) {
+	if !requireAdminStore(c) {
+		return
+	}
+	keyID := c.Param("keyId")
+	if err := adminStore.SetAPIKeyEnabled(c.Request.Context(), keyID, false); err != nil {
+		adminError(c, err)
+		return
+	}
+	auditAdmin(c, "api_key.revoke", "api_key", keyID, nil)
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"id": keyID, "enabled": false}})
+}
+
+// handleAdminSetUserStatus locks or unlocks a user account.
+func handleAdminSetUserStatus(c *gin.Context) {
+	if !requireAdminStore(c) {
+		return
+	}
+	var req struct {
+		Status string `json:"status" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "status is required"})
+		return
+	}
+
+	locked := false
+	switch req.Status {
+	case "suspended", "locked":
+		locked = true
+	case "active", "unlocked":
+		locked = false
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "status must be active or suspended"})
+		return
+	}
+
+	userID := c.Param("userId")
+	if err := adminStore.SetUserStatus(c.Request.Context(), userID, locked); err != nil {
+		adminError(c, err)
+		return
+	}
+	auditAdmin(c, "user.status", "user", userID, gin.H{"locked": locked})
+	c.JSON(http.StatusOK, gin.H{"success": true, "userId": userID, "status": req.Status})
+}
+
+// handleAdminListKYC returns the KYC review queue from the durable KYC store.
+func handleAdminListKYC(c *gin.Context) {
+	limit, offset := pagingFromQuery(c)
+	apps, total, err := kycService.ListApplications(c.Request.Context(), kyc.ListFilter{
+		Status: c.Query("status"),
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		if errors.Is(err, kyc.ErrStoreUnavailable) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "KYC persistence is not configured"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "KYC review queue could not be loaded"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"submissions": apps, "total": total})
+}
+
+type adminReviewKYCRequest struct {
+	Approve bool   `json:"approve"`
+	Level   int    `json:"level"`
+	Reason  string `json:"reason"`
+}
+
+// handleAdminReviewKYC records an operator decision on a KYC application.
+func handleAdminReviewKYC(c *gin.Context) {
+	var req adminReviewKYCRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	userID := c.Param("userId")
+	actorID := ""
+	if user, ok := c.Get("user"); ok {
+		if adminUser, ok := user.(*api.User); ok {
+			actorID = adminUser.ID
+		}
+	}
+
+	status, err := kycService.Review(c.Request.Context(), userID, req.Approve, req.Level, req.Reason, actorID)
+	if err != nil {
+		switch {
+		case errors.Is(err, kyc.ErrStoreUnavailable):
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "KYC persistence is not configured"})
+		case errors.Is(err, kyc.ErrNotSubmitted):
+			c.JSON(http.StatusNotFound, gin.H{"error": "no KYC application for user"})
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	action := "kyc.rejected"
+	if req.Approve {
+		action = "kyc.approved"
+	}
+	auditAdmin(c, action, "user", userID, gin.H{"level": status.Level, "status": status.Status})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": status})
 }
 
 // ============================================================================

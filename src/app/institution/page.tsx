@@ -1,8 +1,26 @@
 'use client';
 
 import { useState } from 'react';
+import { useApiResource } from '@/lib/useApiResource';
+
+interface ExchangeStats {
+  tradingPairs?: number;
+  totalUsers?: number;
+  dailyVolume?: number;
+}
+
+function unwrapStats(payload: unknown): ExchangeStats | null {
+  if (payload && typeof payload === 'object' && 'data' in (payload as Record<string, unknown>)) {
+    return (payload as Record<string, unknown>).data as ExchangeStats;
+  }
+  return (payload as ExchangeStats) ?? null;
+}
 
 export default function InstitutionPage() {
+  const stats = useApiResource<unknown>('/api/stats');
+  const statData = unwrapStats(stats.data);
+  const [submitState, setSubmitState] = useState<{ ok: boolean; message: string } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     companyName: '',
     email: '',
@@ -12,7 +30,28 @@ export default function InstitutionPage() {
   });
 
   const submitInquiry = async () => {
-    alert('Thank you for your inquiry. Our team will contact you shortly.');
+    setSubmitting(true);
+    setSubmitState(null);
+    try {
+      const response = await fetch('/api/institution/inquiry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(body?.error?.message || 'Could not submit your inquiry');
+      }
+      setSubmitState({ ok: true, message: 'Thank you. Our institutional desk will contact you.' });
+      setFormData({ companyName: '', email: '', phone: '', inquiryType: 'custody', message: '' });
+    } catch (err) {
+      setSubmitState({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Could not submit your inquiry',
+      });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -23,16 +62,22 @@ export default function InstitutionPage() {
         
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-3xl font-bold text-blue-600 mb-2">$5B+</div>
-            <div className="text-gray-600">Assets Under Custody</div>
+            <div className="text-3xl font-bold text-blue-600 mb-2">
+              {stats.loading ? '—' : statData?.tradingPairs ?? 0}
+            </div>
+            <div className="text-gray-600">Listed Trading Pairs</div>
           </div>
           <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-3xl font-bold text-blue-600 mb-2">150+</div>
-            <div className="text-gray-600">Institutional Clients</div>
+            <div className="text-3xl font-bold text-blue-600 mb-2">
+              {stats.loading ? '—' : (statData?.totalUsers ?? 0).toLocaleString()}
+            </div>
+            <div className="text-gray-600">Registered Accounts</div>
           </div>
           <div className="bg-white rounded-lg shadow p-6">
-            <div className="text-3xl font-bold text-blue-600 mb-2">99.99%</div>
-            <div className="text-gray-600">Uptime SLA</div>
+            <div className="text-3xl font-bold text-blue-600 mb-2">
+              {stats.loading ? '—' : `$${(statData?.dailyVolume ?? 0).toLocaleString()}`}
+            </div>
+            <div className="text-gray-600">24h Traded Volume (USD)</div>
           </div>
         </div>
 
@@ -41,8 +86,7 @@ export default function InstitutionPage() {
             <h2 className="text-xl font-semibold mb-4">Custody Solutions</h2>
             <ul className="space-y-2 text-gray-600">
               <li>✓ Multi-signature cold storage</li>
-              <li>✓ SOC 2 Type II certified</li>
-              <li>✓ Insurance coverage up to $500M</li>
+              <li>✓ Segregated custody accounts</li>
               <li>✓ 24/7 segregated wallet access</li>
             </ul>
           </div>

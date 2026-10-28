@@ -2,85 +2,39 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
 
-// Get all users (admin)
-export async function GET(request: NextRequest) {
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const page = searchParams.get('page') || '1';
-    const limit = searchParams.get('limit') || '20';
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/admin/users?page=${page}&limit=${limit}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch users' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Admin users API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+function getBearer(request: NextRequest): string | null {
+  const header = request.headers.get('authorization');
+  return header && /^Bearer\s+\S+$/i.test(header) ? header : null;
 }
 
-// Update user (admin)
-export async function PUT(request: NextRequest) {
+// List exchange users with their verification level and account state.
+export async function GET(request: NextRequest) {
+  const token = getBearer(request);
+  if (!token) {
+    return NextResponse.json({ success: false, error: 'Authorization required' }, { status: 401 });
+  }
+
+  const { searchParams } = new URL(request.url);
+  const limit = searchParams.get('limit') || '50';
+  const offset = searchParams.get('offset') || '0';
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/admin/users`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
+    const upstream = await fetch(
+      `${API_BASE_URL}/admin/users?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(offset)}`,
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json', Authorization: token },
+        cache: 'no-store',
       },
-      body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to update user' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Admin update user API error:', error);
+    );
+    const payload = await upstream
+      .json()
+      .catch(() => ({ success: false, error: 'Invalid API response' }));
+    return NextResponse.json(payload, { status: upstream.status });
+  } catch {
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      { success: false, error: 'API service is unavailable; users could not be loaded.' },
+      { status: 502 },
     );
   }
 }

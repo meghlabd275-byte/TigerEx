@@ -1,52 +1,53 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
+import { requireSession } from '@/lib/db/session';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
-
-// Get fiat orders
+/** Fiat buy/sell orders for the authenticated user, newest first. */
 export async function GET(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const { searchParams } = new URL(request.url);
+  const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '20', 10) || 20, 1), 100);
+  const offset = Math.max(parseInt(searchParams.get('offset') || '0', 10) || 0, 0);
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const orderId = searchParams.get('orderId');
-    const startTime = searchParams.get('startTime');
-    const endTime = searchParams.get('endTime');
-    const limit = searchParams.get('limit') || '100';
+    const db = getDb();
+    const rows = db
+      .prepare(
+        `SELECT order_id, provider_id, direction, fiat_currency, crypto_currency,
+                fiat_amount, crypto_amount, rate, fee, status, created_at
+           FROM fiat_orders
+          WHERE user_id = ?
+          ORDER BY created_at DESC
+          LIMIT ? OFFSET ?`,
+      )
+      .all(auth.user.userId, limit, offset) as Array<Record<string, unknown>>;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    let url = `${API_BASE_URL}/fiat/orders?limit=${limit}`;
-    if (orderId) url += `&orderId=${orderId}`;
-    if (startTime) url += `&startTime=${startTime}`;
-    if (endTime) url += `&endTime=${endTime}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch fiat orders' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Fiat orders API error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      {
+        success: true,
+        data: rows.map((r) => ({
+          orderId: r.order_id,
+          providerId: r.provider_id,
+          direction: r.direction,
+          fiatCurrency: r.fiat_currency,
+          cryptoCurrency: r.crypto_currency,
+          fiatAmount: r.fiat_amount,
+          cryptoAmount: r.crypto_amount,
+          rate: r.rate,
+          fee: r.fee,
+          status: r.status,
+          createdAt: r.created_at,
+        })),
+      },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
+  } catch (error) {
+    console.error('Fiat orders error:', error);
+    return NextResponse.json(
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+      { status: 500 },
     );
   }
 }

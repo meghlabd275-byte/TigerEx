@@ -146,6 +146,61 @@ func (s *SQLiteStore) GetApplication(ctx context.Context, userID string) (*Appli
 	return &app, nil
 }
 
+// ListApplications enumerates applications for the operator review queue.
+func (s *SQLiteStore) ListApplications(ctx context.Context, filter ListFilter) ([]Application, int, error) {
+	where := ""
+	args := []any{}
+	if filter.Status != "" {
+		where = " WHERE status = ?"
+		args = append(args, filter.Status)
+	}
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM kyc_applications"+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("counting kyc applications: %w", err)
+	}
+
+	limit := filter.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	q := `
+		SELECT application_id, user_id, document_type, first_name, last_name, date_of_birth,
+		       country, document_number, address, city, COALESCE(state, ''), postal_code,
+		       level, status, COALESCE(rejection_reason, ''), submitted_at, COALESCE(reviewed_at, 0)
+		FROM kyc_applications` + where + `
+		ORDER BY submitted_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("listing kyc applications: %w", err)
+	}
+	defer rows.Close()
+
+	apps := make([]Application, 0, limit)
+	for rows.Next() {
+		var app Application
+		if err := rows.Scan(
+			&app.ID, &app.UserID, &app.DocumentType, &app.FirstName, &app.LastName, &app.DOB,
+			&app.Country, &app.DocumentID, &app.Address, &app.City, &app.State, &app.ZipCode,
+			&app.Level, &app.Status, &app.RejectReason, &app.SubmittedAt, &app.ReviewedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scanning kyc application: %w", err)
+		}
+		apps = append(apps, app)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterating kyc applications: %w", err)
+	}
+	return apps, total, nil
+}
+
 func (s *SQLiteStore) CreateApplication(ctx context.Context, app *Application) error {
 	if app.ID == "" {
 		id, err := newID("kyc")

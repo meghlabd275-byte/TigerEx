@@ -5,21 +5,18 @@ import { useCallback, useEffect, useState } from 'react';
 interface APIKey {
   id: string;
   userId: string;
-  keyId: string;
   name: string;
   permissions: string[];
   ipWhitelist: string[];
-  rateLimit: number;
-  status: string;
-  createdAt: string | null;
-  lastUsedAt: string | null;
+  expiresAt: number;
+  createdAt: number;
+  lastUsedAt: number;
+  enabled: boolean;
 }
 
-const ADMIN_API_BASE = (process.env.NEXT_PUBLIC_ADMIN_API_URL || '').replace(/\/$/, '');
-
-function formatDate(value: string | null): string {
+function formatDate(value: number | undefined): string {
   if (!value) return 'Never';
-  const date = new Date(value);
+  const date = new Date(value * 1000);
   return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString();
 }
 
@@ -45,14 +42,16 @@ export default function AdminAPIPage() {
         return;
       }
 
-      const response = await fetch(`${ADMIN_API_BASE}/admin/api-keys`, {
+      const response = await fetch('/api/admin/api-keys?limit=200', {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         cache: 'no-store',
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok || payload?.success !== true || !Array.isArray(payload.data)) {
-        throw new Error(payload?.error?.message || payload?.error || `Unable to load API keys (HTTP ${response.status}).`);
+        throw new Error(
+          payload?.error?.message || payload?.error || `Unable to load API keys (HTTP ${response.status}).`,
+        );
       }
       setAPIKeys(payload.data as APIKey[]);
     } catch (cause) {
@@ -66,7 +65,7 @@ export default function AdminAPIPage() {
   useEffect(() => { void loadAPIKeys(); }, [loadAPIKeys]);
 
   const revokeKey = async (key: APIKey) => {
-    if (key.status.toLowerCase() === 'revoked') return;
+    if (!key.enabled) return;
     if (!window.confirm(`Revoke API key “${key.name}”? This action cannot be undone.`)) return;
 
     const token = localStorage.getItem('tigerex_admin_token') ||
@@ -82,7 +81,7 @@ export default function AdminAPIPage() {
     setNotice(null);
     try {
       const response = await fetch(
-        `${ADMIN_API_BASE}/admin/api-keys/${encodeURIComponent(key.id)}/revoke`,
+        `/api/admin/api-keys/${encodeURIComponent(key.id)}/revoke`,
         {
           method: 'PUT',
           headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
@@ -102,7 +101,7 @@ export default function AdminAPIPage() {
     }
   };
 
-  const activeCount = apiKeys.filter(key => key.status.toLowerCase() === 'active').length;
+  const activeCount = apiKeys.filter((key) => key.enabled).length;
 
   return (
     <main className="min-h-screen bg-gray-950 p-4 text-gray-100 sm:p-6">
@@ -164,7 +163,7 @@ export default function AdminAPIPage() {
                     <th className="px-4 py-3">Name / ID</th>
                     <th className="px-4 py-3">Owner</th>
                     <th className="px-4 py-3">Permissions</th>
-                    <th className="px-4 py-3">Rate limit</th>
+                    <th className="px-4 py-3">Expires</th>
                     <th className="px-4 py-3">Last used</th>
                     <th className="px-4 py-3">Created</th>
                     <th className="px-4 py-3">Status</th>
@@ -176,7 +175,7 @@ export default function AdminAPIPage() {
                     <tr key={key.id} className="align-top hover:bg-gray-800/40">
                       <td className="px-4 py-4">
                         <div className="font-medium">{key.name}</div>
-                        <div className="mt-1 font-mono text-xs text-gray-500">{key.keyId || key.id}</div>
+                        <div className="mt-1 font-mono text-xs text-gray-500">{key.id}</div>
                       </td>
                       <td className="px-4 py-4 font-mono text-xs text-gray-400">{key.userId || '—'}</td>
                       <td className="px-4 py-4">
@@ -185,23 +184,23 @@ export default function AdminAPIPage() {
                             <span key={permission} className="rounded bg-gray-800 px-2 py-1 text-xs">{permission}</span>
                           ))}
                         </div>
-                        {key.ipWhitelist?.length > 0 && (
+                        {(key.ipWhitelist?.length ?? 0) > 0 && (
                           <p className="mt-2 text-xs text-gray-500">{key.ipWhitelist.length} IP allowlisted</p>
                         )}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-4 tabular-nums">{key.rateLimit}/min</td>
+                      <td className="whitespace-nowrap px-4 py-4 tabular-nums">{formatDate(key.expiresAt)}</td>
                       <td className="whitespace-nowrap px-4 py-4 text-gray-400">{formatDate(key.lastUsedAt)}</td>
                       <td className="whitespace-nowrap px-4 py-4 text-gray-400">{formatDate(key.createdAt)}</td>
                       <td className="px-4 py-4">
-                        <span className={`rounded-full px-2 py-1 text-xs ${key.status.toLowerCase() === 'active' ? 'bg-emerald-950 text-emerald-300' : 'bg-red-950 text-red-300'}`}>
-                          {key.status}
+                        <span className={`rounded-full px-2 py-1 text-xs ${key.enabled ? 'bg-emerald-950 text-emerald-300' : 'bg-red-950 text-red-300'}`}>
+                          {key.enabled ? 'active' : 'revoked'}
                         </span>
                       </td>
                       <td className="px-4 py-4">
                         <button
                           type="button"
                           onClick={() => void revokeKey(key)}
-                          disabled={key.status.toLowerCase() === 'revoked' || busyKey === key.id}
+                          disabled={!key.enabled || busyKey === key.id}
                           className="rounded border border-red-900 px-3 py-1.5 text-xs text-red-300 hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           {busyKey === key.id ? 'Revoking…' : 'Revoke'}
