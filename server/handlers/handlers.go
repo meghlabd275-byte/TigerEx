@@ -1058,7 +1058,7 @@ func ChangePassword(c *gin.Context) {
 func GetFuturesContracts(c *gin.Context) {
 	rows, err := models.Pool.Query(c.Request.Context(), `
 		SELECT symbol, base_currency, quote_currency, contract_type, status
-		FROM futures_contracts
+		FROM futures_markets
 		WHERE status = 'active'
 		ORDER BY symbol
 	`)
@@ -1109,35 +1109,79 @@ func QuoteFutures(c *gin.Context) {
 	})
 }
 func GetMarginAccount(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"borrowable": 0, "borrowed": 0, "interestRate": 0.0001}})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error":   gin.H{"code": 503, "message": "Margin accounts are unavailable until the margin ledger is configured"},
+	})
 }
 
 func BorrowMargin(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Borrowed"}})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error":   gin.H{"code": 503, "message": "Margin borrowing is unavailable until the risk and ledger services are configured"},
+	})
 }
 
 func RepayMargin(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Repaid"}})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error":   gin.H{"code": 503, "message": "Margin repayment is unavailable until the risk and ledger services are configured"},
+	})
 }
 
 func GetMarginPositions(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error":   gin.H{"code": 503, "message": "Margin positions are unavailable until the risk engine is configured"},
+	})
 }
 
 // ============ OPTIONS ============
 
 func GetOptionsContracts(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": []gin.H{
-		{"symbol": "BTC-65000-C", "strike": 65000, "type": "call", "bid": 500, "ask": 550, "expiry": "2024-12-31"},
-	}})
+	rows, err := models.Pool.Query(c.Request.Context(), `
+		SELECT symbol, underlying, strike_price, expiry_date, option_type, contract_size, status
+		FROM options WHERE status = 'active' ORDER BY expiry_date, symbol
+	`)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Configured option contracts are unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	contracts := []gin.H{}
+	for rows.Next() {
+		var symbol, underlying, optionType, status string
+		var strike, contractSize float64
+		var expiry interface{}
+		if err := rows.Scan(&symbol, &underlying, &strike, &expiry, &optionType, &contractSize, &status); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Option contract metadata could not be read"}})
+			return
+		}
+		contracts = append(contracts, gin.H{
+			"symbol": symbol, "underlying": underlying, "strike": strike, "expiry": expiry,
+			"type": optionType, "contractSize": contractSize, "status": status,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Option contract query failed"}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": contracts})
 }
 
 func TradeOptions(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Trade placed"}})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error":   gin.H{"code": 503, "message": "Options execution is unavailable until the pricing and matching engine is configured"},
+	})
 }
 
 func GetOptionsPositions(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"success": false,
+		"error":   gin.H{"code": 503, "message": "Options positions are unavailable until the pricing engine is configured"},
+	})
 }
 
 // ============ P2P ============
