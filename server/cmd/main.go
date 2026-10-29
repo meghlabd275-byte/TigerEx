@@ -241,6 +241,18 @@ func main() {
 			adminAuth.DELETE("/pairs/:pairId", handlers.DeletePair)
 			adminAuth.POST("/pairs/import", handlers.ImportPairsFromCEX)
 
+			// Futures / Perpetual Market Listing
+			adminAuth.GET("/futures-markets", handlers.ListFuturesMarkets)
+			adminAuth.POST("/futures-markets", handlers.CreateFuturesMarket)
+			adminAuth.PUT("/futures-markets/:id", handlers.UpdateFuturesMarket)
+			adminAuth.DELETE("/futures-markets/:id", handlers.DeleteFuturesMarket)
+
+			// Margin Market Listing
+			adminAuth.GET("/margin-markets", handlers.ListMarginMarkets)
+			adminAuth.POST("/margin-markets", handlers.CreateMarginMarket)
+			adminAuth.PUT("/margin-markets/:id", handlers.UpdateMarginMarket)
+			adminAuth.DELETE("/margin-markets/:id", handlers.DeleteMarginMarket)
+
 			// Fees Management
 			adminAuth.GET("/fees", handlers.GetAllFeeStructures)
 			adminAuth.POST("/fees", handlers.CreateFeeStructure)

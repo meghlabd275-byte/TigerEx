@@ -1,19 +1,19 @@
-// =============================================================================
-// TIGEREX v3.0 - COMPLETE DATABASE SCHEMA
-// All tables for production exchange
-// =============================================================================
+-- =============================================================================
+-- TIGEREX v3.0 - COMPLETE DATABASE SCHEMA
+-- All tables for production exchange
+-- =============================================================================
 
 -- ============================================================================
-// TIGEREX v3.0 - COMPLETE DATABASE SCHEMA
-// PostgreSQL Schema for Production Exchange
-// ============================================================================
+-- TIGEREX v3.0 - COMPLETE DATABASE SCHEMA
+-- PostgreSQL Schema for Production Exchange
+-- ============================================================================
 
 -- Extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ============================================================================
-// USERS & AUTHENTICATION
+-- USERS & AUTHENTICATION
 -- ============================================================================
 
 -- Users table
@@ -146,7 +146,7 @@ CREATE INDEX idx_api_keys_user_id ON api_keys(user_id);
 CREATE INDEX idx_api_keys_key_id ON api_keys(key_id);
 
 -- ============================================================================
-// KYC & COMPLIANCE
+-- KYC & COMPLIANCE
 -- ============================================================================
 
 -- KYC Records
@@ -257,7 +257,7 @@ CREATE INDEX idx_compliance_alerts_status ON compliance_alerts(status);
 CREATE INDEX idx_compliance_alerts_created_at ON compliance_alerts(created_at DESC);
 
 -- ============================================================================
-// MARKETS & TRADING PAIRS
+-- MARKETS & TRADING PAIRS
 -- ============================================================================
 
 -- Markets
@@ -324,7 +324,7 @@ CREATE INDEX idx_tickers_market_id ON market_tickers(market_id);
 CREATE INDEX idx_tickers_timestamp ON market_tickers(timestamp DESC);
 
 -- ============================================================================
-// ORDERS & TRADES
+-- ORDERS & TRADES
 -- ============================================================================
 
 -- Orders
@@ -433,8 +433,8 @@ CREATE INDEX idx_trades_maker_user_id ON trades(maker_user_id);
 CREATE INDEX idx_trades_timestamp ON trades(timestamp DESC);
 
 -- ============================================================================
-// POSITIONS (Margin/Futures)
-// ============================================================================
+-- POSITIONS (Margin/Futures)
+-- ============================================================================
 
 -- Margin Positions
 CREATE TABLE margin_positions (
@@ -509,8 +509,8 @@ CREATE INDEX idx_futures_positions_user_id ON futures_positions(user_id);
 CREATE INDEX idx_futures_positions_symbol ON futures_positions(contract_symbol);
 
 -- ============================================================================
-// WALLETS & TRANSACTIONS
-// ============================================================================
+-- WALLETS & TRANSACTIONS
+-- ============================================================================
 
 -- Wallets
 CREATE TABLE wallets (
@@ -555,6 +555,7 @@ CREATE TABLE deposits (
     from_address TEXT,
     to_address TEXT,
     tx_hash VARCHAR(255),
+    txid VARCHAR(255) UNIQUE,
     
     status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'confirming', 'completed', 'failed', 'canceled')),
     confirmations INT DEFAULT 0,
@@ -596,6 +597,7 @@ CREATE TABLE withdrawals (
     tx_hash VARCHAR(255),
     
     two_factor_verified BOOLEAN DEFAULT FALSE,
+    txid VARCHAR(255) UNIQUE,
     
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -625,7 +627,7 @@ CREATE INDEX idx_internal_transfers_from_user ON internal_transfers(from_user_id
 CREATE INDEX idx_internal_transfers_to_user ON internal_transfers(to_user_id);
 
 -- ============================================================================
-// EARN PRODUCTS
+-- EARN PRODUCTS
 -- ============================================================================
 
 -- Earn Products
@@ -702,8 +704,8 @@ CREATE INDEX idx_earn_subscriptions_product_id ON earn_subscriptions(product_id)
 CREATE INDEX idx_earn_subscriptions_status ON earn_subscriptions(status);
 
 -- ============================================================================
-// P2P TRADING
-// ============================================================================
+-- P2P TRADING
+-- ============================================================================
 
 -- P2P Offers
 CREATE TABLE p2p_offers (
@@ -762,8 +764,8 @@ CREATE INDEX idx_p2p_trades_seller_id ON p2p_trades(seller_id);
 CREATE INDEX idx_p2p_trades_status ON p2p_trades(status);
 
 -- ============================================================================
-// NOTIFICATIONS
-// ============================================================================
+-- NOTIFICATIONS
+-- ============================================================================
 
 -- Notifications
 CREATE TABLE notifications (
@@ -803,7 +805,7 @@ CREATE INDEX idx_push_tokens_user_id ON push_tokens(user_id);
 CREATE UNIQUE INDEX idx_push_tokens_token ON push_tokens(token);
 
 -- ============================================================================
-// ADMIN & AUDIT
+-- ADMIN & AUDIT
 -- ============================================================================
 
 -- Admin Actions Log
@@ -838,7 +840,7 @@ CREATE INDEX idx_audit_logs_user_id ON audit_logs(user_id);
 CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at DESC);
 
 -- ============================================================================
-// UPDATE TIMESTAMP TRIGGER
+-- UPDATE TIMESTAMP TRIGGER
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -881,83 +883,16 @@ CREATE TRIGGER update_p2p_trades_updated_at BEFORE UPDATE ON p2p_trades
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================================================
-// DEPOSITS & WITHDRAWALS
+-- DEPOSITS & WITHDRAWALS
 -- ============================================================================
 
 -- Deposits
-CREATE TABLE deposits (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    currency VARCHAR(20) NOT NULL,
-    network VARCHAR(50),
-    amount DECIMAL(20, 8) NOT NULL,
-    txid VARCHAR(255) UNIQUE,
-    address VARCHAR(255) NOT NULL,
-    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'failed', 'cancelled')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_deposits_user_id ON deposits(user_id);
-CREATE INDEX idx_deposits_txid ON deposits(txid);
-
 -- Withdrawals
-CREATE TABLE withdrawals (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    currency VARCHAR(20) NOT NULL,
-    network VARCHAR(50),
-    amount DECIMAL(20, 8) NOT NULL,
-    fee DECIMAL(20, 8) DEFAULT 0,
-    address VARCHAR(255) NOT NULL,
-    txid VARCHAR(255) UNIQUE,
-    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_withdrawals_user_id ON withdrawals(user_id);
-CREATE INDEX idx_withdrawals_txid ON withdrawals(txid);
-
 -- ============================================================================
-// FUTURES & MARGIN TRADING
+-- FUTURES & MARGIN TRADING
 -- ============================================================================
 
 -- Futures Positions
-CREATE TABLE futures_positions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    symbol VARCHAR(20) NOT NULL,
-    side VARCHAR(10) NOT NULL CHECK (side IN (
-        'long',
-        'short'
-    )),
-    quantity DECIMAL(20, 8) NOT NULL,
-    entry_price DECIMAL(20, 8),
-    liquidation_price DECIMAL(20, 8),
-    leverage DECIMAL(5, 2) NOT NULL,
-    margin_mode VARCHAR(20) NOT NULL CHECK (margin_mode IN (
-        'cross',
-        'isolated'
-    )),
-    position_mode VARCHAR(20) NOT NULL CHECK (position_mode IN (
-        'one_way',
-        'hedge'
-    )),
-    status VARCHAR(20) DEFAULT 'open' CHECK (status IN (
-        'open',
-        'closed',
-        'liquidated'
-    )),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    closed_at TIMESTAMP WITH TIME ZONE
-);
-
-CREATE INDEX idx_futures_positions_user_id ON futures_positions(user_id);
-CREATE INDEX idx_futures_positions_symbol ON futures_positions(symbol);
-CREATE INDEX idx_futures_positions_status ON futures_positions(status);
-
 -- Margin Accounts
 CREATE TABLE margin_accounts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -972,3 +907,68 @@ CREATE TABLE margin_accounts (
 
 CREATE INDEX idx_margin_accounts_user_id ON margin_accounts(user_id);
 CREATE INDEX idx_margin_accounts_currency ON margin_accounts(currency);
+
+-- ============================================================================
+-- DERIVATIVES & MARGIN MARKET REGISTRY
+-- Instruments are created only through the admin listing API. Nothing is seeded.
+-- ============================================================================
+
+-- Futures / perpetual market registry (authoritative instrument catalogue)
+CREATE TABLE IF NOT EXISTS futures_markets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    symbol VARCHAR(50) UNIQUE NOT NULL,
+    base_currency VARCHAR(20) NOT NULL,
+    quote_currency VARCHAR(20) NOT NULL,
+    settlement_currency VARCHAR(20) NOT NULL,
+    contract_type VARCHAR(20) NOT NULL CHECK (contract_type IN ('perpetual', 'quarterly', 'delivery')),
+    margin_type VARCHAR(20) NOT NULL CHECK (margin_type IN ('usdt_m', 'usdc_m', 'coin_m')),
+    contract_size DECIMAL(32, 8) NOT NULL CHECK (contract_size > 0),
+    price_precision INTEGER NOT NULL CHECK (price_precision BETWEEN 0 AND 18),
+    quantity_precision INTEGER NOT NULL CHECK (quantity_precision BETWEEN 0 AND 18),
+    min_quantity DECIMAL(32, 16) NOT NULL CHECK (min_quantity > 0),
+    max_leverage INTEGER NOT NULL CHECK (max_leverage BETWEEN 1 AND 1001),
+    initial_margin_rate DECIMAL(10, 8) NOT NULL CHECK (initial_margin_rate > 0 AND initial_margin_rate < 1),
+    maintenance_margin_rate DECIMAL(10, 8) NOT NULL CHECK (maintenance_margin_rate > 0 AND maintenance_margin_rate < 1),
+    liquidation_fee_rate DECIMAL(10, 8) NOT NULL CHECK (liquidation_fee_rate >= 0 AND liquidation_fee_rate < 1),
+    maker_fee DECIMAL(10, 8) NOT NULL CHECK (maker_fee >= 0 AND maker_fee < 1),
+    taker_fee DECIMAL(10, 8) NOT NULL CHECK (taker_fee >= 0 AND taker_fee < 1),
+    funding_interval_hours INTEGER NOT NULL CHECK (funding_interval_hours BETWEEN 1 AND 24),
+    funding_rate_cap DECIMAL(10, 8) NOT NULL CHECK (funding_rate_cap > 0 AND funding_rate_cap <= 1),
+    oracle_source VARCHAR(80) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'paused' CHECK (status IN ('active', 'paused', 'delisting')),
+    created_by UUID,
+    updated_by UUID,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CHECK (maintenance_margin_rate < initial_margin_rate)
+);
+
+CREATE INDEX idx_futures_markets_status ON futures_markets(status);
+CREATE INDEX idx_futures_markets_base_quote ON futures_markets(base_currency, quote_currency);
+
+-- Margin market registry (spot margin pairs, LTV, interest and liquidation params)
+CREATE TABLE IF NOT EXISTS margin_markets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    symbol VARCHAR(50) UNIQUE NOT NULL,
+    base_currency VARCHAR(20) NOT NULL,
+    quote_currency VARCHAR(20) NOT NULL,
+    margin_mode VARCHAR(20) NOT NULL CHECK (margin_mode IN ('cross', 'isolated')),
+    max_leverage INTEGER NOT NULL CHECK (max_leverage BETWEEN 1 AND 20),
+    collateral_asset VARCHAR(20) NOT NULL,
+    collateral_ltv DECIMAL(10, 8) NOT NULL CHECK (collateral_ltv > 0 AND collateral_ltv <= 1),
+    liquidation_threshold DECIMAL(10, 8) NOT NULL CHECK (liquidation_threshold > 0 AND liquidation_threshold <= 1),
+    liquidation_bonus DECIMAL(10, 8) NOT NULL CHECK (liquidation_bonus >= 0 AND liquidation_bonus < 1),
+    borrowable_asset VARCHAR(20) NOT NULL,
+    interest_base_apy DECIMAL(10, 8) NOT NULL CHECK (interest_base_apy >= 0),
+    interest_kink_utilization DECIMAL(10, 8) NOT NULL CHECK (interest_kink_utilization > 0 AND interest_kink_utilization < 1),
+    interest_jump_multiplier DECIMAL(10, 8) NOT NULL CHECK (interest_jump_multiplier >= 1),
+    status VARCHAR(20) NOT NULL DEFAULT 'paused' CHECK (status IN ('active', 'paused', 'delisting')),
+    created_by UUID,
+    updated_by UUID,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CHECK (collateral_ltv < liquidation_threshold)
+);
+
+CREATE INDEX idx_margin_markets_status ON margin_markets(status);
+CREATE INDEX idx_margin_markets_base_quote ON margin_markets(base_currency, quote_currency);
