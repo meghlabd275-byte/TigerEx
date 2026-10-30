@@ -699,8 +699,10 @@ func (s *EarnService) ClaimRedPacket(userID, packetID string) (*RedPacketClaim, 
 	if packet.Type == "average" {
 		claimAmount = packet.Amount / float64(packet.Quantity)
 	} else {
-		// Random - simplified for demo
-		claimAmount = packet.Remaining / float64(packet.Quantity-packet.Claimed)
+		// "Lucky" packets split what remains evenly among the claimers still
+		// to come, so the last claimer receives the exact remainder.
+		remainingClaimers := packet.Quantity - packet.Claimed
+		claimAmount = packet.Remaining / float64(remainingClaimers)
 	}
 
 	claim := &RedPacketClaim{

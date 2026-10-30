@@ -16,7 +16,8 @@ export function WithdrawModal({ currency = 'BTC', onClose }: WithdrawModalProps)
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [balance, setBalance] = useState(0);
-  const [fee, setFee] = useState(0);
+  const [fee, setFee] = useState<number | null>(null);
+  const [feeError, setFeeError] = useState<string | null>(null);
 
   // Get available balance
   useEffect(() => {
@@ -56,19 +57,43 @@ export function WithdrawModal({ currency = 'BTC', onClose }: WithdrawModalProps)
     setNetwork(defaultNetworks[currency] || 'DEFAULT');
   }, [currency]);
 
-  // Calculate fee (mock)
+  // Fetch the withdrawal fee for the selected currency/network from the
+  // backend, which derives it from the live chain gas price. No fee is
+  // assumed locally: if the backend cannot supply one the fee is unavailable
+  // and the withdrawal is blocked.
   useEffect(() => {
-    const fees: { [key: string]: number } = {
-      'BTC': 0.0001,
-      'ETH': 0.001,
-      'USDT': 1,
-      'BNB': 0.001,
-      'SOL': 0.01,
+    let cancelled = false;
+
+    const fetchFee = async () => {
+      setFee(null);
+      setFeeError(null);
+      try {
+        const params = new URLSearchParams({ coin: currency });
+        if (network) params.set('network', network);
+        const res = await fetch(`/api/withdrawal/fee?${params.toString()}`);
+        const data = await res.json();
+        const value = data?.data?.fee ?? data?.fee;
+        if (!res.ok || value === undefined || value === null) {
+          throw new Error(data?.error?.message || data?.error || 'Withdrawal fee is unavailable');
+        }
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          throw new Error('Withdrawal fee is unavailable');
+        }
+        if (!cancelled) setFee(parsed);
+      } catch (err: any) {
+        if (!cancelled) setFeeError(err.message || 'Withdrawal fee is unavailable');
+      }
     };
-    setFee(fees[currency] || 0.01);
-  }, [currency]);
+
+    fetchFee();
+    return () => {
+      cancelled = true;
+    };
+  }, [currency, network]);
 
   const handleMax = () => {
+    if (fee === null) return;
     const maxAmount = Math.max(0, balance - fee);
     setAmount(maxAmount.toFixed(8));
   };
@@ -223,14 +248,21 @@ export function WithdrawModal({ currency = 'BTC', onClose }: WithdrawModalProps)
       <div className="mb-4 bg-gray-800 rounded-lg p-3">
         <div className="flex justify-between text-sm mb-1">
           <span className="text-gray-500">Network Fee</span>
-          <span className="text-white">{fee} {currency}</span>
+          <span className="text-white">
+            {fee === null ? (feeError ? 'Unavailable' : 'Loading…') : `${fee} ${currency}`}
+          </span>
         </div>
         <div className="flex justify-between text-sm">
           <span className="text-gray-500">You will receive</span>
           <span className="text-white">
-            {Math.max(0, (parseFloat(amount) || 0) - fee).toFixed(8)} {currency}
+            {fee === null
+              ? '—'
+              : `${Math.max(0, (parseFloat(amount) || 0) - fee).toFixed(8)} ${currency}`}
           </span>
         </div>
+        {feeError && (
+          <p className="mt-2 text-xs text-amber-500">{feeError}</p>
+        )}
       </div>
 
       {/* Error */}
@@ -243,7 +275,7 @@ export function WithdrawModal({ currency = 'BTC', onClose }: WithdrawModalProps)
       {/* Submit */}
       <button
         onClick={handleSubmit}
-        disabled={loading || !address || !amount || parseFloat(amount) <= fee}
+        disabled={loading || !address || !amount || fee === null || parseFloat(amount) <= fee}
         className="w-full bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-3 rounded-lg font-medium transition-colors"
       >
         {loading ? 'Processing...' : `Withdraw ${currency}`}

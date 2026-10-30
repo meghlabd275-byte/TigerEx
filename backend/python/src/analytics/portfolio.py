@@ -5,7 +5,7 @@ Portfolio optimization and rebalancing
 """
 
 from dataclasses import dataclass
-from typing import List, Dict
+from typing import List, Dict, Optional
 import json
 import math
 
@@ -136,32 +136,153 @@ class RiskParity:
         return {s: total * iv/total_inv_var for s, iv in inv_var.items()}
 
 class BlackLitterman:
-    def __init__(self, market_cov, omega=None):
+    """Black-Litterman posterior expected returns.
+
+    Implements the standard formula
+        E[R] = [(tau*Sigma)^-1 + P^T Omega^-1 P]^-1
+               * [(tau*Sigma)^-1 Pi + P^T Omega^-1 Q]
+    with pure-Python matrix algebra, so no numeric library is required.
+    """
+
+    def __init__(self, market_cov: List[List[float]], omega: Optional[List[List[float]]] = None,
+                 tau: float = 0.05):
+        if not market_cov or any(len(row) != len(market_cov) for row in market_cov):
+            raise ValueError("market_cov must be a non-empty square matrix")
         self.market_cov = market_cov
         self.omega = omega
-    
-    def posterior(self, views, tau=0.05):
-        # Simplified Black-Litterman
-        return self.market_cov
+        self.tau = tau
 
-def main():
-    pm = PortfolioManager(100000)
-    pm.add_asset("BTC", 2.0, 50000)
-    pm.add_asset("ETH", 20.0, 3000)
-    pm.add_asset("SOL", 500, 100)
-    
-    pm.set_target_weights({"BTC": 0.5, "ETH": 0.3, "SOL": 0.2})
-    
-    prices = {"BTC": 50000, "ETH": 3000, "SOL": 100}
-    rebalances = pm.rebalance(prices)
-    
+    @staticmethod
+    def _invert(matrix: List[List[float]]) -> List[List[float]]:
+        """Gauss-Jordan inversion. Raises when the matrix is singular."""
+        size = len(matrix)
+        augmented = [list(row) + [1.0 if i == j else 0.0 for j in range(size)]
+                     for i, row in enumerate(matrix)]
+
+        for col in range(size):
+            pivot_row = max(range(col, size), key=lambda r: abs(augmented[r][col]))
+            if abs(augmented[pivot_row][col]) < 1e-12:
+                raise ValueError("matrix is singular and cannot be inverted")
+            augmented[col], augmented[pivot_row] = augmented[pivot_row], augmented[col]
+
+            pivot = augmented[col][col]
+            augmented[col] = [value / pivot for value in augmented[col]]
+
+            for row in range(size):
+                if row == col:
+                    continue
+                factor = augmented[row][col]
+                if factor == 0:
+                    continue
+                augmented[row] = [value - factor * pivot_value
+                                  for value, pivot_value in zip(augmented[row], augmented[col])]
+
+        return [row[size:] for row in augmented]
+
+    @staticmethod
+    def _multiply(left: List[List[float]], right: List[List[float]]) -> List[List[float]]:
+        size = len(right[0])
+        return [[sum(left[i][k] * right[k][j] for k in range(len(right)))
+                 for j in range(size)] for i in range(len(left))]
+
+    @staticmethod
+    def _matvec(matrix: List[List[float]], vector: List[float]) -> List[float]:
+        return [sum(row[j] * vector[j] for j in range(len(vector))) for row in matrix]
+
+    def posterior(self, views: List[List[float]], view_returns: List[float],
+                  prior_returns: List[float]) -> List[float]:
+        """Return posterior expected returns.
+
+        @param views: P matrix, one row per view.
+        @param view_returns: Q vector, expected return per view.
+        @param prior_returns: Pi vector, equilibrium (prior) expected returns.
+        """
+        if not views or len(views) != len(view_returns):
+            raise ValueError("each view needs exactly one expected return")
+        n_assets = len(self.market_cov)
+        if len(prior_returns) != n_assets:
+            raise ValueError("prior_returns length must match market_cov")
+        if any(len(row) != n_assets for row in views):
+            raise ValueError("each view row must have one entry per asset")
+
+        tau_cov = [[self.tau * value for value in row] for row in self.market_cov]
+        tau_cov_inv = self._invert(tau_cov)
+
+        omega = self.omega
+        if omega is None:
+            # Heuristic from He & Litterman: diagonal Omega proportional to
+            # tau * P Sigma P^T.
+            projected = self._multiply(self._multiply(views, tau_cov),
+                                       [[views[i][j] for i in range(len(views))]
+                                        for j in range(n_assets)])
+            omega = [[projected[i][j] if i == j else 0.0 for j in range(len(views))]
+                     for i in range(len(views))]
+        omega_inv = self._invert(omega)
+
+        views_t = [[views[i][j] for i in range(len(views))] for j in range(n_assets)]
+        views_t_omega_inv = self._multiply(views_t, omega_inv)
+        # Build [tau*Sigma]^-1 + P^T Omega^-1 P
+        middle = [[0.0] * n_assets for _ in range(n_assets)]
+        for i in range(n_assets):
+            for j in range(n_assets):
+                total = tau_cov_inv[i][j]
+                for k in range(len(views)):
+                    total += views_t_omega_inv[i][k] * views[k][j]
+                middle[i][j] = total
+
+        right = self._matvec(tau_cov_inv, prior_returns)
+        scaled_views = self._matvec(views_t_omega_inv, view_returns)
+        right = [right[i] + scaled_views[i] for i in range(n_assets)]
+
+        return self._matvec(self._invert(middle), right)
+
+
+
+def _load_json(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """usage: portfolio.py <portfolio.json>
+
+    portfolio.json: {"capital": float,
+                     "holdings": {"BTC": {"quantity": float, "price": float}},
+                     "targets": {"BTC": float},
+                     "prices": {"BTC": float}}
+    """
+    import sys
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) != 1:
+        print("usage: portfolio.py <portfolio.json>", file=sys.stderr)
+        return 1
+
+    try:
+        config = _load_json(argv[0])
+        capital = float(config["capital"])
+        holdings = config["holdings"]
+        targets = config["targets"]
+        prices = config["prices"]
+
+        pm = PortfolioManager(capital)
+        for symbol, position in holdings.items():
+            pm.add_asset(symbol, float(position["quantity"]), float(position["price"]))
+        pm.set_target_weights(targets)
+        rebalances = pm.rebalance(prices)
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(f"cannot compute rebalance: {exc}", file=sys.stderr)
+        return 1
+
     print("Rebalances needed:")
-    for r in rebalances:
-        print(f"  {r.action.upper()} {r.symbol}: {r.quantity:.4f}")
-    
+    for item in rebalances:
+        print(f"  {item.action.upper()} {item.symbol}: {item.quantity:.4f}")
+
     stats = pm.get_portfolio_stats()
     print(f"\nPortfolio: {json.dumps(stats, indent=2)}")
     print(f"Diversification: {stats['diversification']:.2%}")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -70,7 +70,8 @@ interface BookmarkedDApp {
 export default function Web3Browser() {
   const [activeTab, setActiveTab] = useState<'home' | 'search' | 'dapps'>('home');
   const [url, setUrl] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [showUrlBar, setShowUrlBar] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [history, setHistory] = useState<BrowserHistory[]>([]);
@@ -111,16 +112,19 @@ export default function Web3Browser() {
     localStorage.setItem('tigerex_browser_bookmarks', JSON.stringify(newBookmarks));
   };
 
-  // Open URL
+  // Open URL in the user's browser. dApp pages set X-Frame-Options/CSP so they
+  // cannot be embedded, and a fake in-app load would misrepresent what happened.
   const openUrl = (url: string) => {
-    setIsLoading(true);
-    setUrl(url);
-    // Simulate loading
-    setTimeout(() => {
-      setIsLoading(false);
-      addToHistory(url, url);
-      setActiveTab('home');
-    }, 1500);
+    if (typeof window === 'undefined') return;
+    const target = url.startsWith('http') ? url : `https://${url}`;
+    const opened = window.open(target, '_blank', 'noopener,noreferrer');
+    if (!opened) {
+      setError('Popup blocked. Allow popups for this site to open dApps.');
+      return;
+    }
+    setError(null);
+    setUrl(target);
+    addToHistory(target, target);
   };
 
   // Filtered dApps
@@ -168,6 +172,12 @@ export default function Web3Browser() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4">
+        {error && (
+          <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
         {activeTab === 'home' && (
           <>
             {/* Quick Access */}

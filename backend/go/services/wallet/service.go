@@ -1217,15 +1217,18 @@ func (s *WalletService) Withdraw(ctx context.Context, req *WithdrawRequest) (*Tr
 		return nil, errors.New("insufficient balance")
 	}
 
-	// Get gas price
-	if _, err := s.blockchain.GetGasPrice(ctx, req.Blockchain); err != nil {
+	// Get the live gas price from the chain client. The fee must reflect the
+	// real network gas price, never a hardcoded constant.
+	gasPriceWei, err := s.blockchain.GetGasPrice(ctx, req.Blockchain)
+	if err != nil {
 		return nil, fmt.Errorf("failed to get gas price: %w", err)
 	}
 
-	// Calculate fee
-	feeFloat := s.calculateWithdrawalFee(req.Amount, req.Blockchain)
-	if req.Fee > 0 {
-		feeFloat = req.Fee
+	// Calculate fee. The fee is always derived server-side from the live gas
+	// price; a caller-supplied value must never lower it.
+	feeFloat, err := s.calculateWithdrawalFee(req.Amount, req.Blockchain, gasPriceWei)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate withdrawal fee: %w", err)
 	}
 
 	totalFloat := new(big.Float).Add(amountFloat, new(big.Float).SetFloat64(feeFloat))
@@ -1436,22 +1439,31 @@ func (s *WalletService) validateCosmosAddress(address string) error {
 // FEE CALCULATION
 // ============================================================================
 
-func (s *WalletService) calculateWithdrawalFee(amount float64, blockchain string) float64 {
+// calculateWithdrawalFee derives the withdrawal fee from the live gas price
+// supplied by the chain client. It fails closed when the chain is unknown, the
+// gas limit is unset, or the gas price is missing or non-positive, rather than
+// substituting a hardcoded estimate.
+func (s *WalletService) calculateWithdrawalFee(amount float64, blockchain, gasPriceWei string) (float64, error) {
 	blockchainInfo, ok := SupportedBlockchains[blockchain]
 	if !ok {
-		return 0
+		return 0, fmt.Errorf("unsupported blockchain %q", blockchain)
 	}
 
-	// For EVM chains, estimate gas
 	if blockchainInfo.Type == BlockchainTypeEVM {
-		gasLimit := blockchainInfo.GasLimit
-		// Assume 50 Gwei gas price
-		gasPrice := float64(50e9)
-		return float64(gasLimit) * gasPrice / 1e18
+		if blockchainInfo.GasLimit == 0 {
+			return 0, fmt.Errorf("gas limit is not configured for blockchain %q", blockchain)
+		}
+		gasPrice, ok := new(big.Float).SetString(gasPriceWei)
+		if !ok || gasPrice.Sign() <= 0 {
+			return 0, fmt.Errorf("invalid gas price %q for blockchain %q", gasPriceWei, blockchain)
+		}
+		wei := new(big.Float).Mul(new(big.Float).SetUint64(blockchainInfo.GasLimit), gasPrice)
+		fee, _ := new(big.Float).Quo(wei, big.NewFloat(1e18)).Float64()
+		return fee, nil
 	}
 
-	// For other chains, use percentage
-	return amount * s.config.WithdrawalFeePercent / 100
+	// For non-EVM chains, use the configured percentage fee.
+	return amount * s.config.WithdrawalFeePercent / 100, nil
 }
 
 // calculateUSDValue converts amountStr of token to USD.

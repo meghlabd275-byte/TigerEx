@@ -26,7 +26,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 // =============================================================================
@@ -352,7 +352,7 @@ pub struct TradingService {
 }
 
 impl TradingService {
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
         let service = Self {
             pairs: RwLock::new(HashMap::new()),
             orders: DashMap::new(),
@@ -365,12 +365,12 @@ impl TradingService {
         };
         
         // Initialize default trading pairs
-        service.init_default_pairs();
+        service.init_default_pairs().await;
         
         service
     }
     
-    fn init_default_pairs(&self) {
+    async fn init_default_pairs(&self) {
         let pairs = vec![
             TradingPair {
                 id: "btc-usdt".to_string(),
@@ -435,22 +435,20 @@ impl TradingService {
         ];
         
         // Add pairs and initialize order books
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            let mut pairs_map = self.pairs.write().await;
-            for pair in pairs {
-                let symbol = pair.symbol.clone();
-                pairs_map.insert(pair.id.clone(), pair);
-                
-                // Initialize empty order book
-                self.order_books.insert(symbol.clone(), OrderBook {
-                    symbol,
-                    bids: Vec::new(),
-                    asks: Vec::new(),
-                    last_update_id: 0,
-                });
-            }
-        });
+        let mut pairs_map = self.pairs.write().await;
+        for pair in pairs {
+            let pair_id = pair.id.clone();
+            let symbol = pair.symbol.clone();
+            pairs_map.insert(pair_id.clone(), pair);
+            // Initialize the empty order book under the canonical pair id
+            // so order placement and the order-book endpoint agree.
+            self.order_books.insert(pair_id, OrderBook {
+                symbol,
+                bids: Vec::new(),
+                asks: Vec::new(),
+                last_update_id: 0,
+            });
+        }
     }
     
     // =============================================================================
@@ -514,11 +512,16 @@ impl TradingService {
             order.stop_price = Some(stop);
         }
         
-        // For market orders, execute immediately
+        // A market order can only execute against real liquidity. Without a
+        // resting opposite-side order there is no price, so reject it rather
+        // than fabricate a fill.
         if request.order_type == OrderType::Market {
+            let fill_price = self.get_market_price(&pair.id).await.ok_or(
+                TradingError::OrderRejected("No market liquidity available for market order".into()),
+            )?;
             order.status = OrderStatus::Filled;
             order.filled_quantity = order.quantity;
-            order.average_fill_price = self.get_market_price(&pair.id).await;
+            order.average_fill_price = fill_price;
         }
         
         // Store order
@@ -620,7 +623,8 @@ impl TradingService {
     // =============================================================================
     
     pub async fn get_order_book(&self, symbol: &str) -> Result<OrderBook, TradingError> {
-        self.order_books.get(symbol)
+        let pair_id = symbol.replace('/', "-").to_lowercase();
+        self.order_books.get(&pair_id)
             .map(|ob| ob.clone().into())
             .ok_or(TradingError::PairNotFound)
     }
@@ -700,7 +704,8 @@ impl TradingService {
     // =============================================================================
     
     pub async fn get_ticker(&self, symbol: &str) -> Option<Ticker> {
-        self.tickers.get(symbol).map(|t| t.clone())
+        let pair_id = symbol.replace('/', "-").to_lowercase();
+        self.tickers.get(&pair_id).map(|t| t.clone())
     }
     
     pub async fn get_all_tickers(&self) -> Vec<Ticker> {
@@ -711,25 +716,19 @@ impl TradingService {
     // HELPERS
     // =============================================================================
     
-    async fn get_market_price(&self, pair_id: &str) -> f64 {
-        // Get best bid/ask from order book
+    async fn get_market_price(&self, pair_id: &str) -> Option<f64> {
+        // The only executable price is a real resting order on the opposite
+        // side. With no liquidity there is no price, so return None and let
+        // the caller fail closed instead of filling against an invented one.
         if let Some(ob) = self.order_books.get(pair_id) {
-            if !ob.bids.is_empty() {
-                return ob.bids[0].price;
+            if let Some(best) = ob.bids.first() {
+                return Some(best.price);
             }
-            if !ob.asks.is_empty() {
-                return ob.asks[0].price;
+            if let Some(best) = ob.asks.first() {
+                return Some(best.price);
             }
         }
-        
-        // Default prices for demo
-        match pair_id {
-            "btc-usdt" => 65000.0,
-            "eth-usdt" => 3500.0,
-            "bnb-usdt" => 580.0,
-            "sol-usdt" => 145.0,
-            _ => 1.0,
-        }
+        None
     }
 }
 
@@ -904,7 +903,7 @@ async fn main() -> Result<()> {
     info!("Starting TigerEx Trading Service");
     
     // Create trading service
-    let trading_service = Arc::new(TradingService::new());
+    let trading_service = Arc::new(TradingService::new().await);
     let state = AppState {
         trading_service: trading_service.clone(),
     };
@@ -933,4 +932,49 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
     
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn market_order() -> CreateOrderRequest {
+        CreateOrderRequest {
+            user_id: "u-1".to_string(),
+            symbol: "BTC/USDT".to_string(),
+            side: OrderSide::Buy,
+            order_type: OrderType::Market,
+            price: None,
+            stop_price: None,
+            quantity: 0.01,
+            time_in_force: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn market_order_without_liquidity_is_rejected() {
+        // The service must never fill a market order at an invented price.
+        let service = TradingService::new().await;
+        let result = service.create_order(market_order()).await;
+        assert!(matches!(result, Err(TradingError::OrderRejected(_))));
+    }
+
+    #[tokio::test]
+    async fn market_order_fills_at_best_resting_price() {
+        let service = TradingService::new().await;
+
+        // Seed real liquidity: a resting sell at 50000.
+        let mut maker = market_order();
+        maker.side = OrderSide::Sell;
+        maker.order_type = OrderType::Limit;
+        maker.price = Some(50_000.0);
+        maker.quantity = 1.0;
+        maker.user_id = "maker".to_string();
+        service.create_order(maker).await.expect("limit order accepted");
+
+        let taker = market_order();
+        let filled = service.create_order(taker).await.expect("market order fills");
+        assert_eq!(filled.status, OrderStatus::Filled);
+        assert_eq!(filled.average_fill_price, 50_000.0);
+    }
 }

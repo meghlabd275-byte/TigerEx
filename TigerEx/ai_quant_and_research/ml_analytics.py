@@ -661,53 +661,84 @@ class AnalyticsEngine:
 # ============================================================================
 # MAIN ENTRY POINT
 # ============================================================================
+def load_candles_csv(path: str) -> List[OHLCV]:
+    """Load OHLCV candles from a CSV file.
 
-def main():
-    """Example usage"""
+    Expected header: timestamp,open,high,low,close,volume (timestamp in ms).
+    No candle is invented: a missing file or malformed row raises.
+    """
+    import csv
+
+    candles: List[OHLCV] = []
+    with open(path, newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"timestamp", "open", "high", "low", "close", "volume"}
+        if reader.fieldnames is None or not required.issubset(set(reader.fieldnames)):
+            raise ValueError(f"candle file must contain columns {sorted(required)}")
+        for row in reader:
+            candles.append(
+                OHLCV(
+                    timestamp=int(row["timestamp"]),
+                    open=float(row["open"]),
+                    high=float(row["high"]),
+                    low=float(row["low"]),
+                    close=float(row["close"]),
+                    volume=float(row["volume"]),
+                )
+            )
+
+    if not candles:
+        raise ValueError(f"candle file {path} contained no rows")
+    return candles
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Analyse real candles supplied on the command line."""
+    import sys
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) != 2:
+        print("usage: ml_analytics.py <candles.csv> <SYMBOL>", file=sys.stderr)
+        return 1
+
+    csv_path, symbol = argv
     print("TigerEx ML Analytics Engine v1.0")
     print("=" * 40)
-    
+
+    try:
+        candles = load_candles_csv(csv_path)
+    except (OSError, ValueError) as exc:
+        print(f"cannot load candles: {exc}", file=sys.stderr)
+        return 1
+
     engine = AnalyticsEngine()
-    
-    # Generate sample data
-    base_price = 50000
-    for i in range(100):
-        change = (np.random.random() - 0.5) * 1000
-        price = base_price + change
-        candle = OHLCV(
-            timestamp=int(time.time() * 1000) + i * 60000,
-            open=base_price,
-            high=max(base_price, price),
-            low=min(base_price, price),
-            close=price,
-            volume=np.random.random() * 100,
-        )
-        engine.add_candle("BTC/USDT", candle)
-        base_price = price
-    
+    for candle in candles:
+        engine.add_candle(symbol, candle)
+
     # Analyze
-    print("\nAnalyzing BTC/USDT...\n")
-    analysis = engine.get_analysis("BTC/USDT")
-    
+    print(f"\nAnalyzing {symbol}...\n")
+    analysis = engine.get_analysis(symbol)
+
     print(f"Last Price: ${analysis['last_price']:.2f}")
     print(f"RSI: {analysis['indicators']['rsi']:.1f}")
     print(f"Trend: {analysis['indicators']['trend']}")
     print(f"Bollinger High: ${analysis['indicators']['bb_upper']:.2f}")
     print(f"Bollinger Low: ${analysis['indicators']['bb_lower']:.2f}")
-    
+
     if analysis.get("prediction", {}).get("next_price"):
         print(f"\nPredicted: ${analysis['prediction']['next_price']:.2f} ({analysis['prediction']['direction']})")
-    
+
     print(f"\nRisk: ${analysis['risk']['risk_per_share']:.2f} per share")
-    
+
     # Scan for signals
     print("\nScanning for signals...")
     signals = engine.scan_all_markets()
     for sig in signals:
         print(f"  {sig.symbol}: {sig.action.upper()} ({sig.confidence:.0%} confidence) - {sig.reason}")
-    
+
     print("\nAnalytics engine ready.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

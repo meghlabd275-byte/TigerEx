@@ -12,74 +12,93 @@ import (
 
 var (
 	ErrPositionNotFound = errors.New("position not found")
-	ErrStakeLocked = errors.New("position locked")
-	ErrInvalidAmount = errors.New("invalid amount")
+	ErrStakeLocked      = errors.New("position locked")
+	ErrInvalidAmount    = errors.New("invalid amount")
 )
 
 // Config holds staking configuration
 type Config struct {
-	MinStakeAmount float64
-	MaxStakeAmount float64
-	UnbondingPeriod int64 // seconds
-	EarlyUnbondFee float64 // percentage
+	MinStakeAmount  float64
+	MaxStakeAmount  float64
+	UnbondingPeriod int64   // seconds
+	EarlyUnbondFee  float64 // percentage
 }
 
 // StakingProduct represents a staking product
 type StakingProduct struct {
-	ID             string  `json:"id"`
-	Asset         string  `json:"asset"`
-	Name          string  `json:"name"`
-	APY           float64 `json:"apy"`
-	MinStake      float64 `json:"minStake"`
-	LockPeriod   int     `json:"lockPeriod"` // 0 for flexible
-	Status       string  `json:"status"`
-	StakeType    string  `json:"stakeType"` // "flexible", "locked", "defi"
-	Network      string  `json:"network"`
-	CompoundEnabled bool  `json:"compoundEnabled"`
+	ID              string  `json:"id"`
+	Asset           string  `json:"asset"`
+	Name            string  `json:"name"`
+	APY             float64 `json:"apy"`
+	MinStake        float64 `json:"minStake"`
+	LockPeriod      int     `json:"lockPeriod"` // 0 for flexible
+	Status          string  `json:"status"`
+	StakeType       string  `json:"stakeType"` // "flexible", "locked", "defi"
+	Network         string  `json:"network"`
+	CompoundEnabled bool    `json:"compoundEnabled"`
 }
 
 // StakingPosition represents a staking position
 type StakingPosition struct {
-	ID             string  `json:"id"`
-	UserID         string  `json:"userId"`
-	ProductID     string  `json:"productId"`
-	Asset         string  `json:"asset"`
-	Amount        float64 `json:"amount"`
-	APY           float64 `json:"apy"`
-	RewardsAccrued float64 `json:"rewardsAccrued"`
-	RewardsClaimed float64 `json:"rewardsClaimed"`
-	CompoundEnabled bool   `json:"compoundEnabled"`
-	LockEndTime   int64   `json:"lockEndTime,omitempty"`
-	Status        string  `json:"status"` // "active", "unbonding", "completed"
-	StartedAt     int64   `json:"startedAt"`
-	UpdatedAt     int64   `json:"updatedAt"`
+	ID              string  `json:"id"`
+	UserID          string  `json:"userId"`
+	ProductID       string  `json:"productId"`
+	Asset           string  `json:"asset"`
+	Amount          float64 `json:"amount"`
+	APY             float64 `json:"apy"`
+	RewardsAccrued  float64 `json:"rewardsAccrued"`
+	RewardsClaimed  float64 `json:"rewardsClaimed"`
+	CompoundEnabled bool    `json:"compoundEnabled"`
+	LockEndTime     int64   `json:"lockEndTime,omitempty"`
+	Status          string  `json:"status"` // "active", "unbonding", "completed"
+	StartedAt       int64   `json:"startedAt"`
+	UpdatedAt       int64   `json:"updatedAt"`
 }
 
 // UnbondingRequest represents an unbonding request
 type UnbondingRequest struct {
-	ID            string  `json:"id"`
-	PositionID    string  `json:"positionId"`
-	Amount        float64 `json:"amount"`
-	CompleteTime  int64   `json:"completeTime"`
-	Status        string  `json:"status"` // "pending", "completed"
-	CreatedAt     int64   `json:"createdAt"`
+	ID           string  `json:"id"`
+	PositionID   string  `json:"positionId"`
+	Amount       float64 `json:"amount"`
+	CompleteTime int64   `json:"completeTime"`
+	Status       string  `json:"status"` // "pending", "completed"
+	CreatedAt    int64   `json:"createdAt"`
 }
 
 // Service handles staking operations
 type Service struct {
-	config    Config
-	products map[string]*StakingProduct
-	positions map[string]*StakingPosition
-	unbonding map[string][]*UnbondingRequest
+	config     Config
+	products   map[string]*StakingProduct
+	positions  map[string]*StakingPosition
+	unbonding  map[string][]*UnbondingRequest
+	validators map[string][]*ValidatorInfo
 }
 
 func NewService(config Config) *Service {
 	return &Service{
-		config: config,
-		products: make(map[string]*StakingProduct),
-		positions: make(map[string]*StakingPosition),
-		unbonding: make(map[string][]*UnbondingRequest),
+		config:     config,
+		products:   make(map[string]*StakingProduct),
+		positions:  make(map[string]*StakingPosition),
+		unbonding:  make(map[string][]*UnbondingRequest),
+		validators: make(map[string][]*ValidatorInfo),
 	}
+}
+
+// RegisterValidator records an operator-verified validator for a network. The
+// service never invents validators: until the operator registers real ones,
+// GetValidators reports none for that network.
+func (s *Service) RegisterValidator(network string, v *ValidatorInfo) error {
+	if network == "" {
+		return errors.New("network must not be empty")
+	}
+	if v == nil || v.ValidatorAddress == "" {
+		return errors.New("validator address must not be empty")
+	}
+	if v.Commission < 0 || v.Commission > 100 {
+		return errors.New("validator commission must be within [0, 100]")
+	}
+	s.validators[network] = append(s.validators[network], v)
+	return nil
 }
 
 // InitializeDefaultProducts creates default staking products
@@ -175,19 +194,19 @@ func (s *Service) Stake(ctx context.Context, userID, productID string, amount fl
 	}
 
 	position := &StakingPosition{
-		ID: uuid.New().String(),
-		UserID: userID,
-		ProductID: productID,
-		Asset: product.Asset,
-		Amount: amount,
-		APY: product.APY,
-		RewardsAccrued: 0,
-		RewardsClaimed: 0,
+		ID:              uuid.New().String(),
+		UserID:          userID,
+		ProductID:       productID,
+		Asset:           product.Asset,
+		Amount:          amount,
+		APY:             product.APY,
+		RewardsAccrued:  0,
+		RewardsClaimed:  0,
 		CompoundEnabled: compound,
-		LockEndTime: lockEndTime,
-		Status: "active",
-		StartedAt: now,
-		UpdatedAt: now,
+		LockEndTime:     lockEndTime,
+		Status:          "active",
+		StartedAt:       now,
+		UpdatedAt:       now,
 	}
 
 	s.positions[position.ID] = position
@@ -220,12 +239,12 @@ func (s *Service) Unstake(ctx context.Context, userID, positionID string, amount
 
 	// Create unbonding request
 	unbonding := &UnbondingRequest{
-		ID: uuid.New().String(),
-		PositionID: positionID,
-		Amount: amount,
+		ID:           uuid.New().String(),
+		PositionID:   positionID,
+		Amount:       amount,
 		CompleteTime: api.Now() + s.config.UnbondingPeriod,
-		Status: "pending",
-		CreatedAt: api.Now(),
+		Status:       "pending",
+		CreatedAt:    api.Now(),
 	}
 
 	// Update position
@@ -292,7 +311,7 @@ func (s *Service) CalculateRewards(position *StakingPosition) float64 {
 		return 0
 	}
 
-	elapsed := float64(api.Now() - position.StartedAt) / float64(24*3600*1000) // days
+	elapsed := float64(api.Now()-position.StartedAt) / float64(24*3600*1000) // days
 	rewards := position.Amount * position.APY / 100 * elapsed / 365
 
 	return rewards
@@ -366,30 +385,20 @@ func (s *Service) GetTotalStaked(asset string) float64 {
 // GetValidatorInfo returns validator delegation info
 type ValidatorInfo struct {
 	ValidatorAddress string  `json:"validatorAddress"`
-	Commission     float64 `json:"commission"`
-	Uptime        float64 `json:"uptime"`
-	Delegators    int     `json:"delegators"`
-	TotalStaked  float64 `json:"totalStaked"`
+	Commission       float64 `json:"commission"`
+	Uptime           float64 `json:"uptime"`
+	Delegators       int     `json:"delegators"`
+	TotalStaked      float64 `json:"totalStaked"`
 }
 
-// GetValidators returns available validators
+// GetValidators returns the operator-registered validators for a network. It
+// returns nil when none are registered rather than fabricating a set.
 func (s *Service) GetValidators(network string) []*ValidatorInfo {
-	// Placeholder - in production would query actual validators
-	validators := []*ValidatorInfo{
-		{
-			ValidatorAddress: "val1.tigerex.io",
-			Commission: 5.0,
-			Uptime: 99.9,
-			Delegators: 10000,
-			TotalStaked: 1000000,
-		},
-		{
-			ValidatorAddress: "val2.tigerex.io",
-			Commission: 7.0,
-			Uptime: 99.5,
-			Delegators: 8000,
-			TotalStaked: 800000,
-		},
+	registered := s.validators[network]
+	if len(registered) == 0 {
+		return nil
 	}
-	return validators
+	out := make([]*ValidatorInfo, len(registered))
+	copy(out, registered)
+	return out
 }

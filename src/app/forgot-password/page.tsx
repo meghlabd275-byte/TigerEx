@@ -41,6 +41,7 @@ export default function ForgotPasswordPage() {
   // Account info
   const [accountVerified, setAccountVerified] = useState(false);
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
+  const [totpCode, setTotpCode] = useState('');
   
   // OTP timer
   const [otpTimer, setOtpTimer] = useState(0);
@@ -143,13 +144,13 @@ export default function ForgotPasswordPage() {
         return;
       }
       
-      // If 2FA enabled, require 2FA verification
-      if (twoFactorEnabled) {
-        // For now, proceed to reset step (in production, require 2FA)
-        setStep('reset');
-      } else {
-        setStep('reset');
+      // When a second factor is enrolled, require it before the reset step.
+      if (twoFactorEnabled && totpCode.trim().length !== 6) {
+        setError('Enter the 6-digit code from your authenticator app');
+        return;
       }
+
+      setStep('reset');
     } catch (err) {
       setError('Verification failed. Please try again.');
     } finally {
@@ -212,6 +213,7 @@ export default function ForgotPasswordPage() {
           emailOrPhone: identity,
           code: otp,
           newPassword,
+          totpCode: totpCode.trim() || undefined,
         }),
       });
       
@@ -385,6 +387,27 @@ export default function ForgotPasswordPage() {
                     onChange={setOtp}
                     error={error}
                   />
+
+                  {twoFactorEnabled && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Authenticator Code
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        value={totpCode}
+                        onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="6-digit code"
+                        className="w-full px-4 py-3 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white tracking-widest text-center"
+                      />
+                      <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                        This account has two-factor authentication enabled.
+                      </p>
+                    </div>
+                  )}
 
                   {error && (
                     <div className="flex items-center p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">

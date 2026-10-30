@@ -4,6 +4,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { useApiResource, toArray } from '@/lib/useApiResource';
 import {
   LayoutDashboard, Users, Wallet, Shield, BarChart3, Settings,
   Bell, Search, Filter, Download, Upload, RefreshCw, ChevronDown,
@@ -103,25 +104,51 @@ interface MarketConfig {
 // =============================================================================
 
 const DashboardOverview: React.FC = () => {
-  const [stats, setStats] = useState<AdminStats>({
-    totalUsers: 0,
-    activeUsers: 0,
-    verifiedUsers: 0,
-    totalVolume24h: 0,
-    totalTrades24h: 0,
-    totalFees24h: 0,
-    openOrders: 0,
-    pendingWithdrawals: 0,
-    pendingKYC: 0,
-    openAlerts: 0,
-  });
+  // Every figure below comes from the authenticated admin API. When it is
+  // unavailable the dashboard shows zeros/an empty table rather than invented
+  // metrics, and the error is surfaced instead of hidden.
+  const statsResource = useApiResource<Partial<AdminStats>>('/api/admin/stats');
+  const auditResource = useApiResource<unknown>('/api/admin/audit?limit=10');
+  const loading = statsResource.loading;
 
-  const [loading, setLoading] = useState(true);
+  const stats: AdminStats = {
+    totalUsers: statsResource.data?.totalUsers ?? 0,
+    activeUsers: statsResource.data?.activeUsers ?? 0,
+    verifiedUsers: statsResource.data?.verifiedUsers ?? 0,
+    totalVolume24h: statsResource.data?.totalVolume24h ?? 0,
+    totalTrades24h: statsResource.data?.totalTrades24h ?? 0,
+    totalFees24h: statsResource.data?.totalFees24h ?? 0,
+    openOrders: statsResource.data?.openOrders ?? 0,
+    pendingWithdrawals: statsResource.data?.pendingWithdrawals ?? 0,
+    pendingKYC: statsResource.data?.pendingKYC ?? 0,
+    openAlerts: statsResource.data?.openAlerts ?? 0,
+  };
 
-  useEffect(() => {
-    // Dashboard metrics are unavailable until the authenticated admin API is connected.
-    setLoading(false);
-  }, []);
+  const activityRows = useMemo(() => {
+    interface AuditEntry {
+      id?: string;
+      adminId?: string;
+      action?: string;
+      resourceType?: string;
+      resourceId?: string;
+      details?: unknown;
+      createdAt?: number;
+    }
+    return toArray<AuditEntry>(auditResource.data).map((entry) => ({
+      time: entry.createdAt
+        ? new Date(entry.createdAt).toLocaleString()
+        : '—',
+      event: entry.action || entry.resourceType || '—',
+      user: entry.adminId || '—',
+      details:
+        entry.details === undefined || entry.details === null
+          ? entry.resourceId || ''
+          : typeof entry.details === 'string'
+            ? entry.details
+            : JSON.stringify(entry.details),
+      status: entry.resourceId ? 'success' : 'info',
+    }));
+  }, [auditResource.data]);
 
   const StatCard: React.FC<{
     title: string;
@@ -283,13 +310,7 @@ const DashboardOverview: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-              {[
-                { time: '2 min ago', event: 'User KYC Approved', user: 'user@example.com', details: 'Intermediate verification', status: 'success' },
-                { time: '5 min ago', event: 'Large Withdrawal', user: 'user2@example.com', details: '$50,000 USDT', status: 'pending' },
-                { time: '8 min ago', event: 'AML Alert Triggered', user: 'user3@example.com', details: 'Unusual trading pattern', status: 'warning' },
-                { time: '12 min ago', event: 'New User Registered', user: 'user4@example.com', details: 'From USA', status: 'info' },
-                { time: '15 min ago', event: 'Market Paused', user: 'System', details: 'BTC/USDT maintenance', status: 'warning' },
-              ].map((activity, i) => (
+              {activityRows.map((activity, i) => (
                 <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
                   <td className="py-3 px-4 text-gray-500">{activity.time}</td>
                   <td className="py-3 px-4 font-medium text-gray-900 dark:text-white">{activity.event}</td>
@@ -325,10 +346,11 @@ const UserManagement: React.FC = () => {
   const [filter, setFilter] = useState('all');
   const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null);
 
+  const usersResource = useApiResource<unknown>('/api/admin/users?limit=100');
+
   useEffect(() => {
-    // Do not fabricate customer records. Load these from the authenticated admin API.
-    setUsers([]);
-  }, []);
+    setUsers(toArray<UserRecord>(usersResource.data));
+  }, [usersResource.data]);
 
   const filteredUsers = useMemo(() => {
     return users.filter(user => {
@@ -538,13 +560,11 @@ const KYCReview: React.FC = () => {
   const [kycRecords, setKycRecords] = useState<KYCRecord[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<KYCRecord | null>(null);
 
+  const kycResource = useApiResource<unknown>('/api/admin/kyc?limit=100');
+
   useEffect(() => {
-    setKycRecords([
-      { kycId: 'kyc_001', userId: 'usr_003', userEmail: 'mike.hodler@example.com', level: 1, status: 'pending', submittedAt: '2024-06-01T09:00:00Z' },
-      { kycId: 'kyc_002', userId: 'usr_004', userEmail: 'lisa.investor@example.com', level: 2, status: 'in_review', submittedAt: '2024-05-30T14:30:00Z', reviewerId: 'admin_01' },
-      { kycId: 'kyc_003', userId: 'usr_005', userEmail: 'alex.trade@example.com', level: 1, status: 'pending', submittedAt: '2024-06-02T11:20:00Z' },
-    ]);
-  }, []);
+    setKycRecords(toArray<KYCRecord>(kycResource.data));
+  }, [kycResource.data]);
 
   return (
     <div className="space-y-6">
@@ -683,13 +703,11 @@ const KYCReview: React.FC = () => {
 const ComplianceAlerts: React.FC = () => {
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
 
+  const alertsResource = useApiResource<unknown>('/api/admin/audit?limit=100');
+
   useEffect(() => {
-    setAlerts([
-      { alertId: 'alert_001', userId: 'usr_010', userEmail: 'suspicious@example.com', type: 'large_deposit', severity: 'high', status: 'open', description: 'Deposited $100,000 USDT from new address', createdAt: '2024-06-03T10:30:00Z' },
-      { alertId: 'alert_002', userId: 'usr_011', userEmail: 'trader22@example.com', type: 'unusual_trading', severity: 'medium', status: 'investigating', description: 'Unusual trading pattern detected - high frequency wash trading', createdAt: '2024-06-03T09:15:00Z', assignedTo: 'compliance_01' },
-      { alertId: 'alert_003', userId: 'usr_012', userEmail: 'newuser@example.com', type: 'kyc_mismatch', severity: 'low', status: 'open', description: 'Name on document does not match account name', createdAt: '2024-06-02T16:45:00Z' },
-    ]);
-  }, []);
+    setAlerts(toArray<AlertRecord>(alertsResource.data));
+  }, [alertsResource.data]);
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -787,15 +805,11 @@ const ComplianceAlerts: React.FC = () => {
 const MarketManagement: React.FC = () => {
   const [markets, setMarkets] = useState<MarketConfig[]>([]);
 
+  const marketsResource = useApiResource<unknown>('/api/admin/markets');
+
   useEffect(() => {
-    setMarkets([
-      { symbol: 'BTC/USDT', baseAsset: 'BTC', quoteAsset: 'USDT', status: 'trading', makerFee: 0.001, takerFee: 0.002, minPrice: 0.01, maxPrice: 1000000, tickSize: 0.01, lotSize: 0.00001, minQty: 0.00001, maxQty: 9000 },
-      { symbol: 'ETH/USDT', baseAsset: 'ETH', quoteAsset: 'USDT', status: 'trading', makerFee: 0.001, takerFee: 0.002, minPrice: 0.01, maxPrice: 100000, tickSize: 0.01, lotSize: 0.0001, minQty: 0.0001, maxQty: 9000 },
-      { symbol: 'BNB/USDT', baseAsset: 'BNB', quoteAsset: 'USDT', status: 'trading', makerFee: 0.001, takerFee: 0.002, minPrice: 0.01, maxPrice: 10000, tickSize: 0.01, lotSize: 0.001, minQty: 0.001, maxQty: 9000 },
-      { symbol: 'SOL/USDT', baseAsset: 'SOL', quoteAsset: 'USDT', status: 'trading', makerFee: 0.001, takerFee: 0.002, minPrice: 0.01, maxPrice: 10000, tickSize: 0.01, lotSize: 0.01, minQty: 0.01, maxQty: 9000 },
-      { symbol: 'XRP/USDT', baseAsset: 'XRP', quoteAsset: 'USDT', status: 'halt', makerFee: 0.001, takerFee: 0.002, minPrice: 0.0001, maxPrice: 100, tickSize: 0.0001, lotSize: 0.1, minQty: 0.1, maxQty: 9000000 },
-    ]);
-  }, []);
+    setMarkets(toArray<MarketConfig>(marketsResource.data));
+  }, [marketsResource.data]);
 
   return (
     <div className="space-y-6">

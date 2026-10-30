@@ -983,9 +983,30 @@ impl AuthService {
             .is_ok())
     }
 
-    /// A fixed Argon2 hash used to equalise timing for unknown accounts.
+    /// A real Argon2id hash used to equalise timing for unknown accounts.
+    ///
+    /// The hash is computed once from OS entropy at first use. A literal hash
+    /// string would be a fabricated value that no password verifies against;
+    /// generating it here means the unknown-account path performs exactly the
+    /// same work as the known-account path.
     fn dummy_hash(&self) -> String {
-        "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHR2YWx1ZQ$8s0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m".to_string()
+        static DUMMY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        DUMMY
+            .get_or_init(|| {
+                let random: [u8; 32] = {
+                    let mut buf = [0u8; 32];
+                    OsRng.fill_bytes(&mut buf);
+                    buf
+                };
+                let salt = SaltString::generate(&mut OsRng);
+                // A 32-byte random value no caller can supply is hashed so the
+                // verification work matches a real credential check.
+                Argon2::default()
+                    .hash_password(&random, &salt)
+                    .expect("hashing OS entropy with Argon2id cannot fail")
+                    .to_string()
+            })
+            .clone()
     }
 
     // -------------------------------------------------------------------------

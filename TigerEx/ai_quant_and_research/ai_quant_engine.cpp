@@ -19,6 +19,9 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
 
 // ============================================================================
 // CONFIGURATION
@@ -173,6 +176,12 @@ public:
         }
     }
 
+    std::vector<MarketData> getCandles(const std::string& symbol) {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        return marketDataStore[symbol];
+    }
+
+
     std::vector<double> getPrices(const std::string& symbol) {
         std::lock_guard<std::mutex> lock(dataMutex);
         std::vector<double> prices;
@@ -303,32 +312,54 @@ public:
     }
 
     BacktestResult run(const std::map<std::string, std::vector<double>>& priceData) {
-        BacktestResult result;
+        BacktestResult result{};
         std::vector<double> returns;
-        
+
+        double equity = initialCapital;
+        double peakEquity = initialCapital;
+        double maxDrawdown = 0.0;
+        int wins = 0;
+        int closedTrades = 0;
+        double grossProfit = 0.0;
+        double grossLoss = 0.0;
+
         for (const auto& signal : signals) {
             auto it = priceData.find(signal.symbol);
-            if (it != priceData.end() && !it->second.empty()) {
-                executeSignal(signal, it->second.back());
+            if (it == priceData.end() || it->second.empty()) continue;
+            if (signal.direction != "BUY" && signal.direction != "SELL") continue;
+
+            double price = it->second.back();
+            if (price <= 0.0) continue;
+
+            double notional = currentCapital * 0.1;  // 10% of available capital
+            double fee = notional * commission;
+            double pnl = signal.direction == "BUY"
+                ? notional * signal.strength - fee
+                : notional * signal.strength * -1.0 - fee;
+
+            currentCapital += pnl;
+            equity = currentCapital;
+            returns.push_back(pnl / initialCapital);
+
+            if (pnl > 0) {
+                wins++;
+                grossProfit += pnl;
+            } else {
+                grossLoss += std::abs(pnl);
             }
+            closedTrades++;
+
+            peakEquity = std::max(peakEquity, equity);
+            maxDrawdown = std::max(maxDrawdown, (peakEquity - equity) / peakEquity);
         }
-        
-        // Calculate portfolio value
-        double finalValue = currentCapital;
-        for (const auto& pos : positions) {
-            auto it = priceData.find(pos.symbol);
-            if (it != priceData.end() && !it->second.empty()) {
-                finalValue += pos.quantity * it->second.back();
-            }
-        }
-        
-        result.total_return = (finalValue - initialCapital) / initialCapital;
+
+        result.total_return = (equity - initialCapital) / initialCapital;
         result.sharpe_ratio = calculateSharpe(returns);
-        result.max_drawdown = calculateMaxDrawdown(returns);
-        result.win_rate = calculateWinRate(returns);
-        result.total_trades = signals.size();
-        result.profit_factor = calculateProfitFactor(returns);
-        
+        result.max_drawdown = maxDrawdown;
+        result.win_rate = closedTrades > 0 ? static_cast<double>(wins) / closedTrades : 0.0;
+        result.total_trades = closedTrades;
+        result.profit_factor = grossLoss > 0.0 ? grossProfit / grossLoss : (grossProfit > 0.0 ? 999.0 : 0.0);
+
         return result;
     }
 
@@ -385,57 +416,99 @@ private:
 
 class MLPredictor {
 private:
-    std::vector<std::vector<double>> weights;
-    std::vector<double> biases;
+    std::vector<std::vector<double>> hiddenWeights;  // [hiddenSize][inputSize]
+    std::vector<double> hiddenBiases;                // [hiddenSize]
+    std::vector<double> outputWeights;               // [hiddenSize]
+    double outputBias;
     int inputSize;
     int hiddenSize;
-    int outputSize;
     double learningRate;
+    bool trained;
 
-public:
-    MLPredictor(int input, int hidden, int output, double lr = 0.001)
-        : inputSize(input), hiddenSize(hidden), outputSize(output), learningRate(lr) {
-        // Initialize weights randomly
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::normal_distribution<> d(0, 0.1);
-        
-        weights.resize(hidden);
-        for (auto& w : weights) {
-            w.resize(input);
-            for (auto& v : w) v = d(gen);
-        }
-        
-        biases.resize(hidden);
-        for (auto& b : biases) b = d(gen);
-    }
+    static double sigmoid(double x) { return 1.0 / (1.0 + std::exp(-x)); }
 
-    std::vector<double> predict(const std::vector<double>& input) {
-        if (input.size() != inputSize) return {};
-        
-        // Forward pass (simplified neural network)
+    std::vector<double> forwardHidden(const std::vector<double>& input) const {
         std::vector<double> hidden(hiddenSize);
         for (int i = 0; i < hiddenSize; i++) {
-            hidden[i] = biases[i];
+            double sum = hiddenBiases[i];
             for (int j = 0; j < inputSize; j++) {
-                hidden[i] += weights[i][j] * input[j];
+                sum += hiddenWeights[i][j] * input[j];
             }
-            hidden[i] = std::tanh(hidden[i]);  // Activation
+            hidden[i] = std::tanh(sum);
         }
-        
-        // Output layer (simple linear)
-        std::vector<double> output(1);
-        output[0] = 0;
-        for (int i = 0; i < hiddenSize; i++) {
-            output[0] += hidden[i] * weights[0][i];
-        }
-        
-        return output;
+        return hidden;
     }
 
-    void train(const std::vector<double>& input, const std::vector<double>& target) {
-        // Simplified training (gradient descent would go here)
-        // This is a placeholder for actual backpropagation
+public:
+    MLPredictor(int input, int hidden, double lr = 0.01, unsigned seed = 42)
+        : outputBias(0.0), inputSize(input), hiddenSize(hidden),
+          learningRate(lr), trained(false) {
+        if (input <= 0 || hidden <= 0) {
+            throw std::invalid_argument("MLPredictor dimensions must be positive");
+        }
+
+        // Seeded initialisation keeps runs reproducible; the weights are then
+        // fitted by backpropagation rather than left at their random values.
+        std::mt19937 gen(seed);
+        std::normal_distribution<double> dist(0.0, 0.1);
+
+        hiddenWeights.assign(hiddenSize, std::vector<double>(inputSize));
+        for (auto& row : hiddenWeights) {
+            for (auto& v : row) v = dist(gen);
+        }
+        hiddenBiases.resize(hiddenSize);
+        for (auto& b : hiddenBiases) b = dist(gen);
+        outputWeights.resize(hiddenSize);
+        for (auto& w : outputWeights) w = dist(gen);
+    }
+
+    bool isTrained() const { return trained; }
+
+    std::vector<double> predict(const std::vector<double>& input) const {
+        if (!trained) {
+            throw std::runtime_error("MLPredictor::predict called before train");
+        }
+        if (input.size() != static_cast<size_t>(inputSize)) {
+            throw std::invalid_argument("MLPredictor::predict input size mismatch");
+        }
+
+        std::vector<double> hidden = forwardHidden(input);
+        double output = outputBias;
+        for (int i = 0; i < hiddenSize; i++) {
+            output += hidden[i] * outputWeights[i];
+        }
+        return {sigmoid(output)};
+    }
+
+    // One gradient-descent step on mean-squared error.
+    double train(const std::vector<double>& input, double target) {
+        if (input.size() != static_cast<size_t>(inputSize)) {
+            throw std::invalid_argument("MLPredictor::train input size mismatch");
+        }
+        if (target < 0.0 || target > 1.0) {
+            throw std::invalid_argument("MLPredictor::train target must be in [0, 1]");
+        }
+
+        std::vector<double> hidden = forwardHidden(input);
+        double logit = outputBias;
+        for (int i = 0; i < hiddenSize; i++) logit += hidden[i] * outputWeights[i];
+        double output = sigmoid(logit);
+
+        double error = output - target;
+        double outputGrad = error * output * (1.0 - output);
+
+        for (int i = 0; i < hiddenSize; i++) {
+            double hiddenGrad = outputGrad * outputWeights[i] * (1.0 - hidden[i] * hidden[i]);
+            for (int j = 0; j < inputSize; j++) {
+                hiddenWeights[i][j] -= learningRate * hiddenGrad * input[j];
+            }
+            hiddenBiases[i] -= learningRate * hiddenGrad;
+            outputWeights[i] -= learningRate * outputGrad * hidden[i];
+        }
+        outputBias -= learningRate * outputGrad;
+        trained = true;
+
+        return error * error;
     }
 };
 
@@ -452,6 +525,13 @@ private:
 public:
     QuantStrategy(double capital) 
         : backtester(capital), mlModel(10, 20, 1) {}
+
+    void loadMarketData(const std::vector<MarketData>& candles) {
+        for (const auto& candle : candles) {
+            analyzer.addMarketData("TGR/RUSD", candle);
+        }
+    }
+
 
     Signal generateSignal(const std::string& symbol) {
         // Combine multiple indicators
@@ -499,23 +579,73 @@ public:
 // MAIN
 // ============================================================================
 
-int main() {
-    std::cout << "TigerEx AI Quantitative Research Engine" << std::endl;
-    std::cout << "=====================================" << std::endl;
-    
-    // Create strategy
-    QuantStrategy strategy(100000.0);
-    
-    // Generate signals for multiple symbols
-    std::vector<std::string> symbols = {"BTC/USDT", "ETH/USDT", "SOL/USDT"};
-    
-    for (const auto& symbol : symbols) {
-        Signal signal = strategy.generateSignal(symbol);
-        std::cout << "\n" << symbol << " Signal:" << std::endl;
-        std::cout << "  Direction: " << signal.direction << std::endl;
-        std::cout << "  Strength: " << signal.strength << std::endl;
-        std::cout << "  Confidence: " << signal.confidence << std::endl;
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "usage: ai_quant_engine <candles.csv>" << std::endl;
+        return 1;
     }
-    
+
+    std::ifstream input(argv[1]);
+    if (!input.is_open()) {
+        std::cerr << "cannot open candle file: " << argv[1] << std::endl;
+        return 1;
+    }
+
+    std::string headerLine;
+    if (!std::getline(input, headerLine)) {
+        std::cerr << "candle file is empty" << std::endl;
+        return 1;
+    }
+    if (headerLine.find("close") == std::string::npos) {
+        std::cerr << "candle file must contain a close column" << std::endl;
+        return 1;
+    }
+
+    TechnicalAnalyzer analyzer;
+    std::string line;
+    size_t rowCount = 0;
+    while (std::getline(input, line)) {
+        if (line.empty()) continue;
+        std::stringstream ss(line);
+        std::string field;
+        std::vector<std::string> fields;
+        while (std::getline(ss, field, ',')) fields.push_back(field);
+        if (fields.size() < 6) {
+            std::cerr << "malformed candle row: " << line << std::endl;
+            return 1;
+        }
+
+        try {
+            MarketData candle;
+            candle.timestamp = std::stoll(fields[0]);
+            candle.open = std::stod(fields[1]);
+            candle.high = std::stod(fields[2]);
+            candle.low = std::stod(fields[3]);
+            candle.close = std::stod(fields[4]);
+            candle.volume = std::stod(fields[5]);
+            analyzer.addMarketData("TGR/RUSD", candle);
+            rowCount++;
+        } catch (const std::exception&) {
+            std::cerr << "non-numeric candle row: " << line << std::endl;
+            return 1;
+        }
+    }
+
+    if (rowCount < 30) {
+        std::cerr << "at least 30 candles are required, got " << rowCount << std::endl;
+        return 1;
+    }
+
+    QuantStrategy strategy(100000.0);
+    strategy.loadMarketData(analyzer.getCandles("TGR/RUSD"));
+
+    Signal signal = strategy.generateSignal("TGR/RUSD");
+    std::cout << "TigerEx AI Quantitative Research Engine" << std::endl;
+    std::cout << "Bars loaded: " << rowCount << std::endl;
+    std::cout << "TGR/RUSD signal:" << std::endl;
+    std::cout << "  Direction: " << signal.direction << std::endl;
+    std::cout << "  Strength: " << signal.strength << std::endl;
+    std::cout << "  Confidence: " << signal.confidence << std::endl;
+
     return 0;
 }

@@ -19,7 +19,7 @@ import time
 import uuid
 import hashlib
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Protocol
 from enum import Enum
 from datetime import datetime, timedelta
 
@@ -59,6 +59,44 @@ class RiskLevel(Enum):
     CRITICAL = "critical"
 
 
+class ProviderNotConfiguredError(RuntimeError):
+    """Raised when a verification or screening provider is not configured.
+
+    TigerEx never fabricates a document, biometric, liveness or sanctions
+    result. When the operator has not supplied a provider, the check fails
+    closed instead of returning a pass.
+    """
+
+
+class DocumentVerifier(Protocol):
+    """OCR / document-authenticity provider (self-built or self-hosted)."""
+
+    def verify(self, doc: "Document") -> Dict:
+        """Return {"verified": bool, "score": float, "reason": str}."""
+
+
+class FaceMatcher(Protocol):
+    """Face-match provider comparing a selfie against a document portrait."""
+
+    def match(self, self_image: str, doc_image: str) -> Dict:
+        """Return {"match_score": float, "reason": str}."""
+
+
+class LivenessVerifier(Protocol):
+    """Presentation-attack / liveness provider."""
+
+    def verify(self, video_data: str) -> Dict:
+        """Return {"passed": bool, "score": float, "reason": str}."""
+
+
+class SanctionsScreener(Protocol):
+    """Sanctions, PEP and adverse-media screening provider."""
+
+    def screen(self, user_id: str, name: "PersonName", nationality: str) -> Dict:
+        """Return {"pep": bool, "sanctions": bool, "adverse_media": bool,
+        "risk_score": float, "details": str}."""
+
+
 # ============================================================================
 # KYC ENTITIES
 # ============================================================================
@@ -67,8 +105,8 @@ class RiskLevel(Enum):
 class PersonName:
     """Legal name"""
     first_name: str
-    middle_name: Optional[str] = None
     last_name: str
+    middle_name: Optional[str] = None
     suffix: Optional[str] = None
 
 
@@ -76,11 +114,11 @@ class PersonName:
 class Address:
     """Residential address"""
     street1: str
-    street2: Optional[str] = None
     city: str
     state: str
     postal_code: str
     country: str
+    street2: Optional[str] = None
 
 
 @dataclass
@@ -106,31 +144,31 @@ class KYCAplication:
     tier_requested: KYCTier
     status: VerificationStatus
     risk_level: RiskLevel
-    
+
     # Personal info
     name: Optional[PersonName] = None
     date_of_birth: Optional[str] = None
     nationality: Optional[str] = None
-    
+
     # Documents
     documents: List[Document] = field(default_factory=list)
-    
+
     # Verification results
     id_verified: bool = False
     address_verified: bool = False
     face_match_score: float = 0
     liveness_passed: bool = False
-    
+
     # AML screening
     aml_passed: bool = False
     pep_hit: bool = False
     sanctions_hit: bool = False
     adverse_media_hit: bool = False
-    
+
     # Review
     reviewer_id: Optional[str] = None
     review_notes: Optional[str] = None
-    
+
     # Timestamps
     created_at: int = field(default_factory=lambda: int(time.time()))
     updated_at: int = field(default_factory=lambda: int(time.time()))
@@ -143,11 +181,24 @@ class KYCAplication:
 
 class KYCService:
     """Complete KYC verification system"""
-    
-    def __init__(self):
+
+    def __init__(
+        self,
+        document_verifier: Optional[DocumentVerifier] = None,
+        face_matcher: Optional[FaceMatcher] = None,
+        liveness_verifier: Optional[LivenessVerifier] = None,
+        screener: Optional[SanctionsScreener] = None,
+    ):
         self.applications: Dict[str, KYCAplication] = {}
         self.users: Dict[str, Dict] = {}
-        
+
+        # Providers are supplied by the operator. Until each one is installed,
+        # the matching verification step fails closed.
+        self.document_verifier = document_verifier
+        self.face_matcher = face_matcher
+        self.liveness_verifier = liveness_verifier
+        self.screener = screener
+
         # Requirements per tier
         self.tier_requirements = {
             KYCTier.BASIC: {
@@ -168,11 +219,11 @@ class KYCService:
                 "pep_screened": True,
             },
         }
-    
+
     # ---------------------------------------------------------------------------
     # APPLICATION MANAGEMENT
     # ---------------------------------------------------------------------------
-    
+
     def create_application(
         self,
         user_id: str,
@@ -180,9 +231,9 @@ class KYCService:
         personal_info: Dict
     ) -> str:
         """Create new KYC application"""
-        
+
         tier_enum = KYCTier(tier)
-        
+
         application = KYCAplication(
             application_id=str(uuid.uuid4()),
             user_id=user_id,
@@ -190,7 +241,7 @@ class KYCService:
             status=VerificationStatus.PENDING,
             risk_level=RiskLevel.LOW,
         )
-        
+
         # Add personal info
         if "name" in personal_info:
             name = personal_info["name"]
@@ -198,25 +249,25 @@ class KYCService:
                 first_name=name.get("first", ""),
                 last_name=name.get("last", "")
             )
-        
+
         if "dob" in personal_info:
             application.date_of_birth = personal_info["dob"]
-        
+
         if "nationality" in personal_info:
             application.nationality = personal_info["nationality"]
-        
+
         # Set expiry (3 years for approved)
         application.expires_at = application.created_at + (3 * 365 * 86400)
-        
+
         self.applications[application.application_id] = application
         self.users[user_id] = {
             "tier": tier,
             "application_id": application.application_id,
             "status": "pending"
         }
-        
+
         return application.application_id
-    
+
     def submit_document(
         self,
         application_id: str,
@@ -224,11 +275,11 @@ class KYCService:
         doc_data: Dict
     ) -> bool:
         """Submit identity document"""
-        
+
         app = self.applications.get(application_id)
         if not app:
             return False
-        
+
         doc = Document(
             doc_id=str(uuid.uuid4()),
             user_id=app.user_id,
@@ -240,151 +291,166 @@ class KYCService:
             back_image=doc_data.get("back_image"),
             self_image=doc_data.get("self_image"),
         )
-        
+
         app.documents.append(doc)
         app.status = VerificationStatus.SUBMITTED
         app.updated_at = int(time.time())
-        
+
         return True
-    
+
     def verify_document(self, application_id: str, doc_id: str) -> Dict:
-        """Simulate document verification (would integrate with OCR/API)"""
-        
+        """Verify a document through the configured OCR/authenticity provider.
+
+        Fails closed: without a provider the document is never marked verified.
+        """
+
         app = self.applications.get(application_id)
         if not app:
             return {"error": "Application not found"}
-        
+
         doc = next((d for d in app.documents if d.doc_id == doc_id), None)
         if not doc:
             return {"error": "Document not found"}
-        
-        # In production: integrate with document verification service
-        # Here: simple validation
+
         if len(doc.number) < 4:
             return {"error": "Invalid document number"}
-        
+
+        if self.document_verifier is None:
+            raise ProviderNotConfiguredError(
+                "document verification provider is not configured; refusing to mark the document verified"
+            )
+
+        result = self.document_verifier.verify(doc)
+        if not result.get("verified"):
+            doc.verified = False
+            return {"status": "rejected", "score": result.get("score", 0), "reason": result.get("reason", "")}
+
         doc.verified = True
         app.id_verified = True
         app.status = VerificationStatus.IN_REVIEW
-        
-        return {"status": "verified", "score": 0.95}
-    
+        return {"status": "verified", "score": result.get("score", 0), "reason": result.get("reason", "")}
+
     def verify_face_match(
         self,
         application_id: str,
         self_image: str,
         doc_image: str
     ) -> Dict:
-        """Verify facial match between selfie and document photo"""
-        
+        """Compare a selfie against the document portrait via the configured
+        face-match provider. Fails closed when no provider is installed."""
+
         app = self.applications.get(application_id)
         if not app:
             return {"error": "Application not found"}
-        
-        # In production: use face recognition API
-        # Here: simulate (would be ~80-95%)
-        match_score = 0.85
+
+        if self.face_matcher is None:
+            raise ProviderNotConfiguredError(
+                "face-match provider is not configured; refusing to report a match score"
+            )
+
+        result = self.face_matcher.match(self_image, doc_image)
+        match_score = float(result.get("match_score", 0))
         app.face_match_score = match_score
-        
+
         if match_score >= 0.8:
             return {"status": "match", "score": match_score}
-        
+
         return {"status": "no_match", "score": match_score}
-    
+
     def check_liveness(self, application_id: str, video_data: str) -> Dict:
-        """Verify liveness (not a photo/video)"""
-        
+        """Verify liveness through the configured presentation-attack provider.
+        Fails closed when no provider is installed."""
+
         app = self.applications.get(application_id)
         if not app:
             return {"error": "Application not found"}
-        
-        # In production: liveness detection
-        # Here: simple pass
-        app.liveness_passed = True
-        
-        return {"passed": True}
-    
+
+        if self.liveness_verifier is None:
+            raise ProviderNotConfiguredError(
+                "liveness provider is not configured; refusing to report a liveness pass"
+            )
+
+        result = self.liveness_verifier.verify(video_data)
+        app.liveness_passed = bool(result.get("passed", False))
+        return {
+            "passed": app.liveness_passed,
+            "score": result.get("score", 0),
+            "reason": result.get("reason", ""),
+        }
+
     # ---------------------------------------------------------------------------
     # AML/SCREENING
     # ---------------------------------------------------------------------------
-    
+
     def screen_aml(
         self,
         user_id: str,
         name: PersonName,
         nationality: str
     ) -> Dict:
-        """Perform AML screening"""
-        
-        # Would integrate with:
-        # - OFAC SDN list
-        # - EU sanction lists
-        # - Interpol wanted persons
-        # - Wolfsberg group
-        # - LexisNexis, Dow Jones, etc.
-        
-        # Simplified result
-        hits = {
-            "pep": False,
-            "sanctions": False,
-            "adverse_media": False,
-            "overall_risk": "low"
-        }
-        
-        # Would check against lists here
-        # Return results based on matches
-        
-        return hits
-    
+        """Screen against sanctions, PEP and adverse-media lists via the
+        configured screener. Fails closed when no screener is installed."""
+
+        if self.screener is None:
+            raise ProviderNotConfiguredError(
+                "sanctions/PEP screener is not configured; refusing to report a screening result"
+            )
+
+        return self.screener.screen(user_id, name, nationality)
+
     def screen_pep(
         self,
         name: PersonName,
         nationality: str
     ) -> Dict:
-        """Screen against PEP databases"""
-        
-        # PEP = Politically Exposed Person
-        # Would check:
-        # - Heads of state/government
-        # - Senior politicians
-        # - Military officers
-        # - Judicial officials
-        
+        """Screen against PEP databases via the configured screener. Fails
+        closed when no screener is installed."""
+
+        if self.screener is None:
+            raise ProviderNotConfiguredError(
+                "PEP screener is not configured; refusing to report a screening result"
+            )
+
+        result = self.screener.screen("", name, nationality)
         return {
-            "pep_found": False,
-            "relationship": None,
-            "risk_level": "low",
+            "pep_found": bool(result.get("pep", False)),
+            "relationship": result.get("relationship"),
+            "risk_level": result.get("risk_level", "unknown"),
         }
-    
+
     def complete_aml_screening(self, application_id: str) -> bool:
-        """Complete AML screening for application"""
-        
+        """Complete AML screening for an application through the configured
+        screener. Fails closed when no screener is installed."""
+
         app = self.applications.get(application_id)
         if not app or not app.name:
             return False
-        
-        # Screen
+
         aml_result = self.screen_aml(app.user_id, app.name, app.nationality)
-        
-        app.aml_passed = True
-        app.pep_hit = aml_result.get("pep", False)
-        app.sanctions_hit = aml_result.get("sanctions", False)
-        app.adverse_media_hit = aml_result.get("adverse_media", False)
-        
-        # Set risk level
-        if aml_result.get("sanctions") or aml_result.get("pep"):
+
+        app.pep_hit = bool(aml_result.get("pep", False))
+        app.sanctions_hit = bool(aml_result.get("sanctions", False))
+        app.adverse_media_hit = bool(aml_result.get("adverse_media", False))
+
+        # A hit blocks the application; only a clean screen passes.
+        if app.sanctions_hit:
             app.risk_level = RiskLevel.CRITICAL
-        elif aml_result.get("adverse_media"):
-            app.risk_level = RiskLevel.HIGH
-        elif aml_result.get("pep"):
+            app.aml_passed = False
+        elif app.pep_hit:
             app.risk_level = RiskLevel.MEDIUM
-        
-        return True
-    
+            app.aml_passed = False
+        elif app.adverse_media_hit:
+            app.risk_level = RiskLevel.HIGH
+            app.aml_passed = False
+        else:
+            app.aml_passed = True
+
+        return app.aml_passed
+
     # ---------------------------------------------------------------------------
     # REVIEW & APPROVAL
     # ---------------------------------------------------------------------------
-    
+
     def review_application(
         self,
         application_id: str,
@@ -393,16 +459,16 @@ class KYCService:
         notes: str = ""
     ) -> Dict:
         """Manual review by compliance officer"""
-        
+
         app = self.applications.get(application_id)
         if not app:
             return {"error": "Application not found"}
-        
+
         if approve:
             app.status = VerificationStatus.APPROVED
             app.reviewer_id = reviewer_id
             app.review_notes = notes
-            
+
             # Update user tier
             if app.user_id in self.users:
                 self.users[app.user_id]["tier"] = app.tier_requested.value
@@ -411,40 +477,40 @@ class KYCService:
             app.status = VerificationStatus.REJECTED
             app.reviewer_id = reviewer_id
             app.review_notes = notes
-        
+
         app.updated_at = int(time.time())
-        
+
         return {"status": app.status.value}
-    
+
     def auto_approve_if_eligible(self, application_id: str) -> bool:
         """Auto-approve if all requirements met"""
-        
+
         app = self.applications.get(application_id)
         if not app:
             return False
-        
+
         requirements = self.tier_requirements.get(app.tier_requested, {})
-        
+
         # Check basic requirements
         if requirements.get("id_verified") and not app.id_verified:
             return False
-        
+
         if requirements.get("face_match_score", 0) > app.face_match_score:
             return False
-        
+
         if app.status == VerificationStatus.REJECTED:
             return False
-        
+
         # Approve
         app.status = VerificationStatus.APPROVED
         app.updated_at = int(time.time())
-        
+
         return True
-    
+
     # ---------------------------------------------------------------------------
     # TRAVEL RULE (FATF)
     # ---------------------------------------------------------------------------
-    
+
     def get_travel_rule_data(
         self,
         from_user_id: str,
@@ -453,43 +519,48 @@ class KYCService:
         currency: str
     ) -> Dict:
         """Generate Travel Rule data for large transactions"""
-        
+
         from_user = self.users.get(from_user_id)
         to_user = self.users.get(to_user_id)
-        
+
         if amount < 3000:  # Threshold varies by jurisdiction
             return {}  # Below threshold
-        
-        # Travel Rule requires:
-        # - Originator name/account
-        # - Beneficiary name/account
-        # - Amount/currency
-        
+
+        if not from_user or not to_user:
+            raise ValueError("both originator and beneficiary must exist for a travel-rule record")
+
+        originator_name = from_user.get("legal_name")
+        beneficiary_name = to_user.get("legal_name")
+        if not originator_name or not beneficiary_name:
+            raise ValueError(
+                "travel-rule record requires verified legal names; refusing to emit placeholder identity data"
+            )
+
         return {
             "originator": {
-                "name": "User Name",  # Would get from profile
+                "name": originator_name,
                 "accountNumber": from_user_id,
-                "geographicAddress": "Country",
+                "geographicAddress": from_user.get("country", ""),
             },
             "beneficiary": {
-                "name": "Beneficiary Name",
+                "name": beneficiary_name,
                 "accountNumber": to_user_id,
             },
             "amount": amount,
             "currency": currency,
         }
-    
+
     # ---------------------------------------------------------------------------
     # UTILITIES
     # ---------------------------------------------------------------------------
-    
+
     def get_status(self, user_id: str) -> Dict:
         """Get user's KYC status"""
         return self.users.get(user_id, {
             "tier": 0,
             "status": "not_started"
         })
-    
+
     def get_limits(self, tier: KYCTier) -> Dict:
         """Get tier limits"""
         limits = {
@@ -499,18 +570,18 @@ class KYCService:
             KYCTier.ENHANCED: {"deposit": None, "withdrawal": None},
         }
         return limits.get(tier, {"deposit": 0, "withdrawal": 0})
-    
+
     def expire_old_applications(self) -> int:
         """Expire old pending applications"""
         current_time = int(time.time())
         expired = 0
-        
+
         for app in self.applications.values():
             if app.status == VerificationStatus.PENDING:
                 if current_time - app.created_at > 30 * 86400:  # 30 days
                     app.status = VerificationStatus.EXPIRED
                     expired += 1
-        
+
         return expired
 
 
@@ -521,46 +592,11 @@ class KYCService:
 def main():
     print("TigerEx KYC Service v1.0")
     print("=" * 30)
-    
-    kyc = KYCService()
-    
-    # Create application
-    app_id = kyc.create_application(
-        user_id="user123",
-        tier=2,
-        personal_info={
-            "name": {"first": "John", "last": "Doe"},
-            "dob": "1990-01-01",
-            "nationality": "US"
-        }
+    print(
+        "This service performs no verification on its own. Configure a "
+        "document verifier, face matcher, liveness verifier and sanctions "
+        "screener; until then every verification step fails closed."
     )
-    print(f"Application: {app_id}")
-    
-    # Submit document
-    doc = {
-        "type": "passport",
-        "country": "US",
-        "number": "AB123456",
-        "expiry": "2030-01-01"
-    }
-    
-    doc_id = doc.get("number")
-    kyc.submit_document(app_id, DocumentType.PASSPORT, doc)
-    print("Document submitted")
-    
-    # Verify
-    result = kyc.verify_document(app_id, doc_id)
-    print(f"Verification: {result}")
-    
-    # Face match
-    match = kyc.verify_face_match(app_id, "selfie.jpg", "doc.jpg")
-    print(f"Face match: {match}")
-    
-    # Status
-    status = kyc.get_status("user123")
-    print(f"KYC Status: {status}")
-    
-    print("\nKYC service ready.")
 
 
 if __name__ == "__main__":

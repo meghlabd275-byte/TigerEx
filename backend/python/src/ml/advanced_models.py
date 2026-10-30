@@ -392,31 +392,42 @@ class LiquidityAnalyzer:
         depth_bids: List[Tuple[float, float]],
         depth_asks: List[Tuple[float, float]]
     ) -> Dict:
-        """Estimate slippage for a given trade size"""
-        
+        """Estimate slippage for a given trade size from real order-book depth.
+
+        Fails closed when the supplied book cannot fill the order: slippage
+        beyond the visible depth cannot be computed, so inventing a number
+        here would misprice the trade.
+        """
+        if size <= 0:
+            raise ValueError("size must be positive")
+        if mid_price <= 0:
+            raise ValueError("mid_price must be positive")
+
         levels = depth_bids if side == 'buy' else depth_asks
+        if not levels:
+            raise ValueError(f"no order-book depth supplied for side {side!r}")
+
         remaining_size = size
         total_cost = 0.0
-        
+
         for price, available_qty in levels:
+            if price <= 0 or available_qty <= 0:
+                raise ValueError("order-book levels need positive price and quantity")
             fill_qty = min(remaining_size, available_qty)
             total_cost += fill_qty * price
             remaining_size -= fill_qty
-            
+
             if remaining_size <= 0:
                 break
-                
+
         if remaining_size > 0:
-            # Will move to next price level
-            return {
-                'estimated_slippage': 0.05,  # Conservative 5%
-                'will_move_market': True,
-                'warning': 'Large size may impact market'
-            }
-        
+            raise ValueError(
+                f"order-book depth is insufficient: {remaining_size} of {size} unfilled"
+            )
+
         filled_avg_price = total_cost / size
         slippage = abs(filled_avg_price - mid_price) / mid_price
-        
+
         return {
             'estimated_slippage': slippage,
             'will_move_market': slippage > 0.001,

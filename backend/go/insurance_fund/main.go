@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 )
@@ -38,16 +39,14 @@ type FundEvent struct {
 	CreatedAt int64   `json:"createdAt"`
 }
 
+// NewInsuranceFund returns an empty fund. Reserves are funded from real
+// revenue or capital transfers through Deposit; the fund is never seeded with
+// placeholder balances that would overstate its coverage.
 func NewInsuranceFund() *InsuranceFund {
 	return &InsuranceFund{
-		Reserves: map[string]float64{
-			"USDT": 100000000, // $100M initial
-			"BTC":  1000,      // ~$50M
-			"ETH":  10000,     // ~$30M
-		},
-		TotalValueUSD: 180000000,
-		Claims:        []Claim{},
-		Events:        []FundEvent{},
+		Reserves: map[string]float64{},
+		Claims:   []Claim{},
+		Events:   []FundEvent{},
 	}
 }
 
@@ -61,7 +60,17 @@ func (f *InsuranceFund) GetReserves() map[string]float64 {
 	return reserves
 }
 
-func (f *InsuranceFund) Deposit(asset string, amount float64) {
+// Deposit credits reserves from real revenue or capital. It rejects an empty
+// asset and any non-finite or non-positive amount so a malformed call cannot
+// silently inflate the fund's coverage.
+func (f *InsuranceFund) Deposit(asset string, amount float64) error {
+	if asset == "" {
+		return fmt.Errorf("asset must not be empty")
+	}
+	if math.IsNaN(amount) || math.IsInf(amount, 0) || amount <= 0 {
+		return fmt.Errorf("deposit amount %v must be finite and positive", amount)
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -77,6 +86,7 @@ func (f *InsuranceFund) Deposit(asset string, amount float64) {
 		Asset:     asset,
 		CreatedAt: time.Now().UnixMilli(),
 	})
+	return nil
 }
 
 func (f *InsuranceFund) SubmitClaim(userID, asset string, amount float64, reason string) string {
@@ -163,22 +173,7 @@ func (f *InsuranceFund) GetStats() map[string]interface{} {
 
 func main() {
 	fmt.Println("TigerEx Insurance Fund v1.0.0")
-
+	fmt.Println("Reserves are funded from real revenue via Deposit; the fund starts empty.")
 	fund := NewInsuranceFund()
-
-	// Simulate deposits
-	fund.Deposit("USDT", 10000000) // Add $10M
-	fund.Deposit("BTC", 100)       // Add 100 BTC
-
-	// Submit claim
-	claimID := fund.SubmitClaim("user123", "USDT", 50000, "Hacked account")
-	fmt.Printf("Claim submitted: %s\n", claimID)
-
-	// Approve and process
-	fund.ApproveClaim(claimID, "admin")
-	fund.ProcessClaim(claimID)
-
-	// Get stats
-	stats := fund.GetStats()
-	fmt.Printf("Fund Stats: %+v\n", stats)
+	fmt.Printf("Initial reserves: %+v\n", fund.GetReserves())
 }

@@ -5,8 +5,10 @@ package main
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -204,7 +206,7 @@ type FIXSession struct {
 	LastReceivedSeqNum int
 	IsLoggedOn         bool
 	Username           string
-	Password           string
+	PasswordHash       [32]byte
 	IsInitiator        bool
 	Timestamps         time.Time
 	StartTime          time.Time
@@ -215,12 +217,73 @@ type FIXSession struct {
 	OutBytes           uint64
 }
 
-// FIX Server
+// FIXOrder is the server-side state of a live order. Every execution report
+// and cancel response is derived from this record rather than being invented.
+type FIXOrder struct {
+	OrderID   string
+	ClOrdID   string
+	Symbol    string
+	Side      string
+	OrderQty  float64
+	Price     float64
+	CumQty    float64
+	LeavesQty float64
+	AvgPx     float64
+	OrdStatus string
+}
+
+// FIXServer holds session state, live orders and the credential store used to
+// authenticate logons.
 type FIXServer struct {
-	Sessions   map[string]*FIXSession
-	SessionsMu sync.RWMutex
-	MsgCounter uint64
-	StartTime  time.Time
+	Sessions    map[string]*FIXSession
+	SessionsMu  sync.RWMutex
+	Orders      map[string]*FIXOrder
+	ClOrdIndex  map[string]string
+	OrdersMu    sync.RWMutex
+	Credentials map[string][32]byte
+	MsgCounter  uint64
+	StartTime   time.Time
+}
+
+// RegisterCredential records the sender's password hash for logon checks.
+func (s *FIXServer) RegisterCredential(sender, password string) error {
+	if sender == "" {
+		return fmt.Errorf("sender CompID is required")
+	}
+	if password == "" {
+		return fmt.Errorf("password must not be empty")
+	}
+	s.SessionsMu.Lock()
+	defer s.SessionsMu.Unlock()
+	s.Credentials[sender] = hashSecret(password)
+	return nil
+}
+
+// LookupOrder returns the stored order for an order id or client order id.
+func (s *FIXServer) LookupOrder(orderID, clOrdID string) (*FIXOrder, bool) {
+	s.OrdersMu.RLock()
+	defer s.OrdersMu.RUnlock()
+
+	if orderID != "" {
+		if order, ok := s.Orders[orderID]; ok {
+			return order, true
+		}
+	}
+	if clOrdID != "" {
+		if id, ok := s.ClOrdIndex[clOrdID]; ok {
+			if order, ok := s.Orders[id]; ok {
+				return order, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func (s *FIXServer) storeOrder(order *FIXOrder) {
+	s.OrdersMu.Lock()
+	defer s.OrdersMu.Unlock()
+	s.Orders[order.OrderID] = order
+	s.ClOrdIndex[order.ClOrdID] = order.OrderID
 }
 
 // ============================================================================
@@ -306,7 +369,7 @@ func (msg *FIXMessage) ToString() string {
 	if msg.BeginString != "" {
 		fields = append(fields, fmt.Sprintf("8=%s", msg.BeginString))
 	}
-	fields = append(fields, fmt.Sprintf("9=%d", 0)) // Body length placeholder
+	// Tag 9 is written as 0 here and replaced with the real body length below.
 
 	fields = append(fields, fmt.Sprintf("35=%s", msg.MsgType))
 	fields = append(fields, fmt.Sprintf("49=%s", msg.SenderCompID))
@@ -375,20 +438,31 @@ func (msg *FIXMessage) ToString() string {
 	fields[1] = fmt.Sprintf("9=%d", bodyLength)
 
 	// Calculate checksum
-	checksum := calculateChecksum(strings.Join(fields, "\x01") + "\x01")
+	checksum := CalculateChecksum(strings.Join(fields, "\x01") + "\x01")
 	fields = append(fields, fmt.Sprintf("10=%s", checksum))
 
 	return strings.Join(fields, "\x01") + "\x01"
 }
 
-// Calculate FIX checksum
-func calculateChecksum(data string) string {
-	hash := sha256.Sum256([]byte(data))
+// CalculateChecksum returns the FIX checksum: the sum of every byte in the
+// message (including the trailing SOH) modulo 256, zero-padded to three digits.
+func CalculateChecksum(data string) string {
 	sum := 0
-	for _, b := range hash {
-		sum += int(b)
+	for i := 0; i < len(data); i++ {
+		sum += int(data[i])
 	}
 	return fmt.Sprintf("%03d", sum%256)
+}
+
+// hashSecret returns the SHA-256 of a secret so credentials can be compared
+// without retaining the plaintext.
+func hashSecret(secret string) [32]byte {
+	return sha256.Sum256([]byte(secret))
+}
+
+// secretsEqual compares two secrets in constant time.
+func secretsEqual(a, b [32]byte) bool {
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
 // ============================================================================
@@ -397,12 +471,18 @@ func calculateChecksum(data string) string {
 
 func NewFIXServer() *FIXServer {
 	return &FIXServer{
-		Sessions:  make(map[string]*FIXSession),
-		StartTime: time.Now(),
+		Sessions:    make(map[string]*FIXSession),
+		Orders:      make(map[string]*FIXOrder),
+		ClOrdIndex:  make(map[string]string),
+		Credentials: make(map[string][32]byte),
+		StartTime:   time.Now(),
 	}
 }
 
-func (s *FIXServer) CreateSession(fixVersion, sender, target, username, password string, heartBtInt int) *FIXSession {
+func (s *FIXServer) CreateSession(fixVersion, sender, target, username string, heartBtInt int) *FIXSession {
+	if heartBtInt <= 0 {
+		heartBtInt = 30
+	}
 	session := &FIXSession{
 		SessionID:     fmt.Sprintf("%s->%s", sender, target),
 		FIXVersion:    fixVersion,
@@ -411,7 +491,6 @@ func (s *FIXServer) CreateSession(fixVersion, sender, target, username, password
 		HeartBtInt:    heartBtInt,
 		NextMsgSeqNum: 1,
 		Username:      username,
-		Password:      password,
 		IsInitiator:   true,
 		Timestamps:    time.Now(),
 		StartTime:     time.Now(),
@@ -426,8 +505,25 @@ func (s *FIXServer) CreateSession(fixVersion, sender, target, username, password
 
 // Handle logon
 func (s *FIXServer) HandleLogon(session *FIXSession, msg *FIXMessage) (*FIXMessage, error) {
-	// Validate credentials
-	if session.Password != "" && msg.CustomFields["96"] != session.Password {
+	if msg.SenderCompID != "" {
+		session.SenderCompID = msg.SenderCompID
+	}
+	if msg.TargetCompID != "" {
+		session.TargetCompID = msg.TargetCompID
+	}
+	if msg.MsgSeqNum > 0 {
+		session.NextExpectedSeqNum = msg.MsgSeqNum + 1
+	}
+
+	// Authenticate against the configured credential store. An unknown sender
+	// or a mismatched secret is rejected; there is no default account.
+	s.SessionsMu.RLock()
+	expected, known := s.Credentials[session.SenderCompID]
+	s.SessionsMu.RUnlock()
+	if !known {
+		return s.CreateReject(msg, "Unknown sender CompID", 1), nil
+	}
+	if !secretsEqual(expected, hashSecret(msg.CustomFields["96"])) {
 		return s.CreateReject(msg, "Invalid credentials", 1), nil
 	}
 
@@ -467,6 +563,20 @@ func (s *FIXServer) HandleNewOrder(session *FIXSession, msg *FIXMessage) (*FIXMe
 		return s.CreateReject(msg, "Invalid quantity", 1), nil
 	}
 
+	order := &FIXOrder{
+		OrderID:   orderID,
+		ClOrdID:   msg.ClOrdID,
+		Symbol:    msg.Symbol,
+		Side:      msg.Side,
+		OrderQty:  msg.OrderQty,
+		Price:     msg.Price,
+		CumQty:    0,
+		LeavesQty: msg.OrderQty,
+		AvgPx:     0,
+		OrdStatus: OrdStatusNew,
+	}
+	s.storeOrder(order)
+
 	// Create execution report (New)
 	execReport := &FIXMessage{
 		BeginString:  session.FIXVersion,
@@ -500,21 +610,59 @@ func (s *FIXServer) HandleOrderCancel(session *FIXSession, msg *FIXMessage) (*FI
 		return s.CreateReject(msg, "Not logged on", 1), nil
 	}
 
-	// Create cancel reject (assuming success for demo)
-	cancelReject := &FIXMessage{
+	orderID := msg.OrderID
+	if orderID == "" {
+		orderID = msg.CustomFields["37"]
+	}
+	origClOrdID := msg.OrigClOrdID
+	if origClOrdID == "" {
+		origClOrdID = msg.ClOrdID
+	}
+
+	order, found := s.LookupOrder(orderID, origClOrdID)
+	if !found {
+		return &FIXMessage{
+			BeginString:  session.FIXVersion,
+			MsgType:      MsgTypeOrderCancelReject,
+			SenderCompID: session.TargetCompID,
+			TargetCompID: session.SenderCompID,
+			MsgSeqNum:    int(atomic.AddUint64(&s.MsgCounter, 1)),
+			SendingTime:  time.Now(),
+			OrderID:      orderID,
+			ClOrdID:      msg.ClOrdID,
+			OrigClOrdID:  origClOrdID,
+			OrdStatus:    OrdStatusRejected,
+			OrdRejReason: "5", // unknown order
+			Text:         "Unknown order",
+		}, nil
+	}
+
+	s.OrdersMu.Lock()
+	order.LeavesQty = 0
+	order.OrdStatus = OrdStatusCancelled
+	s.OrdersMu.Unlock()
+
+	return &FIXMessage{
 		BeginString:  session.FIXVersion,
-		MsgType:      MsgTypeOrderCancelReject,
+		MsgType:      MsgTypeExecutionReport,
 		SenderCompID: session.TargetCompID,
 		TargetCompID: session.SenderCompID,
 		MsgSeqNum:    int(atomic.AddUint64(&s.MsgCounter, 1)),
 		SendingTime:  time.Now(),
-		OrderID:      msg.CustomFields["37"],
-		ClOrdID:      msg.CustomFields["41"],
-		OrigClOrdID:  msg.ClOrdID,
+		OrderID:      order.OrderID,
+		ClOrdID:      order.ClOrdID,
+		OrigClOrdID:  origClOrdID,
+		ExecID:       fmt.Sprintf("EXEC-%d", time.Now().UnixNano()),
+		ExecType:     ExecTypeCanceled,
 		OrdStatus:    OrdStatusCancelled,
-	}
-
-	return cancelReject, nil
+		Side:         order.Side,
+		OrderQty:     order.OrderQty,
+		Price:        order.Price,
+		Symbol:       order.Symbol,
+		CumQty:       order.CumQty,
+		LeavesQty:    0,
+		AvgPx:        order.AvgPx,
+	}, nil
 }
 
 // Handle order status request
@@ -523,27 +671,36 @@ func (s *FIXServer) HandleOrderStatus(session *FIXSession, msg *FIXMessage) (*FI
 		return s.CreateReject(msg, "Not logged on", 1), nil
 	}
 
-	// Create execution report with current status
-	execReport := &FIXMessage{
+	orderID := msg.OrderID
+	if orderID == "" {
+		orderID = msg.CustomFields["37"]
+	}
+
+	order, found := s.LookupOrder(orderID, msg.ClOrdID)
+	if !found {
+		return s.CreateReject(msg, "Unknown order", 5), nil
+	}
+
+	return &FIXMessage{
 		BeginString:  session.FIXVersion,
 		MsgType:      MsgTypeExecutionReport,
 		SenderCompID: session.TargetCompID,
 		TargetCompID: session.SenderCompID,
 		MsgSeqNum:    int(atomic.AddUint64(&s.MsgCounter, 1)),
 		SendingTime:  time.Now(),
-		OrderID:      msg.CustomFields["37"],
-		ClOrdID:      msg.ClOrdID,
+		OrderID:      order.OrderID,
+		ClOrdID:      order.ClOrdID,
 		ExecID:       fmt.Sprintf("EXEC-%d", time.Now().UnixNano()),
 		ExecType:     ExecTypeNew,
-		OrdStatus:    OrdStatusNew,
-		Side:         msg.Side,
-		OrderQty:     1.0,
-		LeavesQty:    1.0,
-		CumQty:       0,
-		AvgPx:        0,
-	}
-
-	return execReport, nil
+		OrdStatus:    order.OrdStatus,
+		Side:         order.Side,
+		Symbol:       order.Symbol,
+		OrderQty:     order.OrderQty,
+		Price:        order.Price,
+		LeavesQty:    order.LeavesQty,
+		CumQty:       order.CumQty,
+		AvgPx:        order.AvgPx,
+	}, nil
 }
 
 // Create reject message
@@ -693,13 +850,20 @@ func setupFIXAPIRoutes(r *gin.Engine, server *FIXServer) {
 				c.JSON(400, gin.H{"error": "Invalid request"})
 				return
 			}
+			if req.FIXVersion == "" || req.Sender == "" || req.Target == "" || req.Password == "" {
+				c.JSON(400, gin.H{"error": "fixVersion, senderCompID, targetCompID and password are required"})
+				return
+			}
+			if err := server.RegisterCredential(req.Sender, req.Password); err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
 
 			session := server.CreateSession(
 				req.FIXVersion,
 				req.Sender,
 				req.Target,
 				req.Username,
-				req.Password,
 				req.HeartBtInt,
 			)
 
@@ -759,6 +923,15 @@ func setupFIXAPIRoutes(r *gin.Engine, server *FIXServer) {
 // ============================================================================
 
 func main() {
+	fixAddr := os.Getenv("TIGEREX_FIX_ADDR")
+	if fixAddr == "" {
+		fixAddr = ":8900"
+	}
+	httpAddr := os.Getenv("TIGEREX_FIX_HTTP_ADDR")
+	if httpAddr == "" {
+		httpAddr = ":8445"
+	}
+
 	fmt.Println("TigerEx FIX API Gateway v1.0.0")
 
 	server := NewFIXServer()
@@ -769,13 +942,13 @@ func main() {
 
 	// Start TCP FIX server on port 8900
 	go func() {
-		ln, err := net.Listen("tcp", ":8900")
+		ln, err := net.Listen("tcp", fixAddr)
 		if err != nil {
 			fmt.Printf("FIX TCP server error: %v\n", err)
 			return
 		}
 
-		fmt.Println("FIX TCP server listening on :8900")
+		fmt.Printf("FIX TCP server listening on %s\n", fixAddr)
 
 		for {
 			conn, err := ln.Accept()
@@ -783,8 +956,10 @@ func main() {
 				continue
 			}
 
-			// Create default session for demo
-			session := server.CreateSession(FIX44, "TIGEREX", "CLIENT1", "demo", "demo", 30)
+			// Each accepted connection starts unauthenticated. The client must
+			// send a Logon carrying a CompID and secret registered via the REST
+			// API; there is no default session or default credential.
+			session := server.CreateSession(FIX44, "TIGEREX", "CLIENT1", "", 30)
 
 			handler := &FIXTCPHandler{
 				Server:    server,
@@ -800,6 +975,9 @@ func main() {
 	}()
 
 	// Start HTTP server
-	fmt.Println("REST API listening on :8445")
-	r.Run(":8445")
+	fmt.Printf("REST API listening on %s\n", httpAddr)
+	if err := r.Run(httpAddr); err != nil {
+		fmt.Printf("HTTP server error: %v\n", err)
+		os.Exit(1)
+	}
 }

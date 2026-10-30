@@ -40,12 +40,10 @@ logger = logging.getLogger(__name__)
 
 
 class DataSource(Enum):
-    """Data source types"""
-    BINANCE = "binance"
-    COINBASE = "coinbase"
-    KRAKEN = "kraken"
-    FTX = "ftx"
-    INTERNAL = "internal"
+    """Market-data origins. TigerEx never sources data from another exchange."""
+    TIGEREX_MATCHING_ENGINE = "tigerex_matching_engine"
+    TIGEREX_INDEX = "tigerex_index"
+    TIGEREX_ORACLE = "tigerex_oracle"
 
 
 class ModelType(Enum):
@@ -106,9 +104,13 @@ class MarketData:
 # ============================================================================
 
 class DataCollector:
-    """Collects and normalizes market data from multiple sources"""
+    """Loads and normalises TigerEx market data.
+
+    Every fetch fails closed when no verified adapter is wired in. TigerEx does
+    not pull data from other exchanges, so there is no external fallback.
+    """
     
-    def __init__(self, source: DataSource = DataSource.BINANCE):
+    def __init__(self, source: DataSource = DataSource.TIGEREX_MATCHING_ENGINE):
         self.source = source
         self.cache = {}
     
@@ -654,9 +656,12 @@ class PortfolioOptimizer:
         portfolio_returns = []
         weights_list = []
         
+        # The frontier is sampled, not invented: a fixed seed makes the
+        # sampled cloud reproducible across runs while still covering
+        # the weight simplex.
+        rng = np.random.default_rng(0)
         for _ in range(n_portfolios):
-            # Generate random weights
-            weights = np.random.random(n_assets)
+            weights = rng.random(n_assets)
             weights /= np.sum(weights)
             
             # Portfolio return
@@ -832,22 +837,45 @@ class RiskManager:
 # STRATEGY EXECUTION EXAMPLE
 # ============================================================================
 
-def example_strategy():
-    """Example trading strategy using the framework"""
-    
-    # Configuration
-    config = TradingConfig(
-        initial_capital=100000.0,
-        commission=0.001,
-        slippage=0.0005,
-        risk_per_trade=0.02
-    )
-    
-    # Data collection
-    collector = DataCollector(DataSource.BINANCE)
-    data = collector.fetch_ohlcv('BTCUSDT', '1h', limit=1000)
-    
-    # Feature engineering
+def load_candles(csv_path: str) -> pd.DataFrame:
+    """Read OHLCV candles from CSV.
+
+    Expected header: timestamp,open,high,low,close,volume. Nothing is
+    synthesised: a missing file or malformed row raises.
+    """
+    import csv
+
+    rows = []
+    with open(csv_path, newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"timestamp", "open", "high", "low", "close", "volume"}
+        if reader.fieldnames is None or not required.issubset(set(reader.fieldnames)):
+            raise ValueError(f"candle file must contain columns {sorted(required)}")
+        for row in reader:
+            rows.append(row)
+
+    if not rows:
+        raise ValueError(f"candle file {csv_path} contained no rows")
+
+    return pd.DataFrame({
+        'timestamp': [int(r['timestamp']) for r in rows],
+        'open': [float(r['open']) for r in rows],
+        'high': [float(r['high']) for r in rows],
+        'low': [float(r['low']) for r in rows],
+        'close': [float(r['close']) for r in rows],
+        'volume': [float(r['volume']) for r in rows],
+    })
+
+
+def run_backtest(csv_path: str, config: Optional[TradingConfig] = None) -> 'BacktestResult':
+    """Backtest the price-prediction strategy on real candles from a CSV file."""
+    if config is None:
+        config = TradingConfig()
+
+    data = load_candles(csv_path)
+    if len(data) < 60:
+        raise ValueError("backtest requires at least 60 candles")
+
     engine = FeatureEngine()
     data = engine.add_returns(data)
     data = engine.add_lag_features(data)
@@ -855,40 +883,51 @@ def example_strategy():
     data = engine.add_rsi(data)
     data = engine.add_macd(data)
     data = engine.add_bollinger_bands(data)
-    
-    # Prepare features
+
     feature_cols = [col for col in data.columns if col not in [
         'timestamp', 'datetime', 'open', 'high', 'low', 'close', 'volume'
     ]]
     X = data[feature_cols].fillna(0).values
     y = (data['close'].shift(-1) > data['close']).astype(int).values
-    
-    # Train model
+
     model = PricePredictionModel(ModelType.RANDOM_FOREST, {
         'n_estimators': 100,
-        'max_depth': 10
+        'max_depth': 10,
+        'random_state': 42,
     })
     model.train(X[:-1], y[:-1])
-    
-    # Generate signals
-    predictions = model.predict(X[-100:])
-    signal_gen = SignalGenerator(threshold=0.5)
-    signals = signal_gen.generate_signals(predictions, method='ternary')
-    
-    # Pad signals to match data length
+
+    # Out-of-sample predictions only: score the hold-out tail.
+    holdout = min(100, len(data) // 4)
+    predictions = model.predict(X[-holdout:])
+    signals = SignalGenerator(threshold=0.5).generate_signals(predictions, method='ternary')
+
     full_signals = np.zeros(len(data))
-    full_signals[-100:] = signals
-    
-    # Backtest
-    backtester = Backtester(config)
-    results = backtester.run(data, full_signals)
-    
-    # Print results
+    full_signals[-holdout:] = signals
+
+    return Backtester(config).run(data, full_signals)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """usage: quant_research.py <candles.csv>"""
+    import sys
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) != 1:
+        print("usage: quant_research.py <candles.csv>", file=sys.stderr)
+        return 1
+
+    try:
+        results = run_backtest(argv[0])
+    except (OSError, ValueError) as exc:
+        print(f"backtest failed: {exc}", file=sys.stderr)
+        return 1
+
     print("=== Backtest Results ===")
     print(json.dumps(results.to_dict(), indent=2))
-    
-    return results
+    return 0
+
 
 
 if __name__ == "__main__":
-    example_strategy()
+    raise SystemExit(main())

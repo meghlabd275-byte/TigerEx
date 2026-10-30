@@ -6,7 +6,7 @@ Machine learning based fraud detection system
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 import json
 import math
@@ -79,52 +79,90 @@ class FraudAlert:
 # ============================================================================
 
 class FraudDetectionEngine:
-    def __init__(self):
+    """Rule-based fraud screening engine.
+
+    Jurisdiction risk and amount thresholds are configuration, not constants
+    baked into the scoring path: pass them in to match the deployment's
+    regulatory regime.
+    """
+
+    DEFAULT_HIGH_RISK_COUNTRIES = frozenset({'KP', 'IR', 'SY', 'CU'})
+
+    def __init__(self,
+                 high_risk_countries: Optional[frozenset] = None,
+                 large_amount_threshold: float = 10000.0,
+                 elevated_amount_threshold: float = 5000.0,
+                 new_account_days: int = 7):
+        if large_amount_threshold <= elevated_amount_threshold:
+            raise ValueError("large_amount_threshold must exceed elevated_amount_threshold")
+        if new_account_days < 0:
+            raise ValueError("new_account_days must not be negative")
+
         self.transactions: List[Transaction] = []
         self.alerts: List[FraudAlert] = []
         self.alert_counter = 0
         self.user_patterns: Dict[str, dict] = {}
-        
-    # ========================================================================
-    # RISK SCORING
-    # ========================================================================
-    
+        self.high_risk_countries = (
+            frozenset(high_risk_countries)
+            if high_risk_countries is not None
+            else self.DEFAULT_HIGH_RISK_COUNTRIES
+        )
+        self.large_amount_threshold = large_amount_threshold
+        self.elevated_amount_threshold = elevated_amount_threshold
+        self.new_account_days = new_account_days
+
+    def register_user(self, user_id: str, created_at: datetime) -> None:
+        """Record the account's real creation time so age checks use it."""
+        if not user_id:
+            raise ValueError("user_id is required")
+        pattern = self.user_patterns.setdefault(user_id, {'tx_count': 0, 'total_volume': 0.0})
+        pattern['created_at'] = created_at
+
+
     def calculate_risk_score(self, tx: Transaction) -> float:
-        """Calculate fraud risk score for transaction"""
+        """Calculate fraud risk score for transaction (0-100)."""
+        if tx.amount < 0:
+            raise ValueError("transaction amount must not be negative")
+
         score = 0.0
-        
-        # Check 1: Unusual amount
-        if tx.amount > 10000:
+
+        # Check 1: Unusual amount against the configured thresholds.
+        if tx.amount > self.large_amount_threshold:
             score += 30
-        elif tx.amount > 5000:
+        elif tx.amount > self.elevated_amount_threshold:
             score += 15
-        
-        # Check 2: New account (simplified)
-        if tx.user_id in self.user_patterns:
-            account_age = (datetime.now() - self.user_patterns[tx.user_id].get('created_at', datetime.now())).days
-            if account_age < 7:
+
+        # Check 2: Recently created account, using the real creation time.
+        pattern = self.user_patterns.get(tx.user_id)
+        if pattern and pattern.get('created_at'):
+            account_age = (tx.timestamp - pattern['created_at']).total_seconds() / 86400.0
+            if account_age < self.new_account_days:
                 score += 25
-        
-        # Check 3: High risk countries (simplified list)
-        high_risk_countries = ['KP', 'IR', 'SY', 'CU']
-        if tx.location_country in high_risk_countries:
+
+        # Check 3: Jurisdictions flagged by the configured risk list.
+        if tx.location_country in self.high_risk_countries:
             score += 50
-        
-        # Check 4: Multiple transactions in short time
-        recent_count = sum(1 for t in self.transactions[-100:] 
-                          if t.user_id == tx.user_id and 
-                          (tx.timestamp - t.timestamp).seconds < 60)
+
+        # Check 4: Burst of transactions in the preceding minute.
+        window_start = tx.timestamp - timedelta(seconds=60)
+        recent_count = sum(
+            1 for t in self.transactions
+            if t.user_id == tx.user_id and window_start <= t.timestamp <= tx.timestamp
+        )
         if recent_count > 5:
             score += 20
-        
-        # Check 5: IP address changes
+
+        # Check 5: The account is using a new device/IP beyond its usual set.
         user_txs = [t for t in self.transactions if t.user_id == tx.user_id]
         if user_txs:
-            unique_ips = set(t.ip_address for t in user_txs[-10:])
-            if tx.ip_address not in unique_ips and len(unique_ips) > 3:
+            recent = user_txs[-10:]
+            unique_ips = set(t.ip_address for t in recent)
+            unique_devices = set(t.device_fingerprint for t in recent)
+            if len(unique_ips) > 3 and tx.ip_address not in unique_ips:
                 score += 15
-        
-        # Cap at 100
+            if len(unique_devices) > 3 and tx.device_fingerprint not in unique_devices:
+                score += 10
+
         return min(score, 100.0)
     
     # ========================================================================
@@ -166,8 +204,10 @@ class FraudDetectionEngine:
         # Check for velocity
         if len(user_txs) > 10:
             recent = user_txs[-10:]
-            time_diffs = [(recent[i].timestamp - recent[i-1].timestamp).seconds 
-                         for i in range(1, len(recent))]
+            time_diffs = [
+                (recent[i].timestamp - recent[i - 1].timestamp).total_seconds()
+                for i in range(1, len(recent))
+            ]
             avg_time = sum(time_diffs) / len(time_diffs)
             
             if avg_time < 30:  # Less than 30 seconds between transactions
@@ -184,25 +224,24 @@ class FraudDetectionEngine:
     # ========================================================================
     
     def screen_transaction(self, tx: Transaction) -> tuple:
-        """Screen transaction and return risk level + alerts"""
-        # Calculate base risk score
+        """Screen transaction and return risk level + alerts."""
+        if tx.amount < 0:
+            raise ValueError("transaction amount must not be negative")
+
+        # Score against the history that precedes this transaction, then record it.
         risk_score = self.calculate_risk_score(tx)
-        tx.risk_score = risk_score
-        
-        # Store transaction
-        self.transactions.append(tx)
-        
-        # Get behavioral anomalies
+
         anomalies = self.detect_anomalies(tx.user_id)
-        
-        # Add anomaly scores
         for anomaly in anomalies:
             risk_score += anomaly.score * anomaly.weight
-        
+
         risk_score = min(risk_score, 100.0)
+
+        self.transactions.append(tx)
+        self.learn_user_pattern(tx.user_id, tx)
+
         tx.risk_score = risk_score
-        
-        # Determine risk level
+
         if risk_score >= 80:
             level = RiskLevel.CRITICAL
         elif risk_score >= 60:
@@ -211,15 +250,14 @@ class FraudDetectionEngine:
             level = RiskLevel.MEDIUM
         else:
             level = RiskLevel.LOW
-        
-        # Create alert for high risk
+
         alert = None
-        if level in [RiskLevel.HIGH, RiskLevel.CRITICAL]:
+        if level in (RiskLevel.HIGH, RiskLevel.CRITICAL):
             alert = self.create_alert(tx, level, anomalies)
-        
+
         return level, alert
     
-    def create_alalert(self, tx: Transaction, level: RiskLevel, 
+    def create_alert(self, tx: Transaction, level: RiskLevel, 
                        indicators: List[FraudIndicator]) -> FraudAlert:
         """Create fraud alert"""
         self.alert_counter += 1
@@ -271,17 +309,14 @@ class FraudDetectionEngine:
     # USER PATTERNS
     # ========================================================================
     
-    def learn_user_pattern(self, user_id: str, pattern_data: dict):
-        """Learn user behavior patterns"""
-        if user_id not in self.user_patterns:
-            self.user_patterns[user_id] = {
-                'created_at': datetime.now(),
-                'tx_count': 0,
-                'total_volume': 0.0,
-            }
-        
-        self.user_patterns[user_id]['tx_count'] += 1
-        self.user_patterns[user_id]['total_volume'] += pattern_data.get('amount', 0)
+    def learn_user_pattern(self, user_id: str, tx: Transaction) -> None:
+        """Update the rolling volume counters for a user from a real transaction."""
+        if tx.user_id != user_id:
+            raise ValueError("transaction does not belong to the given user_id")
+
+        pattern = self.user_patterns.setdefault(user_id, {'tx_count': 0, 'total_volume': 0.0})
+        pattern['tx_count'] += 1
+        pattern['total_volume'] += tx.amount
     
     # ========================================================================
     # STATISTICS
@@ -309,29 +344,47 @@ class FraudDetectionEngine:
 
 def _self_test() -> None:
     """Exercises the fraud engine with explicit fixture transactions."""
+    now = datetime.now()
     engine = FraudDetectionEngine()
-    
-    # Fixture transactions for the self-test.
+
+    # A freshly created account: age checks must use the real creation time.
+    engine.register_user("user1", now - timedelta(days=1))
+    engine.register_user("user2", now - timedelta(days=365))
+
     transactions = [
-        Transaction("tx1", "user1", 500.0, "USDT", "deposit", 
-                   datetime.now(), "192.168.1.1", "fp123", "US"),
+        Transaction("tx1", "user1", 500.0, "USDT", "deposit",
+                    now, "192.168.1.1", "fp123", "US"),
         Transaction("tx2", "user2", 15000.0, "USDT", "withdrawal",
-                   datetime.now(), "10.0.0.1", "fp456", "US"),
+                    now, "10.0.0.1", "fp456", "US"),
         Transaction("tx3", "user1", 2000.0, "USDT", "transfer",
-                   datetime.now(), "192.168.1.1", "fp123", "US"),
+                    now, "192.168.1.1", "fp123", "US"),
+        # Sanctioned jurisdiction: must raise a high/critical alert.
+        Transaction("tx4", "user1", 100.0, "USDT", "deposit",
+                    now, "192.168.1.1", "fp123", "KP"),
     ]
-    
-    # Screen transactions
+
     for tx in transactions:
         level, alert = engine.screen_transaction(tx)
-        print(f"Transaction {tx.id}: {level.value} (score: {tx.risk_score:.1f})")
-        
         if alert:
-            print(f"  ALERT: {alert.id} - {alert.indicators}")
-    
+            assert alert.id.startswith("ALERT_")
+            assert alert.transaction_id == tx.id
+            assert alert.risk_level == level
+
+    assert engine.get_alerts()[0].transaction_id == "tx4"
+
+    # A negative amount is rejected rather than scored.
+    try:
+        engine.screen_transaction(Transaction(
+            "bad", "user1", -1.0, "USDT", "deposit",
+            now, "192.168.1.1", "fp123", "US"))
+        raise AssertionError("negative amount must be rejected")
+    except ValueError:
+        pass
+
     stats = engine.get_stats()
-    assert stats['total_transactions'] == 3, stats
+    assert stats['total_transactions'] == 4, stats
     print("fraud detection self-test passed")
+
 
 
 if __name__ == "__main__":

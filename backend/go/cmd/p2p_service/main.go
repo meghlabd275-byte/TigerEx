@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -798,41 +800,25 @@ func main() {
 	// Create service
 	p2pService := NewP2PService()
 
-	// Create demo users
-	p2pService.CreateUser("seller@example.com", "SellerPro", "password123")
-	p2pService.CreateUser("buyer@example.com", "BuyerPro", "password123")
-
-	// Create demo ads
-	p2pService.CreateAd("seller1", &P2PAd{
-		Type:          "sell",
-		Asset:         "USDT",
-		FiatCurrency:  "USD",
-		PriceType:     "fixed",
-		FixedPrice:    1.01,
-		MinAmount:     100,
-		MaxAmount:     5000,
-		PaymentMethod: "bank_transfer",
-		Terms:         "Fast release, minimum 100 USD",
-	})
-
-	p2pService.CreateAd("seller2", &P2PAd{
-		Type:          "buy",
-		Asset:         "USDT",
-		FiatCurrency:  "EUR",
-		PriceType:     "float",
-		PriceMargin:   -2,
-		MinAmount:     50,
-		MaxAmount:     3000,
-		PaymentMethod: "sepa",
-		Terms:         "Instant payment via SEPA",
-	})
+	// Merchants, ads and balances are created by real users through the API.
+	// The service never seeds accounts or ads, because invented merchants with
+	// known passwords would be a live account-takeover vector.
 
 	// Setup router
 	r := gin.Default()
 
-	// CORS middleware
+	// CORS only permits an explicitly configured origin; never a wildcard.
+	allowedOrigin := strings.TrimSpace(os.Getenv("P2P_CORS_ORIGIN"))
 	r.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := c.GetHeader("Origin")
+		if origin != "" && (allowedOrigin == "" || origin != allowedOrigin) {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		if origin != "" {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+			c.Writer.Header().Set("Vary", "Origin")
+		}
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 

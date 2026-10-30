@@ -154,22 +154,39 @@ class RuleBasedDetector:
 
 
 class HybridDetector:
-    """ML-based detector"""
-    
+    """Gradient-boosted fraud detector.
+
+    The classifier is constructed but deliberately left unfitted: `predict`
+    raises until `train` has been called with real labelled events, so an
+    unfitted model can never emit a fabricated probability.
+    """
+
     def __init__(self):
         self.model = xgb.XGBClassifier(
             n_estimators=100,
             max_depth=6,
             learning_rate=0.1
         )
-        
+        self.is_trained = False
+
+    def train(self, events: List[Dict], labels: List[int]) -> 'HybridDetector':
+        """Fit the classifier on real labelled events."""
+        if len(events) != len(labels):
+            raise ValueError("events and labels must have equal length")
+        if not events:
+            raise ValueError("cannot train the fraud model on an empty dataset")
+        matrix = [self.extract_features(event) for event in events]
+        self.model.fit(matrix, labels)
+        self.is_trained = True
+        return self
+
     def predict(self, event: Dict) -> MLResult:
-        # Feature extraction
+        if not self.is_trained:
+            raise RuntimeError("HybridDetector.predict called before train")
+
         features = self.extract_features(event)
-        
-        # Predict
-        prob = self.model.predict_proba([features])[0][1]
-        
+        prob = float(self.model.predict_proba([features])[0][1])
+
         return MLResult(confidence=prob, scores={'xgboost': prob})
         
     def extract_features(self, event: Dict) -> List[float]:
@@ -183,19 +200,94 @@ class HybridDetector:
 
 
 class BehaviorAnalyzer:
-    """Behavioral analysis"""
-    
+    """Behavioural analysis against each account's own history.
+
+    A profile must be fitted from real observations before an account can be
+    scored. An account with no profile contributes no behavioural signal
+    instead of a fixed placeholder score.
+    """
+
+    def __init__(self):
+        self.profiles: Dict[str, Dict[str, float]] = {}
+
+    def fit_profile(self, account_id: str, amounts: List[float],
+                    hours: Optional[List[int]] = None) -> None:
+        """Build a behavioural profile from observed transactions."""
+        if not amounts:
+            raise ValueError("cannot fit a behavioural profile without observations")
+        series = np.asarray(amounts, dtype=float)
+        profile = {
+            'mean_amount': float(np.mean(series)),
+            'std_amount': float(np.std(series)),
+        }
+        if hours:
+            profile['mean_hour'] = float(np.mean(np.asarray(hours, dtype=float)))
+        self.profiles[account_id] = profile
+
     def analyze(self, event: Dict) -> float:
-        # Compare to historical patterns
-        return 0.2  # Simplified
+        """Score how far an event deviates from the account's profile."""
+        account_id = event.get('account_id')
+        profile = self.profiles.get(account_id) if account_id else None
+        if not profile:
+            return 0.0
+
+        score = 0.0
+        amount = float(event.get('amount', 0.0))
+        if profile['std_amount'] > 0:
+            z = abs(amount - profile['mean_amount']) / profile['std_amount']
+            score += min(z / 6.0, 0.7)
+
+        if 'mean_hour' in profile:
+            hour = event.get('hour')
+            if hour is not None and abs(float(hour) - profile['mean_hour']) > 6:
+                score += 0.3
+
+        return min(score, 1.0)
 
 
 class GraphAnalyzer:
-    """Network/graph analysis"""
-    
+    """Transaction-graph analysis.
+
+    Operates on a graph built from real transfer edges. With an empty graph
+    there is nothing to analyse, so the contribution is zero rather than a
+    fixed placeholder.
+    """
+
+    def __init__(self, risky_accounts: Optional[set] = None):
+        self.edges: Dict[str, set] = {}
+        self.risky_accounts = risky_accounts or set()
+
+    def add_edge(self, source: str, target: str) -> None:
+        """Record a transfer between two accounts."""
+        if not source or not target:
+            raise ValueError("graph edges require both a source and a target account")
+        self.edges.setdefault(source, set()).add(target)
+        self.edges.setdefault(target, set()).add(source)
+
+    def _neighbours(self, account: str) -> set:
+        return self.edges.get(account, set())
+
     def analyze(self, event: Dict) -> float:
-        # Analyze transaction graph
-        return 0.15  # Simplified
+        """Score the account's exposure to the rest of the graph."""
+        account = event.get('account_id')
+        if not account or not self.edges:
+            return 0.0
+
+        neighbours = self._neighbours(account)
+        if not neighbours:
+            return 0.0
+
+        score = 0.0
+        risky_neighbours = neighbours & self.risky_accounts
+        if risky_neighbours:
+            score += min(0.4 + 0.1 * len(risky_neighbours), 0.8)
+
+        # Fan-out: an unusually wide neighbourhood suggests layering.
+        if len(neighbours) > 50:
+            score += min((len(neighbours) - 50) / 500.0, 0.2)
+
+        return min(score, 1.0)
+
 
 
 @dataclass

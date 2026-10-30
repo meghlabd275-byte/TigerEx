@@ -2,12 +2,15 @@
 // Migrated from TypeScript to C++ for HFT-level performance
 
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <unordered_map>
 #include <vector>
 #include <string>
 #include <chrono>
 #include <cmath>
 #include <climits>
+#include <stdexcept>
 
 using namespace std;
 
@@ -44,12 +47,21 @@ public:
 
     // Best price routing
     OrderRoute getBestPriceRoute(const string& symbol, double quantity, bool isBuy) {
-        vector<Venue>& symbolVenues = venues[symbol];
-        
         OrderRoute best;
         best.price = isBuy ? INFINITY : 0;
         best.slippage = 0;
-        
+        best.fee = 0;
+
+        auto it = venues.find(symbol);
+        if (it == venues.end() || it->second.empty()) {
+            // Fail closed: an unknown symbol has no route rather than a
+            // fabricated one.
+            best.venue = "";
+            return best;
+        }
+
+        vector<Venue>& symbolVenues = it->second;
+
         for (const auto& venue : symbolVenues) {
             double price = isBuy ? venue.ask : venue.bid;
             
@@ -72,18 +84,26 @@ public:
             }
         }
         
-        // Calculate spread impact
-        const auto& v = symbolVenues[0];
-        double spread = (v.ask - v.bid) / v.bid;
-        best.slippage = spread * 0.5;
-        
+        // Spread impact is taken from the routed venue itself.
+        for (const auto& v : symbolVenues) {
+            if (v.name == best.venue && v.bid > 0) {
+                double spread = (v.ask - v.bid) / v.bid;
+                best.slippage = spread * 0.5;
+                break;
+            }
+        }
+
         return best;
     }
 
     // Smart order routing with impact optimization
     OrderRoute getSmartRoute(const string& symbol, double quantity, bool isBuy) {
-        vector<Venue>& symbolVenues = venues[symbol];
-        
+        auto it = venues.find(symbol);
+        if (it == venues.end() || it->second.empty()) {
+            return getBestPriceRoute(symbol, quantity, isBuy);
+        }
+        vector<Venue>& symbolVenues = it->second;
+
         // For large orders, split across venues
         double totalAvailable = 0;
         for (const auto& v : symbolVenues) {
@@ -105,14 +125,22 @@ public:
         route.price = 0;
         route.slippage = 0.001; // 0.1% for splitting
         
-        vector<Venue>& symbolVenues = venues[symbol];
-        
+        auto it = venues.find(symbol);
+        if (it == venues.end() || it->second.empty()) {
+            route.venue = "";
+            return route;
+        }
+        vector<Venue>& symbolVenues = it->second;
+
         // Weighted allocation
         double totalWeight = 0;
         for (const auto& v : symbolVenues) {
             totalWeight += v.volume24h;
         }
-        
+        if (totalWeight <= 0) {
+            return getBestPriceRoute(symbol, quantity, isBuy);
+        }
+
         // Primary venue
         double cumulative = 0;
         for (const auto& v : symbolVenues) {
@@ -132,14 +160,24 @@ public:
 
     // Venue selection by latency
     OrderRoute getFastestRoute(const string& symbol, double quantity) {
-        vector<Venue>& symbolVenues = venues[symbol];
-        
         OrderRoute fastest;
         fastest.price = 0;
+        fastest.fee = 0;
+        fastest.slippage = 0;
         int minLatency = INT_MAX;
-        
+
+        auto it = venues.find(symbol);
+        if (it == venues.end() || it->second.empty()) {
+            fastest.venue = "";
+            return fastest;
+        }
+        vector<Venue>& symbolVenues = it->second;
+
         for (const auto& v : symbolVenues) {
-            if (v.latency_us < minLatency && v.volume24h > 0) {
+            // A venue can only be routed to if it can fill the order.
+            double available = v.volume24h * v.bid;
+            if (available < quantity * v.ask) continue;
+            if (v.latency_us < minLatency) {
                 minLatency = v.latency_us;
                 fastest.venue = v.name;
                 fastest.price = (v.bid + v.ask) / 2;
@@ -151,13 +189,22 @@ public:
 
     // Fee optimization
     OrderRoute getCheapestRoute(const string& symbol, double quantity) {
-        vector<Venue>& symbolVenues = venues[symbol];
-        
         OrderRoute cheapest;
         cheapest.price = 0;
         cheapest.fee = INFINITY;
-        
+        cheapest.slippage = 0;
+
+        auto it = venues.find(symbol);
+        if (it == venues.end() || it->second.empty()) {
+            cheapest.venue = "";
+            return cheapest;
+        }
+        vector<Venue>& symbolVenues = it->second;
+
         for (const auto& v : symbolVenues) {
+            // A venue can only be routed to if it can fill the order.
+            double available = v.volume24h * v.bid;
+            if (available < quantity * v.ask) continue;
             if (v.fee < cheapest.fee) {
                 cheapest.fee = v.fee;
                 cheapest.venue = v.name;
@@ -169,22 +216,107 @@ public:
     }
 };
 
-int main() {
-    cout << "Order Router initialized" << endl;
+// Parse a full numeric field, rejecting trailing garbage that stod/stoi would
+// otherwise ignore ("12abc" -> 12).
+static double parseDouble(const string& field) {
+    size_t consumed = 0;
+    double value = stod(field, &consumed);
+    if (consumed != field.size()) throw invalid_argument("trailing characters: " + field);
+    if (!isfinite(value)) throw invalid_argument("non-finite value: " + field);
+    return value;
+}
+
+static int parseInt(const string& field) {
+    size_t consumed = 0;
+    int value = stoi(field, &consumed);
+    if (consumed != field.size()) throw invalid_argument("trailing characters: " + field);
+    return value;
+}
+
+// Load venues from a CSV file supplied on the command line. Each non-empty,
+// non-comment line is: symbol,name,bid,ask,volume24h,fee,latency_us
+// No venue data is fabricated: without a readable file the router reports the
+// error and exits non-zero rather than inventing venues or prices.
+static bool loadVenues(const string& path, OrderRouter& router) {
+    ifstream file(path);
+    if (!file.is_open()) {
+        cerr << "Cannot open venue file: " << path << endl;
+        return false;
+    }
+
+    string line;
+    size_t loaded = 0;
+    while (getline(file, line)) {
+        if (line.empty() || line[0] == '#') continue;
+
+        stringstream ss(line);
+        string symbol, name, bid_s, ask_s, vol_s, fee_s, lat_s;
+        if (!getline(ss, symbol, ',') || !getline(ss, name, ',') ||
+            !getline(ss, bid_s, ',') || !getline(ss, ask_s, ',') ||
+            !getline(ss, vol_s, ',') || !getline(ss, fee_s, ',') ||
+            !getline(ss, lat_s, ',')) {
+            cerr << "Malformed venue line: " << line << endl;
+            return false;
+        }
+
+        try {
+            Venue venue{
+                name,
+                symbol,
+                parseDouble(bid_s),
+                parseDouble(ask_s),
+                parseDouble(vol_s),
+                parseDouble(fee_s),
+                parseInt(lat_s),
+            };
+            if (venue.bid <= 0 || venue.ask <= 0 || venue.ask < venue.bid ||
+                venue.volume24h < 0 || venue.fee < 0 || venue.latency_us < 0) {
+                cerr << "Out-of-range venue value in line: " << line << endl;
+                return false;
+            }
+            router.addVenue(symbol, venue);
+            ++loaded;
+        } catch (const exception&) {
+            cerr << "Invalid venue value in line: " << line << endl;
+            return false;
+        }
+    }
+
+    if (loaded == 0) {
+        cerr << "Venue file contained no venues: " << path << endl;
+        return false;
+    }
+    return true;
+}
+
+int main(int argc, char** argv) {
+    if (argc < 4) {
+        cerr << "usage: order-router <venues.csv> <symbol> <quantity>" << endl;
+        return 1;
+    }
 
     OrderRouter router;
+    if (!loadVenues(argv[1], router)) {
+        return 1;
+    }
 
-    // Add mock venues
-    router.addVenue("BTCUSDT", {"Binance", "BTCUSDT", 65000, 65001, 100000000, 0.001, 500});
-    router.addVenue("BTCUSDT", {"Bybit", "BTCUSDT", 65000.5, 65001.5, 50000000, 0.0006, 300});
-    router.addVenue("BTCUSDT", {"OKX", "BTCUSDT", 64999, 65002, 30000000, 0.0008, 400});
+    const string symbol = argv[2];
+    double quantity = 0.0;
+    try {
+        quantity = stod(argv[3]);
+    } catch (const exception&) {
+        cerr << "Invalid quantity: " << argv[3] << endl;
+        return 1;
+    }
 
-    // Get best price
-    auto route = router.getBestPriceRoute("BTCUSDT", 1.0, true);
+    auto route = router.getBestPriceRoute(symbol, quantity, true);
+    if (route.venue.empty()) {
+        cerr << "No venue available for symbol " << symbol << endl;
+        return 1;
+    }
     cout << "Best route: " << route.venue << " @ $" << route.price << endl;
 
-    // Get smart route
-    auto smart = router.getSmartRoute("BTCUSDT", 100.0, true);
+    auto smart = router.getSmartRoute(symbol, quantity, true);
     cout << "Smart route: " << smart.venue << " (slippage: " << (smart.slippage * 100) << "%)" << endl;
 
     return 0;

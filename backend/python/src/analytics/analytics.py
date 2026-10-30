@@ -38,10 +38,20 @@ def calculate_pnl(opening: float, closing: float) -> tuple[float, float]:
 
 
 def get_portfolio_value(holdings: Dict[str, float], prices: Dict[str, float]) -> float:
-    """Calculate total portfolio value in USD"""
+    """Total portfolio value in USD.
+
+    Every holding must have a price: valuing an unpriced asset at zero would
+    understate the portfolio and is refused.
+    """
+    missing = [asset for asset in holdings if asset not in prices]
+    if missing:
+        raise ValueError(f"missing prices for holdings: {sorted(missing)}")
+
     total = 0.0
     for asset, amount in holdings.items():
-        price = prices.get(asset, 0)
+        price = prices[asset]
+        if price < 0:
+            raise ValueError(f"negative price for {asset}")
         total += amount * price
     return total
 
@@ -159,30 +169,34 @@ class AnalyticsEngine:
         return analyze_trading_pair({'trades': self.data[pair]})
 
 
-def main():
-    """Demo runner"""
-    print("TigerEx Analytics Engine initialized")
-    
-    # Demo holdings
-    holdings = {
-        'BTC': 1.5,
-        'ETH': 15.0,
-        'USDT': 5000.0
-    }
-    
-    prices = {
-        'BTC': 65000.0,
-        'ETH': 3500.0,
-        'USDT': 1.0
-    }
-    
-    value = get_portfolio_value(holdings, prices)
+def _load_json(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """usage: analytics.py <holdings.json> <prices.json>"""
+    import sys
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) != 2:
+        print("usage: analytics.py <holdings.json> <prices.json>", file=sys.stderr)
+        return 1
+
+    holdings_path, prices_path = argv
+    try:
+        holdings = _load_json(holdings_path)
+        prices = _load_json(prices_path)
+        value = get_portfolio_value(holdings, prices)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"cannot compute portfolio value: {exc}", file=sys.stderr)
+        return 1
+
+    print("TigerEx Analytics Engine")
+    print(f"Holdings: {len(holdings)} assets")
     print(f"Portfolio Value: ${value:,.2f}")
-    
-    # Risk calculation
-    risk = calculate_risk_score(volatility=0.15, volume=500000, leverage=3)
-    print(f"Risk Score: {risk}/10")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -4,43 +4,66 @@
 package kyc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
 
-const (
-	LevelUnverified  = "unverified"
-	LevelBasic      = "basic"
-	LevelIntermediate = "intermediate"
-	LevelAdvanced   = "advanced"
+// ErrAMLScreenerNotConfigured is returned when an AML check is requested but no
+// screening provider is configured. The exchange must never invent a risk
+// score, a sanctions verdict or a PEP verdict, so the check fails closed.
+var ErrAMLScreenerNotConfigured = errors.New("AML screening provider is not configured; refusing to fabricate a screening result")
 
-	StatusPending    = "pending"
+// AMLScreenResult is the outcome of an external sanctions/PEP/adverse-media
+// screen for one subject.
+type AMLScreenResult struct {
+	RiskScore          int    `json:"risk_score"`
+	PEPStatus          string `json:"pep_status"`
+	SanctionsStatus    string `json:"sanctions_status"`
+	AdverseMediaStatus string `json:"adverse_media_status"`
+	Details            string `json:"details"`
+}
+
+// AMLScreener is the sanctions/PEP/adverse-media screening provider. The
+// implementation is supplied by the operator (a hosted screening vendor or a
+// self-hosted list engine); this package never fabricates its results.
+type AMLScreener interface {
+	Screen(ctx context.Context, userID, checkType string) (*AMLScreenResult, error)
+}
+
+const (
+	LevelUnverified   = "unverified"
+	LevelBasic        = "basic"
+	LevelIntermediate = "intermediate"
+	LevelAdvanced     = "advanced"
+
+	StatusPending   = "pending"
 	StatusSubmitted = "submitted"
 	StatusReviewing = "reviewing"
 	StatusApproved  = "approved"
 	StatusRejected  = "rejected"
 	StatusExpired   = "expired"
 
-	DocTypePassport    = "passport"
-	DocTypeIDCard      = "id_card"
+	DocTypePassport       = "passport"
+	DocTypeIDCard         = "id_card"
 	DocTypeDriversLicense = "drivers_license"
-	DocTypeUtilityBill = "utility_bill"
-	DocTypeBankStatement = "bank_statement"
+	DocTypeUtilityBill    = "utility_bill"
+	DocTypeBankStatement  = "bank_statement"
 )
 
 type KYCProfile struct {
-	UserID         string    `json:"user_id"`
-	Level          string    `json:"level"`
-	Status         string    `json:"status"`
-	SubmittedAt    time.Time `json:"reviewed_at"`
-	ApprovedAt     time.Time `json:"approved_at"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	RejectionReason string   `json:"rejection_reason"`
-	BasicVerified  bool      `json:"basic_verified"`
-	IntermediateVerified bool `json:"intermediate_verified"`
-	AdvancedVerified  bool   `json:"advanced_verified"`
+	UserID               string    `json:"user_id"`
+	Level                string    `json:"level"`
+	Status               string    `json:"status"`
+	SubmittedAt          time.Time `json:"reviewed_at"`
+	ApprovedAt           time.Time `json:"approved_at"`
+	ExpiresAt            time.Time `json:"expires_at"`
+	RejectionReason      string    `json:"rejection_reason"`
+	BasicVerified        bool      `json:"basic_verified"`
+	IntermediateVerified bool      `json:"intermediate_verified"`
+	AdvancedVerified     bool      `json:"advanced_verified"`
 }
 
 type KYCSubmission struct {
@@ -68,46 +91,55 @@ type KYCSubmission struct {
 }
 
 type AMLCheck struct {
-	ID            string    `json:"id"`
-	UserID        string    `json:"user_id"`
-	CheckType     string    `json:"check_type"`
-	RiskScore     int      `json:"risk_score"`
-	RiskLevel     string    `json:"risk_level"`
-	Status        string    `json:"status"`
-	PEPStatus      string    `json:"pep_status"`
-	SanctionsStatus string  `json:"sanctions_status"`
-	AdverseMediaStatus string `json:"adverse_media_status"`
-	Details       string    `json:"details"`
-	CheckedAt     time.Time `json:"checked_at"`
+	ID                 string    `json:"id"`
+	UserID             string    `json:"user_id"`
+	CheckType          string    `json:"check_type"`
+	RiskScore          int       `json:"risk_score"`
+	RiskLevel          string    `json:"risk_level"`
+	Status             string    `json:"status"`
+	PEPStatus          string    `json:"pep_status"`
+	SanctionsStatus    string    `json:"sanctions_status"`
+	AdverseMediaStatus string    `json:"adverse_media_status"`
+	Details            string    `json:"details"`
+	CheckedAt          time.Time `json:"checked_at"`
 }
 
 type AMLTransaction struct {
-	ID           string    `json:"id"`
-	UserID       string    `json:"user_id"`
-	Type         string    `json:"type"`
-	Amount       float64   `json:"amount"`
-	Currency     string    `json:"currency"`
-	Status       string    `json:"status"`
-	RiskScore    int      `json:"risk_score"`
-	Flags        []string `json:"flags"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	Type      string    `json:"type"`
+	Amount    float64   `json:"amount"`
+	Currency  string    `json:"currency"`
+	Status    string    `json:"status"`
+	RiskScore int       `json:"risk_score"`
+	Flags     []string  `json:"flags"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type KYCManager struct {
-	mu          sync.RWMutex
-	profiles    map[string]*KYCProfile
-	submissions map[string]*KYCSubmission
-	amlChecks   map[string]*AMLCheck
+	mu              sync.RWMutex
+	profiles        map[string]*KYCProfile
+	submissions     map[string]*KYCSubmission
+	amlChecks       map[string]*AMLCheck
 	amlTransactions map[string]*AMLTransaction
+	screener        AMLScreener
 }
 
 func NewKYCManager() *KYCManager {
 	return &KYCManager{
-		profiles:         make(map[string]*KYCProfile),
+		profiles:        make(map[string]*KYCProfile),
 		submissions:     make(map[string]*KYCSubmission),
 		amlChecks:       make(map[string]*AMLCheck),
 		amlTransactions: make(map[string]*AMLTransaction),
 	}
+}
+
+// SetAMLScreener installs the sanctions/PEP/adverse-media provider. Until one
+// is installed, RunAMLCheck fails closed.
+func (km *KYCManager) SetAMLScreener(s AMLScreener) {
+	km.mu.Lock()
+	defer km.mu.Unlock()
+	km.screener = s
 }
 
 func (km *KYCManager) CreateProfile(userID string) (*KYCProfile, error) {
@@ -210,46 +242,60 @@ func (km *KYCManager) ReviewSubmission(submissionID, reviewerID, notes, decision
 
 func (km *KYCManager) RunAMLCheck(userID, checkType string) (*AMLCheck, error) {
 	km.mu.Lock()
-	defer km.mu.Unlock()
+	screener := km.screener
+	km.mu.Unlock()
+
+	if screener == nil {
+		return nil, ErrAMLScreenerNotConfigured
+	}
+
+	// The screening call runs outside the manager lock so a slow provider does
+	// not block unrelated KYC operations.
+	result, err := screener.Screen(context.Background(), userID, checkType)
+	if err != nil {
+		return nil, fmt.Errorf("AML screening failed for %s: %w", userID, err)
+	}
 
 	now := time.Now()
 	amlCheck := &AMLCheck{
-		ID:             fmt.Sprintf("AML%d%d", now.Unix(), now.Nanosecond()),
-		UserID:        userID,
-		CheckType:     checkType,
-		RiskScore:     0,
-		RiskLevel:     "low",
-		Status:        StatusApproved,
-		PEPStatus:      "clear",
-		SanctionsStatus: "clear",
-		CheckedAt:     now,
+		ID:                 fmt.Sprintf("AML%d%d", now.Unix(), now.Nanosecond()),
+		UserID:             userID,
+		CheckType:          checkType,
+		RiskScore:          result.RiskScore,
+		RiskLevel:          riskLevelForScore(result.RiskScore),
+		PEPStatus:          result.PEPStatus,
+		SanctionsStatus:    result.SanctionsStatus,
+		AdverseMediaStatus: result.AdverseMediaStatus,
+		Details:            result.Details,
+		CheckedAt:          now,
 	}
 
-	// Simulate AML screening
-	riskScore := simulateAMLScreen(userID)
-	amlCheck.RiskScore = riskScore
-
-	if riskScore > 70 {
-		amlCheck.RiskLevel = "high"
+	// A sanctions hit or a high risk score requires human review. Anything the
+	// provider did not explicitly clear is treated as review, never approved.
+	switch {
+	case result.SanctionsStatus == "hit" || result.RiskScore > 70:
 		amlCheck.Status = StatusReviewing
-	} else if riskScore > 40 {
-		amlCheck.RiskLevel = "medium"
-	} else {
-		amlCheck.RiskLevel = "low"
+	case result.SanctionsStatus == "clear" && result.PEPStatus == "clear" && result.RiskScore <= 70:
+		amlCheck.Status = StatusApproved
+	default:
+		amlCheck.Status = StatusReviewing
 	}
 
+	km.mu.Lock()
 	km.amlChecks[amlCheck.ID] = amlCheck
+	km.mu.Unlock()
 	return amlCheck, nil
 }
 
-func simulateAMLScreen(userID string) int {
-	// Simulate AML screening - in production, integrate with Chainalysis, Elliptic, etc.
-	// Return random risk score for demonstration
-	hash := 0
-	for _, c := range userID {
-		hash = hash*31 + int(c)
+func riskLevelForScore(score int) string {
+	switch {
+	case score > 70:
+		return "high"
+	case score > 40:
+		return "medium"
+	default:
+		return "low"
 	}
-	return (hash % 100 + 100) % 100
 }
 
 func (km *KYCManager) GetAMLCheck(checkID string) (*AMLCheck, error) {
@@ -388,7 +434,7 @@ func (km *KYCManager) VerifyLevel(userID, requiredLevel string) (bool, error) {
 	}
 
 	levelOrder := map[string]int{
-		LevelUnverified:    0,
+		LevelUnverified:   0,
 		LevelBasic:        1,
 		LevelIntermediate: 2,
 		LevelAdvanced:     3,
