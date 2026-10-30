@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/gorilla/websocket"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
@@ -979,26 +980,32 @@ func SubmitKYC(c *gin.Context) {
 
 	// Check for existing pending KYC
 	var existing string
-	_ = models.Pool.QueryRow(c.Request.Context(), `
+	err := models.Pool.QueryRow(c.Request.Context(), `
 		SELECT id FROM kyc_documents WHERE user_id = $1 AND status IN ('pending', 'reviewing')
 	`, userID).Scan(&existing)
+
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(500, gin.H{"success": false, "error": gin.H{"code": 500, "message": "KYC submission could not be checked"}})
+		return
+	}
 
 	if existing != "" {
 		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": "KYC already submitted"}})
 		return
 	}
 
-	// Create KYC (auto-approve for demo)
+	// Store the submission as pending. A KYC level is only granted by an
+	// operator decision; submitting documents never raises it.
 	kycID := uuid.New()
-	_, _ = models.Pool.Exec(c.Request.Context(), `
+	if _, err := models.Pool.Exec(c.Request.Context(), `
 		INSERT INTO kyc_documents (id, user_id, document_type, document_number, front_url, back_url, selfie_url, status)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, kycID, userID, req.DocumentType, req.DocumentNumber, req.FrontUrl, req.BackUrl, req.SelfieUrl, "approved")
+	`, kycID, userID, req.DocumentType, req.DocumentNumber, req.FrontUrl, req.BackUrl, req.SelfieUrl, "pending"); err != nil {
+		c.JSON(500, gin.H{"success": false, "error": gin.H{"code": 500, "message": "KYC submission could not be stored"}})
+		return
+	}
 
-	// Update user KYC level
-	_, _ = models.Pool.Exec(c.Request.Context(), "UPDATE users SET kyc_level = 2 WHERE id = $1", userID)
-
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"kycLevel": 2, "status": "approved", "message": "KYC submitted"}})
+	c.JSON(200, gin.H{"success": true, "data": gin.H{"status": "pending", "message": "KYC submitted for review"}})
 }
 
 func GetKYCStatus(c *gin.Context) {

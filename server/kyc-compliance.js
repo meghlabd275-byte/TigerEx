@@ -111,6 +111,34 @@ function addKYCTables() {
     )
   `);
 
+  // AML watchlists. Screening compares a customer's name and country against
+  // these tables. Operators load them from an official source (OFAC SDN, EU
+  // consolidated list, UN Security Council list, PEP registers) through
+  // importWatchlistEntries; nothing is inferred from a built-in name list.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS aml_watchlist (
+      id TEXT PRIMARY KEY,
+      list_type TEXT NOT NULL,
+      full_name TEXT NOT NULL,
+      normalized_name TEXT NOT NULL,
+      country TEXT,
+      source TEXT NOT NULL,
+      external_id TEXT,
+      added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(list_type, source, external_id)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sanctioned_jurisdictions (
+      country_code TEXT PRIMARY KEY,
+      country_name TEXT NOT NULL,
+      program TEXT NOT NULL,
+      source TEXT NOT NULL,
+      added_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   // Create indexes
   db.exec(`CREATE INDEX IF NOT EXISTS idx_kyc_submissions_user ON kyc_submissions(user_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_kyc_submissions_status ON kyc_submissions(status)`);
@@ -118,6 +146,8 @@ function addKYCTables() {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_kyc_addresses_user ON kyc_addresses(user_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_aml_screenings_user ON aml_screenings(user_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_compliance_flags_user ON compliance_flags(user_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_aml_watchlist_norm ON aml_watchlist(normalized_name)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_aml_watchlist_type ON aml_watchlist(list_type)`);
 
   console.log('✅ KYC tables created');
 }
@@ -178,12 +208,21 @@ const KYC_LEVELS = {
  */
 function calculateKYCLevel(userId) {
   try {
-    const emailVerified = db.prepare('SELECT email_verified FROM users WHERE id = ?').get(userId).email_verified;
-    const addressVerified = db.prepare('SELECT * FROM kyc_addresses WHERE user_id = ?').get(userId) ? true : false;
-    const docVerified = db.prepare('SELECT * FROM kyc_documents WHERE user_id = ? AND status = "verified"')
-      .get(userId) ? true : false;
-    const amlPassed = db.prepare('SELECT * FROM aml_screenings WHERE user_id = ? AND risk_level IN ("low", "medium")')
-      .get(userId) ? true : false;
+    const userRow = db.prepare('SELECT email_verified FROM users WHERE id = ?').get(userId);
+    const emailVerified = Boolean(userRow && userRow.email_verified);
+    const addressVerified = Boolean(
+      db.prepare('SELECT id FROM kyc_addresses WHERE user_id = ? AND verification_status = "verified"').get(userId),
+    );
+    const docVerified = Boolean(
+      db.prepare('SELECT id FROM kyc_documents WHERE user_id = ? AND status = "verified"').get(userId),
+    );
+    // Only a completed screening with a low or medium outcome counts as passed;
+    // an unavailable or high-risk screening does not raise the level.
+    const amlPassed = Boolean(
+      db.prepare(
+        'SELECT id FROM aml_screenings WHERE user_id = ? AND status = "completed" AND risk_level IN ("low", "medium")',
+      ).get(userId),
+    );
 
     let level = 0;
     if (emailVerified) level = 1;
@@ -233,189 +272,194 @@ function checkWithdrawalLimits(userId, amount) {
 }
 
 /**
- * Perform AML screening
+ * Normalize a personal or entity name for comparison: strip diacritics,
+ * punctuation and case, and collapse whitespace.
  */
-function performAMLScreening(userId, firstName, lastName, country) {
-  try {
-    // Simulate AML screening (in production, connect to Sumsub or Jumio)
-    // For now, use simple risk scoring
-
-    let riskLevel = 'low';
-    let pepStatus = 'not_listed';
-    let sanctionsStatus = 'not_listed';
-
-    // Simple PEP check (simulated)
-    const commonPepNames = ['bin', 'trump', 'putin', 'xi', 'khan', 'macron'];
-    if (commonPepNames.some(name => firstName.toLowerCase().includes(name) || lastName.toLowerCase().includes(name))) {
-      pepStatus = 'potential_match';
-      riskLevel = 'medium';
-    }
-
-    // Sanctions country check (simulated)
-    const sanctionedCountries = ['iran', 'north korea', 'syria', 'crimea'];
-    if (sanctionedCountries.some(c => country.toLowerCase().includes(c))) {
-      sanctionsStatus = 'potential_match';
-      riskLevel = 'high';
-    }
-
-    const screeningId = uuidv4();
-    db.prepare(`
-      INSERT INTO aml_screenings (id, user_id, risk_level, pep_status, sanctions_status, screening_date)
-      VALUES (?, ?, ?, ?, ?, datetime('now'))
-    `).run(screeningId, userId, riskLevel, pepStatus, sanctionsStatus);
-
-    if (riskLevel === 'high') {
-      db.prepare(`
-        INSERT INTO compliance_flags (id, user_id, flag_type, severity, reason, action_required)
-        VALUES (?, ?, 'aml_screening', 'high', 'High AML risk detected', 'manual_review')
-      `).run(uuidv4(), userId);
-    }
-
-    return { screeningId, riskLevel, pepStatus, sanctionsStatus };
-  } catch (error) {
-    console.error('AML screening error:', error);
-    return null;
-  }
+function normalizeName(name) {
+  return String(name || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-// ============================================================================
-// KYC API ENDPOINTS (Add to server/index.js)
-// ============================================================================
-
-const kycEndpoints = {
-  // Submit KYC data
-  submitKYC: `
-    app.post('/api/v1/kyc/submit', authenticateRequest, async (req, res) => {
-      try {
-        const { firstName, lastName, dateOfBirth, nationality, documentType, documentNumber, address, city, country, postalCode } = req.body;
-
-        // Validate input
-        if (!firstName || !lastName || !dateOfBirth || !nationality) {
-          return res.status(400).json({ success: false, error: 'Missing personal information' });
-        }
-
-        // Check if already submitted
-        const existing = db.prepare('SELECT * FROM kyc_submissions WHERE user_id = ?').get(req.userId);
-        if (existing && existing.status === 'verified') {
-          return res.status(400).json({ success: false, error: 'Already verified' });
-        }
-
-        // Create submission
-        const submissionId = uuidv4();
-        db.prepare(\`
-          INSERT INTO kyc_submissions (id, user_id, status)
-          VALUES (?, ?, 'pending')
-        \`).run(submissionId, req.userId);
-
-        // Save document
-        if (documentNumber) {
-          const docId = uuidv4();
-          db.prepare(\`
-            INSERT INTO kyc_documents (id, user_id, document_type, document_number, issuing_country, status)
-            VALUES (?, ?, ?, ?, ?, 'pending')
-          \`).run(docId, req.userId, documentType || 'passport', documentNumber, nationality);
-        }
-
-        // Save address
-        if (address && city && country) {
-          const addrId = uuidv4();
-          db.prepare(\`
-            INSERT INTO kyc_addresses (id, user_id, address_line1, city, country, postal_code, verification_status)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending')
-          \`).run(addrId, req.userId, address, city, country, postalCode);
-        }
-
-        // Perform AML screening
-        const amlResult = performAMLScreening(req.userId, firstName, lastName, nationality);
-
-        // Update user with personal info
-        db.prepare(\`
-          UPDATE users SET country = ? WHERE id = ?
-        \`).run(country, req.userId);
-
-        res.json({
-          success: true,
-          data: {
-            submissionId,
-            status: 'pending',
-            amlRiskLevel: amlResult.riskLevel,
-            message: 'KYC submission received. Manual review in progress.'
-          }
-        });
-      } catch (error) {
-        res.status(500).json({ success: false, error: 'Internal server error' });
+/**
+ * Import (or refresh) watchlist entries from an official source.
+ *
+ * Nothing is hardcoded: an operator supplies the parsed rows. Entries are
+ * upserted on (list_type, source, external_id) so a refresh replaces the
+ * previous load from the same source.
+ *
+ * @param {Array<{listType: string, fullName: string, country?: string,
+ *   source: string, externalId?: string}>} entries
+ */
+function importWatchlistEntries(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new Error('importWatchlistEntries requires a non-empty array of entries');
+  }
+  const insert = db.prepare(`
+    INSERT INTO aml_watchlist (id, list_type, full_name, normalized_name, country, source, external_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(list_type, source, external_id) DO UPDATE SET
+      full_name = excluded.full_name,
+      normalized_name = excluded.normalized_name,
+      country = excluded.country,
+      added_at = CURRENT_TIMESTAMP
+  `);
+  let imported = 0;
+  const tx = db.transaction((rows) => {
+    for (const entry of rows) {
+      if (!entry || !entry.listType || !entry.fullName || !entry.source) {
+        throw new Error('each entry needs listType, fullName and source');
       }
-    });
-  \`,
+      insert.run(
+        uuidv4(),
+        entry.listType,
+        entry.fullName,
+        normalizeName(entry.fullName),
+        entry.country ? normalizeName(entry.country) : null,
+        entry.source,
+        entry.externalId || null,
+      );
+      imported += 1;
+    }
+  });
+  tx(entries);
+  return { imported };
+}
 
-  // Get KYC status
-  getKYCStatus: \`
-    app.get('/api/v1/kyc/status', authenticateRequest, (req, res) => {
-      try {
-        const user = db.prepare('SELECT kyc_level, country FROM users WHERE id = ?').get(req.userId);
-        const submission = db.prepare('SELECT * FROM kyc_submissions WHERE user_id = ?').get(req.userId);
-        const amlResult = db.prepare('SELECT * FROM aml_screenings WHERE user_id = ? ORDER BY screening_date DESC LIMIT 1')
-          .get(req.userId);
-        const kycLevel = KYC_LEVELS[user.kyc_level] || KYC_LEVELS[0];
-
-        res.json({
-          success: true,
-          data: {
-            kycLevel: user.kyc_level,
-            levelName: kycLevel.name,
-            description: kycLevel.description,
-            status: submission ? submission.status : 'not_submitted',
-            limits: {
-              dailyWithdrawal: kycLevel.dailyWithdrawalLimit,
-              dailyDeposit: kycLevel.dailyDepositLimit,
-              dailyTrading: kycLevel.tradingLimit
-            },
-            aml: amlResult ? {
-              riskLevel: amlResult.risk_level,
-              pepStatus: amlResult.pep_status,
-              sanctionsStatus: amlResult.sanctions_status
-            } : null,
-            requirements: kycLevel.requirements
-          }
-        });
-      } catch (error) {
-        res.status(500).json({ success: false, error: 'Internal server error' });
+/**
+ * Record the jurisdictions a sanctions program covers.
+ *
+ * @param {Array<{countryCode: string, countryName: string, program: string,
+ *   source: string}>} jurisdictions
+ */
+function importSanctionedJurisdictions(jurisdictions) {
+  if (!Array.isArray(jurisdictions) || jurisdictions.length === 0) {
+    throw new Error('importSanctionedJurisdictions requires a non-empty array');
+  }
+  const insert = db.prepare(`
+    INSERT INTO sanctioned_jurisdictions (country_code, country_name, program, source)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(country_code) DO UPDATE SET
+      country_name = excluded.country_name,
+      program = excluded.program,
+      source = excluded.source
+  `);
+  const tx = db.transaction((rows) => {
+    for (const row of rows) {
+      if (!row || !row.countryCode || !row.countryName || !row.program || !row.source) {
+        throw new Error('each jurisdiction needs countryCode, countryName, program and source');
       }
-    });
-  \`,
+      insert.run(
+        String(row.countryCode).toUpperCase(),
+        row.countryName,
+        row.program,
+        row.source,
+      );
+    }
+  });
+  tx(jurisdictions);
+  return { imported: jurisdictions.length };
+}
 
-  // Check transaction eligibility
-  checkTransactionEligibility: \`
-    app.post('/api/v1/kyc/check-eligibility', authenticateRequest, (req, res) => {
-      try {
-        const { transactionType, amount } = req.body;
+/**
+ * Screen a customer against the loaded watchlists.
+ *
+ * Returns a measured result. A name or country that matches nothing on the
+ * loaded lists is reported as `no_match`, which is the honest reading of "not
+ * on the lists we hold" - it is not an assertion that the customer is clean.
+ * An empty watchlist yields `not_screened` so the caller can hold the
+ * submission for review instead of treating it as a pass.
+ */
+function performAMLScreening(userId, firstName, lastName, country) {
+  const fullName = normalizeName(`${firstName || ''} ${lastName || ''}`);
+  if (!fullName) {
+    throw new Error('AML screening requires a first and last name');
+  }
 
-        if (!transactionType || !amount) {
-          return res.status(400).json({ success: false, error: 'Missing parameters' });
-        }
+  const watchlistCount = db.prepare('SELECT COUNT(*) AS n FROM aml_watchlist').get().n;
+  const jurisdictionCount = db.prepare('SELECT COUNT(*) AS n FROM sanctioned_jurisdictions').get().n;
 
-        let check;
-        if (transactionType === 'withdrawal') {
-          check = checkWithdrawalLimits(req.userId, amount);
-        } else if (transactionType === 'deposit') {
-          check = checkWithdrawalLimits(req.userId, amount); // Use same for now
-        } else {
-          return res.status(400).json({ success: false, error: 'Invalid transaction type' });
-        }
+  if (watchlistCount === 0 && jurisdictionCount === 0) {
+    const screeningId = uuidv4();
+    db.prepare(`
+      INSERT INTO aml_screenings (id, user_id, risk_level, status, pep_status, sanctions_status, notes)
+      VALUES (?, ?, 'unknown', 'not_screened', 'unknown', 'unknown', ?)
+    `).run(screeningId, userId, 'No watchlist data loaded; screening could not be performed');
+    db.prepare(`
+      INSERT INTO compliance_flags (id, user_id, flag_type, severity, reason, action_required)
+      VALUES (?, ?, 'aml_screening', 'medium', ?, 'manual_review')
+    `).run(uuidv4(), userId, 'AML screening unavailable: no watchlist loaded');
+    return {
+      screeningId,
+      riskLevel: 'unknown',
+      pepStatus: 'unknown',
+      sanctionsStatus: 'unknown',
+      screened: false,
+    };
+  }
 
-        res.json({
-          success: true,
-          data: {
-            eligible: check.allowed,
-            reason: check.reason
-          }
-        });
-      } catch (error) {
-        res.status(500).json({ success: false, error: 'Internal server error' });
-      }
-    });
-  \`
-};
+  // Exact normalized-name match against the sanctions/PEP lists.
+  const nameMatches = db.prepare(`
+    SELECT list_type, source, external_id, full_name
+    FROM aml_watchlist
+    WHERE normalized_name = ?
+  `).all(fullName);
+
+  const sanctionsMatch = nameMatches.filter((m) => m.list_type === 'sanctions');
+  const pepMatch = nameMatches.filter((m) => m.list_type === 'pep');
+
+  const normalizedCountry = normalizeName(country);
+  const jurisdiction = normalizedCountry
+    ? db.prepare(`
+        SELECT country_name, program FROM sanctioned_jurisdictions
+        WHERE LOWER(country_name) = ? OR country_code = ?
+      `).get(normalizedCountry, String(country || '').toUpperCase())
+    : null;
+
+  let riskLevel = 'low';
+  if (sanctionsMatch.length > 0 || jurisdiction) {
+    riskLevel = 'high';
+  } else if (pepMatch.length > 0) {
+    riskLevel = 'medium';
+  }
+
+  const pepStatus = pepMatch.length > 0 ? 'match' : 'no_match';
+  const sanctionsStatus =
+    sanctionsMatch.length > 0 || jurisdiction ? 'match' : 'no_match';
+
+  const notes = [
+    sanctionsMatch.length > 0
+      ? `sanctions name match: ${sanctionsMatch.map((m) => `${m.full_name} (${m.source})`).join('; ')}`
+      : null,
+    jurisdiction
+      ? `sanctioned jurisdiction: ${jurisdiction.country_name} (${jurisdiction.program})`
+      : null,
+    pepMatch.length > 0
+      ? `PEP name match: ${pepMatch.map((m) => `${m.full_name} (${m.source})`).join('; ')}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' | ');
+
+  const screeningId = uuidv4();
+  db.prepare(`
+    INSERT INTO aml_screenings (id, user_id, risk_level, status, pep_status, sanctions_status, notes)
+    VALUES (?, ?, ?, 'completed', ?, ?, ?)
+  `).run(screeningId, userId, riskLevel, pepStatus, sanctionsStatus, notes || null);
+
+  if (riskLevel === 'high') {
+    db.prepare(`
+      INSERT INTO compliance_flags (id, user_id, flag_type, severity, reason, action_required)
+      VALUES (?, ?, 'aml_screening', 'high', ?, 'manual_review')
+    `).run(uuidv4(), userId, notes || 'High AML risk detected');
+  }
+
+  return { screeningId, riskLevel, pepStatus, sanctionsStatus, screened: true };
+}
 
 module.exports = {
   addKYCTables,
@@ -423,5 +467,7 @@ module.exports = {
   calculateKYCLevel,
   checkWithdrawalLimits,
   performAMLScreening,
-  kycEndpoints
+  importWatchlistEntries,
+  importSanctionedJurisdictions,
+  normalizeName,
 };
