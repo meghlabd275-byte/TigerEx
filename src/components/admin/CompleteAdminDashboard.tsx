@@ -48,15 +48,25 @@ interface UserRecord {
   totalVolume: number;
 }
 
+// Mirrors kyc.Application as returned by the API service.
 interface KYCRecord {
-  kycId: string;
+  id: string;
   userId: string;
-  userEmail: string;
+  documentType: string;
+  firstName?: string;
+  lastName?: string;
+  dob?: string;
+  country?: string;
+  documentId?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zipCode?: string;
   level: number;
   status: string;
-  submittedAt: string;
-  reviewerId?: string;
-  reviewerNotes?: string;
+  rejectReason?: string;
+  submittedAt: number;
+  reviewedAt?: number;
 }
 
 interface AnalyticsPoint {
@@ -575,12 +585,50 @@ const UserManagement: React.FC = () => {
 const KYCReview: React.FC = () => {
   const [kycRecords, setKycRecords] = useState<KYCRecord[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<KYCRecord | null>(null);
+  const [reviewerNotes, setReviewerNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
 
   const kycResource = useApiResource<unknown>('/api/admin/kyc?limit=100');
 
   useEffect(() => {
-    setKycRecords(toArray<KYCRecord>(kycResource.data));
+    const payload = kycResource.data as { submissions?: KYCRecord[] } | null;
+    setKycRecords(payload?.submissions ?? []);
   }, [kycResource.data]);
+
+  const submitDecision = async (approve: boolean) => {
+    if (!selectedRecord) return;
+    setSubmitting(true);
+    setDecisionError(null);
+    try {
+      const response = await fetch(
+        `/api/admin/kyc/${encodeURIComponent(selectedRecord.userId)}/review`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            approve,
+            level: approve ? Math.max(1, selectedRecord.level) : 0,
+            reason: reviewerNotes,
+          }),
+        },
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(
+          (payload && typeof payload === 'object' && 'error' in payload && String(payload.error)) ||
+            `Review failed with status ${response.status}`,
+        );
+      }
+      setSelectedRecord(null);
+      setReviewerNotes('');
+      kycResource.reload();
+    } catch (err) {
+      setDecisionError(err instanceof Error ? err.message : 'Review failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -592,7 +640,7 @@ const KYCReview: React.FC = () => {
       <div className="grid gap-4">
         {kycRecords.map((record) => (
           <div
-            key={record.kycId}
+            key={record.id}
             className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700"
           >
             <div className="flex items-center justify-between">
@@ -601,9 +649,12 @@ const KYCReview: React.FC = () => {
                   <UserCheck className="w-6 h-6 text-gray-500" />
                 </div>
                 <div>
-                  <div className="font-medium text-gray-900 dark:text-white">{record.userEmail}</div>
+                  <div className="font-medium text-gray-900 dark:text-white">
+                    {[record.firstName, record.lastName].filter(Boolean).join(' ') || record.userId}
+                  </div>
                   <div className="text-sm text-gray-500">
-                    Level {record.level} • Submitted {new Date(record.submittedAt).toLocaleDateString()}
+                    {record.userId} • Level {record.level} • Submitted{' '}
+                    {record.submittedAt ? new Date(record.submittedAt * 1000).toLocaleDateString() : '—'}
                   </div>
                 </div>
               </div>
@@ -631,59 +682,73 @@ const KYCReview: React.FC = () => {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">KYC Review - {selectedRecord.userEmail}</h3>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                KYC Review - {[selectedRecord.firstName, selectedRecord.lastName].filter(Boolean).join(' ') || selectedRecord.userId}
+              </h3>
               <button onClick={() => setSelectedRecord(null)} className="p-2 hover:bg-gray-100 rounded-lg">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Document Preview Placeholder */}
-            <div className="grid grid-cols-2 gap-6 mb-6">
-              <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center">
-                <FileCheck className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-                <p className="text-sm text-gray-500">ID Document Front</p>
-              </div>
-              <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center">
-                <FileCheck className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-                <p className="text-sm text-gray-500">ID Document Back</p>
-              </div>
-              <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center">
-                <FileCheck className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-                <p className="text-sm text-gray-500">Selfie with Document</p>
-              </div>
-              <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center">
-                <FileCheck className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-                <p className="text-sm text-gray-500">Address Proof</p>
-              </div>
-            </div>
-
-            {/* AML Check Results */}
-            <div className="bg-gray-50 dark:bg-gray-900 rounded-xl p-4 mb-6">
-              <h4 className="font-medium text-gray-900 dark:text-white mb-3">AML Check Results</h4>
-              <div className="grid grid-cols-4 gap-4">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600">Pass</div>
-                  <div className="text-xs text-gray-500">PEP Check</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600">Pass</div>
-                  <div className="text-xs text-gray-500">Sanctions</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600">Pass</div>
-                  <div className="text-xs text-gray-500">Adverse Media</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-yellow-600">25</div>
-                  <div className="text-xs text-gray-500">Risk Score</div>
+            {/* The KYC service stores identity documents as a path plus a
+                digest in the encrypted object store, never as an inline image,
+                so the console shows the submitted fields rather than a
+                fabricated preview. */}
+            <div className="grid grid-cols-2 gap-4 mb-6 text-sm">
+              <div>
+                <div className="text-gray-500">Document type</div>
+                <div className="font-medium text-gray-900 dark:text-white">
+                  {selectedRecord.documentType || '—'}
                 </div>
               </div>
+              <div>
+                <div className="text-gray-500">Document number</div>
+                <div className="font-medium text-gray-900 dark:text-white">
+                  {selectedRecord.documentId || '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-500">Legal name</div>
+                <div className="font-medium text-gray-900 dark:text-white">
+                  {[selectedRecord.firstName, selectedRecord.lastName].filter(Boolean).join(' ') || '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-500">Date of birth</div>
+                <div className="font-medium text-gray-900 dark:text-white">
+                  {selectedRecord.dob || '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-500">Country</div>
+                <div className="font-medium text-gray-900 dark:text-white">
+                  {selectedRecord.country || '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-500">Address</div>
+                <div className="font-medium text-gray-900 dark:text-white">
+                  {[selectedRecord.address, selectedRecord.city, selectedRecord.state, selectedRecord.zipCode]
+                    .filter(Boolean)
+                    .join(', ') || '—'}
+                </div>
+              </div>
+              {selectedRecord.rejectReason && (
+                <div className="col-span-2">
+                  <div className="text-gray-500">Previous rejection reason</div>
+                  <div className="font-medium text-red-600 dark:text-red-400">
+                    {selectedRecord.rejectReason}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Notes */}
             <div className="mb-6">
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">Reviewer Notes</label>
               <textarea
+                value={reviewerNotes}
+                onChange={(e) => setReviewerNotes(e.target.value)}
                 className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-900 border-0 rounded-lg text-sm"
                 rows={3}
                 placeholder="Add notes about this KYC submission..."
@@ -691,18 +756,28 @@ const KYCReview: React.FC = () => {
             </div>
 
             {/* Actions */}
+            {decisionError && (
+              <div className="mb-4 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 px-4 py-3 text-sm text-red-600 dark:text-red-400">
+                {decisionError}
+              </div>
+            )}
+
             <div className="flex gap-4">
-              <button className="flex-1 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 font-medium flex items-center justify-center gap-2">
+              <button
+                onClick={() => submitDecision(true)}
+                disabled={submitting}
+                className="flex-1 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+              >
                 <CheckCircle className="w-5 h-5" />
                 Approve
               </button>
-              <button className="flex-1 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600 font-medium flex items-center justify-center gap-2">
+              <button
+                onClick={() => submitDecision(false)}
+                disabled={submitting}
+                className="flex-1 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600 font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+              >
                 <XCircle className="w-5 h-5" />
                 Reject
-              </button>
-              <button className="flex-1 py-3 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 font-medium flex items-center justify-center gap-2">
-                <Clock className="w-5 h-5" />
-                Request More Info
               </button>
             </div>
           </div>

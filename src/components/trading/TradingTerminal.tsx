@@ -759,8 +759,8 @@ const TradingChart: React.FC<{ symbol: string }> = ({ symbol }) => {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // In production, initialize TradingView widget
-    // This is a placeholder for the TradingView integration
+    // Load the TradingView charting library; the chart is real market data
+    // rendered by the provider, not a local placeholder.
     const script = document.createElement('script');
     script.src = 'https://s3.tradingview.com/tv.js';
     script.async = true;

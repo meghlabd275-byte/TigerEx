@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import QRCode from 'qrcode';
 
 interface DepositAddress {
   address: string;
@@ -20,6 +21,7 @@ export function DepositModal({ currency = 'BTC', network = 'BTC', onClose }: Dep
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchAddress = async () => {
@@ -51,6 +53,28 @@ export function DepositModal({ currency = 'BTC', network = 'BTC', onClose }: Dep
 
     fetchAddress();
   }, [currency, network]);
+
+  useEffect(() => {
+    if (!address?.address) {
+      setQrDataUrl(null);
+      return;
+    }
+    let cancelled = false;
+    // BIP-21 style URI: wallets that support it pre-fill currency, address and memo.
+    const uri = `${currency.toLowerCase()}:${address.address}${
+      address.memo ? `?message=${encodeURIComponent(address.memo)}` : ''
+    }`;
+    QRCode.toDataURL(uri, { margin: 1, width: 240, errorCorrectionLevel: 'M' })
+      .then((url) => {
+        if (!cancelled) setQrDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setQrDataUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [address, currency]);
 
   const copyToClipboard = async () => {
     if (!address?.address) return;
@@ -104,13 +128,14 @@ export function DepositModal({ currency = 'BTC', network = 'BTC', onClose }: Dep
         </div>
       </div>
 
-      {/* QR Code Placeholder */}
+      {/* Scannable QR of the deposit URI, so the address can be read by a wallet. */}
       <div className="flex justify-center mb-6">
-        <div className="w-48 h-48 bg-white rounded-lg flex items-center justify-center">
-          <div className="text-gray-400 text-center">
-            <div className="text-4xl mb-2">📱</div>
-            <div className="text-xs">QR Code</div>
-          </div>
+        <div className="w-48 h-48 bg-white rounded-lg flex items-center justify-center overflow-hidden">
+          {qrDataUrl ? (
+            <img src={qrDataUrl} alt={`${currency} deposit address QR code`} className="w-full h-full" />
+          ) : (
+            <div className="text-gray-400 text-center text-xs">Generating QR…</div>
+          )}
         </div>
       </div>
 
