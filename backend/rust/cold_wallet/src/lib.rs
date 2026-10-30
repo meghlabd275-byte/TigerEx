@@ -2,21 +2,18 @@
 //! Ultra-secure cold storage with HSM integration, multi-signature support, and air-gapped operation
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::RngCore;
-use ring::digest;
 use serde::{Deserialize, Serialize};
+use ripemd::Digest as _;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tracing::{error, info, warn};
 
 // ============================================================================
 // ERROR TYPES
@@ -119,6 +116,22 @@ impl Network {
     }
 }
 
+impl std::fmt::Display for Network {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Network::Bitcoin => "bitcoin",
+            Network::Ethereum => "ethereum",
+            Network::Solana => "solana",
+            Network::Polygon => "polygon",
+            Network::BNBChain => "bnbchain",
+            Network::Avalanche => "avalanche",
+            Network::Arbitrum => "arbitrum",
+            Network::Optimism => "optimism",
+        };
+        f.write_str(name)
+    }
+}
+
 /// Wallet type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -131,6 +144,18 @@ pub enum WalletType {
     Cold,
     /// Archive - long-term storage
     Archive,
+}
+
+impl std::fmt::Display for WalletType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            WalletType::Hot => "hot",
+            WalletType::Warm => "warm",
+            WalletType::Cold => "cold",
+            WalletType::Archive => "archive",
+        };
+        f.write_str(name)
+    }
 }
 
 /// Wallet status
@@ -251,6 +276,11 @@ pub struct Transaction {
 pub struct TransactionSignature {
     pub signer_id: String,
     pub signature: Vec<u8>,
+    /// The exact bytes covered by `signature`. Stored so verification can
+    /// recompute the signed digest instead of trusting the signature's
+    /// presence, which is what a real cold-wallet threshold check requires.
+    #[serde(default)]
+    pub signed_payload: Vec<u8>,
     pub signed_at: i64,
     pub status: SignatureStatus,
 }
@@ -348,24 +378,134 @@ pub fn verify_signature(verifier_key: &VerifyingKey, data: &[u8], signature: &[u
     }
 }
 
-/// Derive address from public key (simplified - production would use proper derivation)
-pub fn derive_address(network: Network, public_key: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(public_key);
-    let hash = hasher.finalize();
+/// Hash160 = RIPEMD160(SHA256(data)), the hash Bitcoin uses for P2PKH/P2SH.
+fn hash160(data: &[u8]) -> [u8; 20] {
+    use ripemd::Ripemd160;
+    let sha = Sha256::digest(data);
+    let ripe = Ripemd160::digest(sha);
+    let mut out = [0u8; 20];
+    out.copy_from_slice(&ripe);
+    out
+}
 
+/// Base58Check encoding: payload followed by the first four bytes of
+/// SHA256(SHA256(payload)).
+fn base58check(payload: &[u8]) -> String {
+    let checksum = Sha256::digest(Sha256::digest(payload));
+    let mut buf = payload.to_vec();
+    buf.extend_from_slice(&checksum[..4]);
+    base58::ToBase58::to_base58(buf.as_slice())
+}
+
+/// Encode a secp256k1 public key as the SEC1 compressed form Bitcoin uses.
+fn compressed_pubkey(public_key: &[u8]) -> Result<secp256k1::PublicKey, ColdWalletError> {
+    secp256k1::PublicKey::from_slice(public_key).map_err(|e| {
+        ColdWalletError::InvalidSignature(format!("invalid secp256k1 public key: {e}"))
+    })
+}
+
+/// EIP-55 mixed-case checksum for a 20-byte EVM address.
+fn eip55(addr: &[u8; 20]) -> String {
+    use sha3::{Digest as _, Keccak256};
+    let lower = hex::encode(addr);
+    let hash = Keccak256::digest(lower.as_bytes());
+    let mut out = String::with_capacity(42);
+    out.push_str("0x");
+    for (i, ch) in lower.chars().enumerate() {
+        if ch.is_ascii_alphabetic() {
+            let nibble = if i % 2 == 0 {
+                hash[i / 2] >> 4
+            } else {
+                hash[i / 2] & 0x0f
+            };
+            if nibble >= 8 {
+                out.push(ch.to_ascii_uppercase());
+                continue;
+            }
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Derive the on-chain address that a public key actually controls.
+///
+/// The key material must match the network: secp256k1 SEC1 keys (33-byte
+/// compressed or 65-byte uncompressed) for Bitcoin and the EVM chains, and a
+/// 32-byte Ed25519 key for Solana. Anything else is rejected rather than
+/// turned into a string that no key can spend.
+pub fn derive_address(network: Network, public_key: &[u8]) -> Result<String, ColdWalletError> {
     match network {
         Network::Bitcoin => {
-            // Simplified P2PKH - production would use proper encoding
-            format!("1{}", &hex::encode(&hash[..20])[..32])
+            let key = compressed_pubkey(public_key)?;
+            let serialized = key.serialize();
+            let mut payload = Vec::with_capacity(21);
+            payload.push(0x00); // mainnet P2PKH
+            payload.extend_from_slice(&hash160(&serialized));
+            Ok(base58check(&payload))
         }
-        Network::Ethereum => {
-            // EVM address
-            let addr = &hash[12..];
-            format!("0x{}", hex::encode(addr))
+        Network::Ethereum
+        | Network::Polygon
+        | Network::BNBChain
+        | Network::Avalanche
+        | Network::Arbitrum
+        | Network::Optimism => {
+            use sha3::{Digest as _, Keccak256};
+            let key = compressed_pubkey(public_key)?;
+            let uncompressed = key.serialize_uncompressed();
+            let hash = Keccak256::digest(&uncompressed[1..]);
+            let mut addr = [0u8; 20];
+            addr.copy_from_slice(&hash[12..]);
+            Ok(eip55(&addr))
         }
-        _ => hex::encode(&hash[..32]),
+        Network::Solana => {
+            if public_key.len() != 32 {
+                return Err(ColdWalletError::InvalidSignature(
+                    "Solana address requires a 32-byte Ed25519 public key".to_string(),
+                ));
+            }
+            Ok(base58::ToBase58::to_base58(public_key))
+        }
     }
+}
+
+/// Derive a P2SH multi-signature address from the redeem script
+/// `OP_m <pubkey>... OP_n OP_CHECKMULTISIG`.
+///
+/// Only Bitcoin is supported; the other networks have no equivalent native
+/// script address, and returning a plausible-looking string for them would be
+/// a fabricated address.
+pub fn derive_multisig_address(
+    network: Network,
+    public_keys: &[Vec<u8>],
+    threshold: usize,
+) -> Result<String, ColdWalletError> {
+    if network != Network::Bitcoin {
+        return Err(ColdWalletError::InvalidSignature(
+            "multi-signature script addresses are only defined for Bitcoin".to_string(),
+        ));
+    }
+    if threshold == 0 || threshold > public_keys.len() || public_keys.len() > MAX_SIGNERS {
+        return Err(ColdWalletError::InvalidSignature(
+            "threshold must be between 1 and the number of signers".to_string(),
+        ));
+    }
+
+    let mut script = Vec::new();
+    script.push(0x50 + threshold as u8); // OP_1..OP_16
+    for pk in public_keys {
+        let key = compressed_pubkey(pk)?;
+        let serialized = key.serialize();
+        script.push(serialized.len() as u8);
+        script.extend_from_slice(&serialized);
+    }
+    script.push(0x50 + public_keys.len() as u8);
+    script.push(0xae); // OP_CHECKMULTISIG
+
+    let mut payload = Vec::with_capacity(21);
+    payload.push(0x05); // mainnet P2SH
+    payload.extend_from_slice(&hash160(&script));
+    Ok(base58check(&payload))
 }
 
 /// Hash transaction for signing
@@ -416,15 +556,20 @@ pub fn create_multisig_wallet(config: &WalletConfig) -> Result<MultiSigConfig, C
         )));
     }
 
-    // Derive multi-sig address
-    let mut combined_keys: Vec<u8> = Vec::new();
+    // Derive the P2SH address for the m-of-n redeem script. The script is built
+    // from one public key per signer, in signer order.
+    let mut signer_keys: Vec<Vec<u8>> = Vec::with_capacity(config.signers.len());
     for signer in &config.signers {
-        for pk in &signer.public_keys {
-            combined_keys.extend(&pk.public_key);
-        }
+        let pk = signer.public_keys.first().ok_or_else(|| {
+            ColdWalletError::InvalidSignature(format!(
+                "signer {} has no public key",
+                signer.signer_id
+            ))
+        })?;
+        signer_keys.push(pk.public_key.clone());
     }
 
-    let address = derive_address(config.network, &combined_keys);
+    let address = derive_multisig_address(config.network, &signer_keys, config.threshold)?;
 
     let multisig = MultiSigConfig {
         signers: config.signers.clone(),
@@ -470,18 +615,15 @@ pub fn sign_transaction(
     // Verify our signature
     verify_signature(verifier_key, &data_to_sign, &signature)?;
 
-    // Add signature
+    // Record the signature together with the exact payload it covers so the
+    // threshold check can verify it cryptographically later.
     tx.signatures.push(TransactionSignature {
         signer_id: signer_id.to_string(),
         signature,
+        signed_payload: data_to_sign,
         signed_at: Utc::now().timestamp(),
         status: SignatureStatus::Signed,
     });
-
-    // Check if threshold reached
-    if tx.signatures.len() >= tx.signatures.len() {
-        // In production, check actual threshold
-    }
 
     tx.updated_at = Utc::now().timestamp();
 
@@ -495,9 +637,28 @@ pub fn verify_multisig(
 ) -> Result<bool, ColdWalletError> {
     let mut valid_sigs = 0;
 
+    // The signed digest must match what the transaction currently commits to.
+    let expected_payload = hash_transaction(&TransactionRequest {
+        network: tx.network,
+        from_address: tx.from_address.clone(),
+        to_address: tx.to_address.clone(),
+        amount: tx.amount.clone(),
+        fee: Some(tx.fee.clone()),
+        nonce: None,
+        data: None,
+        memo: None,
+    });
+
     for sig in &tx.signatures {
         if sig.status != SignatureStatus::Signed {
             continue;
+        }
+
+        // The signature must cover this exact transaction, not some other one.
+        if sig.signed_payload != expected_payload {
+            return Err(ColdWalletError::InvalidSignature(
+                "signature payload does not match the transaction".to_string(),
+            ));
         }
 
         // Find signer's public key
@@ -506,26 +667,36 @@ pub fn verify_multisig(
                 continue;
             }
 
-            // Verify with first active key
+            // Verify against each active signing key the signer holds.
+            let mut verified = false;
             for pk in &signer.public_keys {
                 if !pk.is_active || pk.key_type != KeyType::Signing {
                     continue;
                 }
 
-                // Reconstruct verifier key
-                // In production, parse from public_key bytes
-                // For now, skip verification
+                let verifier = VerifyingKey::from_bytes(
+                    &match <[u8; 32]>::try_from(pk.verifier_public_key.as_slice()) {
+                        Ok(bytes) => bytes,
+                        Err(_) => continue,
+                    },
+                )
+                .map_err(|e| {
+                    ColdWalletError::InvalidSignature(format!("malformed verifier key: {e}"))
+                })?;
+
+                if verify_signature(&verifier, &sig.signed_payload, &sig.signature).is_ok() {
+                    verified = true;
+                    break;
+                }
+            }
+
+            if verified {
                 valid_sigs += 1;
-                break;
             }
         }
     }
 
-    if valid_sigs >= multisig.threshold {
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    Ok(valid_sigs >= multisig.threshold)
 }
 
 // ============================================================================
@@ -736,12 +907,15 @@ impl ColdWalletManager {
         wallet_type: WalletType,
         public_keys: &[Vec<u8>],
     ) -> Result<WalletAddress, ColdWalletError> {
-        // Derive address
-        let mut combined = Vec::new();
-        for pk in public_keys {
-            combined.extend(pk);
+        // A single-signature wallet holds exactly one key. Multi-signature
+        // wallets go through create_multisig_wallet so the address is the real
+        // script address.
+        if public_keys.len() != 1 {
+            return Err(ColdWalletError::InvalidSignature(
+                "single-signature wallet requires exactly one public key".to_string(),
+            ));
         }
-        let address = derive_address(network, &combined);
+        let address = derive_address(network, &public_keys[0])?;
 
         let now = Utc::now().timestamp();
         let wallet = WalletAddress {
@@ -800,6 +974,7 @@ impl ColdWalletManager {
         // Create transaction
         let tx = create_withdrawal_transaction(&request, wallet, TRANSACTION_FEE_SATS);
 
+        let request_user_id = request.user_id.clone();
         self.transactions.insert(tx.tx_id.clone(), tx.clone());
         self.pending_withdrawals.insert(request.request_id.clone(), request);
 
@@ -807,7 +982,7 @@ impl ColdWalletManager {
         self.audit_logs.push(create_audit_log(
             "withdrawal_requested",
             &format!("Requested {} {}", tx.amount, tx.network),
-            Some(&request.user_id),
+            Some(&request_user_id),
             None,
             Some(&tx.tx_id),
             None,
@@ -893,10 +1068,138 @@ mod tests {
         assert!(verify_signature(&verifier_key, data, &signature).is_ok());
     }
 
+    fn signing_signer(id: &str, key: &SigningKey) -> SignerInfo {
+        SignerInfo {
+            signer_id: id.to_string(),
+            name: id.to_string(),
+            public_keys: vec![PublicKeyInfo {
+                key_type: KeyType::Signing,
+                key_id: format!("{id}-key"),
+                public_key: key.verifying_key().to_bytes().to_vec(),
+                verifier_public_key: key.verifying_key().to_bytes().to_vec(),
+                created_at: Utc::now().timestamp(),
+                expires_at: None,
+                is_active: true,
+            }],
+            threshold: 1,
+            is_hsm: false,
+            created_at: Utc::now().timestamp(),
+            last_used_at: None,
+        }
+    }
+
+    fn sample_transaction() -> Transaction {
+        Transaction {
+            tx_id: "tx-1".to_string(),
+            network: Network::Bitcoin,
+            from_address: "bc1qfrom".to_string(),
+            to_address: "bc1qto".to_string(),
+            amount: "100000".to_string(),
+            fee: "1000".to_string(),
+            status: TransactionStatus::Pending,
+            signatures: Vec::new(),
+            tx_hash: None,
+            block_hash: None,
+            block_number: None,
+            confirmations: 0,
+            created_at: Utc::now().timestamp(),
+            updated_at: Utc::now().timestamp(),
+        }
+    }
+
+    #[test]
+    fn multisig_accepts_real_threshold_signatures() {
+        let key1 = generate_signing_key();
+        let key2 = generate_signing_key();
+        let multisig = MultiSigConfig {
+            signers: vec![
+                signing_signer("signer1", &key1),
+                signing_signer("signer2", &key2),
+            ],
+            threshold: 2,
+            network: Network::Bitcoin,
+            address: "bc1qmultisig".to_string(),
+            created_at: Utc::now().timestamp(),
+        };
+
+        let mut tx = sample_transaction();
+        sign_transaction(&mut tx, "signer1", &key1, &key1.verifying_key()).unwrap();
+        assert!(!verify_multisig(&tx, &multisig).unwrap(), "one of two must not reach threshold");
+        sign_transaction(&mut tx, "signer2", &key2, &key2.verifying_key()).unwrap();
+        assert!(verify_multisig(&tx, &multisig).unwrap());
+    }
+
+    #[test]
+    fn multisig_rejects_a_forged_signature() {
+        let key1 = generate_signing_key();
+        let key2 = generate_signing_key();
+        let multisig = MultiSigConfig {
+            signers: vec![
+                signing_signer("signer1", &key1),
+                signing_signer("signer2", &key2),
+            ],
+            threshold: 2,
+            network: Network::Bitcoin,
+            address: "bc1qmultisig".to_string(),
+            created_at: Utc::now().timestamp(),
+        };
+
+        // A signature that carries the right payload but was produced by an
+        // unrelated key must not count towards the threshold.
+        let attacker = generate_signing_key();
+        let mut tx = sample_transaction();
+        sign_transaction(&mut tx, "signer1", &key1, &key1.verifying_key()).unwrap();
+        let payload = tx.signatures[0].signed_payload.clone();
+        tx.signatures.push(TransactionSignature {
+            signer_id: "signer2".to_string(),
+            signature: sign_data(&attacker, &payload),
+            signed_payload: payload,
+            signed_at: Utc::now().timestamp(),
+            status: SignatureStatus::Signed,
+        });
+
+        assert!(!verify_multisig(&tx, &multisig).unwrap());
+    }
+
+    #[test]
+    fn multisig_rejects_a_signature_bound_to_another_transaction() {
+        let key1 = generate_signing_key();
+        let key2 = generate_signing_key();
+        let multisig = MultiSigConfig {
+            signers: vec![
+                signing_signer("signer1", &key1),
+                signing_signer("signer2", &key2),
+            ],
+            threshold: 2,
+            network: Network::Bitcoin,
+            address: "bc1qmultisig".to_string(),
+            created_at: Utc::now().timestamp(),
+        };
+
+        let mut tx = sample_transaction();
+        sign_transaction(&mut tx, "signer1", &key1, &key1.verifying_key()).unwrap();
+        sign_transaction(&mut tx, "signer2", &key2, &key2.verifying_key()).unwrap();
+        assert!(verify_multisig(&tx, &multisig).unwrap());
+
+        // Tampering with the amount must invalidate both signatures.
+        tx.amount = "900000".to_string();
+        assert!(verify_multisig(&tx, &multisig).is_err());
+    }
+
+    fn secp_public_key(secret: u8) -> Vec<u8> {
+        let secp = secp256k1::Secp256k1::new();
+        let mut bytes = [0u8; 32];
+        bytes[31] = secret;
+        let sk = secp256k1::SecretKey::from_slice(&bytes).unwrap();
+        secp256k1::PublicKey::from_secret_key(&secp, &sk)
+            .serialize()
+            .to_vec()
+    }
+
     #[test]
     fn test_multisig_wallet() {
-        let signing_key1 = generate_signing_key();
-        let signing_key2 = generate_signing_key();
+        let key1 = secp_public_key(1);
+        let key2 = secp_public_key(2);
 
         let config = WalletConfig {
             network: Network::Bitcoin,
@@ -908,13 +1211,13 @@ mod tests {
                     public_keys: vec![PublicKeyInfo {
                         key_type: KeyType::Signing,
                         key_id: "key1".to_string(),
-                        public_key: signing_key1.verifying_key().to_bytes().to_vec(),
-                        verifier_public_key: signing_key1.verifying_key().to_bytes().to_vec(),
+                        public_key: key1.clone(),
+                        verifier_public_key: key1.clone(),
                         created_at: Utc::now().timestamp(),
                         expires_at: None,
                         is_active: true,
                     }],
-                    threshold: 2,
+                    threshold: 1,
                     is_hsm: false,
                     created_at: Utc::now().timestamp(),
                     last_used_at: None,
@@ -925,13 +1228,13 @@ mod tests {
                     public_keys: vec![PublicKeyInfo {
                         key_type: KeyType::Signing,
                         key_id: "key2".to_string(),
-                        public_key: signing_key2.verifying_key().to_bytes().to_vec(),
-                        verifier_public_key: signing_key2.verifying_key().to_bytes().to_vec(),
+                        public_key: key2.clone(),
+                        verifier_public_key: key2.clone(),
                         created_at: Utc::now().timestamp(),
                         expires_at: None,
                         is_active: true,
                     }],
-                    threshold: 2,
+                    threshold: 1,
                     is_hsm: false,
                     created_at: Utc::now().timestamp(),
                     last_used_at: None,
@@ -945,8 +1248,67 @@ mod tests {
             air_gapped: true,
         };
 
-        let result = create_multisig_wallet(&config);
-        assert!(result.is_ok());
+        let multisig = create_multisig_wallet(&config).unwrap();
+        // A 2-of-2 P2SH address on mainnet starts with '3'.
+        assert!(multisig.address.starts_with('3'), "got {}", multisig.address);
+        assert_eq!(multisig.threshold, 2);
+
+        // The same keys must produce the same address, and a different
+        // threshold a different one.
+        let again = create_multisig_wallet(&config).unwrap();
+        assert_eq!(multisig.address, again.address);
+
+        // A different signer set must produce a different script address.
+        let mut three_signers = config.clone();
+        let key3 = secp_public_key(3);
+        three_signers.signers.push(SignerInfo {
+            signer_id: "signer3".to_string(),
+            name: "Signer 3".to_string(),
+            public_keys: vec![PublicKeyInfo {
+                key_type: KeyType::Signing,
+                key_id: "key3".to_string(),
+                public_key: key3.clone(),
+                verifier_public_key: key3,
+                created_at: Utc::now().timestamp(),
+                expires_at: None,
+                is_active: true,
+            }],
+            threshold: 1,
+            is_hsm: false,
+            created_at: Utc::now().timestamp(),
+            last_used_at: None,
+        });
+        let other = create_multisig_wallet(&three_signers).unwrap();
+        assert_ne!(multisig.address, other.address);
+    }
+
+    #[test]
+    fn p2pkh_matches_known_vector() {
+        // Private key 1 on Bitcoin mainnet is the canonical P2PKH vector.
+        let addr = derive_address(Network::Bitcoin, &secp_public_key(1)).unwrap();
+        assert_eq!(addr, "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH");
+    }
+
+    #[test]
+    fn evm_address_matches_known_vector() {
+        // Private key 1 on Ethereum, EIP-55 checksummed.
+        let addr = derive_address(Network::Ethereum, &secp_public_key(1)).unwrap();
+        assert_eq!(addr, "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf");
+    }
+
+    #[test]
+    fn solana_address_is_base58_of_the_key() {
+        let addr = derive_address(Network::Solana, &[0u8; 32]).unwrap();
+        assert_eq!(addr, "11111111111111111111111111111111");
+
+        // A wrong-sized key must be rejected, not silently encoded.
+        assert!(derive_address(Network::Solana, &[0u8; 20]).is_err());
+    }
+
+    #[test]
+    fn derive_address_rejects_non_secp256k1_keys() {
+        // 32 bytes that are not a valid secp256k1 public key encoding.
+        assert!(derive_address(Network::Bitcoin, &[9u8; 32]).is_err());
     }
 
     #[test]

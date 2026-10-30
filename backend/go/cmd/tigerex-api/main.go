@@ -440,6 +440,7 @@ func main() {
 		admin.GET("/deposits", handleAdminGetDeposits)
 		admin.PUT("/markets/:symbol", handleAdminUpdateMarket)
 		admin.GET("/stats", handleAdminGetStats)
+		admin.GET("/analytics", handleAdminGetAnalytics)
 		admin.GET("/markets", handleAdminGetMarkets)
 		admin.GET("/audit", handleAdminGetAudit)
 		admin.PUT("/users/:userId/status", handleAdminSetUserStatus)
@@ -2464,6 +2465,32 @@ func handleAdminGetStats(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, stats)
+}
+
+// handleAdminGetAnalytics returns ledger-derived daily series for the admin
+// analytics dashboard. The window is bounded so a caller cannot ask for an
+// unbounded scan.
+func handleAdminGetAnalytics(c *gin.Context) {
+	if !requireAdminStore(c) {
+		return
+	}
+
+	days := 30
+	if raw := c.Query("days"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "days must be an integer"})
+			return
+		}
+		days = parsed
+	}
+
+	report, err := adminStore.Analytics(c.Request.Context(), days)
+	if err != nil {
+		adminError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, report)
 }
 
 // handleAdminGetMarkets lists every market with its trading status.

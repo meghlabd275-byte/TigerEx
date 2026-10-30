@@ -59,6 +59,33 @@ interface KYCRecord {
   reviewerNotes?: string;
 }
 
+interface AnalyticsPoint {
+  date: string;
+  value: number;
+}
+
+interface RevenueSource {
+  source: string;
+  amount: number;
+}
+
+interface AnalyticsReport {
+  days: number;
+  from: string;
+  to: string;
+  volumeSeries: AnalyticsPoint[];
+  userGrowthSeries: AnalyticsPoint[];
+  revenueSeries: AnalyticsPoint[];
+  revenueBreakdown: RevenueSource[];
+}
+
+const formatNumber = (num: number): string => {
+  if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+  if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+  if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
+  return num.toFixed(2);
+};
+
 interface AlertRecord {
   alertId: string;
   userId: string;
@@ -173,13 +200,6 @@ const DashboardOverview: React.FC = () => {
     </div>
   );
 
-  const formatNumber = (num: number): string => {
-    if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
-    if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
-    if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
-    return num.toFixed(2);
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -195,28 +215,24 @@ const DashboardOverview: React.FC = () => {
         <StatCard
           title="Total Users"
           value={stats.totalUsers.toLocaleString()}
-          change="+12.5%"
           icon={Users}
           color="bg-blue-500"
         />
         <StatCard
           title="24h Volume"
           value={`$${formatNumber(stats.totalVolume24h)}`}
-          change="+8.3%"
           icon={DollarSign}
           color="bg-green-500"
         />
         <StatCard
           title="24h Trades"
           value={stats.totalTrades24h.toLocaleString()}
-          change="+15.2%"
           icon={Activity}
           color="bg-purple-500"
         />
         <StatCard
           title="24h Fees"
           value={`$${formatNumber(stats.totalFees24h)}`}
-          change="+5.7%"
           icon={TrendingUp}
           color="bg-orange-500"
         />
@@ -999,64 +1015,176 @@ const FeeManagement: React.FC = () => {
 // =============================================================================
 
 const AnalyticsDashboard: React.FC = () => {
+  const [days, setDays] = useState(30);
+  const analytics = useApiResource<AnalyticsReport>(`/api/admin/analytics?days=${days}`);
+
+  const maxVolume = useMemo(
+    () => Math.max(1, ...(analytics.data?.volumeSeries ?? []).map((p) => p.value)),
+    [analytics.data],
+  );
+  const totalVolume = useMemo(
+    () => (analytics.data?.volumeSeries ?? []).reduce((sum, p) => sum + p.value, 0),
+    [analytics.data],
+  );
+  const totalRevenue = useMemo(
+    () => (analytics.data?.revenueSeries ?? []).reduce((sum, p) => sum + p.value, 0),
+    [analytics.data],
+  );
+  const totalSignups = useMemo(
+    () => (analytics.data?.userGrowthSeries ?? []).reduce((sum, p) => sum + p.value, 0),
+    [analytics.data],
+  );
+  const maxRevenue = useMemo(
+    () => Math.max(1, ...(analytics.data?.revenueBreakdown ?? []).map((r) => r.amount)),
+    [analytics.data],
+  );
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Analytics Dashboard</h2>
         <div className="flex items-center gap-4">
-          <select className="px-4 py-2 bg-gray-100 dark:bg-gray-800 border-0 rounded-lg text-sm">
-            <option>Last 7 days</option>
-            <option>Last 30 days</option>
-            <option>Last 90 days</option>
-            <option>This year</option>
+          <select
+            value={days}
+            onChange={(e) => setDays(Number(e.target.value))}
+            className="px-4 py-2 bg-gray-100 dark:bg-gray-800 border-0 rounded-lg text-sm"
+          >
+            <option value={7}>Last 7 days</option>
+            <option value={30}>Last 30 days</option>
+            <option value={90}>Last 90 days</option>
+            <option value={365}>This year</option>
           </select>
-          <button className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm font-medium flex items-center gap-2">
-            <Download className="w-4 h-4" />
-            Export Report
+          <button
+            onClick={analytics.reload}
+            disabled={analytics.loading}
+            className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${analytics.loading ? 'animate-spin' : ''}`} />
+            Refresh
           </button>
         </div>
       </div>
 
-      {/* Charts Placeholder */}
+      {analytics.error && (
+        <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 px-4 py-3 text-sm text-red-600 dark:text-red-400">
+          {analytics.error}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+          <div className="text-sm text-gray-500 mb-1">Volume ({days}d)</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-white">
+            ${formatNumber(totalVolume)}
+          </div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+          <div className="text-sm text-gray-500 mb-1">Revenue ({days}d)</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-white">
+            ${formatNumber(totalRevenue)}
+          </div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+          <div className="text-sm text-gray-500 mb-1">New Users ({days}d)</div>
+          <div className="text-2xl font-bold text-gray-900 dark:text-white">
+            {totalSignups.toLocaleString()}
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
           <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Trading Volume</h3>
-          <div className="h-64 flex items-center justify-center text-gray-400">
-            <div className="text-center">
-              <BarChart3 className="w-16 h-16 mx-auto mb-2 opacity-50" />
-              <p>Volume chart placeholder</p>
+          {analytics.loading && !analytics.data ? (
+            <div className="h-64 flex items-center justify-center text-gray-400">Loading…</div>
+          ) : (analytics.data?.volumeSeries.length ?? 0) === 0 ? (
+            <div className="h-64 flex items-center justify-center text-gray-400">No trading history in this window.</div>
+          ) : (
+            <div className="h-64 flex items-end gap-1">
+              {analytics.data!.volumeSeries.map((point) => (
+                <div
+                  key={point.date}
+                  title={`${point.date}: ${point.value.toFixed(2)}`}
+                  className="flex-1 bg-orange-500/80 hover:bg-orange-500 rounded-t"
+                  style={{ height: `${Math.max(1, (point.value / maxVolume) * 100)}%` }}
+                />
+              ))}
             </div>
-          </div>
+          )}
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
           <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">User Growth</h3>
-          <div className="h-64 flex items-center justify-center text-gray-400">
-            <div className="text-center">
-              <Users className="w-16 h-16 mx-auto mb-2 opacity-50" />
-              <p>User growth chart placeholder</p>
+          {analytics.loading && !analytics.data ? (
+            <div className="h-64 flex items-center justify-center text-gray-400">Loading…</div>
+          ) : (analytics.data?.userGrowthSeries.length ?? 0) === 0 ? (
+            <div className="h-64 flex items-center justify-center text-gray-400">No sign-ups in this window.</div>
+          ) : (
+            <div className="h-64 flex items-end gap-1">
+              {analytics.data!.userGrowthSeries.map((point) => {
+                const max = Math.max(1, ...analytics.data!.userGrowthSeries.map((p) => p.value));
+                return (
+                  <div
+                    key={point.date}
+                    title={`${point.date}: ${point.value}`}
+                    className="flex-1 bg-blue-500/80 hover:bg-blue-500 rounded-t"
+                    style={{ height: `${Math.max(1, (point.value / max) * 100)}%` }}
+                  />
+                );
+              })}
             </div>
-          </div>
+          )}
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
           <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Revenue Breakdown</h3>
-          <div className="h-64 flex items-center justify-center text-gray-400">
-            <div className="text-center">
-              <PieChart className="w-16 h-16 mx-auto mb-2 opacity-50" />
-              <p>Revenue pie chart placeholder</p>
+          {(analytics.data?.revenueBreakdown.length ?? 0) === 0 ? (
+            <div className="h-64 flex items-center justify-center text-gray-400">No revenue recorded in this window.</div>
+          ) : (
+            <div className="space-y-4 pt-2">
+              {analytics.data!.revenueBreakdown.map((source) => (
+                <div key={source.source}>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-gray-600 dark:text-gray-300 capitalize">
+                      {source.source.replace(/_/g, ' ')}
+                    </span>
+                    <span className="font-medium text-gray-900 dark:text-white">
+                      ${formatNumber(source.amount)}
+                    </span>
+                  </div>
+                  <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-green-500"
+                      style={{ width: `${(source.amount / maxRevenue) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
-          </div>
+          )}
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Fee Revenue</h3>
-          <div className="h-64 flex items-center justify-center text-gray-400">
-            <div className="text-center">
-              <TrendingUp className="w-16 h-16 mx-auto mb-2 opacity-50" />
-              <p>Fee revenue chart placeholder</p>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Daily Revenue</h3>
+          {analytics.loading && !analytics.data ? (
+            <div className="h-64 flex items-center justify-center text-gray-400">Loading…</div>
+          ) : (analytics.data?.revenueSeries.length ?? 0) === 0 ? (
+            <div className="h-64 flex items-center justify-center text-gray-400">No revenue in this window.</div>
+          ) : (
+            <div className="h-64 flex items-end gap-1">
+              {analytics.data!.revenueSeries.map((point) => {
+                const max = Math.max(1, ...analytics.data!.revenueSeries.map((p) => p.value));
+                return (
+                  <div
+                    key={point.date}
+                    title={`${point.date}: ${point.value.toFixed(2)}`}
+                    className="flex-1 bg-purple-500/80 hover:bg-purple-500 rounded-t"
+                    style={{ height: `${Math.max(1, (point.value / max) * 100)}%` }}
+                  />
+                );
+              })}
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

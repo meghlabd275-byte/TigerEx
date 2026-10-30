@@ -7,7 +7,6 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
-use sha2::{Sha256, Digest};
 
 // ============================================================================
 // Error Types
@@ -44,7 +43,7 @@ pub enum WalletError {
 // Core Types
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WalletType {
     Spot,
     Funding,
@@ -54,7 +53,7 @@ pub enum WalletType {
     Cold,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Chain {
     Bitcoin,
     Ethereum,
@@ -323,6 +322,7 @@ impl WalletManager {
         chain: Chain,
         symbol: &str,
         amount: f64,
+        fee: f64,
         to_address: &str,
     ) -> Result<Transaction, WalletError> {
         // Rate limiting
@@ -340,8 +340,8 @@ impl WalletManager {
         let balance = wallet.get_balance(symbol)
             .ok_or(WalletError::WalletNotFound)?;
         
-        // Calculate fee
-        let fee = self.calculate_withdrawal_fee(chain, symbol);
+        // The fee is supplied by the caller from the live fee schedule; this
+        // crate never invents one.
         let total = amount + fee;
         
         if balance.available < total {
@@ -440,25 +440,25 @@ impl WalletManager {
         Ok((from_tx, to_tx))
     }
 
-    pub fn generate_address(
+    /// Register an address that was derived from real key material.
+    ///
+    /// This crate deliberately does not derive addresses itself: an address
+    /// built from random bytes can never be spent from. Derivation happens in
+    /// the key-holding wallet service, which passes the result here.
+    pub fn register_address(
         &self,
         user_id: &str,
         wallet_type: WalletType,
         chain: Chain,
+        address: String,
     ) -> Result<Address, WalletError> {
+        self.validate_address(chain, &address)?;
+
         let wallet = self.get_wallet(user_id, wallet_type)
             .ok_or(WalletError::WalletNotFound)?;
 
-        let address = match chain {
-            Chain::Bitcoin => self.generate_btc_address(),
-            Chain::Ethereum | Chain::BNBChain | Chain::Polygon | Chain::Avalanche |
-            Chain::Arbitrum | Chain::Optimism | Chain::Base => self.generate_evm_address(),
-            Chain::Solana => self.generate_solana_address(),
-            Chain::Tron => self.generate_tron_address(),
-        }?;
-
         let addr = Address {
-            address: address.clone(),
+            address,
             chain,
             symbol: chain_to_symbol(chain),
             memo: None,
@@ -472,44 +472,10 @@ impl WalletManager {
         Ok(addr)
     }
 
-    fn generate_btc_address(&self) -> Result<String, WalletError> {
-        // Generate BTC address (simplified)
-        let mut bytes = [0u8; 25];
-        rand::rand::thread_rng().fill(&mut bytes[1..21]);
-        let checksum = double_sha256(&bytes[..21])[..4].to_vec();
-        bytes[21..25].copy_from_slice(&checksum);
-        
-        Ok(base58::encode(&bytes))
-    }
-
-    fn generate_evm_address(&self) -> Result<String, WalletError> {
-        // Generate EVM address
-        let mut bytes = [0u8; 20];
-        rand::rand::thread_rng().fill(&mut bytes);
-        
-        Ok(format!("0x{}", hex::encode(bytes)))
-    }
-
-    fn generate_solana_address(&self) -> Result<String, WalletError> {
-        // Generate Solana address
-        let mut bytes = [0u8; 32];
-        rand::rand::thread_rng().fill(&mut bytes);
-        
-        Ok(base58::encode(&bytes))
-    }
-
-    fn generate_tron_address(&self) -> Result<String, WalletError> {
-        // Generate Tron address
-        let mut bytes = [0u8; 21];
-        rand::rand::thread_rng().fill(&mut bytes);
-        
-        Ok("T" + &base58::encode(&bytes))
-    }
-
     fn validate_address(&self, chain: Chain, address: &str) -> Result<(), WalletError> {
         match chain {
             Chain::Bitcoin => {
-                if !address.starts_with('1') && !address.starts_with('3') && !address.starts_with('bc1') {
+                if !address.starts_with('1') && !address.starts_with('3') && !address.starts_with("bc1") {
                     return Err(WalletError::InvalidAddress);
                 }
             }
@@ -534,33 +500,21 @@ impl WalletManager {
         Ok(())
     }
 
-    fn calculate_withdrawal_fee(&self, chain: Chain, symbol: &str) -> f64 {
-        // Simplified fee calculation
-        match chain {
-            Chain::Bitcoin => 0.0001,
-            Chain::Ethereum => 0.005,
-            Chain::BNBChain => 0.001,
-            Chain::Solana => 0.00025,
-            Chain::Tron => 1.0,
-            _ => 0.01,
-        }
-    }
-
     fn check_rate_limit(&self, user_id: &str) -> Result<(), WalletError> {
         let mut limits = self.rate_limits.write();
         let now = Utc::now();
         
-        if let Some((count, timestamp)) = limits.get(user_id) {
-            if *timestamp + chrono::Duration::minutes(1) > now {
-                if *count >= 10 {
+        let existing = limits.get(user_id).copied();
+        match existing {
+            Some((count, timestamp)) if timestamp + chrono::Duration::minutes(1) > now => {
+                if count >= 10 {
                     return Err(WalletError::RateLimitExceeded);
                 }
-                limits.insert(user_id.to_string(), (*count + 1, now));
-            } else {
+                limits.insert(user_id.to_string(), (count + 1, now));
+            }
+            _ => {
                 limits.insert(user_id.to_string(), (1, now));
             }
-        } else {
-            limits.insert(user_id.to_string(), (1, now));
         }
         
         Ok(())
@@ -582,33 +536,9 @@ fn chain_to_symbol(chain: Chain) -> String {
     }
 }
 
-fn double_sha256(data: &[u8]) -> Vec<u8> {
-    let mut hasher1 = Sha256::new();
-    hasher1.update(data);
-    let hash1 = hasher1.finalize();
-    
-    let mut hasher2 = Sha256::new();
-    hasher2.update(&hash1);
-    hasher2.finalize().to_vec()
-}
 
 fn main() {
     tracing::info!("TigerEx Wallet Manager starting...");
-    
-    let manager = WalletManager::new();
-    
-    // Create test wallet
-    let wallet = manager.create_wallet("user123", WalletType::Spot);
-    
-    // Generate address
-    if let Ok(addr) = manager.generate_address("user123", WalletType::Spot, Chain::Ethereum) {
-        tracing::info!("Generated address: {}", addr.address);
-    }
-    
-    // Deposit
-    if let Ok(tx) = manager.deposit("user123", WalletType::Spot, "USDT", 1000.0) {
-        tracing::info!("Deposit tx: {}", tx.tx_id);
-    }
-    
+    let _manager = WalletManager::new();
     tracing::info!("TigerEx Wallet Manager ready");
 }

@@ -63,6 +63,7 @@ type Store interface {
 	SetMarketStatus(ctx context.Context, symbol, status string) error
 
 	Stats(ctx context.Context) (*ExchangeStats, error)
+	Analytics(ctx context.Context, days int) (*AnalyticsReport, error)
 
 	AppendAudit(ctx context.Context, entry *AuditEntry) error
 	ListAudit(ctx context.Context, limit, offset int) ([]AuditEntry, error)
@@ -176,6 +177,31 @@ type ExchangeStats struct {
 	PendingDeposits    int64   `json:"pendingDeposits"`
 	ActiveMarkets      int64   `json:"activeMarkets"`
 	TotalVolume24h     float64 `json:"totalVolume24h"`
+}
+
+// AnalyticsPoint is one day in a time series.
+type AnalyticsPoint struct {
+	Date  string  `json:"date"`
+	Value float64 `json:"value"`
+}
+
+// RevenueSource is one labelled revenue total for the selected range.
+type RevenueSource struct {
+	Source string  `json:"source"`
+	Amount float64 `json:"amount"`
+}
+
+// AnalyticsReport is the ledger-derived analytics shown on the admin dashboard.
+// Every figure is aggregated from TigerEx's own tables over the requested
+// window; days with no activity are present with a genuine zero.
+type AnalyticsReport struct {
+	Days             int              `json:"days"`
+	From             string           `json:"from"`
+	To               string           `json:"to"`
+	VolumeSeries     []AnalyticsPoint `json:"volumeSeries"`
+	UserGrowthSeries []AnalyticsPoint `json:"userGrowthSeries"`
+	RevenueSeries    []AnalyticsPoint `json:"revenueSeries"`
+	RevenueBreakdown []RevenueSource  `json:"revenueBreakdown"`
 }
 
 // AuditEntry records one operator action.
@@ -722,6 +748,145 @@ func (s *PGStore) Stats(ctx context.Context) (*ExchangeStats, error) {
 		return nil, fmt.Errorf("collecting stats: %w", err)
 	}
 	return &st, nil
+}
+
+// --- analytics -------------------------------------------------------------
+
+// Analytics aggregates daily trading volume, user sign-ups and revenue for the
+// trailing days window (clamped to a sane range). Empty days are emitted as
+// real zeros so the dashboard never has to invent a point.
+func (s *PGStore) Analytics(ctx context.Context, days int) (*AnalyticsReport, error) {
+	if days <= 0 {
+		days = 30
+	}
+	if days > 366 {
+		days = 366
+	}
+
+	end := time.Now().UTC().Truncate(24 * time.Hour)
+	start := end.AddDate(0, 0, -(days - 1))
+	windowEnd := end.AddDate(0, 0, 1)
+
+	report := &AnalyticsReport{
+		Days:             days,
+		From:             start.Format("2006-01-02"),
+		To:               end.Format("2006-01-02"),
+		VolumeSeries:     make([]AnalyticsPoint, 0, days),
+		UserGrowthSeries: make([]AnalyticsPoint, 0, days),
+		RevenueSeries:    make([]AnalyticsPoint, 0, days),
+	}
+
+	volume := map[string]float64{}
+	tradeFees := map[string]float64{}
+	{
+		const q = `
+			SELECT to_char(timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD'),
+			       COALESCE(SUM(quote_quantity), 0),
+			       COALESCE(SUM(maker_fee + taker_fee), 0)
+			FROM trades
+			WHERE timestamp >= $1 AND timestamp < $2
+			GROUP BY 1
+		`
+		rows, err := s.pool.Query(ctx, q, start, windowEnd)
+		if err != nil {
+			return nil, fmt.Errorf("aggregating trade volume: %w", err)
+		}
+		for rows.Next() {
+			var day string
+			var vol, fee float64
+			if err := rows.Scan(&day, &vol, &fee); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scanning trade volume: %w", err)
+			}
+			volume[day] = vol
+			tradeFees[day] = fee
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("aggregating trade volume: %w", err)
+		}
+	}
+
+	withdrawalFees := map[string]float64{}
+	{
+		const q = `
+			SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD'),
+			       COALESCE(SUM(fee), 0)
+			FROM withdrawals
+			WHERE created_at >= $1 AND created_at < $2 AND status = 'completed'
+			GROUP BY 1
+		`
+		rows, err := s.pool.Query(ctx, q, start, windowEnd)
+		if err != nil {
+			return nil, fmt.Errorf("aggregating withdrawal fees: %w", err)
+		}
+		for rows.Next() {
+			var day string
+			var fee float64
+			if err := rows.Scan(&day, &fee); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scanning withdrawal fees: %w", err)
+			}
+			withdrawalFees[day] = fee
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("aggregating withdrawal fees: %w", err)
+		}
+	}
+
+	signups := map[string]float64{}
+	{
+		const q = `
+			SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD'), COUNT(*)
+			FROM users
+			WHERE created_at >= $1 AND created_at < $2 AND deleted_at IS NULL
+			GROUP BY 1
+		`
+		rows, err := s.pool.Query(ctx, q, start, windowEnd)
+		if err != nil {
+			return nil, fmt.Errorf("aggregating user sign-ups: %w", err)
+		}
+		for rows.Next() {
+			var day string
+			var n float64
+			if err := rows.Scan(&day, &n); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scanning user sign-ups: %w", err)
+			}
+			signups[day] = n
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("aggregating user sign-ups: %w", err)
+		}
+	}
+
+	var totalTradeFees, totalWithdrawalFees, totalDepositFees float64
+	for i := 0; i < days; i++ {
+		day := start.AddDate(0, 0, i).Format("2006-01-02")
+		report.VolumeSeries = append(report.VolumeSeries, AnalyticsPoint{Date: day, Value: volume[day]})
+		report.UserGrowthSeries = append(report.UserGrowthSeries, AnalyticsPoint{Date: day, Value: signups[day]})
+		report.RevenueSeries = append(report.RevenueSeries, AnalyticsPoint{Date: day, Value: tradeFees[day] + withdrawalFees[day]})
+		totalTradeFees += tradeFees[day]
+		totalWithdrawalFees += withdrawalFees[day]
+	}
+
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(fee), 0)
+		FROM deposits
+		WHERE created_at >= $1 AND created_at < $2 AND status = 'completed'
+	`, start, windowEnd).Scan(&totalDepositFees); err != nil {
+		return nil, fmt.Errorf("aggregating deposit fees: %w", err)
+	}
+
+	report.RevenueBreakdown = []RevenueSource{
+		{Source: "trading_fees", Amount: totalTradeFees},
+		{Source: "withdrawal_fees", Amount: totalWithdrawalFees},
+		{Source: "deposit_fees", Amount: totalDepositFees},
+	}
+
+	return report, nil
 }
 
 // --- audit -----------------------------------------------------------------

@@ -1,28 +1,39 @@
 //! TigerEx Cold Wallet Daemon
-//! Production-grade cold wallet management service
-
-use tigerex_cold_wallet::{
-    ColdWalletManager, Network, WalletType, WalletStatus,
-};
+//!
+//! Resident process that owns the in-memory cold-wallet manager. Configuration
+//! comes from the environment; there are no compiled-in defaults that could
+//! silently stand in for real settings.
 
 use std::sync::Arc;
+
+use tigerex_cold_wallet::ColdWalletManager;
 use tokio::sync::RwLock;
-use tracing::{info, error, Level};
+use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-mod hsm;
-mod blockchain;
-
+/// Shared state handed to command handlers.
 #[derive(Clone)]
 pub struct AppState {
     pub wallet_manager: Arc<RwLock<ColdWalletManager>>,
     pub is_air_gapped: bool,
-    pub hsm_enabled: bool,
+}
+
+/// Parse a boolean environment flag. An unset flag keeps the caller's default;
+/// an unparsable value is a hard error rather than a silent fallback.
+fn env_flag(name: &str, default: bool) -> Result<bool, String> {
+    match std::env::var(name) {
+        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(true),
+            "0" | "false" | "no" | "off" => Ok(false),
+            other => Err(format!("{name}: expected a boolean, got {other:?}")),
+        },
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(e) => Err(format!("{name}: {e}")),
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .with_target(true)
@@ -30,90 +41,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_file(true)
         .with_line_number(true)
         .finish();
-
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set tracing subscriber");
 
+    let is_air_gapped = env_flag("TIGEREX_AIR_GAPPED", true)?;
+
     info!("Starting TigerEx Cold Wallet Daemon v1.0.0");
-    info!("Initializing wallet manager...");
+    info!("Air-gapped mode: {is_air_gapped}");
 
-    let wallet_manager = Arc::new(RwLock::new(ColdWalletManager::new()));
-
-    // Initialize app state
     let state = AppState {
-        wallet_manager: wallet_manager.clone(),
-        is_air_gapped: true,
-        hsm_enabled: true,
+        wallet_manager: Arc::new(RwLock::new(ColdWalletManager::new())),
+        is_air_gapped,
     };
 
-    // Initialize HSM if enabled
-    if state.hsm_enabled {
-        info!("Initializing HSM...");
-        if let Err(e) = hsm::initialize_hsm().await {
-            error!("HSM initialization failed: {}", e);
-        }
+    if !state.is_air_gapped {
+        error!(
+            "TIGEREX_AIR_GAPPED is disabled. A cold wallet daemon must remain \
+             offline; refusing to start."
+        );
+        return Err("refusing to start a non-air-gapped cold wallet daemon".into());
     }
 
-    // Initialize blockchain connections
-    info!("Connecting to blockchain nodes...");
-    let btc_node = blockchain::connect_node(Network::Bitcoin, "btc-node:8332").await?;
-    let eth_node = blockchain::connect_node(Network::Ethereum, "eth-node:8545").await?;
+    info!("Cold wallet manager ready");
 
-    info!("TigerEx Cold Wallet initialized successfully");
-    info!("Air-gapped mode: {}", state.is_air_gapped);
-    info!("HSM enabled: {}", state.hsm_enabled);
-
-    // Keep the service running
     tokio::signal::ctrl_c().await?;
     info!("Shutting down...");
 
     Ok(())
 }
 
+/// Operator commands exposed by the daemon.
 pub mod commands {
-    use tigerex_cold_wallet::*;
-    
-    /// Process withdrawal with full security checks
-    pub async fn process_withdrawal(
-        state: &AppState,
-        user_id: &str,
-        network: Network,
-        to_address: &str,
-        amount: &str,
-    ) -> Result<Transaction, ColdWalletError> {
-        let request = WithdrawalRequest {
-            request_id: format!("req_{}", Utc::now().timestamp_millis()),
-            user_id: user_id.to_string(),
-            network,
-            to_address: to_address.to_string(),
-            amount: amount.to_string(),
-            fee_level: "medium".to_string(),
-            status: WalletStatus::Active,
-            created_at: Utc::now().timestamp(),
-            approved_at: None,
-            processed_at: None,
-        };
+    use super::AppState;
+    use tigerex_cold_wallet::{AuditLog, ColdWalletError, Transaction, WalletAddress};
 
-        let mut manager = state.wallet_manager.write().await;
-        manager.process_withdrawal(request)
-    }
-
-    /// Sign transaction with HSM
-    pub async fn sign_transaction_hsm(
-        state: &AppState,
-        tx_id: &str,
-        signer_id: &str,
-    ) -> Result<Transaction, ColdWalletError> {
-        // In production, use HSM to sign
-        let signing_key = crate::hsm::sign_with_hsm(tx_id.as_bytes())?;
-        
-        let mut manager = state.wallet_manager.write().await;
-        // Would need proper key management in production
-        Ok(manager.get_transaction(tx_id).cloned().unwrap())
-    }
-
-    /// Get wallet balance
-    pub async fn get_balance(
+    /// Look up a wallet address.
+    pub async fn get_wallet(
         state: &AppState,
         address: &str,
     ) -> Result<Option<WalletAddress>, ColdWalletError> {
@@ -121,13 +84,20 @@ pub mod commands {
         Ok(manager.get_wallet(address).cloned())
     }
 
-    /// Get audit logs
-    pub async fn get_audit_logs(
+    /// Look up a transaction by id.
+    pub async fn get_transaction(
         state: &AppState,
-        limit: usize,
-    ) -> Vec<AuditLog> {
+        tx_id: &str,
+    ) -> Result<Option<Transaction>, ColdWalletError> {
         let manager = state.wallet_manager.read().await;
-        manager.get_audit_logs(limit)
+        Ok(manager.get_transaction(tx_id).cloned())
+    }
+
+    /// Return the most recent audit log entries.
+    pub async fn get_audit_logs(state: &AppState, limit: usize) -> Vec<AuditLog> {
+        let manager = state.wallet_manager.read().await;
+        manager
+            .get_audit_logs(limit)
             .into_iter()
             .cloned()
             .collect()
