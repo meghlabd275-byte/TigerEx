@@ -217,7 +217,7 @@ function processCryptoWithdrawal(userId, currency, amount, toAddress, toTag = nu
 
 const paymentEndpoints = {
   // Get payment methods
-  getPaymentMethods: \`
+  getPaymentMethods: `
     app.get('/api/v1/payment/methods', authenticateRequest, (req, res) => {
       try {
         const methods = db.prepare(\`
@@ -233,10 +233,10 @@ const paymentEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Add payment method
-  addPaymentMethod: \`
+  addPaymentMethod: `
     app.post('/api/v1/payment/methods/add', authenticateRequest, (req, res) => {
       try {
         const { methodType, provider, accountHolder, iban, swiftCode, bankName } = req.body;
@@ -263,10 +263,10 @@ const paymentEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Deposit fiat
-  depositFiat: \`
+  depositFiat: `
     app.post('/api/v1/deposit/fiat', authenticateRequest, (req, res) => {
       try {
         const { currency, amount, provider, methodId } = req.body;
@@ -286,10 +286,10 @@ const paymentEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Get deposit status
-  getDepositStatus: \`
+  getDepositStatus: `
     app.get('/api/v1/deposit/status/:depositId', authenticateRequest, (req, res) => {
       try {
         const deposit = db.prepare(\`
@@ -317,10 +317,10 @@ const paymentEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Withdraw crypto
-  withdrawCrypto: \`
+  withdrawCrypto: `
     app.post('/api/v1/withdraw/crypto', authenticateRequest, (req, res) => {
       try {
         const { currency, amount, address, tag } = req.body;
@@ -340,10 +340,10 @@ const paymentEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Get withdrawal history
-  getWithdrawalHistory: \`
+  getWithdrawalHistory: `
     app.get('/api/v1/withdraw/history', authenticateRequest, (req, res) => {
       try {
         const withdrawals = db.prepare(\`
@@ -371,10 +371,10 @@ const paymentEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Get payment providers
-  getProviders: \`
+  getProviders: `
     app.get('/api/v1/payment/providers', (req, res) => {
       try {
         const providers = Object.entries(PAYMENT_PROVIDERS).map(([key, config]) => ({
@@ -396,7 +396,7 @@ const paymentEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`
+  `
 };
 
 module.exports = {

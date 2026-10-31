@@ -238,6 +238,19 @@ function checkUserActivity(rule) {
 // FEATURE FLAGS
 // ============================================================================
 
+// FNV-1a over the identifier, reduced to a 0-99 bucket. A stable hash keeps a
+// given user in the same bucket across requests, which `charCodeAt(0)` and a
+// random draw both fail to do.
+function stableBucket(identifier) {
+  let hash = 0x811c9dc5;
+  const text = String(identifier);
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash % 100;
+}
+
 function isFeatureEnabled(featureName, userId = null) {
   try {
     const flag = db.prepare('SELECT * FROM feature_flags WHERE feature_name = ?').get(featureName);
@@ -245,15 +258,15 @@ function isFeatureEnabled(featureName, userId = null) {
 
     if (!flag.enabled) return false;
 
-    if (flag.rollout_percentage === 100) return true;
+    if (flag.rollout_percentage >= 100) return true;
+    if (flag.rollout_percentage <= 0) return false;
 
-    // Rollout logic - based on user ID hash for consistency
-    if (userId) {
-      const hash = parseInt(userId.charCodeAt(0)) % 100;
-      return hash < flag.rollout_percentage;
-    }
+    // A partial rollout must be decided deterministically per user. Without an
+    // identity there is nothing to bucket on, so the flag stays off rather than
+    // being decided by a random draw that changes on every request.
+    if (!userId) return false;
 
-    return Math.random() * 100 < flag.rollout_percentage;
+    return stableBucket(userId) < flag.rollout_percentage;
   } catch (error) {
     console.error('Error checking feature flag:', error);
     return false;
@@ -266,7 +279,7 @@ function isFeatureEnabled(featureName, userId = null) {
 
 const adminEndpoints = {
   // Get system dashboard
-  getDashboard: \`
+  getDashboard: `
     app.get('/api/v1/admin/dashboard', authenticateAdmin, (req, res) => {
       try {
         const metrics = generateSystemMetrics();
@@ -289,10 +302,10 @@ const adminEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Get users list (admin)
-  getUsers: \`
+  getUsers: `
     app.get('/api/v1/admin/users', authenticateAdmin, (req, res) => {
       try {
         const { limit = 50, offset = 0, status = 'all' } = req.query;
@@ -320,10 +333,10 @@ const adminEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Ban/Unban user
-  banUser: \`
+  banUser: `
     app.post('/api/v1/admin/users/:userId/ban', authenticateAdmin, (req, res) => {
       try {
         const { reason } = req.body;
@@ -341,10 +354,10 @@ const adminEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // View audit logs
-  getAuditLogs: \`
+  getAuditLogs: `
     app.get('/api/v1/admin/audit-logs', authenticateAdmin, (req, res) => {
       try {
         const { limit = 100, offset = 0 } = req.query;
@@ -360,10 +373,10 @@ const adminEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // System health check
-  getSystemHealth: \`
+  getSystemHealth: `
     app.get('/api/v1/admin/health', authenticateAdmin, (req, res) => {
       try {
         const health = {
@@ -389,7 +402,7 @@ const adminEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`
+  `
 };
 
 // Middleware for admin authentication
@@ -423,6 +436,7 @@ module.exports = {
   generateSystemMetrics,
   evaluateRiskRules,
   isFeatureEnabled,
+  stableBucket,
   adminEndpoints,
   authenticateAdmin
 };

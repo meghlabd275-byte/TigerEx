@@ -564,7 +564,10 @@ impl TradingBotEngine {
         let mut holdings = Vec::new();
         
         for (currency, balance) in balances {
-            let price = prices.get(currency).unwrap_or(&1.0);
+            // A holding without a verified price must not be valued at par.
+            let price = prices
+                .get(currency)
+                .ok_or_else(|| format!("no verified price for {currency}"))?;
             let value = balance * price;
             total_value += value;
             

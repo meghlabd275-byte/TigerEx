@@ -143,9 +143,11 @@ impl DarkPoolService {
                     continue;
                 }
 
+                // A crossing needs a price on both sides. Treating a missing
+                // price as an unconditional cross fabricated a fill at 0.0.
                 let crosses = match (orders[i].price, orders[j].price) {
                     (Some(buy), Some(sell)) => buy >= sell,
-                    _ => true,
+                    _ => false,
                 };
                 if !crosses {
                     continue;

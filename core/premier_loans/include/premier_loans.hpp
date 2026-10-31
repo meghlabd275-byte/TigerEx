@@ -18,6 +18,8 @@
 #include <atomic>
 #include <chrono>
 #include <string>
+#include <algorithm>
+#include <cmath>
 
 namespace tigerex {
 namespace loans {
@@ -86,14 +88,24 @@ private:
 public:
     PremierLoansEngine() {}
 
-    // Calculate credit score
-    double calculate_credit_score(const std::string& user_id, double income, uint64_t credit_history_months, double existing_debt) {
-        // Fico-style score calculation
-        double base_score = 300;
-        double income_factor = std::min(income / 100000.0, 200);  // Max 200 points
-        double history_factor = std::min(credit_history_months / 12.0 * 20, 200);  // Max 200 points
-        double debt_factor = (existing_debt > 0) ? (100 - std::min(existing_debt / income * 50, 100)) : 100;
-        
+    // Calculate credit score. A non-positive income yields no score, because the
+    // debt-to-income ratio is undefined and the loan limit would be meaningless.
+    std::optional<double> calculate_credit_score(const std::string& user_id, double income,
+                                                 uint64_t credit_history_months,
+                                                 double existing_debt) {
+        if (!std::isfinite(income) || income <= 0.0) {
+            return std::nullopt;
+        }
+        if (!std::isfinite(existing_debt) || existing_debt < 0.0) {
+            return std::nullopt;
+        }
+
+        double base_score = 300.0;
+        double income_factor = std::min(income / 100000.0, 200.0);
+        double history_factor = std::min(static_cast<double>(credit_history_months) / 12.0 * 20.0, 200.0);
+        double debt_ratio = existing_debt / income;
+        double debt_factor = 100.0 - std::min(debt_ratio * 50.0, 100.0);
+
         double score = base_score + income_factor + history_factor + debt_factor;
         return std::min(std::max(score, 300.0), 850.0);
     }
@@ -124,16 +136,32 @@ public:
         return income * multiplier;
     }
 
-    // Create loan offer
-    std::optional<std::string> create_offer(const std::string& user_id, LoanType type, double amount, uint64_t term_days) {
+    // Create loan offer. The rate and the size are drawn from the user's stored
+    // credit assessment; a user without one has no offer. The offer is rejected
+    // when it exceeds the assessed limit.
+    std::optional<std::string> create_offer(const std::string& user_id, LoanType type,
+                                            double amount, uint64_t term_days) {
         std::unique_lock lock(mutex_);
-        
-        double score = 700;  // Would fetch actual score
-        double rate = get_interest_rate(score);
+
+        if (!std::isfinite(amount) || amount <= 0.0 || term_days == 0) {
+            return std::nullopt;
+        }
+
+        auto score_it = credit_scores_.find(user_id);
+        if (score_it == credit_scores_.end()) {
+            return std::nullopt;
+        }
+        const CreditScore& credit = score_it->second;
+
+        if (amount > credit.max_loan_amount) {
+            return std::nullopt;
+        }
+
+        double rate = get_interest_rate(credit.score);
         double processing_fee = amount * 0.01;
-        
+
         std::string offer_id = "LOAN_" + std::to_string(next_offer_id_.fetch_add(1));
-        
+
         LoanOffer offer;
         offer.offer_id = offer_id;
         offer.user_id = user_id;
@@ -142,9 +170,10 @@ public:
         offer.interest_rate = rate;
         offer.term_days = term_days;
         offer.processing_fee = processing_fee;
-        offer.valid_until = std::chrono::system_clock::now().time_since_epoch().count() + (7 * 24 * 60 * 60 * 1000);
+        offer.valid_until = std::chrono::system_clock::now().time_since_epoch().count() +
+                            (7LL * 24 * 60 * 60 * 1000000000LL);
         offer.is_approved = true;
-        
+
         offers_[offer_id] = offer;
         return offer_id;
     }
@@ -152,21 +181,44 @@ public:
     // Accept offer and create loan
     std::optional<std::string> accept_offer(const std::string& offer_id) {
         std::unique_lock lock(mutex_);
-        
+
         auto offer_it = offers_.find(offer_id);
         if (offer_it == offers_.end()) return std::nullopt;
-        
-        const auto& offer = offer_it->second;
-        
-        // Calculate EMI
-        double monthly_rate = offer.interest_rate / 12 / 100;
-        double months = offer.term_days / 30.0;
-        double emi = (offer.principal * monthly_rate * std::pow(1 + monthly_rate, months)) / 
-                     (std::pow(1 + monthly_rate, months) - 1);
-        double total_interest = emi * months - offer.principal;
-        
+
+        const LoanOffer& offer = offer_it->second;
+
+        if (!offer.is_approved) {
+            return std::nullopt;
+        }
+
+        // An offer can only be accepted once.
+        for (const auto& [id, loan] : loans_) {
+            if (loan.offer_id == offer_id) {
+                return std::nullopt;
+            }
+        }
+
+        // Amortising payment over the term. A zero rate is a valid offer and must
+        // not divide by zero.
+        double monthly_rate = offer.interest_rate / 12.0 / 100.0;
+        double months = static_cast<double>(offer.term_days) / 30.0;
+        if (months <= 0.0) {
+            return std::nullopt;
+        }
+
+        double emi;
+        double total_interest;
+        if (monthly_rate <= 0.0) {
+            emi = offer.amount / months;
+            total_interest = 0.0;
+        } else {
+            double growth = std::pow(1.0 + monthly_rate, months);
+            emi = (offer.amount * monthly_rate * growth) / (growth - 1.0);
+            total_interest = emi * months - offer.amount;
+        }
+
         std::string loan_id = "LN_" + std::to_string(next_loan_id_.fetch_add(1));
-        
+
         Loan loan;
         loan.loan_id = loan_id;
         loan.user_id = offer.user_id;
@@ -181,36 +233,48 @@ public:
         loan.total_repayment = offer.amount + total_interest;
         loan.remaining_amount = loan.total_repayment;
         loan.start_date = std::chrono::system_clock::now().time_since_epoch().count();
-        loan.next_payment_date = loan.start_date + (30 * 24 * 60 * 60 * 1000);
-        loan.end_date = loan.start_date + (offer.term_days * 24 * 60 * 60 * 1000);
-        
+        loan.next_payment_date = loan.start_date + (30LL * 24 * 60 * 60 * 1000000000LL);
+        loan.end_date = loan.start_date +
+                        (static_cast<int64_t>(offer.term_days) * 24LL * 60 * 60 * 1000000000LL);
+
         loans_[loan_id] = loan;
-        
-        total_disbursed_.fetch_add((uint64_t)offer.amount);
-        
+
+        total_disbursed_.fetch_add(static_cast<uint64_t>(offer.amount));
+
         return loan_id;
     }
 
     // Make payment
     bool make_payment(const std::string& loan_id, double amount) {
         std::unique_lock lock(mutex_);
-        
+
+        if (!std::isfinite(amount) || amount <= 0.0) {
+            return false;
+        }
+
         auto it = loans_.find(loan_id);
         if (it == loans_.end()) return false;
-        
+
         Loan& loan = it->second;
         if (loan.status != LoanStatus::ACTIVE) return false;
-        
-        loan.paid_amount += amount;
-        loan.remaining_amount -= amount;
-        loan.next_payment_date += (30 * 24 * 60 * 60 * 1000);
-        
-        if (loan.remaining_amount <= 0) {
+
+        // Overpayment is capped at what is still owed so the loan cannot be
+        // credited more than its balance.
+        double applied = std::min(amount, loan.remaining_amount);
+
+        loan.paid_amount += applied;
+        loan.remaining_amount -= applied;
+
+        if (loan.remaining_amount <= 0.0) {
             loan.status = LoanStatus::REPAID;
-            loan.remaining_amount = 0;
+            loan.remaining_amount = 0.0;
+            loan.next_payment_date = 0;
+        } else {
+            uint64_t next = loan.next_payment_date + (30LL * 24 * 60 * 60 * 1000000000LL);
+            loan.next_payment_date = std::min(next, loan.end_date);
         }
-        
-        total_repaid_.fetch_add((uint64_t)amount);
+
+        total_repaid_.fetch_add(static_cast<uint64_t>(applied));
         return true;
     }
 
@@ -240,20 +304,26 @@ public:
         return std::nullopt;
     }
 
-    // Update credit score
-    void update_credit_score(const std::string& user_id, double income, uint64_t months, double debt) {
+    // Update credit score. Returns false when the inputs cannot produce a score.
+    bool update_credit_score(const std::string& user_id, double income, uint64_t months, double debt) {
+        auto score = calculate_credit_score(user_id, income, months, debt);
+        if (!score.has_value()) {
+            return false;
+        }
+
         std::unique_lock lock(mutex_);
-        
+
         CreditScore cs;
         cs.user_id = user_id;
-        cs.score = calculate_credit_score(user_id, income, months, debt);
+        cs.score = *score;
         cs.grade = get_credit_grade(cs.score);
         cs.income = income;
         cs.max_loan_amount = get_max_loan_amount(cs.score, income);
         cs.interest_rate = get_interest_rate(cs.score);
         cs.last_updated = std::chrono::system_clock::now().time_since_epoch().count();
-        
+
         credit_scores_[user_id] = cs;
+        return true;
     }
 
     // Get statistics

@@ -264,7 +264,7 @@ function createWebhook(userId, url, events, customHeaders = null) {
 
 const webhookEndpoints = {
   // Create webhook
-  createWebhook: \`
+  createWebhook: `
     app.post('/api/v1/webhooks', authenticateRequest, (req, res) => {
       try {
         const { url, events, headers } = req.body;
@@ -279,10 +279,10 @@ const webhookEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Get webhooks
-  getWebhooks: \`
+  getWebhooks: `
     app.get('/api/v1/webhooks', authenticateRequest, (req, res) => {
       try {
         const webhooks = db.prepare(\`
@@ -306,10 +306,10 @@ const webhookEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Delete webhook
-  deleteWebhook: \`
+  deleteWebhook: `
     app.delete('/api/v1/webhooks/:webhookId', authenticateRequest, (req, res) => {
       try {
         const webhook = db.prepare('SELECT * FROM webhooks WHERE id = ? AND user_id = ?')
@@ -327,10 +327,10 @@ const webhookEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Get available integrations
-  getIntegrations: \`
+  getIntegrations: `
     app.get('/api/v1/integrations/available', (req, res) => {
       try {
         const integrations = Object.entries(AVAILABLE_INTEGRATIONS).map(([key, config]) => ({
@@ -345,10 +345,10 @@ const webhookEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Connect integration
-  connectIntegration: \`
+  connectIntegration: `
     app.post('/api/v1/integrations/connect', authenticateRequest, (req, res) => {
       try {
         const { integrationType, config } = req.body;
@@ -388,10 +388,10 @@ const webhookEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Get webhook deliveries (for debugging)
-  getDeliveries: \`
+  getDeliveries: `
     app.get('/api/v1/webhooks/:webhookId/deliveries', authenticateRequest, (req, res) => {
       try {
         // Verify ownership
@@ -415,7 +415,7 @@ const webhookEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`
+  `
 };
 
 module.exports = {

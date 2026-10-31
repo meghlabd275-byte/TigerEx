@@ -323,7 +323,7 @@ const futuresEndpoints = {
   `,
 
   // Get open positions
-  getPositions: \`
+  getPositions: `
     app.get('/api/v1/futures/positions', authenticateRequest, (req, res) => {
       try {
         const positions = db.prepare(\`
@@ -352,10 +352,10 @@ const futuresEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Close position
-  closePosition: \`
+  closePosition: `
     app.post('/api/v1/futures/close', authenticateRequest, (req, res) => {
       try {
         const { positionId, quantity, price } = req.body;
@@ -390,10 +390,10 @@ const futuresEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Set stop-loss and take-profit
-  setTPSL: \`
+  setTPSL: `
     app.post('/api/v1/futures/tp-sl', authenticateRequest, (req, res) => {
       try {
         const { symbol, side, takeProfitPrice, stopLossPrice } = req.body;
@@ -424,7 +424,7 @@ const futuresEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`
+  `
 };
 
 // ============================================================================

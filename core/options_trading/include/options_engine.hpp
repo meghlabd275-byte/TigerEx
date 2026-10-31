@@ -179,16 +179,24 @@ struct OptionPosition {
     std::string symbol;
     PositionSide side;
     PositionStatus status;
-    
+
+    // Contract terms. A position cannot be repriced or exercised without
+    // knowing which contract it is: call or put, at what strike, expiring when.
+    OptionType type;
+    uint64_t strike_price;
+    uint64_t expiry_time;
+
     uint64_t quantity;
     uint64_t filled_quantity;
     uint64_t average_price;
     uint64_t entry_price;
     uint64_t mark_price;
     
-    uint64_t realized_pnl;
-    uint64_t unrealized_pnl;
-    
+    // Signed: a losing position has a negative PnL, so an unsigned type would
+    // wrap a loss into a colossal gain.
+    int64_t realized_pnl;
+    int64_t unrealized_pnl;
+
     uint64_t exercise_price;
     uint64_t exercise_time;
     
@@ -203,6 +211,9 @@ struct OptionPosition {
         , account_id(0)
         , side(PositionSide::LONG)
         , status(PositionStatus::OPEN)
+        , type(OptionType::CALL)
+        , strike_price(0)
+        , expiry_time(0)
         , quantity(0)
         , filled_quantity(0)
         , average_price(0)
@@ -347,6 +358,14 @@ public:
     
     // Calculate d1 and d2
     static void calculate_d1d2(double S, double K, double T, double r, double q, double sigma, double& d1, double& d2) {
+        // A non-positive spot or strike makes log(S/K) non-finite, which would
+        // propagate NaN through every price and Greek.
+        if (!std::isfinite(S) || !std::isfinite(K) || S <= 0.0 || K <= 0.0) {
+            d1 = 0.0;
+            d2 = 0.0;
+            return;
+        }
+
         if (T <= 0 || sigma <= 0) {
             d1 = (S > K) ? 1e10 : -1e10;
             d2 = d1;
@@ -355,7 +374,6 @@ public:
         
         double sqrt_T = std::sqrt(T);
         double log_term = std::log(S / K);
-        double var_term = sigma * sigma * T / 8.0;  // For BSM with jumps
         
         d1 = (log_term + (r - q + 0.5 * sigma * sigma) * T) / (sigma * sqrt_T);
         d2 = d1 - sigma * sqrt_T;
@@ -363,6 +381,11 @@ public:
     
     // Calculate call/put prices
     static double calculate_call_price(double S, double K, double T, double r, double q, double sigma) {
+        if (!std::isfinite(S) || !std::isfinite(K) || S <= 0.0 || K <= 0.0) {
+            double discount = std::exp(-r * std::max(0.0, T));
+            return std::max(0.0, S - K * discount);
+        }
+
         if (T <= 0) {
             return std::max(0.0, S - K);
         }
@@ -376,7 +399,12 @@ public:
         return S * dividend_discount * normal_cdf_adjusted(d1) - K * discount * normal_cdf_adjusted(d2);
     }
     
-    static double calculate_put_price(double S, double K, double double T, double r, double q, double sigma) {
+        static double calculate_put_price(double S, double K, double T, double r, double q, double sigma) {
+        if (!std::isfinite(S) || !std::isfinite(K) || S <= 0.0 || K <= 0.0) {
+            double discount = std::exp(-r * std::max(0.0, T));
+            return std::max(0.0, K * discount - S);
+        }
+
         if (T <= 0) {
             return std::max(0.0, K - S);
         }
@@ -390,7 +418,7 @@ public:
         return K * discount * normal_cdf_adjusted(-d2) - S * dividend_discount * normal_cdf_adjusted(-d1);
     }
     
-    // Calculate Greeks
+        // Calculate Greeks
     static Greeks calculate_greeks(double S, double K, double T, double r, double q, double sigma, OptionType type) {
         Greeks g;
         
@@ -488,18 +516,23 @@ public:
             }
         }
         
-        // Backward induction
-        for (int32_t j = steps - 1; j >= 0; --j) {
-            for (uint32_t i = 0; i <= j; ++i) {
+        // Backward induction. The spot price at node (j, i) is
+        // S * u^(j-i) * d^i; the maturity array must not be reused here or the
+        // early-exercise test compares against a price from the wrong step.
+        for (int32_t j = static_cast<int32_t>(steps) - 1; j >= 0; --j) {
+            for (uint32_t i = 0; i <= static_cast<uint32_t>(j); ++i) {
+                double node_price = S * std::pow(u, static_cast<double>(j - static_cast<int32_t>(i)))
+                                      * std::pow(d, static_cast<double>(i));
+
                 double exercise_value;
                 if (type == OptionType::CALL) {
-                    exercise_value = std::max(0.0, prices[i] - K);
+                    exercise_value = std::max(0.0, node_price - K);
                 } else {
-                    exercise_value = std::max(0.0, K - prices[i]);
+                    exercise_value = std::max(0.0, K - node_price);
                 }
-                
+
                 double hold_value = discount * (p * values[i] + (1 - p) * values[i + 1]);
-                
+
                 if (style == OptionStyle::AMERICAN) {
                     values[i] = std::max(exercise_value, hold_value);
                 } else {
@@ -507,19 +540,46 @@ public:
                 }
             }
         }
-        
-        return values[0];
+
+                return values[0];
     }
     
-    // Calculate Greeks using binomial
+    // Calculate Greeks using binomial. Finite differences on the lattice price
+    // keep the Greeks consistent with the American early-exercise premium, which
+    // Black-Scholes cannot represent.
     static Greeks calculate_greeks(
         double S, double K, double T, double r, double q, double sigma,
-        OptionType type, uint32_t steps = DEFAULT_STEPS
+        OptionType type, OptionStyle style = OptionStyle::AMERICAN,
+        uint32_t steps = DEFAULT_STEPS
     ) {
         Greeks g;
-        
-        // Use Black-Scholes as approximation for Greeks
-        return BlackScholesModel::calculate_greeks(S, K, T, r, q, sigma, type);
+        if (S <= 0.0 || K <= 0.0 || T <= 0.0 || sigma <= 0.0) {
+            return g;
+        }
+
+        double price = calculate_option_price(S, K, T, r, q, sigma, type, style, steps);
+        double h = S * 1e-3;
+        double up = calculate_option_price(S + h, K, T, r, q, sigma, type, style, steps);
+        double down = calculate_option_price(S - h, K, T, r, q, sigma, type, style, steps);
+        double vol_up = calculate_option_price(S, K, T, r, q, sigma + 1e-4, type, style, steps);
+        double rate_up = calculate_option_price(S, K, T, r + 1e-4, q, sigma, type, style, steps);
+
+        g.delta = (up - down) / (2.0 * h);
+        g.gamma = (up - 2.0 * price + down) / (h * h);
+        g.vega = (vol_up - price) / 100.0;
+        g.rho = (rate_up - price) / 100.0;
+
+        double dt = T / 365.0;
+        if (T > dt) {
+            double theta_shift = calculate_option_price(S, K, T - dt, r, q, sigma, type, style, steps);
+            g.theta = (theta_shift - price) / 365.0;
+        }
+
+        if (price > 0.0) {
+            g.lambda = g.delta * S / price;
+        }
+
+        return g;
     }
 };
 
@@ -565,18 +625,34 @@ public:
         OptionType type, uint32_t num_paths = DEFAULT_PATHS
     ) {
         Greeks g;
-        
-        // Use finite difference for Greeks
+        if (S <= 0.0 || K <= 0.0 || T <= 0.0 || sigma <= 0.0) {
+            return g;
+        }
+
         double price = calculate_option_price(S, K, T, r, q, sigma, type, num_paths);
-        double price_up = calculate_option_price(S * 1.01, K, T, r, q, sigma, type, num_paths);
-        double price_down = calculate_option_price(S * 0.99, K, T, r, q, sigma, type, num_paths);
-        double price_vol_up = calculate_option_price(S, K, T, r, q, sigma * 1.01, type, num_paths);
-        
-        g.delta = (price_up - price_down) / (0.02 * S);
-        g.gamma = (price_up - 2 * price + price_down) / (0.0001 * S * S);
+        double h = S * 1e-3;
+        double price_up = calculate_option_price(S + h, K, T, r, q, sigma, type, num_paths);
+        double price_down = calculate_option_price(S - h, K, T, r, q, sigma, type, num_paths);
+        double price_vol_up = calculate_option_price(S, K, T, r, q, sigma + 1e-4, type, num_paths);
+        double price_rate_up = calculate_option_price(S, K, T, r + 1e-4, q, sigma, type, num_paths);
+
+        g.delta = (price_up - price_down) / (2.0 * h);
+        g.gamma = (price_up - 2.0 * price + price_down) / (h * h);
         g.vega = (price_vol_up - price) / 100.0;
-        g.theta = -price / T / 365.0;
-        
+        g.rho = (price_rate_up - price) / 100.0;
+
+        // Theta is the sensitivity to the passage of time, so it is measured by
+        // shortening T rather than by dividing the price by T.
+        double dt = T / 365.0;
+        if (T > dt) {
+            double price_time_decay = calculate_option_price(S, K, T - dt, r, q, sigma, type, num_paths);
+            g.theta = (price_time_decay - price) / 365.0;
+        }
+
+        if (price > 0.0) {
+            g.lambda = g.delta * S / price;
+        }
+
         return g;
     }
 };
@@ -584,44 +660,62 @@ public:
 // Implied volatility solver
 class ImpliedVolatilitySolver {
 public:
-    static double calculate_implied_volatility(
+    // Solve for the volatility that reproduces an observed market price.
+    // Returns std::nullopt when the price is outside the no-arbitrage band
+    // (below intrinsic, above the underlying) or when the iteration does not
+    // converge, rather than handing back a number that does not fit the price.
+    static std::optional<double> calculate_implied_volatility(
         double market_price, double S, double K, double T, double r, double q,
         OptionType type, double initial_guess = 0.3
     ) {
-        double sigma = initial_guess;
-        double tol = 1e-6;
-        int max_iterations = 100;
-        
+        if (!std::isfinite(market_price) || market_price <= 0.0) return std::nullopt;
+        if (!std::isfinite(S) || !std::isfinite(K) || S <= 0.0 || K <= 0.0) return std::nullopt;
+        if (!std::isfinite(T) || T <= 0.0) return std::nullopt;
+
+        double discount_K = K * std::exp(-r * T);
+        double discount_S = S * std::exp(-q * T);
+        double lower_bound = (type == OptionType::CALL)
+            ? std::max(0.0, discount_S - discount_K)
+            : std::max(0.0, discount_K - discount_S);
+        double upper_bound = (type == OptionType::CALL) ? discount_S : discount_K;
+
+        if (market_price < lower_bound || market_price > upper_bound) {
+            return std::nullopt;
+        }
+
+        double sigma = std::clamp(initial_guess, 0.01, 5.0);
+        const double tol = 1e-8;
+        const int max_iterations = 100;
+
         for (int i = 0; i < max_iterations; ++i) {
-            double price;
-            if (type == OptionType::CALL) {
-                price = BlackScholesModel::calculate_call_price(S, K, T, r, q, sigma);
-            } else {
-                price = BlackScholesModel::calculate_put_price(S, K, T, r, q, sigma);
-            }
-            
+            double price = (type == OptionType::CALL)
+                ? BlackScholesModel::calculate_call_price(S, K, T, r, q, sigma)
+                : BlackScholesModel::calculate_put_price(S, K, T, r, q, sigma);
+
             double diff = market_price - price;
-            
             if (std::abs(diff) < tol) {
                 return sigma;
             }
-            
-            // Use vega to adjust
+
+            // vega from calculate_greeks is per 1% vol move, so scale it back to
+            // a per-unit-vol sensitivity before using it as the Newton step.
             Greeks g = BlackScholesModel::calculate_greeks(S, K, T, r, q, sigma, type);
             double vega = g.vega * 100.0;
-            
-            if (std::abs(vega) < 1e-10) {
+
+            if (!std::isfinite(vega) || std::abs(vega) < 1e-12) {
                 break;
             }
-            
+
             sigma += diff / vega;
-            
-            // Bound sigma
-            if (sigma < 0.01) sigma = 0.01;
-            if (sigma > 5.0) sigma = 5.0;
+
+            if (!std::isfinite(sigma)) {
+                return std::nullopt;
+            }
+
+            sigma = std::clamp(sigma, 0.01, 5.0);
         }
-        
-        return sigma;
+
+        return std::nullopt;
     }
 };
 
@@ -655,8 +749,11 @@ public:
         return true;
     }
     
-    // Exercise position
-    bool exercise_position(uint64_t position_id, uint64_t exercise_price) {
+    // Exercise position at the settlement price. P&L is the option's intrinsic
+    // value at expiry less the premium paid, signed by the position side: a long
+    // call earns max(S-K, 0) per contract, a long put earns max(K-S, 0), and a
+    // short position owes the negative of that.
+    bool exercise_position(uint64_t position_id, uint64_t settlement_price) {
         std::unique_lock lock(mutex_);
         
         auto it = positions_.find(position_id);
@@ -665,24 +762,30 @@ public:
         }
         
         auto& pos = it->second;
+        if (pos.status != PositionStatus::OPEN) {
+            return false;
+        }
+        if (pos.filled_quantity == 0) {
+            return false;
+        }
+
         pos.status = PositionStatus::EXERCISED;
-        pos.exercise_price = exercise_price;
+        pos.exercise_price = settlement_price;
         pos.exercise_time = std::chrono::system_clock::now().time_since_epoch().count();
         
-        // Calculate P&L
-        if (pos.side == PositionSide::LONG) {
-            if (pos.type == OptionType::CALL) {
-                pos.realized_pnl = (exercise_price - pos.average_price) * pos.filled_quantity;
-            } else {
-                pos.realized_pnl = (pos.average_price - exercise_price) * pos.filled_quantity;
-            }
+        int64_t intrinsic = 0;
+        if (pos.type == OptionType::CALL) {
+            intrinsic = settlement_price > pos.strike_price
+                ? static_cast<int64_t>(settlement_price - pos.strike_price) : 0;
         } else {
-            if (pos.type == OptionType::CALL) {
-                pos.realized_pnl = (pos.average_price - exercise_price) * pos.filled_quantity;
-            } else {
-                pos.realized_pnl = (exercise_price - pos.average_price) * pos.filled_quantity;
-            }
+            intrinsic = pos.strike_price > settlement_price
+                ? static_cast<int64_t>(pos.strike_price - settlement_price) : 0;
         }
+        
+        int64_t gross = intrinsic * static_cast<int64_t>(pos.filled_quantity);
+        int64_t premium = static_cast<int64_t>(pos.average_price) *
+                          static_cast<int64_t>(pos.filled_quantity);
+        pos.realized_pnl = (pos.side == PositionSide::LONG) ? gross - premium : premium - gross;
         
         return true;
     }
@@ -702,38 +805,62 @@ public:
     // Get user positions
     std::vector<OptionPosition> get_user_positions(uint64_t user_id) const {
         std::shared_lock lock(mutex_);
-        
+
         std::vector<OptionPosition> result;
         for (const auto& [id, pos] : positions_) {
             if (pos.user_id == user_id && pos.status == PositionStatus::OPEN) {
                 result.push_back(pos);
             }
         }
-        
+
         return result;
     }
-    
-    // Update mark prices
+
+    // Every position that is still open, across all users. Used by settlement
+    // sweeps that must reach expiry without knowing the account list.
+    std::vector<OptionPosition> get_open_positions() const {
+        std::shared_lock lock(mutex_);
+
+        std::vector<OptionPosition> result;
+        for (const auto& [id, pos] : positions_) {
+            if (pos.status == PositionStatus::OPEN) {
+                result.push_back(pos);
+            }
+        }
+
+        return result;
+    }
+
+    // Reprice open positions from an observed underlying price and volatility.
+    // Uses the correct model for the position's option type: pricing a put with
+    // the call formula overstates its value.
     void update_mark_prices(double underlying_price, double volatility) {
+        if (!std::isfinite(underlying_price) || underlying_price <= 0.0) return;
+        if (!std::isfinite(volatility) || volatility < 0.0) return;
+
         std::unique_lock lock(mutex_);
-        
+
         for (auto& [id, pos] : positions_) {
             if (pos.status != PositionStatus::OPEN) continue;
-            
-            // Get contract details (would need to look up)
-            // Calculate mark price using Black-Scholes
-            double T = pos.expiry_time / 86400000000000.0;  // Convert to years
-            double price = BlackScholesModel::calculate_call_price(
-                underlying_price, pos.strike_price / 1e8,
-                T, 0.05, 0.0, volatility
-            );
-            
-            pos.mark_price = static_cast<uint64_t>(price * 1e8);
-            pos.unrealized_pnl = (pos.mark_price - pos.average_price) * pos.filled_quantity;
-            
-            // Update Greeks
+
+            double T = pos.expiry_time / 86400000000000.0;  // nanoseconds -> years
+            double strike = pos.strike_price / 1e8;
+
+            double price = (pos.type == OptionType::CALL)
+                ? BlackScholesModel::calculate_call_price(underlying_price, strike, T, 0.05, 0.0, volatility)
+                : BlackScholesModel::calculate_put_price(underlying_price, strike, T, 0.05, 0.0, volatility);
+
+            pos.mark_price = price > 0.0 ? static_cast<uint64_t>(price * 1e8) : 0;
+
+            int64_t mark = static_cast<int64_t>(pos.mark_price);
+            int64_t entry = static_cast<int64_t>(pos.average_price);
+            int64_t qty = static_cast<int64_t>(pos.filled_quantity);
+            pos.unrealized_pnl = (pos.side == PositionSide::LONG)
+                ? (mark - entry) * qty
+                : (entry - mark) * qty;
+
             pos.greeks = BlackScholesModel::calculate_greeks(
-                underlying_price, pos.strike_price / 1e8,
+                underlying_price, strike,
                 T, 0.05, 0.0, volatility,
                 pos.type
             );
@@ -754,26 +881,57 @@ public:
         surfaces_[symbol] = surface;
     }
     
-    // Get volatility for strike and expiry
-    double get_volatility(const std::string& symbol, double strike, double expiry) const {
+    // Interpolate an implied volatility from observed surface points. There is
+    // no default volatility: a symbol with no surface yields no answer, so the
+    // caller cannot price a contract off an invented number.
+    std::optional<double> get_volatility(const std::string& symbol, double strike, double expiry) const {
         std::shared_lock lock(mutex_);
-        
+
         auto it = surfaces_.find(symbol);
         if (it == surfaces_.end()) {
-            return 0.3;  // Default volatility
+            return std::nullopt;
         }
-        
+
         const auto& surface = it->second;
-        
-        // Interpolate
-        double strike_ratio = strike;
-        double base_vol = surface.base_volatility;
-        double skew = surface.skew;
-        
-        // Simple skew adjustment
-        return base_vol + skew * (strike_ratio - 1.0);
+        if (surface.points.empty()) {
+            return std::nullopt;
+        }
+
+        // Nearest observed expiry, then linear interpolation across strikes
+        // within that expiry slice.
+        double best_expiry = surface.points.front().expiry;
+        double best_distance = std::abs(best_expiry - expiry);
+        for (const auto& point : surface.points) {
+            double distance = std::abs(point.expiry - expiry);
+            if (distance < best_distance) {
+                best_distance = distance;
+                best_expiry = point.expiry;
+            }
+        }
+
+        const VolatilityPoint* lower = nullptr;
+        const VolatilityPoint* upper = nullptr;
+        for (const auto& point : surface.points) {
+            if (point.expiry != best_expiry) continue;
+            if (point.strike <= strike && (!lower || point.strike > lower->strike)) {
+                lower = &point;
+            }
+            if (point.strike >= strike && (!upper || point.strike < upper->strike)) {
+                upper = &point;
+            }
+        }
+
+        if (!lower && !upper) {
+            return std::nullopt;
+        }
+        if (!lower) return upper->volatility;
+        if (!upper) return lower->volatility;
+        if (lower->strike == upper->strike) return lower->volatility;
+
+        double weight = (strike - lower->strike) / (upper->strike - lower->strike);
+        return lower->volatility + weight * (upper->volatility - lower->volatility);
     }
-    
+
     // Get surface
     std::optional<VolatilitySmile> get_surface(const std::string& symbol) const {
         std::shared_lock lock(mutex_);
@@ -799,36 +957,43 @@ public:
     // Place order
     uint64_t place_order(const OptionOrder& order) {
         std::unique_lock lock(mutex_);
-        
+
         uint64_t order_id = next_order_id_.fetch_add(1);
         OptionOrder new_order = order;
         new_order.order_id = order_id;
         new_order.status = OrderStatus::NEW;
         new_order.created_at = std::chrono::system_clock::now().time_since_epoch().count();
-        
+
         orders_[order_id] = new_order;
         user_orders_[std::to_string(order.user_id)].push_back(order_id);
-        
+
         return order_id;
     }
-    
-    // Cancel order
+
+    // Cancel order. Only the owner may cancel, and only while the order is
+    // still live; cancelling a filled order would silently rewrite history.
     bool cancel_order(uint64_t order_id, uint64_t user_id) {
         std::unique_lock lock(mutex_);
-        
+
         auto it = orders_.find(order_id);
         if (it == orders_.end()) {
             return false;
         }
-        
+
         if (it->second.user_id != user_id) {
             return false;
         }
-        
+
+        if (it->second.status != OrderStatus::NEW &&
+            it->second.status != OrderStatus::PENDING &&
+            it->second.status != OrderStatus::PARTIALLY_FILLED) {
+            return false;
+        }
+
         it->second.status = OrderStatus::CANCELLED;
         return true;
     }
-    
+
     // Get order
     std::optional<OptionOrder> get_order(uint64_t order_id) const {
         std::shared_lock lock(mutex_);
@@ -900,17 +1065,20 @@ public:
         if (it == contracts_.end()) {
             return 0;
         }
-        
-        const auto& contract = it->second;
-        
-        // Check balance
-        // (would check with balance manager)
-        
+
+        if (!it->second.is_active) {
+            return 0;
+        }
+
+        if (order.quantity == 0) {
+            return 0;
+        }
+
         lock.unlock();
-        
+
         return order_manager_->place_order(order);
     }
-    
+
     // Cancel order
     bool cancel_order(uint64_t order_id, uint64_t user_id) {
         return order_manager_->cancel_order(order_id, user_id);
@@ -918,51 +1086,62 @@ public:
     
     // Exercise option
     bool exercise_option(uint64_t position_id, uint64_t user_id, double underlying_price) {
+        if (!std::isfinite(underlying_price) || underlying_price <= 0.0) {
+            return false;
+        }
+
         auto pos_opt = position_manager_->get_position(position_id);
         if (!pos_opt.has_value()) {
             return false;
         }
-        
-        const auto& pos = pos_opt.value();
-        if (pos.user_id != user_id) {
+
+        if (pos_opt->user_id != user_id) {
             return false;
         }
-        
-        return position_manager_->exercise_position(position_id, static_cast<uint64_t>(underlying_price * 1e8));
+
+        return position_manager_->exercise_position(
+            position_id, static_cast<uint64_t>(underlying_price * 1e8));
     }
-    
-    // Auto exercise at expiry
+
+    // Auto exercise at expiry. Positions in the money beyond the contract's
+    // auto-exercise threshold are settled at the observed underlying price.
     void auto_exercise_expired(double underlying_price) {
+        if (!std::isfinite(underlying_price) || underlying_price <= 0.0) {
+            return;
+        }
+
         std::unique_lock lock(contracts_mutex_);
-        
-        uint64_t now = std::chrono::system_clock::now().time_since_epoch().count();
-        
+
+        uint64_t now = static_cast<uint64_t>(
+            std::chrono::system_clock::now().time_since_epoch().count());
+
         for (auto& [symbol, contract] : contracts_) {
             if (!contract.is_active || !contract.is_auto_exercisable) {
                 continue;
             }
-            
+
             if (now < contract.expiry_time) {
                 continue;
             }
-            
-            // Check threshold
-            double in_the_money = (contract.type == OptionType::CALL) ?
-                (underlying_price > contract.strike_price / 1e8) :
-                (underlying_price < contract.strike_price / 1e8);
-            
-            if (in_the_money) {
-                // Exercise all long positions
-                auto positions = position_manager_->get_user_positions(0);  // All users
-                for (const auto& pos : positions) {
-                    if (pos.symbol == symbol && pos.status == PositionStatus::OPEN) {
-                        position_manager_->exercise_position(pos.position_id, underlying_price);
-                    }
+
+            double strike = contract.strike_price / 1e8;
+            double intrinsic = (contract.type == OptionType::CALL)
+                ? (underlying_price - strike)
+                : (strike - underlying_price);
+
+            if (intrinsic <= contract.auto_exercise_threshold) {
+                continue;
+            }
+
+            for (const auto& pos : position_manager_->get_open_positions()) {
+                if (pos.symbol == symbol) {
+                    position_manager_->exercise_position(
+                        pos.position_id, static_cast<uint64_t>(underlying_price * 1e8));
                 }
             }
         }
     }
-    
+
     // Calculate option price
     double calculate_price(const std::string& symbol, double underlying_price, 
                           double time_to_expiry, double risk_free_rate = 0.05) {
@@ -977,13 +1156,17 @@ public:
         double K = contract.strike_price / 1e8;
         double T = time_to_expiry;
         
-        // Get volatility
-        double sigma = vol_surface_manager_->get_volatility(symbol, 1.0, T);
+        // Volatility is read from the observed surface at this contract's
+        // strike. Without a surface there is no price to report.
+        auto sigma = vol_surface_manager_->get_volatility(symbol, K, T);
+        if (!sigma.has_value() || *sigma <= 0.0) {
+            return 0.0;
+        }
         
         if (contract.type == OptionType::CALL) {
-            return BlackScholesModel::calculate_call_price(underlying_price, K, T, risk_free_rate, 0.0, sigma);
+            return BlackScholesModel::calculate_call_price(underlying_price, K, T, risk_free_rate, 0.0, *sigma);
         } else {
-            return BlackScholesModel::calculate_put_price(underlying_price, K, T, risk_free_rate, 0.0, sigma);
+            return BlackScholesModel::calculate_put_price(underlying_price, K, T, risk_free_rate, 0.0, *sigma);
         }
     }
     
@@ -1001,15 +1184,24 @@ public:
         double K = contract.strike_price / 1e8;
         double T = time_to_expiry;
         
-        double sigma = vol_surface_manager_->get_volatility(symbol, 1.0, T);
+        auto sigma = vol_surface_manager_->get_volatility(symbol, K, T);
+        if (!sigma.has_value() || *sigma <= 0.0) {
+            return {};
+        }
         
-        return BlackScholesModel::calculate_greeks(underlying_price, K, T, risk_free_rate, 0.0, sigma, contract.type);
+        return BlackScholesModel::calculate_greeks(underlying_price, K, T, risk_free_rate, 0.0, *sigma, contract.type);
     }
     
     // Update market data
     void update_market_data(const OptionMarketData& data) {
         std::unique_lock lock(contracts_mutex_);
         market_data_[data.symbol] = data;
+    }
+
+    // Publish an observed volatility surface for a symbol so contracts on it can
+    // be priced. Until a surface exists the engine reports no price.
+    void update_volatility_surface(const std::string& symbol, const VolatilitySmile& surface) {
+        vol_surface_manager_->update_surface(symbol, surface);
     }
     
     // Get market data
@@ -1036,12 +1228,14 @@ public:
         return std::nullopt;
     }
     
-    // Get implied volatility
-    double calculate_implied_volatility(const std::string& symbol, double market_price,
+    // Implied volatility for a contract, from an observed market price. Returns
+    // no value when the contract is unknown or the price is not consistent with
+    // any volatility.
+    std::optional<double> calculate_implied_volatility(const std::string& symbol, double market_price,
                                     double underlying_price, double time_to_expiry) {
         auto contract_opt = get_contract(symbol);
         if (!contract_opt.has_value()) {
-            return 0.0;
+            return std::nullopt;
         }
         
         const auto& contract = contract_opt.value();

@@ -549,10 +549,10 @@ public:
     
     double get_crypto_balance(const std::string& card_id, const std::string& symbol) {
         auto price_it = token_prices_.find(symbol);
-        if (price_it == token_prices_.end()) return 0;
+        if (price_it == token_prices_.end() || price_it->second <= 0.0) return 0;
         auto card_opt = card_manager_->get_card(card_id);
         if (!card_opt.has_value()) return 0;
-        return card_opt->value().current_balance / price_it->second;
+        return card_opt->current_balance / price_it->second;
     }
     
     double get_total_cashback(const std::string& card_id) const {

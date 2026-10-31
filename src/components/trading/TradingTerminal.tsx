@@ -11,6 +11,7 @@ import {
   ArrowUpRight, ArrowDownRight, ExternalLink, Copy, Trash2,
   Plus, Minus, AlertTriangle, Check, X, Info, Lock
 } from 'lucide-react';
+import { API_BASE_URL, WS_BASE_URL } from '@/lib/config';
 
 declare global {
   interface Window {
@@ -140,8 +141,8 @@ const useApp = () => {
 // =============================================================================
 
 class ApiService {
-  private baseUrl: string = '/api';
-  private wsUrl: string = 'wss://stream.tigerex.com';
+  private baseUrl: string = API_BASE_URL;
+  private wsUrl: string = WS_BASE_URL;
   private ws: WebSocket | null = null;
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;

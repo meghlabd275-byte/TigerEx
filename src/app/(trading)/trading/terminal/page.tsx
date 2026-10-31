@@ -7,6 +7,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
+import { WS_BASE_URL } from '@/lib/config';
 
 // Types
 interface Order {
@@ -479,7 +480,7 @@ export default function TradingTerminalPage() {
     fetchData();
 
     // WebSocket for real-time updates
-    const ws = new WebSocket(`wss://api.tigerex.com/ws/${symbol.toLowerCase()}`);
+    const ws = new WebSocket(`${WS_BASE_URL}/${symbol.toLowerCase()}`);
     ws.onopen = () => setWsConnected(true);
     ws.onclose = () => setWsConnected(false);
     ws.onmessage = (e) => {

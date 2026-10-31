@@ -358,7 +358,7 @@ function processSignalBot(bot, config) {
 
 const botEndpoints = {
   // Create bot
-  createBot: \`
+  createBot: `
     app.post('/api/v1/bots/create', authenticateRequest, (req, res) => {
       try {
         const { botType, symbol, ...params } = req.body;
@@ -387,10 +387,10 @@ const botEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Get bots
-  getBots: \`
+  getBots: `
     app.get('/api/v1/bots', authenticateRequest, (req, res) => {
       try {
         const bots = db.prepare(\`
@@ -417,10 +417,10 @@ const botEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Start bot
-  startBot: \`
+  startBot: `
     app.post('/api/v1/bots/:botId/start', authenticateRequest, (req, res) => {
       try {
         const bot = db.prepare('SELECT * FROM trading_bots WHERE id = ? AND user_id = ?')
@@ -438,10 +438,10 @@ const botEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Stop bot
-  stopBot: \`
+  stopBot: `
     app.post('/api/v1/bots/:botId/stop', authenticateRequest, (req, res) => {
       try {
         const bot = db.prepare('SELECT * FROM trading_bots WHERE id = ? AND user_id = ?')
@@ -459,7 +459,7 @@ const botEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`
+  `
 };
 
 module.exports = {

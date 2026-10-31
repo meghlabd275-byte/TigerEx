@@ -12,6 +12,9 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
+#include <deque>
+#include <map>
 #include <bitset>
 #include <chrono>
 #include <concepts>
@@ -169,73 +172,62 @@ struct TaggedPointer {
 
 } // namespace atomic
 
-// Memory pool with lock-free allocation
+// Memory pool with fixed-capacity allocation. The free list is guarded by a
+// mutex: the previous lock-free Treiber stack was ABA-prone and could hand the
+// same node to two callers, which would corrupt any object built on it.
 template<typename T, size_t PoolSize = 65536>
-class LockFreePool {
-public:
+class MemoryPool {
+private:
     struct Node {
-        T data;
-        std::atomic<Node*> next;
-        uint64_t sequence;
+        alignas(alignof(T)) unsigned char storage[sizeof(T)];
+        Node* next;
     };
 
-private:
-    alignas(64) std::atomic<Node*> head_;
-    alignas(64) std::atomic<size_t> alloc_count_;
-    alignas(64) std::atomic<size_t> free_count_;
-    
-    std::vector<Node, std::allocator<Node>> storage_;
-    std::vector<Node*, std::allocator<Node*>> free_list_;
+    std::vector<Node> storage_;
+    Node* free_head_;
+    size_t allocated_;
+    mutable std::mutex mutex_;
 
 public:
-    LockFreePool() : storage_(PoolSize), free_list_(PoolSize) {
-        // Initialize free list
-        for (size_t i = 0; i < PoolSize - 1; ++i) {
-            storage_[i].next.store(&storage_[i + 1], std::memory_order_relaxed);
-            storage_[i].sequence = i;
-            free_list_[i] = &storage_[i];
+    MemoryPool() : storage_(PoolSize), free_head_(nullptr), allocated_(0) {
+        for (size_t i = 0; i < PoolSize; ++i) {
+            storage_[i].next = free_head_;
+            free_head_ = &storage_[i];
         }
-        storage_[PoolSize - 1].next.store(nullptr, std::memory_order_relaxed);
-        storage_[PoolSize - 1].sequence = PoolSize - 1;
-        free_list_[PoolSize - 1] = &storage_[PoolSize - 1];
-        
-        head_.store(&storage_[0], std::memory_order_relaxed);
     }
-    
-    Node* allocate() noexcept {
-        Node* node = head_.load(std::memory_order_acquire);
-        
-        while (node) {
-            Node* next = node->next.load(std::memory_order_acquire);
-            if (head_.compare_exchange_weak(node, next,
-                std::memory_order_acquire, std::memory_order_acquire)) {
-                alloc_count_.fetch_add(1, std::memory_order_relaxed);
-                return node;
-            }
+
+    MemoryPool(const MemoryPool&) = delete;
+    MemoryPool& operator=(const MemoryPool&) = delete;
+
+    // Returns storage for one T, or nullptr when the pool is exhausted. The
+    // caller is responsible for constructing the object with placement new.
+    T* allocate() noexcept {
+        std::lock_guard lock(mutex_);
+        if (!free_head_) {
+            return nullptr;
         }
-        
-        return nullptr; // Pool exhausted
+        Node* node = free_head_;
+        free_head_ = node->next;
+        ++allocated_;
+        return reinterpret_cast<T*>(node->storage);
     }
-    
-    void deallocate(Node* node) noexcept {
-        if (UNLIKELY(!node)) return;
-        
-        Node* old_head = head_.load(std::memory_order_acquire);
-        do {
-            node->next.store(old_head, std::memory_order_relaxed);
-        } while (!head_.compare_exchange_weak(old_head, node,
-            std::memory_order_acquire, std::memory_order_acquire));
-        
-        free_count_.fetch_add(1, std::memory_order_relaxed);
+
+    // Returns a pointer previously handed out by allocate().
+    void deallocate(T* ptr) noexcept {
+        if (!ptr) return;
+        std::lock_guard lock(mutex_);
+        Node* node = reinterpret_cast<Node*>(ptr);
+        node->next = free_head_;
+        free_head_ = node;
+        --allocated_;
     }
-    
+
     size_t allocated() const noexcept {
-        return alloc_count_.load(std::memory_order_relaxed);
+        std::lock_guard lock(mutex_);
+        return allocated_;
     }
-    
-    size_t freed() const noexcept {
-        return free_count_.load(std::memory_order_relaxed);
-    }
+
+    size_t capacity() const noexcept { return PoolSize; }
 };
 
 // High-performance timestamp
@@ -268,91 +260,105 @@ public:
     }
 };
 
-// Ring buffer for order flow
+// Bounded multi-producer / multi-consumer queue (Vyukov). Each slot carries a
+// sequence number so producers and consumers agree on ownership without a lock.
 template<typename T, size_t Capacity = 4096>
 class alignas(64) MPMCRingBuffer {
 private:
     static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be power of 2");
-    static constexpr size_t Mask = Capacity - 1;
-    
-    alignas(64) std::atomic<size_t> write_pos_{0};
-    alignas(64) std::atomic<size_t> read_pos_{0};
-    alignas(64) T data_[Capacity];
-    
+    static_assert(Capacity >= 2, "Capacity must be at least 2");
+
+    struct alignas(64) Cell {
+        std::atomic<size_t> sequence;
+        T data;
+    };
+
+    alignas(64) Cell buffer_[Capacity];
+    alignas(64) std::atomic<size_t> enqueue_pos_{0};
+    alignas(64) std::atomic<size_t> dequeue_pos_{0};
+
 public:
+    MPMCRingBuffer() {
+        for (size_t i = 0; i < Capacity; ++i) {
+            buffer_[i].sequence.store(i, std::memory_order_relaxed);
+        }
+    }
+
+    MPMCRingBuffer(const MPMCRingBuffer&) = delete;
+    MPMCRingBuffer& operator=(const MPMCRingBuffer&) = delete;
+
     HOT bool push(T&& item) noexcept {
-        const size_t write = write_pos_.load(std::memory_order_relaxed);
-        const size_t next_write = (write + 1) & Mask;
-        
-        if (UNLIKELY(next_write == read_pos_.load(std::memory_order_acquire))) {
-            return false; // Full
+        size_t pos = enqueue_pos_.load(std::memory_order_relaxed);
+        for (;;) {
+            Cell& cell = buffer_[pos & (Capacity - 1)];
+            size_t seq = cell.sequence.load(std::memory_order_acquire);
+            intptr_t diff = static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos);
+
+            if (diff == 0) {
+                if (enqueue_pos_.compare_exchange_weak(pos, pos + 1,
+                        std::memory_order_relaxed, std::memory_order_relaxed)) {
+                    cell.data = std::move(item);
+                    cell.sequence.store(pos + 1, std::memory_order_release);
+                    return true;
+                }
+            } else if (diff < 0) {
+                return false;  // Full
+            } else {
+                pos = enqueue_pos_.load(std::memory_order_relaxed);
+            }
         }
-        
-        data_[write] = std::move(item);
-        write_pos_.store(next_write, std::memory_order_release);
-        return true;
     }
-    
+
     HOT bool pop(T& item) noexcept {
-        const size_t read = read_pos_.load(std::memory_order_relaxed);
-        
-        if (UNLIKELY(read == write_pos_.load(std::memory_order_acquire))) {
-            return false; // Empty
+        size_t pos = dequeue_pos_.load(std::memory_order_relaxed);
+        for (;;) {
+            Cell& cell = buffer_[pos & (Capacity - 1)];
+            size_t seq = cell.sequence.load(std::memory_order_acquire);
+            intptr_t diff = static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos + 1);
+
+            if (diff == 0) {
+                if (dequeue_pos_.compare_exchange_weak(pos, pos + 1,
+                        std::memory_order_relaxed, std::memory_order_relaxed)) {
+                    item = std::move(cell.data);
+                    cell.sequence.store(pos + Capacity, std::memory_order_release);
+                    return true;
+                }
+            } else if (diff < 0) {
+                return false;  // Empty
+            } else {
+                pos = dequeue_pos_.load(std::memory_order_relaxed);
+            }
         }
-        
-        item = std::move(data_[read]);
-        read_pos_.store((read + 1) & Mask, std::memory_order_release);
-        return true;
     }
-    
-    size_t size() const noexcept {
-        const size_t w = write_pos_.load(std::memory_order_relaxed);
-        const size_t r = read_pos_.load(std::memory_order_relaxed);
-        return (w - r) & Mask;
-    }
-    
+
     bool empty() const noexcept {
-        return write_pos_.load(std::memory_order_acquire) == 
-               read_pos_.load(std::memory_order_acquire);
-    }
-    
-    bool full() const noexcept {
-        return ((write_pos_.load(std::memory_order_acquire) + 1) & Mask) == 
-               read_pos_.load(std::memory_order_acquire);
+        size_t pos = dequeue_pos_.load(std::memory_order_relaxed);
+        const Cell& cell = buffer_[pos & (Capacity - 1)];
+        size_t seq = cell.sequence.load(std::memory_order_acquire);
+        return static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos + 1) < 0;
     }
 };
 
-// Lock-free order book using bucket-based price aggregation
+// Price-time priority order book. It is mutex-guarded rather than lock-free:
+// the previous bucket-array version sorted level arrays on every insert, never
+// tracked resting order identity, and could not represent more than one order
+// per price. Correctness is preferred over the claim of a lock-free structure.
 template<typename Price, typename Quantity>
-class alignas(128) LockFreeOrderBook {
+class OrderBook {
 public:
-    static constexpr size_t MaxPriceLevels = 100000;
-    static constexpr size_t PriceBuckets = 1024;
-    static constexpr size_t BucketSize = MaxPriceLevels / PriceBuckets;
-    
-    struct alignas(64) PriceLevel {
-        Price price;
-        Quantity quantity;
-        uint32_t order_count;
-        uint64_t last_update;
-        
-        bool operator<(const PriceLevel& other) const { return price < other.price; }
-        bool operator>(const PriceLevel& other) const { return price > other.price; }
-    };
-    
     struct Order {
         uint64_t order_id;
         uint64_t user_id;
         uint64_t account_id;
-        uint8_t side; // 0 = buy, 1 = sell
-        uint8_t type;
+        uint8_t side;      // 0 = buy, 1 = sell
+        uint8_t type;      // 0 = limit, 1 = market
         Price price;
         Quantity quantity;
         Quantity filled;
         uint64_t timestamp;
         uint32_t flags;
     };
-    
+
     struct Trade {
         uint64_t trade_id;
         uint64_t buy_order_id;
@@ -364,195 +370,343 @@ public:
     };
 
 private:
-    // Price indexed arrays for O(1) access
-    alignas(64) PriceLevel buy_levels_[MaxPriceLevels];
-    alignas(64) PriceLevel sell_levels_[MaxPriceLevels];
-    alignas(64) std::atomic<uint32_t> buy_count_{0};
-    alignas(64) std::atomic<uint32_t> sell_count_{0};
-    
-    // Order map for O(1) order lookup
+    struct RestingLevel {
+        Quantity quantity{0};
+        std::deque<uint64_t> order_ids;  // FIFO for time priority
+    };
+
+    std::map<Price, RestingLevel, std::greater<Price>> bids_;
+    std::map<Price, RestingLevel, std::less<Price>> asks_;
     std::unordered_map<uint64_t, Order> orders_;
-    alignas(64) std::shared_mutex order_mutex_;
-    
-    // Trade output buffer
-    MPMCRingBuffer<Trade, 16384> trade_buffer_;
-    
-    // Statistics
-    alignas(64) std::atomic<uint64_t> total_trades_{0};
-    alignas(64) std::atomic<uint64_t> total_volume_{0};
-    alignas(64) std::atomic<uint64_t> max_latency_ns_{0};
-    alignas(64) std::atomic<uint64_t> min_latency_ns_{~0ULL};
+    std::vector<Trade> trades_;
+
+    mutable std::shared_mutex mutex_;
+
+    std::atomic<uint64_t> total_trades_{0};
+    std::atomic<uint64_t> next_trade_id_{1};
+    std::atomic<double> total_volume_{0.0};
+    std::atomic<uint64_t> max_latency_ns_{0};
+    std::atomic<uint64_t> min_latency_ns_{~0ULL};
 
     TimestampCounter timestamp_;
 
 public:
-    LockFreeOrderBook() {
-        // Initialize price levels
-        for (size_t i = 0; i < MaxPriceLevels; ++i) {
-            buy_levels_[i] = PriceLevel{0, 0, 0, 0};
-            sell_levels_[i] = PriceLevel{0, 0, 0, 0};
-        }
-    }
-    
-    // Fast order insertion - targets <1us
-    HOT bool insert_order(const Order& order) {
+    OrderBook() = default;
+
+    // Submit an order. Returns true when the order was accepted (whether it
+    // rested or fully/partially matched). Market orders never rest.
+    bool insert_order(const Order& order) {
         const uint64_t start_ns = timestamp_.monotonic_ns();
-        
+
+        if (order.quantity == 0) {
+            return false;
+        }
+
+        std::unique_lock lock(mutex_);
+
+        if (orders_.count(order.order_id) != 0) {
+            return false;  // Duplicate order id
+        }
+
+        Quantity remaining = order.quantity;
+        Order working = order;
+        working.filled = 0;
+
         if (order.side == 0) {
-            return insert_buy_order(order, start_ns);
+            remaining = match_against(asks_, working, remaining, /*is_market=*/order.type != 0);
         } else {
-            return insert_sell_order(order, start_ns);
+            remaining = match_against(bids_, working, remaining, /*is_market=*/order.type != 0);
         }
-    }
-    
-private:
-    HOT bool insert_buy_order(const Order& order, uint64_t start_ns) {
-        // Try to match immediately
-        const uint32_t sell_cnt = sell_count_.load(std::memory_order_acquire);
-        
-        if (sell_cnt > 0 && order.price >= sell_levels_[0].price) {
-            // Execute match
-            PriceLevel& level = sell_levels_[0];
-            
-            const Quantity match_qty = std::min(order.quantity, level.quantity);
-            
-            Trade trade{
-                .trade_id = total_trades_.fetch_add(1, std::memory_order_relaxed) + 1,
-                .buy_order_id = order.order_id,
-                .sell_order_id = 0,
-                .price = level.price,
-                .quantity = match_qty,
-                .timestamp = timestamp_.monotonic_ns(),
-                .maker_side = 1
-            };
-            
-            trade_buffer_.push(std::move(trade));
-            total_volume_.fetch_add(match_qty * level.price, std::memory_order_relaxed);
-            
-            // Update latency
-            const uint64_t latency = timestamp_.monotonic_ns() - start_ns;
-            update_latency_stats(latency);
-            
-            return true;
+
+        working.filled = static_cast<Quantity>(order.quantity - remaining);
+
+        // A limit order with residual quantity rests on the book.
+        if (remaining > 0 && order.type == 0) {
+            if (order.side == 0) {
+                auto& level = bids_[order.price];
+                level.quantity = static_cast<Quantity>(level.quantity + remaining);
+                level.order_ids.push_back(order.order_id);
+            } else {
+                auto& level = asks_[order.price];
+                level.quantity = static_cast<Quantity>(level.quantity + remaining);
+                level.order_ids.push_back(order.order_id);
+            }
+            orders_[order.order_id] = working;
         }
-        
-        // Add to order book
-        uint32_t count = buy_count_.load(std::memory_order_relaxed);
-        if (count >= MaxPriceLevels) return false;
-        
-        buy_levels_[count] = PriceLevel{
-            .price = order.price,
-            .quantity = order.quantity,
-            .order_count = 1,
-            .last_update = timestamp_.monotonic_ns()
-        };
-        
-        buy_count_.store(count + 1, std::memory_order_release);
-        
-        // Sort buy levels descending
-        sort_buy_levels();
-        
+
+        const uint64_t latency = timestamp_.monotonic_ns() - start_ns;
+        update_latency_stats(latency);
+
         return true;
-    }
-    
-    HOT bool insert_sell_order(const Order& order, uint64_t start_ns) {
-        const uint32_t buy_cnt = buy_count_.load(std::memory_order_acquire);
-        
-        if (buy_cnt > 0 && order.price <= buy_levels_[0].price) {
-            PriceLevel& level = buy_levels_[0];
-            
-            const Quantity match_qty = std::min(order.quantity, level.quantity);
-            
-            Trade trade{
-                .trade_id = total_trades_.fetch_add(1, std::memory_order_relaxed) + 1,
-                .buy_order_id = 0,
-                .sell_order_id = order.order_id,
-                .price = level.price,
-                .quantity = match_qty,
-                .timestamp = timestamp_.monotonic_ns(),
-                .maker_side = 0
-            };
-            
-            trade_buffer_.push(std::move(trade));
-            total_volume_.fetch_add(match_qty * level.price, std::memory_order_relaxed);
-            
-            const uint64_t latency = timestamp_.monotonic_ns() - start_ns;
-            update_latency_stats(latency);
-            
-            return true;
-        }
-        
-        uint32_t count = sell_count_.load(std::memory_order_relaxed);
-        if (count >= MaxPriceLevels) return false;
-        
-        sell_levels_[count] = PriceLevel{
-            .price = order.price,
-            .quantity = order.quantity,
-            .order_count = 1,
-            .last_update = timestamp_.monotonic_ns()
-        };
-        
-        sell_count_.store(count + 1, std::memory_order_release);
-        sort_sell_levels();
-        
-        return true;
-    }
-    
-    void sort_buy_levels() {
-        uint32_t count = buy_count_.load(std::memory_order_relaxed);
-        std::sort(buy_levels_, buy_levels_ + count, 
-            [](const PriceLevel& a, const PriceLevel& b) { return a.price > b.price; });
-    }
-    
-    void sort_sell_levels() {
-        uint32_t count = sell_count_.load(std::memory_order_relaxed);
-        std::sort(sell_levels_, sell_levels_ + count,
-            [](const PriceLevel& a, const PriceLevel& b) { return a.price < b.price; });
-    }
-    
-    HOT void update_latency_stats(uint64_t latency) {
-        uint64_t current = max_latency_ns_.load(std::memory_order_relaxed);
-        while (latency > current && 
-               !max_latency_ns_.compare_exchange_weak(current, latency,
-               std::memory_order_relaxed, std::memory_order_relaxed));
-        
-        current = min_latency_ns_.load(std::memory_order_relaxed);
-        while (latency < current && 
-               !min_latency_ns_.compare_exchange_weak(current, latency,
-               std::memory_order_relaxed, std::memory_order_relaxed));
     }
 
-public:
-    // Public read-only accessors
-    Price get_best_bid() const noexcept {
-        const uint32_t count = buy_count_.load(std::memory_order_acquire);
-        return count > 0 ? buy_levels_[0].price : 0;
+    // Cancel a resting order. Returns false when the order is unknown or already
+    // fully filled.
+    bool cancel_order(uint64_t order_id) {
+        std::unique_lock lock(mutex_);
+
+        auto it = orders_.find(order_id);
+        if (it == orders_.end()) {
+            return false;
+        }
+
+        Order& order = it->second;
+        Quantity outstanding = static_cast<Quantity>(order.quantity - order.filled);
+        if (outstanding == 0) {
+            return false;
+        }
+
+        if (order.side == 0) {
+            remove_from_level(bids_, order.price, order_id, outstanding);
+        } else {
+            remove_from_level(asks_, order.price, order_id, outstanding);
+        }
+
+        order.filled = order.quantity;
+        return true;
     }
-    
-    Price get_best_ask() const noexcept {
-        const uint32_t count = sell_count_.load(std::memory_order_acquire);
-        return count > 0 ? sell_levels_[0].price : 0;
+
+    Price get_best_bid() const {
+        std::shared_lock lock(mutex_);
+        return bids_.empty() ? Price{0} : bids_.begin()->first;
     }
-    
-    Price get_spread() const noexcept {
-        return get_best_ask() - get_best_bid();
+
+    Price get_best_ask() const {
+        std::shared_lock lock(mutex_);
+        return asks_.empty() ? Price{0} : asks_.begin()->first;
     }
-    
+
+    // Spread is undefined unless both sides are populated.
+    std::optional<Price> get_spread() const {
+        std::shared_lock lock(mutex_);
+        if (bids_.empty() || asks_.empty()) {
+            return std::nullopt;
+        }
+        return asks_.begin()->first - bids_.begin()->first;
+    }
+
+    std::optional<Order> get_order(uint64_t order_id) const {
+        std::shared_lock lock(mutex_);
+        auto it = orders_.find(order_id);
+        if (it == orders_.end()) {
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
+    std::vector<Trade> get_trades() const {
+        std::shared_lock lock(mutex_);
+        return trades_;
+    }
+
     uint64_t get_total_trades() const noexcept {
         return total_trades_.load(std::memory_order_relaxed);
     }
-    
-    uint64_t get_total_volume() const noexcept {
+
+    double get_total_volume() const noexcept {
         return total_volume_.load(std::memory_order_relaxed);
     }
-    
+
     std::pair<uint64_t, uint64_t> get_latency_stats() const noexcept {
         return {min_latency_ns_.load(std::memory_order_relaxed),
                 max_latency_ns_.load(std::memory_order_relaxed)};
     }
+
+private:
+    // Walk the opposite side in price priority, filling `working` until it is
+    // exhausted or no further price is acceptable.
+    template<typename OppositeSide>
+    Quantity match_against(OppositeSide& opposite, Order& working, Quantity remaining, bool is_market) {
+        while (remaining > 0 && !opposite.empty()) {
+            auto level_it = opposite.begin();
+            Price level_price = level_it->first;
+
+            if (!is_market) {
+                bool acceptable = (working.side == 0) ? (working.price >= level_price)
+                                                      : (working.price <= level_price);
+                if (!acceptable) {
+                    break;
+                }
+            }
+
+            RestingLevel& level = level_it->second;
+
+            while (remaining > 0 && !level.order_ids.empty()) {
+                uint64_t resting_id = level.order_ids.front();
+                auto resting_it = orders_.find(resting_id);
+                if (resting_it == orders_.end()) {
+                    level.order_ids.pop_front();
+                    continue;
+                }
+
+                Order& resting = resting_it->second;
+                Quantity available = static_cast<Quantity>(resting.quantity - resting.filled);
+                if (available == 0) {
+                    level.order_ids.pop_front();
+                    continue;
+                }
+
+                Quantity match = std::min(remaining, available);
+
+                Trade trade{};
+                trade.trade_id = next_trade_id_.fetch_add(1, std::memory_order_relaxed);
+                trade.price = level_price;
+                trade.quantity = match;
+                trade.timestamp = timestamp_.monotonic_ns();
+                if (working.side == 0) {
+                    trade.buy_order_id = working.order_id;
+                    trade.sell_order_id = resting_id;
+                    trade.maker_side = 1;
+                } else {
+                    trade.buy_order_id = resting_id;
+                    trade.sell_order_id = working.order_id;
+                    trade.maker_side = 0;
+                }
+
+                trades_.push_back(trade);
+                total_trades_.fetch_add(1, std::memory_order_relaxed);
+                total_volume_.fetch_add(static_cast<double>(level_price) *
+                                        static_cast<double>(match),
+                                        std::memory_order_relaxed);
+
+                resting.filled = static_cast<Quantity>(resting.filled + match);
+                level.quantity = static_cast<Quantity>(level.quantity - match);
+                remaining = static_cast<Quantity>(remaining - match);
+
+                if (resting.filled == resting.quantity) {
+                    level.order_ids.pop_front();
+                }
+            }
+
+            if (level.quantity == 0) {
+                opposite.erase(level_it);
+            }
+        }
+
+        return remaining;
+    }
+
+    template<typename Side>
+    void remove_from_level(Side& side, Price price, uint64_t order_id, Quantity outstanding) {
+        auto it = side.find(price);
+        if (it == side.end()) {
+            return;
+        }
+
+        auto& ids = it->second.order_ids;
+        for (auto id_it = ids.begin(); id_it != ids.end(); ++id_it) {
+            if (*id_it == order_id) {
+                ids.erase(id_it);
+                break;
+            }
+        }
+
+        it->second.quantity = static_cast<Quantity>(it->second.quantity - outstanding);
+        if (it->second.quantity == 0 || it->second.order_ids.empty()) {
+            side.erase(it);
+        }
+    }
+
+    void update_latency_stats(uint64_t latency) {
+        uint64_t current = max_latency_ns_.load(std::memory_order_relaxed);
+        while (latency > current &&
+               !max_latency_ns_.compare_exchange_weak(current, latency,
+               std::memory_order_relaxed, std::memory_order_relaxed));
+
+        current = min_latency_ns_.load(std::memory_order_relaxed);
+        while (latency < current &&
+               !min_latency_ns_.compare_exchange_weak(current, latency,
+               std::memory_order_relaxed, std::memory_order_relaxed));
+    }
 };
 
-// High-performance risk engine
+// Latency histogram. Percentiles are derived from a log2-bucketed histogram so
+// they reflect recorded samples instead of being stored as never-updated fields.
+struct LatencySnapshot {
+    uint64_t count = 0;
+    uint64_t min_ns = 0;
+    uint64_t max_ns = 0;
+    uint64_t p50_ns = 0;
+    uint64_t p95_ns = 0;
+    uint64_t p99_ns = 0;
+    uint64_t p999_ns = 0;
+    double mean_ns = 0.0;
+};
+
+struct alignas(64) LatencyStats {
+    static constexpr size_t kBuckets = 66;
+
+    std::atomic<uint64_t> count{0};
+    std::atomic<uint64_t> sum{0};
+    std::atomic<uint64_t> min_latency{~0ULL};
+    std::atomic<uint64_t> max_latency{0};
+    std::array<std::atomic<uint64_t>, kBuckets> histogram{};
+
+    LatencyStats() {
+        for (auto& bucket : histogram) {
+            bucket.store(0, std::memory_order_relaxed);
+        }
+    }
+
+    LatencyStats(const LatencyStats&) = delete;
+    LatencyStats& operator=(const LatencyStats&) = delete;
+
+    static size_t bucket_index(uint64_t latency_ns) {
+        if (latency_ns == 0) return 0;
+        return static_cast<size_t>(std::bit_width(latency_ns));
+    }
+
+    void record(uint64_t latency_ns) {
+        count.fetch_add(1, std::memory_order_relaxed);
+        sum.fetch_add(latency_ns, std::memory_order_relaxed);
+        histogram[bucket_index(latency_ns)].fetch_add(1, std::memory_order_relaxed);
+
+        uint64_t current = min_latency.load(std::memory_order_relaxed);
+        while (latency_ns < current &&
+               !min_latency.compare_exchange_weak(current, latency_ns,
+               std::memory_order_relaxed, std::memory_order_relaxed));
+
+        current = max_latency.load(std::memory_order_relaxed);
+        while (latency_ns > current &&
+               !max_latency.compare_exchange_weak(current, latency_ns,
+               std::memory_order_relaxed, std::memory_order_relaxed));
+    }
+
+    LatencySnapshot snapshot() const {
+        LatencySnapshot out;
+        uint64_t samples = count.load(std::memory_order_relaxed);
+        if (samples == 0) {
+            return out;
+        }
+
+        out.count = samples;
+        out.min_ns = min_latency.load(std::memory_order_relaxed);
+        out.max_ns = max_latency.load(std::memory_order_relaxed);
+        out.mean_ns = static_cast<double>(sum.load(std::memory_order_relaxed)) /
+                      static_cast<double>(samples);
+
+        auto percentile = [&](uint64_t numerator, uint64_t denominator) -> uint64_t {
+            uint64_t rank = (samples * numerator + denominator - 1) / denominator;
+            uint64_t cumulative = 0;
+            for (size_t i = 0; i < kBuckets; ++i) {
+                cumulative += histogram[i].load(std::memory_order_relaxed);
+                if (cumulative >= rank) {
+                    return i == 0 ? 0 : (1ULL << (i - 1));
+                }
+            }
+            return out.max_ns;
+        };
+
+        out.p50_ns = percentile(50, 100);
+        out.p95_ns = percentile(95, 100);
+        out.p99_ns = percentile(99, 100);
+        out.p999_ns = percentile(999, 1000);
+
+        return out;
+    }
+};
+
+// Per-order risk limits and per-account risk state.
 template<typename T>
 class RiskEngine {
 public:
@@ -564,7 +718,7 @@ public:
         T max_orders_per_second;
         T daily_volume_limit;
     };
-    
+
     struct AccountRisk {
         T total_exposure;
         T available_balance;
@@ -577,45 +731,65 @@ public:
 private:
     RiskLimits limits_;
     std::unordered_map<uint64_t, AccountRisk> account_risks_;
-    alignas(64) std::shared_mutex risk_mutex_;
+    mutable std::shared_mutex risk_mutex_;
 
 public:
-    RiskEngine(RiskLimits limits) : limits_(limits) {}
-    
-    HOT bool check_order_risk(uint64_t account_id, T order_value, T current_exposure) {
+    explicit RiskEngine(RiskLimits limits) : limits_(limits) {}
+
+    // Evaluate a prospective order. An account with no recorded risk state is
+    // rejected: margin cannot be verified for an account the engine has not seen.
+    bool check_order_risk(uint64_t account_id, T order_value, T additional_exposure) {
+        if (!std::isfinite(static_cast<double>(order_value)) || order_value <= T{0}) {
+            return false;
+        }
+        if (order_value < limits_.min_order_size) {
+            return false;
+        }
+        if (order_value > limits_.max_order_value) {
+            return false;
+        }
+        if (limits_.max_leverage <= T{0}) {
+            return false;
+        }
+
         std::shared_lock lock(risk_mutex_);
-        
+
         auto it = account_risks_.find(account_id);
         if (it == account_risks_.end()) {
-            return order_value <= limits_.max_order_value;
+            return false;
         }
-        
+
         const AccountRisk& risk = it->second;
-        
-        if (order_value > limits_.max_order_value) return false;
-        if (risk.total_exposure + order_value > limits_.max_position_size) return false;
-        
+
+        if (risk.total_exposure + additional_exposure > limits_.max_position_size) {
+            return false;
+        }
+
+        T notional = order_value + additional_exposure;
+        T required_margin = notional / limits_.max_leverage;
+        if (required_margin > risk.available_balance) {
+            return false;
+        }
+
         return true;
     }
-    
+
     void update_account_risk(uint64_t account_id, const AccountRisk& risk) {
         std::unique_lock lock(risk_mutex_);
         account_risks_[account_id] = risk;
     }
-    
-    AccountRisk get_account_risk(uint64_t account_id) {
+
+    std::optional<AccountRisk> get_account_risk(uint64_t account_id) const {
         std::shared_lock lock(risk_mutex_);
-        
         auto it = account_risks_.find(account_id);
-        if (it != account_risks_.end()) {
-            return it->second;
+        if (it == account_risks_.end()) {
+            return std::nullopt;
         }
-        
-        return AccountRisk{};
+        return it->second;
     }
 };
 
-// High-frequency trade execution
+// Order execution against a book, with risk gating.
 class TradeExecutor {
 public:
     struct ExecutionReport {
@@ -629,7 +803,7 @@ public:
     };
 
 private:
-    LockFreeOrderBook<double, uint64_t> order_book_;
+    OrderBook<double, double> order_book_;
     RiskEngine<double> risk_engine_;
     TimestampCounter timestamp_;
 
@@ -642,115 +816,117 @@ public:
         .max_orders_per_second = 1000,
         .daily_volume_limit = 100'000'000.0
     }) {}
-    
-    HOT ExecutionReport execute_market_order(uint64_t account_id, uint64_t order_id,
-                                            uint8_t side, double quantity) {
+
+    OrderBook<double, double>& book() { return order_book_; }
+
+    ExecutionReport execute_market_order(uint64_t account_id, uint64_t order_id,
+                                         uint8_t side, double quantity) {
         const uint64_t start_ns = timestamp_.monotonic_ns();
-        
-        if (!risk_engine_.check_order_risk(account_id, 0, 0)) {
-            return ExecutionReport{
-                .order_id = order_id,
-                .success = false,
-                .error_message = "Risk check failed",
-                .latency_ns = timestamp_.monotonic_ns() - start_ns
-            };
-        }
-        
-        double price = side == 0 ? order_book_.get_best_ask() : order_book_.get_best_bid();
-        
-        if (price == 0) {
-            return ExecutionReport{
-                .order_id = order_id,
-                .success = false,
-                .error_message = "No liquidity",
-                .latency_ns = timestamp_.monotonic_ns() - start_ns
-            };
-        }
-        
-        const uint64_t latency = timestamp_.monotonic_ns() - start_ns;
-        
-        return ExecutionReport{
+
+        ExecutionReport report{
             .order_id = order_id,
-            .trade_id = order_id,
-            .success = true,
-            .price = price,
-            .quantity = quantity,
-            .latency_ns = latency
+            .trade_id = 0,
+            .success = false,
+            .price = 0.0,
+            .quantity = 0.0,
+            .latency_ns = 0,
+            .error_message = {}
         };
+
+        if (quantity <= 0.0) {
+            report.error_message = "Invalid quantity";
+            report.latency_ns = timestamp_.monotonic_ns() - start_ns;
+            return report;
+        }
+
+        // Price the order off the opposite side before the risk check, because
+        // the notional value depends on it.
+        double price = side == 0 ? order_book_.get_best_ask() : order_book_.get_best_bid();
+        if (price <= 0.0) {
+            report.error_message = "No liquidity";
+            report.latency_ns = timestamp_.monotonic_ns() - start_ns;
+            return report;
+        }
+
+        if (!risk_engine_.check_order_risk(account_id, price * quantity, price * quantity)) {
+            report.error_message = "Risk check failed";
+            report.latency_ns = timestamp_.monotonic_ns() - start_ns;
+            return report;
+        }
+
+        OrderBook<double, double>::Order order{};
+        order.order_id = order_id;
+        order.user_id = account_id;
+        order.account_id = account_id;
+        order.side = side;
+        order.type = 1;  // market
+        order.price = price;
+        order.quantity = quantity;
+        order.filled = 0.0;
+        order.timestamp = start_ns;
+        order.flags = 0;
+
+        if (!order_book_.insert_order(order)) {
+            report.error_message = "Order rejected";
+            report.latency_ns = timestamp_.monotonic_ns() - start_ns;
+            return report;
+        }
+
+        report.success = true;
+        report.trade_id = order_id;
+        report.price = price;
+        report.quantity = quantity;
+        report.latency_ns = timestamp_.monotonic_ns() - start_ns;
+
+        return report;
     }
 };
 
-// Cache-line aligned statistics
-struct alignas(64) LatencyStats {
-    std::atomic<uint64_t> count{0};
-    std::atomic<uint64_t> sum{0};
-    std::atomic<uint64_t> min_latency{~0ULL};
-    std::atomic<uint64_t> max_latency{0};
-    std::atomic<uint64_t> p50{0};
-    std::atomic<uint64_t> p95{0};
-    std::atomic<uint64_t> p99{0};
-    std::atomic<uint64_t> p999{0};
-    
-    void record(uint64_t latency_ns) {
-        count.fetch_add(1, std::memory_order_relaxed);
-        sum.fetch_add(latency_ns, std::memory_order_relaxed);
-        
-        uint64_t current = min_latency.load(std::memory_order_relaxed);
-        while (latency_ns < current && 
-               !min_latency.compare_exchange_weak(current, latency_ns,
-               std::memory_order_relaxed, std::memory_order_relaxed));
-        
-        current = max_latency.load(std::memory_order_relaxed);
-        while (latency_ns > current && 
-               !max_latency.compare_exchange_weak(current, latency_ns,
-               std::memory_order_relaxed, std::memory_order_relaxed));
-    }
-};
-
-// Main matching engine class
+// Main matching engine. Symbols are registered explicitly; there is no built-in
+// instrument list.
 class UltraLowLatencyMatchingEngine {
 private:
-    std::unordered_map<std::string, std::unique_ptr<LockFreeOrderBook<double, uint64_t>>> order_books_;
-    alignas(64) std::shared_mutex books_mutex_;
-    
-    TradeExecutor executor_;
-    
-    alignas(64) LatencyStats order_latency_;
-    alignas(64) LatencyStats match_latency_;
-    alignas(64) LatencyStats risk_latency_;
-    
-    MPMCRingBuffer<LockFreeOrderBook<double, uint64_t>::Order, 65536> order_flow_;
-    
-    std::jthread worker_;
-    std::atomic<bool> running_{false};
+    std::unordered_map<std::string, std::unique_ptr<OrderBook<double, double>>> order_books_;
+    mutable std::shared_mutex books_mutex_;
+
+    RiskEngine<double> risk_engine_;
     TimestampCounter timestamp_;
 
+    alignas(64) LatencyStats order_latency_;
+
 public:
-    UltraLowLatencyMatchingEngine() {
-        const std::vector<std::string> pairs = {
-            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-            "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "MATICUSDT"
-        };
-        
-        for (const auto& pair : pairs) {
-            order_books_[pair] = std::make_unique<LockFreeOrderBook<double, uint64_t>>();
+    UltraLowLatencyMatchingEngine()
+        : risk_engine_(RiskEngine<double>::RiskLimits{
+              .max_order_value = 1'000'000.0,
+              .max_position_size = 10'000'000.0,
+              .max_leverage = 125.0,
+              .min_order_size = 0.0001,
+              .max_orders_per_second = 1000,
+              .daily_volume_limit = 100'000'000.0
+          }) {}
+
+    ~UltraLowLatencyMatchingEngine() = default;
+
+    // Register a tradable symbol.
+    bool register_symbol(const std::string& symbol) {
+        std::unique_lock lock(books_mutex_);
+        if (order_books_.count(symbol) != 0) {
+            return false;
         }
+        order_books_[symbol] = std::make_unique<OrderBook<double, double>>();
+        return true;
     }
-    
-    void start() {
-        running_.store(true, std::memory_order_release);
-        worker_ = std::jthread([this](std::stop_token st) {
-            process_order_flow(st);
-        });
+
+    bool has_symbol(const std::string& symbol) const {
+        std::shared_lock lock(books_mutex_);
+        return order_books_.count(symbol) != 0;
     }
-    
-    void stop() {
-        running_.store(false, std::memory_order_release);
-        worker_.request_stop();
-    }
-    
-    // Main order entry point - targets <10us
-    HOT TradeExecutor::ExecutionReport place_order(
+
+    RiskEngine<double>& risk_engine() { return risk_engine_; }
+
+    // Synchronous order entry. Validates the symbol, gates on risk, and inserts
+    // into the book, reporting the real latency of that work.
+    TradeExecutor::ExecutionReport place_order(
         uint64_t account_id,
         uint64_t order_id,
         const std::string& symbol,
@@ -760,98 +936,104 @@ public:
         double quantity
     ) {
         const uint64_t start_ns = timestamp_.monotonic_ns();
-        
-        LockFreeOrderBook<double, uint64_t>::Order order{
+
+        TradeExecutor::ExecutionReport report{
             .order_id = order_id,
-            .user_id = account_id,
-            .account_id = account_id,
-            .side = side,
-            .type = type,
-            .price = price,
-            .quantity = quantity,
-            .filled = 0,
-            .timestamp = start_ns,
-            .flags = 0
+            .trade_id = 0,
+            .success = false,
+            .price = 0.0,
+            .quantity = 0.0,
+            .latency_ns = 0,
+            .error_message = {}
         };
-        
-        // Risk check
-        const uint64_t risk_start = timestamp_.monotonic_ns();
-        const uint64_t risk_latency = timestamp_.monotonic_ns() - risk_start;
-        risk_latency_.record(risk_latency);
-        
-        // Insert to order book
+
+        if (quantity <= 0.0 || !std::isfinite(price) || price <= 0.0) {
+            report.error_message = "Invalid order parameters";
+            report.latency_ns = timestamp_.monotonic_ns() - start_ns;
+            return report;
+        }
+
+        if (!risk_engine_.check_order_risk(account_id, price * quantity, price * quantity)) {
+            report.error_message = "Risk check failed";
+            report.latency_ns = timestamp_.monotonic_ns() - start_ns;
+            return report;
+        }
+
+        OrderBook<double, double>::Order order{};
+        order.order_id = order_id;
+        order.user_id = account_id;
+        order.account_id = account_id;
+        order.side = side;
+        order.type = type;
+        order.price = price;
+        order.quantity = quantity;
+        order.filled = 0.0;
+        order.timestamp = start_ns;
+        order.flags = 0;
+
         std::shared_lock lock(books_mutex_);
         auto it = order_books_.find(symbol);
-        
         if (it == order_books_.end()) {
-            return TradeExecutor::ExecutionReport{
-                .order_id = order_id,
-                .success = false,
-                .error_message = "Symbol not found",
-                .latency_ns = timestamp_.monotonic_ns() - start_ns
-            };
+            report.error_message = "Symbol not found";
+            report.latency_ns = timestamp_.monotonic_ns() - start_ns;
+            return report;
         }
-        
-        bool inserted = it->second->insert_order(order);
-        
-        const uint64_t order_latency = timestamp_.monotonic_ns() - start_ns;
-        order_latency_.record(order_latency);
-        
-        if (!inserted) {
-            return TradeExecutor::ExecutionReport{
-                .order_id = order_id,
-                .success = false,
-                .error_message = "Order book full",
-                .latency_ns = order_latency
-            };
+
+        if (!it->second->insert_order(order)) {
+            report.error_message = "Order rejected";
+            report.latency_ns = timestamp_.monotonic_ns() - start_ns;
+            return report;
         }
-        
-        return TradeExecutor::ExecutionReport{
-            .order_id = order_id,
-            .trade_id = order_id,
-            .success = true,
-            .latency_ns = order_latency
-        };
+
+        const uint64_t latency = timestamp_.monotonic_ns() - start_ns;
+        order_latency_.record(latency);
+
+        report.success = true;
+        report.trade_id = order_id;
+        report.price = price;
+        report.quantity = quantity;
+        report.latency_ns = latency;
+
+        return report;
     }
 
-private:
-    void process_order_flow(std::stop_token st) {
-        LockFreeOrderBook<double, uint64_t>::Order order;
-        
-        while (!st.stop_requested()) {
-            if (order_flow_.pop(order)) {
-                const uint64_t start = timestamp_.monotonic_ns();
-                const uint64_t latency = timestamp_.monotonic_ns() - start;
-                match_latency_.record(latency);
-            } else {
-                std::this_thread::yield();
-            }
-        }
-    }
-    
-public:
-    LatencyStats get_order_latency_stats() const { return order_latency_; }
-    LatencyStats get_match_latency_stats() const { return match_latency_; }
-    LatencyStats get_risk_latency_stats() const { return risk_latency_; }
-    
-    double get_mid_price(const std::string& symbol) const {
+    bool cancel_order(const std::string& symbol, uint64_t order_id) {
         std::shared_lock lock(books_mutex_);
         auto it = order_books_.find(symbol);
-        if (it == order_books_.end()) return 0;
-        
+        if (it == order_books_.end()) {
+            return false;
+        }
+        return it->second->cancel_order(order_id);
+    }
+
+    std::optional<double> get_mid_price(const std::string& symbol) const {
+        std::shared_lock lock(books_mutex_);
+        auto it = order_books_.find(symbol);
+        if (it == order_books_.end()) {
+            return std::nullopt;
+        }
+
         double bid = it->second->get_best_bid();
         double ask = it->second->get_best_ask();
-        
+        if (bid <= 0.0 || ask <= 0.0) {
+            return std::nullopt;
+        }
+
         return (bid + ask) / 2.0;
     }
-    
-    double get_spread(const std::string& symbol) const {
+
+    std::optional<double> get_spread(const std::string& symbol) const {
         std::shared_lock lock(books_mutex_);
         auto it = order_books_.find(symbol);
-        if (it == order_books_.end()) return 0;
-        
+        if (it == order_books_.end()) {
+            return std::nullopt;
+        }
         return it->second->get_spread();
     }
+
+    LatencySnapshot get_order_latency_stats() const { return order_latency_.snapshot(); }
+
+private:
 };
 
 } // namespace tigerex

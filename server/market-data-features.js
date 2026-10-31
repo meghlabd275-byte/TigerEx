@@ -347,7 +347,7 @@ function generateKlineData(symbol, interval = '1h') {
 
 const marketDataEndpoints = {
   // Get staking products
-  getStakingProducts: \`
+  getStakingProducts: `
     app.get('/api/v1/staking/products', (req, res) => {
       try {
         const products = Object.entries(STAKING_PRODUCTS).map(([asset, details]) => ({
@@ -365,10 +365,10 @@ const marketDataEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Create staking position
-  startStaking: \`
+  startStaking: `
     app.post('/api/v1/staking/start', authenticateRequest, (req, res) => {
       try {
         const { asset, amount, lockDays = 0 } = req.body;
@@ -383,10 +383,10 @@ const marketDataEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Get staking positions
-  getStakingPositions: \`
+  getStakingPositions: `
     app.get('/api/v1/staking/positions', authenticateRequest, (req, res) => {
       try {
         const positions = db.prepare(\`
@@ -412,10 +412,10 @@ const marketDataEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Get kline data
-  getKlines: \`
+  getKlines: `
     app.get('/api/v1/klines', (req, res) => {
       try {
         const { symbol, interval = '1h', limit = 100 } = req.query;
@@ -446,10 +446,10 @@ const marketDataEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`,
+  `,
 
   // Create price alert
-  createPriceAlert: \`
+  createPriceAlert: `
     app.post('/api/v1/alerts/price', authenticateRequest, (req, res) => {
       try {
         const { symbol, targetPrice, condition = 'above' } = req.body;
@@ -472,7 +472,7 @@ const marketDataEndpoints = {
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-  \`
+  `
 };
 
 module.exports = {

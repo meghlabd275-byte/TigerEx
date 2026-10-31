@@ -844,12 +844,12 @@ export function AdminDashboard() {
     pendingKyc: 0,
     activeAlerts: 0,
   };
-  const mockUsers: User[] = [];
-  const mockTransactions: Transaction[] = [];
-  const mockKycRequests: KYCRequest[] = [];
-  const mockAlerts: Alert[] = [];
-  const mockMarkets: Market[] = [];
-  const mockSystemHealth: SystemHealth[] = [];
+  const users: User[] = [];
+  const transactions: Transaction[] = [];
+  const kycRequests: KYCRequest[] = [];
+  const alerts: Alert[] = [];
+  const markets: Market[] = [];
+  const systemHealth: SystemHealth[] = [];
 
   // Tab navigation
   const tabs = [
@@ -1045,7 +1045,7 @@ export function AdminDashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {mockTransactions.map((tx) => (
+                      {transactions.map((tx) => (
                         <tr key={tx.id} className="border-b border-gray-100 dark:border-gray-800">
                           <td className="py-3 capitalize">{tx.type}</td>
                           <td className="py-3">{tx.asset}</td>
@@ -1095,7 +1095,7 @@ export function AdminDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {mockUsers.map((user) => (
+                    {users.map((user) => (
                       <UserRow
                         key={user.id}
                         user={user}
@@ -1155,7 +1155,7 @@ export function AdminDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {mockTransactions.map((tx) => (
+                    {transactions.map((tx) => (
                       <TransactionRow
                         key={tx.id}
                         transaction={tx}
@@ -1175,7 +1175,7 @@ export function AdminDashboard() {
           {activeTab === 'kyc' && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-gray-900 dark:text-white">Pending KYC Requests ({mockKycRequests.length})</h2>
+                <h2 className="text-lg font-bold text-gray-900 dark:text-white">Pending KYC Requests ({kycRequests.length})</h2>
                 <div className="flex gap-2">
                   <button className="px-4 py-2 bg-gray-100 dark:bg-gray-800 rounded-lg">All</button>
                   <button className="px-4 py-2 bg-orange-500 text-white rounded-lg">Pending</button>
@@ -1184,7 +1184,7 @@ export function AdminDashboard() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {mockKycRequests.map((request) => (
+                {kycRequests.map((request) => (
                   <KYCCard
                     key={request.id}
                     request={request}
@@ -1202,7 +1202,7 @@ export function AdminDashboard() {
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-bold text-gray-900 dark:text-white">
-                  Active Alerts ({mockAlerts.filter(a => a.status !== 'resolved').length})
+                  Active Alerts ({alerts.filter(a => a.status !== 'resolved').length})
                 </h2>
                 <div className="flex gap-2">
                   <button className="px-4 py-2 bg-red-500/10 text-red-500 rounded-lg">All</button>
@@ -1213,7 +1213,7 @@ export function AdminDashboard() {
               </div>
 
               <div className="space-y-4">
-                {mockAlerts.map((alert) => (
+                {alerts.map((alert) => (
                   <AlertCard
                     key={alert.id}
                     alert={alert}
@@ -1250,7 +1250,7 @@ export function AdminDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {mockMarkets.map((market) => (
+                    {markets.map((market) => (
                       <tr key={market.symbol} className="border-b border-gray-100 dark:border-gray-800">
                         <td className="py-4 px-4">
                           <p className="font-medium text-gray-900 dark:text-white">{market.symbol}</p>
@@ -1346,7 +1346,7 @@ export function AdminDashboard() {
             <div className="space-y-6">
               <h2 className="text-lg font-bold text-gray-900 dark:text-white">System Health</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {mockSystemHealth.map((system) => (
+                {systemHealth.map((system) => (
                   <SystemHealthCard key={system.component} system={system} />
                 ))}
               </div>

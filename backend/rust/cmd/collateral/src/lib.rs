@@ -135,7 +135,11 @@ impl CollateralService {
             let Some(price) = prices.get(asset) else {
                 return Err(CollateralError::UnknownAsset(asset.clone()));
             };
-            let haircut = ltv.get(asset).copied().unwrap_or(1.0);
+            // An asset without an explicit haircut must not silently count at
+            // full value; that is a fail-open default on a risk calculation.
+            let Some(haircut) = ltv.get(asset).copied() else {
+                return Err(CollateralError::UnknownAsset(format!("{asset} (no LTV)")));
+            };
             total += amount * price * haircut;
         }
         Ok(total)
@@ -157,7 +161,21 @@ mod tests {
         svc.set_price("BTC", 50_000.0).unwrap();
         svc.set_price("USDT", 1.0).unwrap();
         svc.set_ltv("BTC", 0.7).unwrap();
+        svc.set_ltv("USDT", 1.0).unwrap();
         svc
+    }
+
+    #[test]
+    fn an_asset_without_an_ltv_is_refused_rather_than_counted_at_full_value() {
+        let svc = CollateralService::new();
+        svc.set_price("BTC", 50_000.0).unwrap();
+        // No LTV configured for BTC.
+        svc.post("u1", "BTC", 1.0).unwrap();
+
+        assert_eq!(
+            svc.available("u1").unwrap_err(),
+            CollateralError::UnknownAsset("BTC (no LTV)".to_string())
+        );
     }
 
     #[test]

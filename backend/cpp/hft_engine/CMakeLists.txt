@@ -16,26 +16,15 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# Source files
-set(HFT_SOURCES
-    src/hft_engine.cpp
-    src/order_manager.cpp
-    src/risk_engine.cpp
-    src/execution.cpp
-    src/network.cpp
-    src/metrics.cpp
-)
+# Header-only engine: the implementation lives in include/hft_engine.hpp, so
+# there is no library to compile. The test target proves it compiles and works.
+find_package(Threads REQUIRED)
+add_executable(hft_engine_test tests/hft_engine_test.cpp)
+target_include_directories(hft_engine_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(hft_engine_test PRIVATE Threads::Threads)
 
-# Create library
-add_library(tigerex_hft STATIC ${HFT_SOURCES})
-
-# Link libraries
-target_link_libraries(tigerex_hft
-    pthread
-    rt
-    dl
-)
+enable_testing()
+add_test(NAME hft_engine_test COMMAND hft_engine_test)
 
 # Install
-install(TARGETS tigerex_hft DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include/tigerex_hft)

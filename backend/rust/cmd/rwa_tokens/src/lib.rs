@@ -105,13 +105,17 @@ impl RWATokenService {
             return Err(RwaError::InvalidPrice(unit_price));
         }
 
-        let ratio = self
+        // A token without a configured collateral ratio must not be minted:
+        // defaulting to 1.0 would treat an unassessed asset as fully collateralised.
+        let Some(ratio) = self
             .ratios
             .read()
             .unwrap()
             .get(kind.as_str())
             .copied()
-            .unwrap_or(1.0);
+        else {
+            return Err(RwaError::UnknownAsset(kind.as_str().to_string()));
+        };
 
         let mut next_id = self.next_id.write().unwrap();
         let id = format!("{}_{}", kind.as_str(), *next_id);
@@ -164,12 +168,23 @@ mod tests {
     #[test]
     fn value_comes_from_the_supplied_price_not_a_constant() {
         let svc = RWATokenService::new();
+        svc.set_collateral_ratio(AssetKind::Gold, 0.8).unwrap();
         let id = svc.mint(AssetKind::Gold, 2.0, 2_400.0).unwrap();
 
         let asset = svc.asset(&id).unwrap();
         // The old implementation always valued gold at 2,000/oz.
         assert_eq!(asset.value, 4_800.0);
         assert_eq!(asset.unit_price, 2_400.0);
+    }
+
+    #[test]
+    fn minting_without_a_configured_ratio_is_refused() {
+        let svc = RWATokenService::new();
+        // No collateral ratio set for Gold: minting must not assume 1.0.
+        assert_eq!(
+            svc.mint(AssetKind::Gold, 1.0, 2_000.0).unwrap_err(),
+            RwaError::UnknownAsset("gold".to_string())
+        );
     }
 
     #[test]
@@ -194,6 +209,7 @@ mod tests {
     #[test]
     fn invalid_quantities_and_prices_are_rejected() {
         let svc = RWATokenService::new();
+        svc.set_collateral_ratio(AssetKind::Gold, 0.8).unwrap();
         assert!(svc.mint(AssetKind::Gold, -1.0, 2_000.0).is_err());
         assert!(svc.mint(AssetKind::Gold, 1.0, -2_000.0).is_err());
         assert!(svc.mint(AssetKind::Gold, f64::NAN, 2_000.0).is_err());
@@ -203,6 +219,7 @@ mod tests {
     #[test]
     fn ids_are_unique_and_stable() {
         let svc = RWATokenService::new();
+        svc.set_collateral_ratio(AssetKind::Gold, 0.8).unwrap();
         let a = svc.mint(AssetKind::Gold, 1.0, 2_000.0).unwrap();
         let b = svc.mint(AssetKind::Gold, 1.0, 2_000.0).unwrap();
         // The old id was the asset count, so these collided.

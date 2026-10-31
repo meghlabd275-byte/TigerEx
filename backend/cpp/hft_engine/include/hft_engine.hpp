@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <numeric>
 #include <iostream>
+#include <cstring>
 #include <sstream>
 #include <iomanip>
 
@@ -60,6 +61,12 @@ using UserId = uint64_t;
 using SymbolId = uint32_t;
 using Price = int64_t;  // Scaled by 10^8
 using Quantity = int64_t;
+
+// Monotonic nanosecond clock shared by the book and the risk engine.
+inline Timestamp get_timestamp_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 enum class OrderSide : uint8_t {
     Buy = 0,
@@ -178,7 +185,20 @@ struct OrderBookLevel {
     OrderBookLevel() noexcept : price(0), quantity(0), order_id(0), level(0) {}
 };
 
-struct OrderBook {
+// One resting order consumed by an incoming order.
+struct Fill {
+    OrderId maker_order_id;
+    Price price;
+    Quantity quantity;
+
+    Fill() noexcept : maker_order_id(0), price(0), quantity(0) {}
+    Fill(OrderId id, Price p, Quantity q) noexcept
+        : maker_order_id(id), price(p), quantity(q) {}
+};
+
+// Flat, copyable point-in-time snapshot of a book. The live book is the
+// `OrderBook` class further down.
+struct OrderBookSnapshot {
     SymbolId symbol_id;
     Timestamp last_update;
     uint64_t sequence;
@@ -197,7 +217,7 @@ struct OrderBook {
     Quantity volume;
     uint64_t trade_count;
     
-    OrderBook() noexcept : symbol_id(0), last_update(0), sequence(0),
+    OrderBookSnapshot() noexcept : symbol_id(0), last_update(0), sequence(0),
         bid_count(0), ask_count(0), last_price(0), high_price(0), 
         low_price(0), volume(0), trade_count(0) {}
 };
@@ -316,6 +336,17 @@ public:
         }
         return std::nullopt;
     }
+
+    std::vector<Symbol> get_all_symbols() const {
+        std::shared_lock lock(mutex_);
+        std::vector<Symbol> out;
+        out.reserve(symbols_by_id_.size());
+        for (const auto& [id, sym] : symbols_by_id_) {
+            (void)id;
+            out.push_back(sym);
+        }
+        return out;
+    }
 };
 
 // ============================================================================
@@ -327,7 +358,8 @@ private:
     struct PriceLevel {
         Price price;
         Quantity quantity;
-        std::vector<OrderId> orders;
+        // Resting orders at this price, oldest first, with their remaining size.
+        std::deque<std::pair<OrderId, Quantity>> orders;
         
         PriceLevel() : price(0), quantity(0) {}
     };
@@ -352,7 +384,7 @@ public:
         
         level.price = order->price;
         level.quantity += order->remaining_quantity;
-        level.orders.push_back(order->order_id);
+        level.orders.emplace_back(order->order_id, order->remaining_quantity);
         
         sequence_.fetch_add(1, std::memory_order_relaxed);
         last_update_.store(get_timestamp_ns(), std::memory_order_relaxed);
@@ -371,7 +403,8 @@ public:
         
         auto& order_ids = it->second.orders;
         for (auto it2 = order_ids.begin(); it2 != order_ids.end(); ++it2) {
-            if (*it2 == order_id) {
+            if (it2->first == order_id) {
+                it->second.quantity -= it2->second;
                 order_ids.erase(it2);
                 break;
             }
@@ -388,21 +421,34 @@ public:
         return true;
     }
     
-    // Get best bid
-    std::optional<PriceLevel> get_best_bid() const {
+    // Best bid: the highest bid price. The book is a hash map, so the best
+    // price has to be searched for; `begin()` returns an arbitrary level.
+    std::optional<std::pair<Price, Quantity>> best_bid() const {
         std::shared_lock lock(mutex_);
-        if (bids_.empty()) return std::nullopt;
-        return bids_.begin()->second;
+        std::optional<std::pair<Price, Quantity>> best;
+        for (const auto& [price, level] : bids_) {
+            if (level.quantity <= 0) continue;
+            if (!best || price > best->first) {
+                best = std::make_pair(price, level.quantity);
+            }
+        }
+        return best;
     }
-    
-    // Get best ask
-    std::optional<PriceLevel> get_best_ask() const {
+
+    // Best ask: the lowest ask price.
+    std::optional<std::pair<Price, Quantity>> best_ask() const {
         std::shared_lock lock(mutex_);
-        if (asks_.empty()) return std::nullopt;
-        return asks_.begin()->second;
+        std::optional<std::pair<Price, Quantity>> best;
+        for (const auto& [price, level] : asks_) {
+            if (level.quantity <= 0) continue;
+            if (!best || price < best->first) {
+                best = std::make_pair(price, level.quantity);
+            }
+        }
+        return best;
     }
-    
-    // Get depth
+
+    // Get depth, best prices first.
     void get_depth(size_t levels, 
                    std::vector<OrderBookLevel>& bid_levels,
                    std::vector<OrderBookLevel>& ask_levels) const {
@@ -410,24 +456,82 @@ public:
         
         bid_levels.clear();
         ask_levels.clear();
-        
-        size_t count = 0;
+
+        std::vector<std::pair<Price, Quantity>> bid_prices;
+        bid_prices.reserve(bids_.size());
         for (const auto& [price, level] : bids_) {
-            if (count++ >= levels) break;
+            if (level.quantity > 0) bid_prices.push_back({price, level.quantity});
+        }
+        std::sort(bid_prices.begin(), bid_prices.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
+
+        std::vector<std::pair<Price, Quantity>> ask_prices;
+        ask_prices.reserve(asks_.size());
+        for (const auto& [price, level] : asks_) {
+            if (level.quantity > 0) ask_prices.push_back({price, level.quantity});
+        }
+        std::sort(ask_prices.begin(), ask_prices.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+
+        for (size_t k = 0; k < bid_prices.size() && k < levels; ++k) {
             OrderBookLevel bl;
-            bl.price = price;
-            bl.quantity = level.quantity;
+            bl.price = bid_prices[k].first;
+            bl.quantity = bid_prices[k].second;
             bid_levels.push_back(bl);
         }
-        
-        count = 0;
-        for (const auto& [price, level] : asks_) {
-            if (count++ >= levels) break;
+        for (size_t k = 0; k < ask_prices.size() && k < levels; ++k) {
             OrderBookLevel al;
-            al.price = price;
-            al.quantity = level.quantity;
+            al.price = ask_prices[k].first;
+            al.quantity = ask_prices[k].second;
             ask_levels.push_back(al);
         }
+    }
+
+    // Take liquidity from the opposite side, best price first, then oldest
+    // order first within a level, until `qty` is filled or the side is empty.
+    std::vector<Fill> take(OrderSide incoming_side, Quantity qty) {
+        std::unique_lock lock(mutex_);
+
+        auto& levels = incoming_side == OrderSide::Buy ? asks_ : bids_;
+        std::vector<Fill> fills;
+
+        while (qty > 0) {
+            auto best = levels.end();
+            for (auto it = levels.begin(); it != levels.end(); ++it) {
+                if (it->second.quantity <= 0) continue;
+                if (best == levels.end() ||
+                    (incoming_side == OrderSide::Buy ? it->first < best->first
+                                                     : it->first > best->first)) {
+                    best = it;
+                }
+            }
+            if (best == levels.end()) break;
+
+            auto& level = best->second;
+            while (qty > 0 && !level.orders.empty()) {
+                auto& front = level.orders.front();
+                Quantity take_qty = std::min(qty, front.second);
+
+                fills.emplace_back(front.first, level.price, take_qty);
+                front.second -= take_qty;
+                level.quantity -= take_qty;
+                qty -= take_qty;
+
+                if (front.second <= 0) {
+                    level.orders.pop_front();
+                }
+            }
+
+            if (level.orders.empty()) {
+                levels.erase(best);
+            }
+        }
+
+        if (!fills.empty()) {
+            sequence_.fetch_add(1, std::memory_order_relaxed);
+            last_update_.store(get_timestamp_ns(), std::memory_order_relaxed);
+        }
+        return fills;
     }
     
     SymbolId symbol_id() const { return symbol_id_; }
@@ -495,19 +599,33 @@ public:
                          OrderSide side) {
         std::shared_lock lock(mutex_);
         
+        if (price < 0 || quantity <= 0) {
+            return false;
+        }
+
+        // Size and notional limits apply to every order, including the first
+        // from an account the engine has not seen before. Returning early for
+        // an unknown user let it send an order of any size unchecked.
+        if (quantity > default_limits_.max_order_size) {
+            return false;
+        }
+
+        // A market order carries no limit price; its notional is bounded by the
+        // book at execution time, so the price-based check is skipped.
+        if (price > 0) {
+            int64_t notional = static_cast<int64_t>(price) * static_cast<int64_t>(quantity);
+            if (notional > default_limits_.max_notional) {
+                return false;
+            }
+        }
+
         auto it = user_states_.find(user_id);
         if (it == user_states_.end()) {
-            return true;  // New user, allow
+            return true;
         }
         
         const auto& state = it->second;
         if (state.is_blocked) {
-            return false;
-        }
-        
-        // Check order size
-        int64_t notional = (int64_t)price * quantity;
-        if (notional > default_limits_.max_notional) {
             return false;
         }
         
@@ -811,52 +929,44 @@ private:
         return (ts << 20) | (counter.fetch_add(1) & 0xFFFFF);
     }
     
-    // Get current timestamp in nanoseconds
-    static Timestamp get_timestamp_ns() {
-        auto now = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(
-            now.time_since_epoch()
-        ).count();
-    }
-    
     // Process market order
     std::optional<OrderId> process_market_order(Order* order) {
-        std::shared_lock lock(books_mutex_);
-        auto it = order_books_.find(order->symbol_id);
-        if (it == order_books_.end()) {
+        // The book pointer is taken under a short lock; the book then
+        // synchronises its own state. Holding books_mutex_ across the trade
+        // would invert the lock order used by cancel_order and risk a deadlock.
+        OrderBook* book = nullptr;
+        {
+            std::shared_lock lock(books_mutex_);
+            auto it = order_books_.find(order->symbol_id);
+            if (it == order_books_.end()) {
+                return std::nullopt;
+            }
+            book = it->second.get();
+        }
+
+        auto fills = book->take(order->side, order->remaining_quantity);
+
+        if (fills.empty()) {
+            order->status = OrderStatus::Rejected;
+            order->updated_at = get_timestamp_ns();
+            if (on_order_update_) on_order_update_(*order);
             return std::nullopt;
         }
-        
-        OrderBook* book = it->second.get();
-        
-        // Match against opposite side
-        auto& levels = order->side == OrderSide::Buy ? book->asks : book->bids;
-        
-        // For market orders, we match at best available price
-        if (!levels.empty()) {
-            Price match_price = order->side == OrderSide::Buy ? 
-                levels.begin()->first : levels.begin()->first;
-            
-            // Execute trade
-            execute_trade(order, match_price, order->remaining_quantity);
+
+        for (const auto& fill : fills) {
+            execute_trade(order, fill.maker_order_id, fill.price, fill.quantity);
         }
-        
-        // Update order status
-        if (order->filled_quantity >= order->quantity) {
-            order->status = OrderStatus::Filled;
-        } else if (order->filled_quantity > 0) {
-            order->status = OrderStatus::PartiallyFilled;
-        } else {
-            order->status = OrderStatus::Rejected;
-        }
-        
+
+        order->status = order->remaining_quantity > 0
+            ? OrderStatus::PartiallyFilled
+            : OrderStatus::Filled;
         order->updated_at = get_timestamp_ns();
-        
+
         if (on_order_update_) on_order_update_(*order);
-        
+
         return order->order_id;
     }
-    
+
     // Add order to book
     bool add_to_book(Order* order) {
         std::shared_lock lock(books_mutex_);
@@ -868,32 +978,59 @@ private:
         return it->second->add_order(order);
     }
     
-    // Execute trade
-    void execute_trade(Order* order, Price price, Quantity quantity) {
+    // Execute trade against a resting order. The maker order is updated too,
+    // and the trade counter is advanced exactly once per fill.
+    void execute_trade(Order* taker, OrderId maker_order_id,
+                       Price price, Quantity quantity) {
+        if (quantity <= 0 || taker->remaining_quantity < quantity) {
+            return;
+        }
+
+        // Average fill price must use the pre-trade filled quantity.
+        taker->average_fill_price =
+            ((taker->average_fill_price * taker->filled_quantity) + (price * quantity)) /
+            (taker->filled_quantity + quantity);
+        taker->filled_quantity += quantity;
+        taker->remaining_quantity -= quantity;
+
+        Order* maker = nullptr;
+        {
+            std::shared_lock lock(orders_mutex_);
+            auto it = orders_by_id_.find(maker_order_id);
+            if (it != orders_by_id_.end()) {
+                maker = it->second;
+            }
+        }
+
+        if (maker != nullptr) {
+            maker->filled_quantity += quantity;
+            maker->remaining_quantity -= quantity;
+            maker->average_fill_price = price;
+            maker->status = maker->remaining_quantity > 0
+                ? OrderStatus::PartiallyFilled
+                : OrderStatus::Filled;
+            maker->updated_at = get_timestamp_ns();
+        }
+
         Trade trade;
-        trade.order_id = order->order_id;
-        trade.symbol_id = order->symbol_id;
-        trade.side = order->side;
+        trade.trade_id = total_trades_.fetch_add(1) + 1;
+        trade.match_id = static_cast<uint32_t>(trade.trade_id);
+        trade.order_id = taker->order_id;
+        trade.counter_order_id = maker_order_id;
+        trade.symbol_id = taker->symbol_id;
+        trade.side = taker->side;
         trade.price = price;
         trade.quantity = quantity;
-        trade.leaves_quantity = order->remaining_quantity - quantity;
+        trade.leaves_quantity = taker->remaining_quantity;
         trade.executed_at = get_timestamp_ns();
-        trade.trade_id = total_trades_.fetch_add(1) + 1;
-        
-        // Update order
-        order->filled_quantity += quantity;
-        order->remaining_quantity -= quantity;
-        order->average_fill_price = 
-            ((order->average_fill_price * order->filled_quantity) + (price * quantity)) / 
-            (order->filled_quantity + quantity);
-        
-        // Update metrics
-        total_trades_.fetch_add(1);
-        total_volume_.fetch_add((uint64_t)price * quantity);
-        
-        risk_engine_->record_order(order->user_id, price, quantity);
-        
+
+        total_volume_.fetch_add(static_cast<uint64_t>(price) *
+                                static_cast<uint64_t>(quantity));
+
+        risk_engine_->record_order(taker->user_id, price, quantity);
+
         if (on_trade_) on_trade_(trade);
+        if (maker != nullptr && on_order_update_) on_order_update_(*maker);
     }
 };
 

@@ -14,6 +14,7 @@ import {
   ArrowRightLeft, Eye, EyeOff, RefreshCcw, Pause, Play,
   AlertCircle, CheckCircle, XCircle
 } from 'lucide-react';
+import { API_BASE_URL, WS_BASE_URL } from '@/lib/config';
 
 // =============================================================================
 // TYPES & INTERFACES
@@ -197,7 +198,7 @@ class TradingApiService {
   private subscriptions: Set<string> = new Set();
   private messageHandlers: Map<string, (data: any) => void> = new Map();
 
-  constructor(baseUrl: string = '/api', wsUrl: string = 'wss://stream.tigerex.com') {
+  constructor(baseUrl: string = API_BASE_URL, wsUrl: string = WS_BASE_URL) {
     this.baseUrl = baseUrl;
     this.wsUrl = wsUrl;
   }

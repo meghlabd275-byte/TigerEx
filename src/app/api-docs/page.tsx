@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Code, Copy, Check, ChevronRight, Key, Lock, Globe, Clock } from 'lucide-react';
+import { API_BASE_URL, WS_BASE_URL } from '@/lib/config';
 
 const API_ENDPOINTS = [
   { method: 'GET', path: '/api/v1/markets', description: 'Get all available trading pairs', category: 'Market' },
@@ -26,7 +27,7 @@ export default function APIDocumentation() {
   const filteredEndpoints = selectedCategory === 'all' ? API_ENDPOINTS : API_ENDPOINTS.filter(e => e.category === selectedCategory);
 
   const copyEndpoint = (path: string) => {
-    navigator.clipboard.writeText(`https://api.tigerex.com${path}`);
+    navigator.clipboard.writeText(`${API_BASE_URL}${path}`);
     setCopiedEndpoint(path);
     setTimeout(() => setCopiedEndpoint(''), 2000);
   };
@@ -133,7 +134,7 @@ export default function APIDocumentation() {
           </h2>
           <div className="space-y-3">
             <div className="bg-[#0A0A0F] rounded-lg p-3">
-              <p className="font-mono text-sm text-green-500">wss://ws.tigerex.com/v1/ws</p>
+              <p className="font-mono text-sm text-green-500">{WS_BASE_URL}/v1/ws</p>
             </div>
             <p className="text-sm text-gray-400">Subscribe to real-time market data, order updates, and trade executions.</p>
           </div>

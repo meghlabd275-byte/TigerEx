@@ -34,6 +34,8 @@
 namespace tigerex {
 namespace dex {
 
+struct RouteStep;
+
 // Supported DEX protocols
 enum class DEXProtocol : uint8_t {
     UNISWAP_V2 = 0,
@@ -59,7 +61,7 @@ enum class DEXProtocol : uint8_t {
 };
 
 // Chain IDs
-enum class ChainId : uint8_t {
+enum class ChainId : uint32_t {
     ETHEREUM = 1,
     POLYGON = 137,
     BSC = 56,
@@ -230,7 +232,7 @@ struct SwapTransaction {
         , min_amount_out(0)
         , value(0)
         , gas_limit(0)
-        , gas_limit(0)
+        , gas_price(0)
         , deadline(0)
         , created_at(0)
     {}
@@ -270,276 +272,376 @@ struct MarketData {
     {}
 };
 
-// Uniswap V2 pricing
+// Fixed-point denominator for fee arithmetic. Using 1e6 keeps more fee-rate
+// precision than the canonical 1e3 constant, which silently truncates rates
+// finer than 0.1%.
+constexpr uint64_t kFeeDenominator = 1000000;
+
+// Uniswap V2 pricing (constant product x*y=k)
 class UniswapV2Pricing {
 public:
     // Get amount out given amount in
-    static uint64_t get_amount_out(uint64_t amount_in, uint64_t reserve_in, uint64_t reserve_out, double fee_rate) {
+    static uint64_t get_amount_out(uint64_t amount_in, uint64_t reserve_in,
+                                   uint64_t reserve_out, double fee_rate) {
         if (amount_in == 0 || reserve_in == 0 || reserve_out == 0) {
             return 0;
         }
-        
-        uint64_t amount_in_with_fee = amount_in * static_cast<uint64_t>((1.0 - fee_rate) * 1000);
+        if (!std::isfinite(fee_rate) || fee_rate < 0.0 || fee_rate >= 1.0) {
+            return 0;
+        }
+
+        uint64_t fee_factor = static_cast<uint64_t>((1.0 - fee_rate) * kFeeDenominator);
+        uint64_t amount_in_with_fee = amount_in * fee_factor;
         uint64_t numerator = amount_in_with_fee * reserve_out;
-        uint64_t denominator = reserve_in * 1000 + amount_in_with_fee;
-        
+        uint64_t denominator = reserve_in * kFeeDenominator + amount_in_with_fee;
+
+        if (denominator == 0) {
+            return 0;
+        }
+
         return numerator / denominator;
     }
-    
-    // Get amount in given amount out
-    static uint64_t get_amount_in(uint64_t amount_out, uint64_t reserve_in, uint64_t reserve_out, double fee_rate) {
+
+    // Get amount in required for a desired amount out
+    static uint64_t get_amount_in(uint64_t amount_out, uint64_t reserve_in,
+                                  uint64_t reserve_out, double fee_rate) {
         if (amount_out == 0 || reserve_in == 0 || reserve_out == 0) {
             return 0;
         }
-        
-        uint64_t numerator = reserve_in * amount_out * 1000;
-        uint64_t denominator = (reserve_out - amount_out) * static_cast<uint64_t>((1.0 - fee_rate) * 1000);
-        
-        return (numerator / denominator) + 1;
+        if (!std::isfinite(fee_rate) || fee_rate < 0.0 || fee_rate >= 1.0) {
+            return 0;
+        }
+        // The pool cannot pay out its entire reserve.
+        if (amount_out >= reserve_out) {
+            return 0;
+        }
+
+        uint64_t fee_factor = static_cast<uint64_t>((1.0 - fee_rate) * kFeeDenominator);
+        if (fee_factor == 0) {
+            return 0;
+        }
+
+        unsigned __int128 numerator =
+            static_cast<unsigned __int128>(reserve_in) * amount_out * kFeeDenominator;
+        unsigned __int128 denominator =
+            static_cast<unsigned __int128>(reserve_out - amount_out) * fee_factor;
+
+        return static_cast<uint64_t>(numerator / denominator) + 1;
     }
-    
-    // Get price impact
-    static double calculate_price_impact(uint64_t amount_in, uint64_t amount_out, 
-                                     uint64_t reserve_in, uint64_t reserve_out) {
+
+    // Get price impact as a signed fraction of the mid price.
+    static double calculate_price_impact(uint64_t amount_in, uint64_t amount_out,
+                                         uint64_t reserve_in, uint64_t reserve_out) {
+        if (amount_in == 0 || reserve_in == 0 || reserve_out == 0) {
+            return 0.0;
+        }
+
         double mid_price = static_cast<double>(reserve_out) / static_cast<double>(reserve_in);
+        if (mid_price <= 0.0) {
+            return 0.0;
+        }
         double exec_price = static_cast<double>(amount_out) / static_cast<double>(amount_in);
-        
+
         return (mid_price - exec_price) / mid_price;
     }
 };
 
-// Uniswap V3 pricing
+// Uniswap V3 pricing. Output depends on in-range liquidity and the current pool
+// price, so both are required inputs; the previous signature could not express
+// a real swap.
 class UniswapV3Pricing {
 public:
-    // Calculate amount out with V3 formula (simplified)
-    static uint64_t get_amount_out(uint64_t amount_in, uint64_t sqrt_price_limit_x96, double fee_rate) {
-        if (amount_in == 0 || sqrt_price_limit_x96 == 0) {
+    // Exact input for token0 -> token1 within a single tick range.
+    //   sqrtP_next = L * sqrtP / (L + amount_in * sqrtP)
+    //   amount_out = L * (sqrtP - sqrtP_next)
+    static uint64_t get_amount_out_token0_in(uint64_t amount_in, uint64_t liquidity,
+                                             double sqrt_price, double fee_rate) {
+        if (amount_in == 0 || liquidity == 0 || sqrt_price <= 0.0) {
             return 0;
         }
-        
-        // Simplified V3 calculation
-        double sqrt_price = sqrt_price_limit_x96 / (1ULL << 96);
-        double amount_in_adjusted = amount_in * (1.0 - fee_rate);
-        
-        // Calculate output (simplified)
-        double output = amount_in_adjusted * sqrt_price;
-        
-        return static_cast<uint64_t>(output);
+        if (!std::isfinite(fee_rate) || fee_rate < 0.0 || fee_rate >= 1.0) {
+            return 0;
+        }
+
+        double amount_in_after_fee = static_cast<double>(amount_in) * (1.0 - fee_rate);
+        double L = static_cast<double>(liquidity);
+        double sqrt_next = L * sqrt_price / (L + amount_in_after_fee * sqrt_price);
+
+        double out = L * (sqrt_price - sqrt_next);
+        return out > 0.0 ? static_cast<uint64_t>(out) : 0;
     }
-    
-    // Get tick from sqrt price
+
+    // Exact input for token1 -> token0 within a single tick range.
+    //   sqrtP_next = sqrtP + amount_in / L
+    //   amount_out = L * (1/sqrtP - 1/sqrtP_next)
+    static uint64_t get_amount_out_token1_in(uint64_t amount_in, uint64_t liquidity,
+                                             double sqrt_price, double fee_rate) {
+        if (amount_in == 0 || liquidity == 0 || sqrt_price <= 0.0) {
+            return 0;
+        }
+        if (!std::isfinite(fee_rate) || fee_rate < 0.0 || fee_rate >= 1.0) {
+            return 0;
+        }
+
+        double amount_in_after_fee = static_cast<double>(amount_in) * (1.0 - fee_rate);
+        double L = static_cast<double>(liquidity);
+        double sqrt_next = sqrt_price + amount_in_after_fee / L;
+
+        double out = L * (1.0 / sqrt_price - 1.0 / sqrt_next);
+        return out > 0.0 ? static_cast<uint64_t>(out) : 0;
+    }
+
+    // Tick for a given sqrt price (Q64.96).
     static int32_t get_tick_from_sqrt_price(uint64_t sqrt_price_x96) {
-        double sqrt_price = sqrt_price_x96 / static_cast<double>(1ULL << 96);
-        return static_cast<int32_t>(std::log(sqrt_price) * 2);
+        if (sqrt_price_x96 == 0) {
+            return 0;
+        }
+        double sqrt_price = static_cast<double>(sqrt_price_x96) / static_cast<double>(1ULL << 96);
+        if (sqrt_price <= 0.0) {
+            return 0;
+        }
+        return static_cast<int32_t>(std::log(sqrt_price) / std::log(std::sqrt(1.0001)));
     }
-    
-    // Get sqrt price from tick
+
+    // Sqrt price (Q64.96) for a given tick.
     static uint64_t get_sqrt_price_from_tick(int32_t tick) {
-        double sqrt_price = std::exp(tick / 2.0);
-        return static_cast<uint64_t>(sqrt_price * (1ULL << 96));
+        double sqrt_price = std::pow(1.0001, static_cast<double>(tick) / 2.0);
+        return static_cast<uint64_t>(sqrt_price * static_cast<double>(1ULL << 96));
     }
 };
 
-// Curve pricing
+// Curve StableSwap pricing (invariant D over an n-coin pool).
 class CurvePricing {
 public:
-    // Get amount out for stable swap (D = invariant)
-    static uint64_t get_amount_out_stable(uint64_t amount_in, uint64_t reserve_in, uint64_t reserve_out,
-                                       const std::vector<uint64_t>& reserves, double fee_rate) {
-        // Simplified stable swap formula
-        if (amount_in == 0 || reserves.empty()) {
+    // Compute D via Newton's method from the pool balances.
+    static double compute_invariant(const std::vector<uint64_t>& balances, int64_t amplification) {
+        size_t n = balances.size();
+        if (n == 0) {
+            return 0.0;
+        }
+
+        double sum = 0.0;
+        for (auto b : balances) {
+            sum += static_cast<double>(b);
+        }
+        if (sum == 0.0) {
+            return 0.0;
+        }
+
+        double ann = static_cast<double>(amplification) * static_cast<double>(n);
+        double d = sum;
+
+        for (int i = 0; i < 255; ++i) {
+            double d_product = d;
+            double s = 0.0;
+            for (auto b : balances) {
+                double bal = static_cast<double>(b);
+                d_product = d_product * d / (bal * static_cast<double>(n));
+                s += bal;
+            }
+
+            double d_prev = d;
+            // d = (Ann*S + n*Dp) * D / ((Ann-1)*D + (n+1)*Dp)
+            d = (ann * sum + static_cast<double>(n) * d_product) * d /
+                ((ann - 1.0) * d + static_cast<double>(n + 1) * d_product);
+
+            if (std::abs(d - d_prev) <= 1.0) {
+                return d;
+            }
+        }
+
+        return d;
+    }
+
+    // Solve for the new balance of the output coin after depositing `amount_in`
+    // into coin `index_in`, using the StableSwap invariant.
+    static double compute_y(const std::vector<uint64_t>& balances, int64_t amplification,
+                            size_t index_in, size_t index_out, double new_in_balance) {
+        size_t n = balances.size();
+        if (n == 0 || index_in >= n || index_out >= n || index_in == index_out) {
+            return 0.0;
+        }
+
+        double d = compute_invariant(balances, amplification);
+        if (d <= 0.0) {
+            return 0.0;
+        }
+
+        double ann = static_cast<double>(amplification) * static_cast<double>(n);
+        double s = new_in_balance;
+        double c = d;
+        for (size_t i = 0; i < n; ++i) {
+            if (i == index_out) continue;
+            double bal = (i == index_in) ? new_in_balance : static_cast<double>(balances[i]);
+            s += bal;
+            c = c * d / (bal * static_cast<double>(n));
+        }
+        c = c * d / (ann * static_cast<double>(n));
+
+        double b = s + d / ann;
+        double y = d;
+        for (int i = 0; i < 255; ++i) {
+            double y_prev = y;
+            y = (y * y + c) / (2.0 * y + b - d);
+            if (std::abs(y - y_prev) <= 1.0) {
+                return y;
+            }
+        }
+
+        return y;
+    }
+
+    // Amount out for a swap between two coins of a stable pool.
+    static uint64_t get_amount_out_stable(uint64_t amount_in, size_t index_in, size_t index_out,
+                                          const std::vector<uint64_t>& balances, double fee_rate) {
+        if (amount_in == 0 || balances.size() < 2) {
             return 0;
         }
-        
-        // Simplified calculation
-        uint64_t total_reserves = 0;
-        for (auto r : reserves) {
-            total_reserves += r;
+        if (index_in >= balances.size() || index_out >= balances.size() || index_in == index_out) {
+            return 0;
         }
-        
-        uint64_t amount_out = (amount_in * reserve_out) / total_reserves;
-        amount_out = amount_out * static_cast<uint64_t>((1.0 - fee_rate) * 1000) / 1000;
-        
-        return amount_out;
+        if (!std::isfinite(fee_rate) || fee_rate < 0.0 || fee_rate >= 1.0) {
+            return 0;
+        }
+
+        // Curve's A parameter is scaled by n^n * 100 in the canonical contracts.
+        int64_t amplification = 100;
+        double new_in_balance = static_cast<double>(balances[index_in]) +
+                                static_cast<double>(amount_in) * (1.0 - fee_rate);
+        double y = compute_y(balances, amplification, index_in, index_out, new_in_balance);
+
+        double balance_out = static_cast<double>(balances[index_out]);
+        if (y >= balance_out) {
+            return 0;
+        }
+
+        return static_cast<uint64_t>(balance_out - y);
     }
 };
 
-// Smart order router
+// Smart order router. Routes on realised output amount computed from the
+// registered pool state; it holds no assumed gas price and no placeholder graph.
 class SmartOrderRouter {
+public:
+    // Reports gas units for a protocol. Supplied by the deployment so the router
+    // never invents a gas cost.
+    using GasEstimator = std::function<std::optional<uint64_t>(DEXProtocol)>;
+
 private:
     std::vector<Pool> pools_;
-    std::unordered_map<std::string, std::vector<Pool>> token_pools_;
-    std::unordered_map<Token, TokenPrice, TokenHash> prices_;
+    std::unordered_map<std::string, std::vector<size_t>> token_pools_;
     mutable std::shared_mutex mutex_;
-    
-    // Graph for routing
-    struct GraphNode {
-        Token token;
-        std::vector<std::pair<Token, double>> edges;  // (Token, best_price)
-    };
-    
-    std::unordered_map<Token, GraphNode, TokenHash> graph_;
-    
+    GasEstimator gas_estimator_;
+
+    static std::string token_key(const Token& token) {
+        return token.address + "_" + std::to_string(static_cast<uint32_t>(token.chain));
+    }
+
 public:
+    void set_gas_estimator(GasEstimator estimator) { gas_estimator_ = std::move(estimator); }
+
     // Add pool
     void add_pool(const Pool& pool) {
         std::unique_lock lock(mutex_);
-        
+
+        size_t index = pools_.size();
         pools_.push_back(pool);
-        
-        // Add to token pools map
-        std::string key_a = pool.token_a.address + "_" + std::to_string(static_cast<int>(pool.chain));
-        std::string key_b = pool.token_b.address + "_" + std::to_string(static_cast<int>(pool.chain));
-        
-        token_pools_[key_a].push_back(pool);
-        token_pools_[key_b].push_back(pool);
-        
-        // Update graph
-        graph_[pool.token_a].edges.push_back({pool.token_b, 0});
-        graph_[pool.token_b].edges.push_back({pool.token_a, 0});
+
+        token_pools_[token_key(pool.token_a)].push_back(index);
+        token_pools_[token_key(pool.token_b)].push_back(index);
     }
-    
-    // Get quote
+
+    // Quote the best route for a request. The quote is empty when no pool can
+    // connect the two tokens.
     QuoteResponse get_quote(const QuoteRequest& request) {
+        std::shared_lock lock(mutex_);
+
         QuoteResponse response;
-        
-        // Find best route
-        auto route = find_best_route(request.from_token, request.to_token, request.amount_in);
-        
+
+        if (request.amount_in == 0) {
+            return response;
+        }
+
+        auto route = find_best_route_locked(request.from_token, request.to_token, request.amount_in);
         if (route.empty()) {
             return response;
         }
-        
-        // Execute route
-        uint64_t amount = request.amount_in;
-        double total_fee = 0;
-        double total_gas = 0;
-        
-        for (size_t i = 0; i < route.size(); ++i) {
-            const auto& step = route[i];
-            
-            // Find pool
-            auto pool_opt = find_pool(step.protocol, step.from_token, step.to_token);
-            if (!pool_opt.has_value()) {
+
+        // The route already carries the realised output of each hop; the final
+        // hop's output is the quote amount.
+        uint64_t amount = route.back().amount_out;
+        if (amount == 0) {
+            return response;
+        }
+
+        response.route = route;
+        response.amount_out = amount;
+        response.execution_price = static_cast<double>(amount) /
+                                   static_cast<double>(request.amount_in);
+
+        // Aggregate fee paid across hops, denominated in the input token.
+        double fee_fraction = 0.0;
+        uint64_t hop_in = request.amount_in;
+        uint64_t total_fee = 0;
+        for (const auto& step : route) {
+            total_fee += static_cast<uint64_t>(static_cast<double>(hop_in) * step.fee);
+            hop_in = step.amount_out;
+            fee_fraction += step.fee;
+        }
+        response.total_fee = total_fee;
+
+        if (gas_estimator_) {
+            uint64_t total_gas = 0;
+            bool have_all = true;
+            for (const auto& step : route) {
+                auto gas = gas_estimator_(step.protocol);
+                if (!gas.has_value()) {
+                    have_all = false;
+                    break;
+                }
+                total_gas += *gas;
+            }
+            if (have_all) {
+                response.total_gas = total_gas;
+                response.gas_estimate = total_gas;
+            }
+        }
+
+        // Price impact is measured against the pool mid price on the first hop.
+        const auto& first = route.front();
+        for (const auto& pool : pools_) {
+            if (pool.protocol != first.protocol) continue;
+            if (!((pool.token_a == first.from_token && pool.token_b == first.to_token) ||
+                  (pool.token_b == first.from_token && pool.token_a == first.to_token))) {
                 continue;
             }
-            
-            const auto& pool = pool_opt.value();
-            
-            // Calculate output
-            uint64_t output = UniswapV2Pricing::get_amount_out(
-                amount, pool.reserve_a, pool.reserve_b, pool.fee_rate
-            );
-            
-            // Update route step
-            RouteStep executed_step = step;
-            executed_step.amount_out = output;
-            response.route.push_back(executed_step);
-            
-            total_fee += pool.fee_rate;
-            total_gas += 150000;  // Estimated gas per swap
-            
-            amount = output;
+            uint64_t reserve_in = (pool.token_a == first.from_token) ? pool.reserve_a : pool.reserve_b;
+            uint64_t reserve_out = (pool.token_a == first.from_token) ? pool.reserve_b : pool.reserve_a;
+            response.price_impact = UniswapV2Pricing::calculate_price_impact(
+                first.amount_in, first.amount_out, reserve_in, reserve_out);
+            break;
         }
-        
-        response.amount_out = amount;
-        response.total_fee = static_cast<uint64_t>(total_fee * request.amount_in);
-        response.total_gas = static_cast<uint64_t>(total_gas);
-        response.timestamp = std::chrono::system_clock::now().time_since_epoch().count();
-        response.expires_at = response.timestamp + 30000;  // 30 seconds
-        
+
+        response.timestamp = static_cast<uint64_t>(
+            std::chrono::system_clock::now().time_since_epoch().count());
+        response.expires_at = response.timestamp + 30000;
+
         return response;
     }
-    
-    // Find best route using Dijkstra
+
+    // Find best route by maximising output. A best-first search keyed on the
+    // realised output of each partial route; the first time the destination is
+    // reached the route is optimal because every hop is monotonically
+    // decreasing in output.
     std::vector<RouteStep> find_best_route(const Token& from, const Token& to, uint64_t amount_in) {
-        std::vector<RouteStep> route;
-        
-        // Use A* or Dijkstra
-        struct Node {
-            Token token;
-            uint64_t amount_out;
-            double cost;
-            std::vector<RouteStep> path;
-            
-            bool operator<(const Node& other) const {
-                return cost > other.cost;  // For min-heap
-            }
-        };
-        
-        std::priority_queue<Node> pq;
-        
-        pq.push({from, amount_in, 0, {}});
-        std::set<std::string> visited;
-        
-        while (!pq.empty()) {
-            auto current = pq.top();
-            pq.pop();
-            
-            std::string key = current.token.address + "_" + std::to_string(static_cast<int>(current.token.chain));
-            if (visited.count(key)) {
-                continue;
-            }
-            visited.insert(key);
-            
-            if (current.token == to) {
-                return current.path;
-            }
-            
-            // Find adjacent pools
-            std::string pool_key = key;
-            auto it = token_pools_.find(pool_key);
-            if (it == token_pools_.end()) {
-                continue;
-            }
-            
-            for (const auto& pool : it->second) {
-                Token next_token;
-                if (pool.token_a == current.token) {
-                    next_token = pool.token_b;
-                } else if (pool.token_b == current.token) {
-                    next_token = pool.token_a;
-                } else {
-                    continue;
-                }
-                
-                uint64_t reserve_in = (pool.token_a == current.token) ? pool.reserve_a : pool.reserve_b;
-                uint64_t reserve_out = (pool.token_a == current.token) ? pool.reserve_b : pool.reserve_a;
-                
-                uint64_t output = UniswapV2Pricing::get_amount_out(
-                    current.amount_out, reserve_in, reserve_out, pool.fee_rate
-                );
-                
-                // Calculate cost (minimize gas + price impact)
-                double gas_cost = 150000 * 20;  // Assuming 20 gwei gas
-                double price_impact = UniswapV2Pricing::calculate_price_impact(
-                    current.amount_out, output, reserve_in, reserve_out
-                );
-                double cost = gas_cost + price_impact * output * 100;
-                
-                RouteStep step;
-                step.protocol = pool.protocol;
-                step.chain = pool.chain;
-                step.from_token = current.token;
-                step.to_token = next_token;
-                step.amount_in = current.amount_out;
-                step.amount_out = output;
-                step.fee = pool.fee_rate;
-                
-                auto new_path = current.path;
-                new_path.push_back(step);
-                
-                pq.push({next_token, output, cost, new_path});
-            }
-        }
-        
-        return route;
+        std::shared_lock lock(mutex_);
+        return find_best_route_locked(from, to, amount_in);
     }
-    
-    // Find pool
+
+    // Find pool by protocol and token pair (first match).
     std::optional<Pool> find_pool(DEXProtocol protocol, const Token& from, const Token& to) const {
         std::shared_lock lock(mutex_);
-        
+
         for (const auto& pool : pools_) {
             if (pool.protocol == protocol) {
                 if ((pool.token_a == from && pool.token_b == to) ||
@@ -548,265 +650,337 @@ public:
                 }
             }
         }
-        
+
         return std::nullopt;
     }
-    
-    // Update token prices
-    void update_prices(const std::unordered_map<Token, TokenPrice, TokenHash>& prices) {
-        std::unique_lock lock(mutex_);
-        prices_ = prices;
+
+private:
+    struct RouteNode {
+        Token token;
+        uint64_t amount_out;
+        std::vector<RouteStep> path;
+
+        // std::priority_queue is a max-heap by default; compare so the node with
+        // the largest output comes first.
+        bool operator<(const RouteNode& other) const {
+            return amount_out < other.amount_out;
+        }
+    };
+
+    // Output of a single hop, using the pricing model that matches the pool.
+    static uint64_t hop_output(const Pool& pool, const Token& from_token,
+                               uint64_t amount_in, uint64_t reserve_in, uint64_t reserve_out) {
+        if (amount_in == 0 || reserve_in == 0 || reserve_out == 0) {
+            return 0;
+        }
+
+        if (pool.is_stable) {
+            // Stable pools are priced by the StableSwap invariant. The coin order
+            // must match the pool's declaration.
+            size_t index_in = (pool.token_a == from_token) ? 0 : 1;
+            size_t index_out = 1 - index_in;
+            std::vector<uint64_t> balances = {pool.reserve_a, pool.reserve_b};
+            return CurvePricing::get_amount_out_stable(
+                amount_in, index_in, index_out, balances, pool.fee_rate);
+        }
+
+        return UniswapV2Pricing::get_amount_out(amount_in, reserve_in, reserve_out, pool.fee_rate);
+    }
+
+    std::vector<RouteStep> find_best_route_locked(const Token& from, const Token& to,
+                                                  uint64_t amount_in) {
+        std::vector<RouteStep> empty;
+
+        if (from == to || amount_in == 0) {
+            return empty;
+        }
+
+        std::priority_queue<RouteNode> queue;
+        queue.push({from, amount_in, {}});
+
+        // Track the best output seen per token so a worse route to the same token
+        // is not expanded.
+        std::unordered_map<std::string, uint64_t> best_output;
+        best_output[token_key(from)] = amount_in;
+
+        while (!queue.empty()) {
+            RouteNode current = queue.top();
+            queue.pop();
+
+            if (current.token == to) {
+                return current.path;
+            }
+
+            auto known = best_output.find(token_key(current.token));
+            if (known != best_output.end() && current.amount_out < known->second) {
+                continue;
+            }
+
+            auto it = token_pools_.find(token_key(current.token));
+            if (it == token_pools_.end()) {
+                continue;
+            }
+
+            for (size_t pool_index : it->second) {
+                const Pool& pool = pools_[pool_index];
+
+                Token next_token;
+                uint64_t reserve_in;
+                uint64_t reserve_out;
+                if (pool.token_a == current.token) {
+                    next_token = pool.token_b;
+                    reserve_in = pool.reserve_a;
+                    reserve_out = pool.reserve_b;
+                } else if (pool.token_b == current.token) {
+                    next_token = pool.token_a;
+                    reserve_in = pool.reserve_b;
+                    reserve_out = pool.reserve_a;
+                } else {
+                    continue;
+                }
+
+                uint64_t output = hop_output(pool, current.token, current.amount_out,
+                                             reserve_in, reserve_out);
+                if (output == 0) {
+                    continue;
+                }
+
+                auto seen = best_output.find(token_key(next_token));
+                if (seen != best_output.end() && output <= seen->second) {
+                    continue;
+                }
+                best_output[token_key(next_token)] = output;
+
+                RouteStep step;
+                step.protocol = pool.protocol;
+                step.chain = pool.chain;
+                step.from_token = current.token;
+                step.to_token = next_token;
+                step.amount_in = current.amount_out;
+                step.amount_out = output;
+                step.pool_index = pool_index;
+                step.fee = pool.fee_rate;
+
+                auto new_path = current.path;
+                new_path.push_back(step);
+
+                queue.push({next_token, output, new_path});
+            }
+        }
+
+        return empty;
     }
 };
 
-// DEX Aggregator
+// DEX Aggregator. Routing is performed over pools the operator registers from
+// on-chain state. The aggregator holds no third-party endpoints, no invented
+// reliability scores, and no hardcoded router addresses: swap calldata is
+// produced by an injected encoder, and broadcasting by an injected submitter.
 class DEXAggregator {
+public:
+    // Encodes a route step into target-contract calldata. Supplied by the
+    // deployment so the aggregator carries no baked-in ABI constants.
+    using CalldataEncoder = std::function<std::optional<std::pair<std::string, std::string>>(
+        const RouteStep&)>;
+
+    // Broadcasts a signed transaction and returns the transaction hash.
+    using TransactionSubmitter = std::function<std::optional<std::string>(const SwapTransaction&)>;
+
 private:
     std::unique_ptr<SmartOrderRouter> router_;
-    
-    // DEX API clients
+
+    // A DEX becomes routable only once its pools have been registered.
     struct DEXClient {
         DEXProtocol protocol;
-        std::string api_endpoint;
-        std::string subgraph;
         bool is_available;
         double reliability_score;
-        
-        DEXClient() : is_available(true), reliability_score(1.0) {}
+
+        DEXClient() : protocol(DEXProtocol::UNISWAP_V2), is_available(false), reliability_score(0.0) {}
     };
-    
+
     std::unordered_map<DEXProtocol, DEXClient> dex_clients_;
     std::atomic<bool> running_{false};
-    
-    // Price cache
+
+    // Cache entry keeps the whole quote so a hit can be returned unchanged.
     struct CachedPrice {
         double price;
         uint64_t timestamp;
+        QuoteResponse response;
     };
-    
+
     std::unordered_map<std::string, CachedPrice> price_cache_;
     mutable std::shared_mutex cache_mutex_;
-    
+
+    CalldataEncoder calldata_encoder_;
+    TransactionSubmitter submitter_;
+
 public:
     DEXAggregator() {
         router_ = std::make_unique<SmartOrderRouter>();
-        
-        // Initialize DEX clients
-        initialize_dex_clients();
+        // The router reads gas units from this aggregator's observed table, so a
+        // protocol with no recorded estimate contributes no gas figure.
+        router_->set_gas_estimator([this](DEXProtocol protocol) {
+            return get_gas_estimate(protocol);
+        });
     }
-    
-    // Initialize DEX clients
-    void initialize_dex_clients() {
-        dex_clients_[DEXProtocol::UNISWAP_V2] = {"UNISWAP_V2", "https://api.uniswap.org", "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v2", true, 1.0};
-        dex_clients_[DEXProtocol::UNISWAP_V3] = {"UNISWAP_V3", "https://api.uniswap.org", "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3", true, 1.0};
-        dex_clients_[DEXProtocol::SUSHISWAP] = {"SUSHISWAP", "https://api.sushi.com", "https://api.thegraph.com/subgraphs/name/sushi-v3/v3-arbitrum-one", true, 0.95};
-        dex_clients_[DEXProtocol::CURVE] = {"CURVE", "https://api.curve.fi", "https://api.curve.fi/subgraphs/name/curve", true, 0.98};
-        dex_clients_[DEXProtocol::BALANCER] = {"BALANCER", "https://api.balancer.fi", "https://api.thegraph.com/subgraphs/name/balancer-v2/balancer", true, 0.95};
-        dex_clients_[DEXProtocol::PANCAKESWAP] = {"PANCAKESWAP", "https://api.pancakeswap.finance", "https://api.pancakeswap.finance/subgraphs/v1/bsc", true, 0.9};
-        dex_clients_[DEXProtocol::QUICKSWAP] = {"QUICKSWAP", "https://api.quickswap.exchange", "https://api.thegraph.com/subgraphs/name/quickswap/quickswap", true, 0.85};
-        dex_clients_[DEXProtocol::SPIRITSWAP] = {"SPIRITSWAP", "https://api.spiritswap.finance", "https://api.thegraph.com/subgraphs/name/spiritswap/spiritswap", true, 0.8};
-        dex_clients_[DEXProtocol::TRADERJOE] = {"TRADERJOE", "https://api.traderjo.exchange", "https://api.thegraph.com/subgraphs/name/traderjoe/v1-avalanch", true, 0.85};
-        dex_clients_[DEXProtocol::RAYDIUM] = {"RAYDIUM", "https://api.raydium.io", "https://api.raydium.io/graphql", true, 0.9};
-        dex_clients_[DEXProtocol::ORCA] = {"ORCA", "https://api.orca.so", "https://api.orca.so/graphql", true, 0.85};
-        dex_clients_[DEXProtocol::SOLANA] = {"SOLANA", "https://api.solana.com", "", true, 0.9};
+
+    // Register a DEX as routable with an operator-supplied reliability score.
+    void register_dex(DEXProtocol protocol, double reliability_score) {
+        DEXClient client;
+        client.protocol = protocol;
+        client.is_available = true;
+        client.reliability_score = reliability_score;
+        dex_clients_[protocol] = client;
     }
-    
-    // Add pool
-    void add_pool(const Pool& pool) {
-        router_->add_pool(pool);
+
+    // Reflect an observed availability change.
+    void set_dex_available(DEXProtocol protocol, bool available) {
+        dex_clients_[protocol].is_available = available;
     }
-    
+
+    void set_calldata_encoder(CalldataEncoder encoder) { calldata_encoder_ = std::move(encoder); }
+    void set_transaction_submitter(TransactionSubmitter submitter) { submitter_ = std::move(submitter); }
+
+    void add_pool(const Pool& pool) { router_->add_pool(pool); }
+
     // Get quote
     QuoteResponse get_quote(const QuoteRequest& request) {
-        // Check cache first
-        std::string cache_key = request.from_token.symbol + "_" + request.to_token.symbol + "_" + std::to_string(request.amount_in);
-        
+        std::string cache_key = request.from_token.symbol + "_" + request.to_token.symbol + "_" +
+                                std::to_string(request.amount_in);
+
         {
             std::shared_lock lock(cache_mutex_);
             auto it = price_cache_.find(cache_key);
             if (it != price_cache_.end()) {
-                auto age = std::chrono::system_clock::now().time_since_epoch().count() - it->second.timestamp;
-                if (age < 5000) {  // 5 seconds cache
-                    // Return cached quote
-                    QuoteResponse cached_response;
-                    // (would populate from cache)
-                    return cached_response;
+                auto now = static_cast<uint64_t>(
+                    std::chrono::system_clock::now().time_since_epoch().count());
+                if (now < it->second.timestamp + 5000) {
+                    return it->second.response;
                 }
             }
         }
-        
-        // Get fresh quote
+
         auto response = router_->get_quote(request);
-        
-        // Cache result
-        {
+
+        if (response.amount_out > 0) {
             std::unique_lock lock(cache_mutex_);
-            price_cache_[cache_key] = {response.execution_price, response.timestamp};
+            price_cache_[cache_key] = {response.execution_price, response.timestamp, response};
         }
-        
+
         return response;
     }
-    
+
     // Get multi-DEX quote
     std::vector<QuoteResponse> get_multi_dex_quote(const QuoteRequest& request) {
         std::vector<QuoteResponse> responses;
-        
-        // Get quote from each DEX
+
         for (auto& [protocol, client] : dex_clients_) {
             if (!client.is_available) continue;
-            
+
             QuoteRequest dex_request = request;
             dex_request.force_dex = true;
             dex_request.preferred_dex = protocol;
-            
+
             auto response = get_quote(dex_request);
             if (response.amount_out > 0) {
                 responses.push_back(response);
             }
         }
-        
-        // Sort by amount out
-        std::sort(responses.begin(), responses.end(), 
+
+        std::sort(responses.begin(), responses.end(),
             [](const QuoteResponse& a, const QuoteResponse& b) {
                 return a.amount_out > b.amount_out;
             });
-        
+
         return responses;
     }
-    
-    // Build swap transaction
-    SwapTransaction build_swap_transaction(const QuoteResponse& quote, uint64_t user_address) {
+
+    // Build a swap transaction from a quote. Returns no value when there is no
+    // route or no calldata encoder, rather than fabricating calldata.
+    std::optional<SwapTransaction> build_swap_transaction(const QuoteResponse& quote, uint64_t user_address) {
+        if (quote.route.empty()) {
+            return std::nullopt;
+        }
+
         SwapTransaction tx;
-        
-        tx.from_token = quote.route[0].from_token;
+        tx.from_token = quote.route.front().from_token;
         tx.to_token = quote.route.back().to_token;
-        tx.amount_in = quote.route[0].amount_in;
+        tx.amount_in = quote.route.front().amount_in;
         tx.min_amount_out = quote.amount_out * 99 / 100;  // 1% slippage protection
         tx.route = quote.route;
         tx.gas_limit = quote.total_gas;
-        tx.created_at = std::chrono::system_clock::now().time_since_epoch().count();
-        tx.deadline = tx.created_at + 1800;  // 30 minutes
-        
-        // Build transaction data per DEX
-        for (const auto& step : quote.route) {
-            switch (step.protocol) {
-                case DEXProtocol::UNISWAP_V2:
-                    tx.data = build_uniswap_v2_data(step);
-                    tx.to = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D";  // Router
-                    break;
-                    
-                case DEXProtocol::UNISWAP_V3:
-                    tx.data = build_uniswap_v3_data(step);
-                    tx.to = "0xE592427A0AEce92De3E94f1c4D0bA86A82cE8d3a2";  // Router
-                    break;
-                    
-                case DEXProtocol::SUSHISWAP:
-                    tx.data = build_sushiswap_data(step);
-                    tx.to = "0xd9e1ce17f264c7945c6f7a8b3a7d2be6a5ed1b7a";  // Router
-                    break;
-                    
-                case DEXProtocol::CURVE:
-                    tx.data = build_curve_data(step);
-                    tx.to = "0x99a58482e019d4b8b1dd5c2fe2b72c93f3c3c2a7";  // Curve swap
-                    break;
-                    
-                default:
-                    // Generic encoding
-                    tx.data = build_generic_data(step);
-                    tx.to = "";
-            }
+        tx.created_at = static_cast<uint64_t>(
+            std::chrono::system_clock::now().time_since_epoch().count());
+        tx.deadline = tx.created_at + 1800;
+
+        // A multi-step route cannot be represented by a single (to, data) pair;
+        // require a single-step route so the encoder output is unambiguous.
+        if (quote.route.size() != 1) {
+            return std::nullopt;
         }
-        
+
+        if (!calldata_encoder_) {
+            return std::nullopt;
+        }
+
+        auto encoded = calldata_encoder_(quote.route.front());
+        if (!encoded.has_value()) {
+            return std::nullopt;
+        }
+
+        tx.to = encoded->first;
+        tx.data = encoded->second;
+        tx.value = 0;
+
         return tx;
     }
-    
-    // Execute swap only when a real signer/RPC broadcaster is injected.
-    // This implementation deliberately fails closed rather than returning a
-    // fabricated transaction hash that could be mistaken for settlement.
-    std::optional<std::string> execute_swap(const SwapTransaction& /*tx*/) {
-        return std::nullopt;
+
+    // Broadcast a swap. Fails closed until a submitter is injected, so a caller
+    // can never mistake a fabricated hash for settlement.
+    std::optional<std::string> execute_swap(const SwapTransaction& tx) {
+        if (!submitter_) {
+            return std::nullopt;
+        }
+        return submitter_(tx);
     }
-    
-    // Get best price across DEXes
-    double get_best_price(const Token& from, const Token& to) {
+
+    // Get best price across registered DEXes
+    double get_best_price(const Token& from, const Token& to, uint64_t amount_in) {
         QuoteRequest request;
         request.from_token = from;
         request.to_token = to;
-        request.amount_in = 1000000000;  // 1 token
-        
+        request.amount_in = amount_in;
+
         auto quotes = get_multi_dex_quote(request);
-        
-        if (quotes.empty()) return 0;
-        
-        return quotes[0].execution_price;
+
+        if (quotes.empty()) return 0.0;
+
+        return quotes.front().execution_price;
     }
-    
-    // Get gas estimates
-    std::unordered_map<DEXProtocol, uint64_t> get_gas_estimates() {
-        std::unordered_map<DEXProtocol, uint64_t> estimates;
-        
-        estimates[DEXProtocol::UNISWAP_V2] = 150000;
-        estimates[DEXProtocol::UNISWAP_V3] = 120000;
-        estimates[DEXProtocol::SUSHISWAP] = 180000;
-        estimates[DEXProtocol::CURVE] = 200000;
-        estimates[DEXProtocol::BALANCER] = 150000;
-        estimates[DEXProtocol::PANCAKESWAP] = 150000;
-        estimates[DEXProtocol::QUICKSWAP] = 150000;
-        estimates[DEXProtocol::RAYDIUM] = 10000;
-        
-        return estimates;
+
+    // Gas estimates are observed per chain and injected, not hardcoded.
+    void update_gas_estimate(DEXProtocol protocol, uint64_t gas_units) {
+        gas_estimates_[protocol] = gas_units;
     }
-    
-    // Get DEX status
-    std::map<DEXProtocol, bool> get_dex_status() {
+
+    std::optional<uint64_t> get_gas_estimate(DEXProtocol protocol) const {
+        auto it = gas_estimates_.find(protocol);
+        if (it == gas_estimates_.end()) {
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
+    std::map<DEXProtocol, bool> get_dex_status() const {
         std::map<DEXProtocol, bool> status;
-        
-        for (auto& [protocol, client] : dex_clients_) {
+        for (const auto& [protocol, client] : dex_clients_) {
             status[protocol] = client.is_available;
         }
-        
         return status;
     }
-    
-    // Check and update DEX availability
-    void check_dex_availability() {
-        for (auto& [protocol, client] : dex_clients_) {
-            // Would ping each DEX API
-            // For now, assume available
-            client.is_available = true;
-        }
-    }
-    
+
 private:
-    // Build Uniswap V2 swap data
-    std::string build_uniswap_v2_data(const RouteStep& step) {
-        // Simplified - would encode proper calldata
-        std::string data = "0x22b0e291";  // swapExactETHForTokens selector
-        return data;
-    }
-    
-    // Build Uniswap V3 swap data
-    std::string build_uniswap_v3_data(const RouteStep& step) {
-        std::string data = "0x0d66e189";  // exactInput selector
-        return data;
-    }
-    
-    // Build SushiSwap swap data
-    std::string build_sushiswap_data(const RouteStep& step) {
-        std::string data = "0x18cbafe5";  // swapExactTokensForTokens
-        return data;
-    }
-    
-    // Build Curve swap data
-    std::string build_curve_data(const RouteStep& step) {
-        std::string data = "0x5b60e651";  // exchange selector
-        return data;
-    }
-    
-    // Build generic swap data
-    std::string build_generic_data(const RouteStep& step) {
-        return "";
-    }
+    std::unordered_map<DEXProtocol, uint64_t> gas_estimates_;
 };
 
 } // namespace dex
