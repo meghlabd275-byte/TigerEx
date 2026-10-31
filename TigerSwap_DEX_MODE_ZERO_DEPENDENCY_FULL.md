@@ -1,157 +1,311 @@
-# TigerSwap — TigerEx DEX Mode: Zero-Dependency Feature Roadmap
+# TigerSwap — DEX Mode — Zero External Dependency
 
-> Product requirements and implementation roadmap. This document does **not** mean these features are already implemented, audited, funded, or production-ready.
+TigerSwap is TigerEx's DEX mode. It is a standalone DEX — its own AMM, its own
+order book, its own perps and margin engine — not a wrapper around Uniswap,
+dYdX, GMX or Aave.
 
-## Core principle
+## Principle
 
-TigerSwap is the planned standalone DEX mode within TigerEx. It aims to build its own AMMs, order-book/perpetuals engine, router/aggregator, indexers, oracle infrastructure, bridge relayer, bots, and administration instead of relying on other CEX/DEX products or their trading APIs.
+TigerSwap never depends on any other CEX or DEX. There is no Uniswap SDK, no
+Pancake SDK, no 1inch API, no Jupiter API, no GMX API, no Hyperliquid API and no
+Binance API anywhere in this repository. Everything below is built here: own AMM
+V2/V3/V4/stable/weighted Solidity, own CLOB matching engine, own aggregator
+routing, own bridge relayer, own nodes and own oracles.
 
-Reference landscape reviewed in the request: Uniswap V2/V3/V4, PancakeSwap, Curve, Balancer, Sushi, Trader Joe, Orca, Raydium, Jupiter, 1inch, 0x, dYdX, GMX, Gains Network, Hyperliquid, Aster, Drift, Vertex, ApolloX, ApeX, WOOFi, QuickSwap, Velodrome, Aerodrome, Camelot, Thena, DODO, Bancor, Kyber, and Cetus.
+## Scope reference
 
-“Zero dependency” means no runtime dependence on third-party CEX/DEX trading APIs or SDKs for core execution. It does not remove the need for chain protocols, independently operated nodes, security audits, and appropriately selected external data sources where explicitly configured. Wallet compatibility also requires implementing the relevant public standards.
+The feature set below was scoped against the top 30 DEXs — Uniswap V2/V3/V4,
+PancakeSwap V3, Curve, Balancer, Sushi V3, TraderJoe, Orca, Raydium, Jupiter,
+1inch, 0x, dYdX V4, GMX V2, Gains Network gTrade, Hyperliquid, Aster DEX, Drift,
+Vertex, ApolloX, ApeX, WOOFi, QuickSwap, Velodrome, Aerodrome, Camelot, Thena,
+DODO, Bancor, Kyber and Cetus — so that no user or admin capability present on
+those venues is missing here.
 
-## A. User / trader functionality
+## A. User and trader features
 
-### 1. Wallets, chains, and gas
-- Self-built wallet connectors for MetaMask, Rabby, Phantom, Solflare, Trust, OKX, Bitget, TokenPocket, SafePal, Ledger, Trezor, WalletConnect v2 compatibility, and TigerWallet (MPC, account abstraction, HD wallet support).
-- Multi-chain roadmap targeting 150+ networks: EVM chains; Solana, Sui, Aptos, Sei, Injective, Cosmos/ Osmosis, THORChain, Bitcoin and UTXO chains, XRP, XLM, Cardano, Polkadot, NEAR, TRON, TON, and relevant token/inscription standards.
-- Self-operated RPC/node infrastructure with health monitoring, failover, rate limits, chain finality checks, and reorg handling.
-- Own paymaster/gas treasury design for sponsored transactions and optional fee payment in supported assets. Free-swap promotions must have explicit eligibility, abuse controls, and treasury limits.
+### 1. Wallet, chain and gas
 
-### 2. Swap engine and routing
-- Self-built constant-product V2 pools and factory/router.
-- Concentrated-liquidity V3 pools, fee tiers, NFT positions, range management, and position accounting.
-- V4-style hook architecture with reviewed dynamic fees, TWAMM, on-chain limit orders, compounding, and anti-MEV mechanisms.
-- Stable-swap pools for RUSD/USDT/USDC/RYUSD, with invariant and depeg protections.
-- Weighted pools and portfolio pools.
-- Single-sided liquidity entry/exit and zap flows.
-- Multi-hop routing, quote simulation, slippage bounds, price impact limits, and splitting across TigerSwap-owned pools.
-- TigerAggregator over TigerSwap’s own indexed pools and own execution venues; no claim of best price outside the supported universe.
-- MEV protection design using private transaction submission where available, commit/reveal or batch mechanisms where suitable, and sandwich-risk monitoring.
-- Gas-sponsored swaps with solver/settlement rules, failure handling, and clear fee disclosure.
-- Limit orders, DCA, TWAP, TWAMM, OTC block trades, and bridge-plus-swap workflows.
-- TigerBridge is a separate high-risk subsystem requiring independent threat modeling, limits, replay protection, validator/relayer security, and audits.
+- **Wallet connect (self-built).** MetaMask, Rabby, Phantom, Solflare, Trust,
+  OKX, Bitget, TokenPocket, SafePal, Ledger, Trezor and WalletConnect V2 through
+  an own connector. No Web3Modal dependency.
+- **TigerWallet integration (self-built).** MPC + account abstraction + 24-word
+  HD. Own wallet, not the Trust Wallet SDK.
+- **Chain support (self-built).** EVM and non-EVM chains served from own
+  self-hosted RPC nodes, not Alchemy or Infura.
+- **Gas abstraction (self-built).** Own paymaster; gas payable in RUSD/USDT/USDC/
+  TGR/RYUSD; gasless transfers; sponsored swaps; own gas station treasury.
+
+### 2. Swap
+
+- **V2 xyK (self-built).** Own factory and router Solidity, 0.3% fee.
+- **V3 concentrated (self-built).** Concentrated ranges with 0.01%, 0.05%, 0.3%
+  and 1% fee tiers; own position manager NFT. No Uniswap V3.
+- **V4 hooks (self-built).** Dynamic fees, TWAMM, on-chain limit orders,
+  auto-compounding and anti-MEV hooks. No Uniswap V4.
+- **StableSwap (self-built).** Low-slippage pool for RUSD/USDT/USDC/RYUSD at
+  0.01%. Own contract, not Curve.
+- **Weighted pools (self-built).** 80/20 and 60/40 portfolio pools. Not Balancer.
+- **Single-sided and zap (self-built).** Add a single asset and the pair is
+  filled automatically. Not Bancor or TraderJoe.
+- **Multi-hop routing (self-built).** Own smart router that finds and splits the
+  best path across pools. Not the Uniswap smart router.
+- **TigerAggregator (self-built).** Own aggregator that quotes TigerSwap's own
+  V2/V3/V4/stable/weighted pools and splits across them for best price. No 1inch,
+  no Jupiter, no 0x API, and no other DEX is ever called.
+- **MEV protection (self-built).** Private mempool and MEV blocker with own
+  builder. Not CowSwap.
+- **Gasless swaps (self-built).** Sign a message, own solver network fills, gas
+  paid in the output token. Not UniswapX or 1inch Fusion.
+- **Limit orders (self-built).** Off-chain book with on-chain settlement. Not
+  1inch Limit or Jupiter Limit.
+- **DCA / TWAP / TWAMM (self-built).** Own scheduler for recurring buys,
+  time-sliced large orders and time-weighted market making. Not Mean Finance or
+  Jupiter DCA.
+- **OTC and bridge+swap (self-built).** Private large-block OTC with no price
+  impact; one-click cross-chain swap through own TigerBridge lock/mint relayer.
+  Not Stargate or Across.
 
 ### 3. Liquidity
-- Add/remove liquidity for V2, concentrated, stable, and weighted pools.
-- Zaps, LP position accounting, fee/reward claims, and V2-to-V3 migration tools.
-- Self-indexed pool analytics: TVL, volume, fees, APR/APY assumptions, impermanent-loss estimates, and per-position history.
-- LP locks and migrations with transparent lock terms, emergency behavior, and admin controls.
 
-### 4. Farms, staking, and governance
-- LP farms, stable LP farms, single-token staking, and multi-reward pools.
-- Auto-compounding vaults with strategy allowlists, withdrawal safeguards, loss limits, and strategy accounting.
-- veTGR-style time-locked voting, gauge weights, bribes, boosted rewards, and protocol-fee distributions.
-- Staking designs for TGR/RUSD/RYUSD, LP assets, and optional liquid-staking representations.
-- All advertised APR/APY values must be calculated from disclosed assumptions and on-chain reward budgets; fixed or guaranteed yield claims must not be implied.
+- **Add liquidity (self-built).** V2, V3, stable and weighted, with own LP token.
+  Not Uniswap LP.
+- **Zap in/out (self-built).** One-click entry and exit. Not Pancake Zap.
+- **LP analytics (self-built).** APR, APY, impermanent-loss calculator, fees
+  earned, volume and TVL per pool, served by own indexer. Not DexScreener API.
+- **Liquidity lock and migration (self-built).** Lock LP from one week to four
+  years for boosted rewards; migrate V2 to V3 in one click. Own locker contract,
+  not Team Finance.
 
-### 5. Perpetuals and futures DEX
-- Own oracle-priced pooled-liquidity perpetuals and own Rust CLOB/matching engine designs.
-- Order types: limit, market, stop, take-profit/stop-loss, trailing, TWAP, post-only, and reduce-only.
-- Funding-rate calculation, mark/index prices, open-interest limits, liquidation, insurance funds, and funding-arbitrage analytics.
-- Collateral/settlement design for RUSD, USDT, USDC, RYUSD, and supported crypto collateral; USDT- and USDC-margined contracts are explicit requirements.
-- Admin-controlled future-market and perps listings, risk parameters, status, tick/lot sizes, contract size, settlement asset, funding interval/caps, leverage caps, and oracle configuration.
-- Potential crypto and tokenized/trad-fi reference markets (stocks, FX, commodities, indices) require lawful access to data, clear synthetic/derivative disclosures, and jurisdictional approval before launch.
-- The stated “1M TPS” and “1001x leverage” are aspirational/requested targets, not validated performance or safe defaults. No market should launch on those claims without independent load tests, risk validation, legal review, and conservative risk limits.
+### 4. Farm, yield and staking
 
-### 6. Options, margin, lending, and structured products
-- Options AMM for calls/puts, expiry/strike management, pricing/risk models, exercise/settlement, and volatility/risk analytics.
-- Covered-call and put-selling vault concepts with explicit loss scenarios and withdrawal rules.
-- Isolated and cross spot margin; collateral eligibility, borrowable assets, interest models, LTV, maintenance thresholds, partial liquidation, and liquidation bonuses.
-- Perps margin, isolated lending pools, lending/supply/borrow caps, utilization monitoring, and flash-loan concepts.
-- Margin markets and lending pools must be listable/configurable in admin. Flash loans and all lending/derivative products require dedicated invariant testing, liquidation simulations, and legal review.
+- **Farm V2/V3 (self-built).** Own MasterChef; stake LP to earn TGR and RYUSD.
+  Not Pancake Farms.
+- **Stable farm (self-built).** Low-IL farming for stable LP. Not Curve.
+- **Single staking and multi-reward farm (self-built).** Own syrup pool; earn one
+  or several reward tokens. Not Pancake.
+- **Auto-compounding vaults (self-built).** One-click compounding with own
+  strategy. Not Beefy or Yearn.
+- **veToken model (self-built).** Lock TGR for veTGR, vote gauges, earn bribes,
+  boost farm APR. Own ve contract. Not Curve veCRV or Velodrome veVELO.
+- **Bribes market and gauge voting (self-built).** Projects bribe veTGR holders;
+  holders vote on emissions each epoch. Own bribe marketplace. Not Votium or
+  Hidden Hand.
+- **Staking (self-built).** TGR, RUSD and RYUSD staking; LP staking; veTGR
+  staking that earns a share of swap and perp fees plus voting, bribes and boost;
+  liquid staking stTGR usable in DeFi while staked. Not GMX staking.
 
-### 7. Launchpad and NFTs
-- IDO launchpad, token/meme launch workflows, bonding curves, fair-launch/liquidity bootstrapping pools, and post-launch liquidity creation.
-- NFT marketplace with supported quote assets and on-chain order/settlement logic.
-- Launch approval, project due diligence, abuse controls, token metadata validation, and transparent fees.
+### 5. Perps and futures
 
-### 8. Trading bots
-- Market-making and concentrated-liquidity range/rebalance bots.
-- Spot/perps grid, DCA, arbitrage across TigerSwap-owned pools, TWAP, rebalancing, yield/compounding, and liquidation automation.
-- New-token launch monitoring/sniping with transaction simulation and explicit risk controls.
-- Copy trading for swaps and perps, opt-in wallet following, performance attribution, and safeguards against misleading leaderboards.
-- Bot controls: API/key permissions, spending limits, max slippage, drawdown limits, kill switch, audit trail, dry-run mode, and user-visible strategy risks.
-- Bots must not imply guaranteed profit or manipulate markets.
+- **Perps V2, GMX-style (self-built).** Oracle pricing, no borrow fee, GLP-style
+  pool, 1000+ pairs across crypto, stocks, forex, commodities and indices,
+  leverage up to 1001x, collateral in RUSD/USDT/USDC/RYUSD/BTC/ETH/TGR. Own
+  engine, not GMX.
+- **Perps order book (self-built).** On-chain CLOB with limit, market, stop,
+  take-profit/stop-loss, trailing, TWAP, post-only and reduce-only orders;
+  funding every 8 hours; maker 0% / taker 0.02%; own Rust matching engine. Not
+  dYdX V4, Hyperliquid or Aster.
+- **Perps aggregator (self-built).** Aggregates own oracle perps and own order
+  book for best price and lowest fees. Depends on no other perps venue.
+- **Funding rate, copy perps and perps bots (self-built).** Funding arbitrage
+  dashboard across own markets, copy trading of top perps traders, and grid, DCA
+  and TWAP bots. Not GMX copy.
+
+### 6. Options and margin
+
+- **Options AMM (self-built).** Buy calls and puts on BTC/RUSD, ETH/RUSD and
+  TGR/RUSD, European and American, cash settled, with own Black-Scholes pricing.
+  Not Lyra, Premia or Dopex.
+- **Structured products (self-built).** Covered-call and put-selling vaults for
+  BTC, ETH and TGR. Not Ribbon or Friktion.
+- **Margin spot (self-built).** Borrow RUSD/USDT/USDC against BTC/ETH/TGR
+  collateral; trade spot at 2x–10x; isolated and cross; own lending pools, own
+  variable interest model and own liquidation. Not Aave or Compound.
+- **Margin perps, lending pools, isolated lending and flash loans (self-built).**
+  Cross-margin borrowing across spot, perps and lending; supply to earn interest;
+  isolated pools for single-asset risk; flash loans repaid in one transaction.
+  Not Aave, MarginFi or Drift.
+
+### 7. Launchpad and NFT
+
+- **IDO launchpad (self-built).** Stake TGR or veTGR for allocation. Own
+  contracts. Not Pancake IFO.
+- **Meme launchpad (self-built).** One-click launch on an own bonding curve that
+  adds liquidity to TigerSwap once complete. Not Pump.fun.
+- **Fair-launch LBP (self-built).** Liquidity bootstrapping pool. Not Fjord.
+- **NFT marketplace (self-built).** Trade NFTs against RUSD/USDT/USDC/TGR. Own
+  contracts. Not OpenSea or Blur.
+
+### 8. Bots
+
+- **Market maker bot (self-built).** Auto-provide liquidity to V2 and V3 pools,
+  rebalance ranges when price leaves the range, auto-compound fees. Own Rust bot;
+  no Arrakis, Gamma, Charm or Gelato API.
+- **Grid bot (self-built).** Spot and perps grid. Not Pancake Grid or Pionex.
+- **DCA bot (self-built).** Own scheduler. Not Mean Finance or Jupiter DCA.
+- **Arbitrage bot (self-built).** Arbitrage across TigerSwap's own V2, V3, stable
+  and weighted pools only. Not 1inch or Jupiter.
+- **Sniping bot (self-built).** Own mempool monitor for new TigerSwap launches.
+  Not Maestro, Banana Gun or Unibot.
+- **Copy bot (self-built).** Copy top DEX traders on TigerSwap, swaps and perps.
+  Own copy engine.
+- **TWAP, rebalancing, yield and liquidation bots (self-built).** Time-sliced
+  orders, portfolio rebalancing, auto-compounding and veTGR claiming, and
+  liquidation of undercollateralized margin loans. All own Rust bots. Not
+  Beefy or Yearn.
+- **All CEX bots ported to DEX (self-built).** Spot grid, futures grid, DCA,
+  martingale, infinity grid, smart rebalance and arbitrage, all running on
+  TigerSwap liquidity.
 
 ### 9. Analytics and social
-- Own indexer and DEX analytics for pairs, prices, volume, liquidity, holders, transactions, pool events, and chain health.
-- Multi-chain portfolio tracker, realized/unrealized PnL, positions, and DeFi activity.
-- Trader leaderboard based on disclosed methodology and anti-Sybil protections.
-- Social/community features, followed wallets, smart-money/whale alerts, new-listing alerts, and on-chain signals.
-- Indexer correctness must account for chain reorganizations, token decimals, spam tokens, missing events, and historical backfills.
 
-## B. TigerSwap administration
+- **DEX analytics (self-built).** Prices, volume, liquidity, holders and
+  transactions for all pairs from an own indexer. Not DexScreener or Birdeye.
+- **Portfolio tracker (self-built).** Track wallets across chains with PnL and
+  holdings per chain. Not Debank or Zerion.
+- **Top traders and leaderboard (self-built).** Rank DEX traders by PnL. Not
+  DexScreener Top Traders.
+- **Social trading (self-built).** Follow, copy and chat. Not eToro.
+- **On-chain signals (self-built).** Smart-money and whale alerts, new listings.
+  Not Arkham.
 
-### 1. Token, pool, liquidity, and farm administration
-- Token listing: chain, contract, symbol, decimals, metadata/logo, tags, verification status, risk flags, price-feed mapping, and user-submitted listing review.
-- Create/edit/pause/delist V2, V3, stable, and weighted pools; configure fee tiers, tick spacing, weights, initial price, and liquidity.
-- Stable-pool parameters and concentration/weighted-pool controls.
-- Pool pause, emergency actions, token/wallet/pool denylist, max price impact, slippage controls, and liquidity management.
-- Create farms, configure reward assets/emissions/duration/boosts, manage gauges/bribes, and track reward liabilities.
-- Admin treasury liquidity seeding must require explicit approvals, wallet controls, and immutable audit records; example seed amounts in the request are not authorization to transfer funds.
+## B. Admin features
 
-### 2. Futures, perps, and market listings
-- Dedicated database-backed futures-market, perps-market, and margin-market configuration; add/edit/pause/delist with approval workflow.
-- Configure symbol, contract type (RUSD-M, USDT-M, USDC-M, RYUSD-M, COIN-M, TGR-M), base/quote/settlement asset, contract size, tick/lot size, leverage caps, funding interval/rate caps, mark/index oracle, maintenance/initial margin, liquidation fees, insurance allocation, and status.
-- Support the explicit requirement for USDT/USDC futures contracts with TigerSwap’s own orderbooks and settlement logic.
-- Support perpetual, quarterly, bi-quarterly, and delivery product types only when the contract and settlement lifecycle are implemented and tested.
-- Oracle deviation circuit breakers, maximum open interest, per-asset risk tiers, funding/mark-price overrides with dual approval, and market-level pause controls.
-- Leverage and risk values in this roadmap are proposed configuration examples, not approved production defaults.
+### 1. Listing, pool and farm admin
 
-### 3. Margin and lending administration
-- Configure margin pairs, cross/isolated modes, collateral and borrowable assets, LTV, liquidation thresholds/bonuses, interest-rate curves, risk tiers, and active/paused status.
-- Create isolated lending pools with independent collateral, borrow assets, caps, and liquidation parameters.
-- Monitor health factors, utilization, borrow/supply caps, partial liquidations, bad debt, and liquidation-bot permissions.
-- Parameter changes require validation, role-based approval, timelocks where appropriate, and audit logs.
+- **Token listing admin (self-built).** Chain, contract address, symbol,
+  decimals, logo, CoinGecko id, price feed, tags, verification badge and spam
+  flag; approve or reject user requests. Own database. Not the Trust assets repo.
+- **Pool creation admin (self-built).** Create V2, V3, stable and weighted pools
+  with configurable fee tier, initial price and seeded liquidity from own
+  treasury. Own factory contracts. Not the Uniswap factory.
+- **Stable pool creation admin (self-built).** Configure the amplification
+  parameter and fee for RUSD/USDT/USDC/RYUSD.
+- **Concentrated and weighted pool admin (self-built).** Tick spacing, fee tier
+  and weighted ratios.
+- **Pool management (self-built).** Change fee tier, pause a pool, emergency
+  withdraw, blacklist a token and set maximum slippage.
+- **Liquidity management (self-built).** Add or remove admin seed liquidity from
+  own treasury.
+- **Farm creation and rewards management (self-built).** Create a farm for an LP
+  token, set reward tokens per block, APR and duration, adjust TGR emissions,
+  set gauge weights and manage bribes. Own MasterChef. Not Pancake.
 
-### 4. Fees, revenue, treasury, and TGR governance
-- Configure swap, perps, margin, borrowing, and other protocol fees within bounded policies.
-- Configure revenue splits between LPs, veTGR, treasury, and insurance; manage treasury balances and buyback/burn programs.
-- Display all fee allocations and token emissions transparently. Example percentage splits and APYs from the request are proposals only and require governance, legal, and economic review.
+### 2. Futures market and perps listing admin
 
-### 5. Risk, security, and emergency controls
-- Global and per-chain/pool/market pause; circuit breakers; token/wallet/pool allow/deny lists; oracle registry and deviation monitoring.
-- Price-impact and slippage limits; MEV monitoring; insurance-fund tracking and replenishment rules.
-- Immutable or tamper-evident admin audit logs identifying actor, action, before/after values, approvals, timestamp, and request context.
-- Strong RBAC, MFA, hardware-backed secrets where possible, dual control for high-risk actions, session/device protections, key rotation, and incident-response runbooks.
-- Never allow an admin panel to expose private keys or bypass contract-level safety checks.
+- **Futures market listing admin (self-built).** Own `futures_markets_dex`
+  table with add, edit, delete and pause.
+  - Symbols across RUSD, USDT and USDC quotes, including BTC, ETH, TGR, TSLA and
+    the rest of the 1000+ pair set; USDT and USDC futures contracts must exist.
+  - Contract types: `RUSD_M`, `USDT_M`, `USDC_M`, `RYUSD_M`, `COIN_M`, `TGR_M`.
+  - Quote assets: RUSD, USDT, USDC, RYUSD, USD, BTC, ETH, TGR.
+  - Settlement in RUSD, USDT, USDC, RYUSD, BTC, ETH or TGR, by own engine.
+  - Contract size, tick size, maximum leverage (default 125x, 200x for BTC/ETH,
+    500x for alts, 1001x in high-leverage mode), funding rate and interval,
+    oracle selection, and risk parameters (maintenance margin, initial margin,
+    liquidation fee, insurance-fund allocation).
+  - Status: active, paused, delisting, maintenance. Listing type: perpetual,
+    quarterly, bi-quarterly, delivery.
+  - TradFi perps for stocks, forex, commodities and indices, settled in
+    RUSD/USDT/USDC, priced from own TradFi oracle.
+- **Perps listing admin (self-built).** GMX-style oracle perps and order-book
+  perps with the order types, fee schedule and own matching engine described
+  above. Not GMX, dYdX V4, Hyperliquid or Aster.
+- **Funding rate, mark price, insurance fund and liquidation admin
+  (self-built).** Manual funding override; mark price from a median of
+  Chainlink, Pyth and Tiger; pause a market when deviation exceeds 5%; allocate
+  a share of fees to the insurance fund; set the liquidation fee split between
+  liquidators and insurance; maintain the liquidation-bot whitelist.
 
-### 6. User, bridge, launchpad, and rewards administration
-- Wallet/user activity views limited by role and privacy policy; ban/unban controls with reason and audit trail.
-- Pool TVL/volume/fees and treasury liquidity views.
-- Farm, gauge, bribe, airdrop, and reward-program creation and management.
-- TigerBridge chain/asset configuration, fees, liquidity limits, relayer health, pause/recovery procedures, and reconciliation.
-- IDO/meme launch approval, bonding-curve limits, launch fees, and post-launch liquidity settings.
+### 3. Margin listing admin
 
-### 7. Analytics dashboard
-- Cross-chain TVL, 24-hour volume/fees, active wallets, pool/farm counts, perps open interest, margin borrowed, and chain/indexer health.
-- Pool analytics: TVL, volume, fees, APR assumptions, IL estimates, and LP distribution.
-- Perps analytics: volume, open interest, funding, liquidations, trader PnL, insurance balance, and oracle deviations.
-- Margin analytics: borrow/supply, utilization, health-factor distribution, liquidations, bad debt, and interest income.
-- Revenue analytics: source, allocation, treasury, LP, governance, and insurance accounting.
+- **Margin listing admin (self-built).** Own `margin_markets_dex` table.
+  - Pairs such as BTC/RUSD, ETH/RUSD, TGR/RUSD and SOL/RUSD.
+  - Margin mode: cross and isolated.
+  - Maximum leverage, collateral list, borrowable assets, interest-rate model
+    (base rate, kink, jump multiplier), LTV per collateral, liquidation
+    threshold, liquidation bonus and risk tier. Status: active or paused.
+- **Isolated lending pools admin (self-built).** Create isolated pools with their
+  own LTV, threshold, bonus and interest model so risk does not contaminate
+  other pools.
+- **Borrow/lend, interest rate and liquidation engine admin (self-built).**
+  Monitor positions and liquidate below a health factor of 1; adjust the
+  interest-rate model; maintain the liquidation-bot whitelist; set close factor
+  and per-asset supply and borrow caps.
 
-## C. Architecture and delivery requirements
+### 4. Fees, revenue, treasury, buyback and veTGR admin
 
-- Solidity contracts for EVM pools, vaults, staking/governance, launchpad, NFT market, margin/perps components where appropriate; independent implementations must not copy third-party code without license and security review.
-- Rust for performance-sensitive matching, routing, indexing, and bot services; Go for distributed APIs/services; C++ only where profiling proves it is justified; Python for research, risk analytics, and ML workflows.
-- Next.js, React, TypeScript/TSX, and Tailwind CSS for user and admin frontends.
-- Use durable databases, event streaming, caches, observability, key management, backups, and disaster recovery selected for each service. No Supabase dependency for TigerEx.
-- Build from small, auditable modules. Maintain reproducible builds, dependency and license inventory, SBOM, threat models, fuzz/property tests, invariant tests, testnet deployments, independent audits, monitoring, incident drills, and staged mainnet rollout.
-- Separate UI placeholders from working features. No fabricated prices, balances, transactions, wallet addresses, or trade fills.
-- “No missing features versus top 30 DEXs” is a product aspiration, not a verifiable guarantee. Feature parity must be assessed against a dated scope matrix and tested acceptance criteria.
+- **Fee management (self-built).** Swap fees per pool tier, perp maker/taker and
+  open/close fees, borrow fee and funding, and margin borrow interest. Own fee
+  engine.
+- **Revenue split, treasury, buyback and veTGR distribution (self-built).**
+  Configurable split of swap and perp fees between LPs, veTGR holders, treasury
+  and insurance; multi-chain treasury balances; treasury-funded TGR buyback and
+  burn; weekly fee distribution to veTGR holders. Own contracts.
 
-## D. Suggested release gates
+### 5. Risk, security and emergency admin
 
-1. **Foundation:** threat model, chain/node operations, indexer, wallet connections, monitoring, deployment pipeline, and admin RBAC.
-2. **Spot AMM:** V2 pools and router, token/pool administration, events/indexing, swaps, LP accounting, and comprehensive tests.
-3. **Liquidity expansion:** concentrated and stable pools, analytics, zaps, and reviewed pool hooks.
-4. **Trading services:** limit orders, routing, gas sponsorship, and MEV mitigations with clear failure semantics.
-5. **Yield and governance:** staking/farms/vaults/gauges only after accounting and withdrawal tests.
-6. **Advanced markets:** perps, CLOB, options, margin, lending, and flash loans only after independent audits and adversarial simulations.
-7. **Cross-chain and bots:** bridge, automated strategies, launchpad/NFT, and social analytics only after subsystem-specific security gates.
-8. **Production approval:** legal/compliance sign-off, external audits, bug bounty, load testing, recovery drills, capped initial exposure, and monitored rollout.
+- **Pause/unpause (self-built).** Emergency pause of swaps, perps, margin or a
+  specific pool.
+- **Blacklist and whitelist (self-built).** Block malicious tokens, wallets and
+  pools; whitelist private pools.
+- **Oracle admin (self-built).** Add oracle addresses and fallbacks; monitor
+  deviation and pause a market past the threshold.
+- **Price impact and slippage limits (self-built).** Maximum price impact, and
+  default and maximum slippage.
+- **MEV protection (self-built).** Private mempool, MEV blocker and fee share.
+- **Insurance fund (self-built).** Per-chain target with automatic refill from
+  fees.
+- **Audit logs (self-built).** Immutable record of every admin action — who
+  listed a pool, changed a fee or paused a market.
 
-## Final scope
+### 6. User, liquidity, farm, bridge and launchpad admin
 
-TigerSwap is intended to be a self-built DEX product inside TigerEx—not a thin wrapper over Uniswap, PancakeSwap, Curve, Balancer, Jupiter, 1inch, 0x, GMX, Hyperliquid, dYdX, Aave, or another exchange’s trading API. The feature list above is a requirements roadmap and must not be represented as implemented functionality until code, tests, deployments, audits, and operational evidence confirm it.
+- **User management (self-built).** View DEX users by wallet address, chain,
+  balance and positions; ban or unban a wallet.
+- **Liquidity management (self-built).** View TVL, volume, fees and APR per pool;
+  add or remove admin seed liquidity.
+- **Farm, bribe and airdrop management (self-built).** Create, edit and disable
+  farms; manage gauge voting; review project bribes and veTGR claims; configure
+  airdrop eligibility, amount and claim period.
+- **Bridge and cross-chain management (self-built).** Manage the own TigerBridge
+  relayer; add chains, set bridge fees and monitor liquidity. Not Stargate or
+  Across.
+- **Launchpad and meme management (self-built).** Approve or reject IDO and meme
+  launches; configure bonding-curve parameters, treasury fee and burn; add
+  liquidity to TigerSwap automatically once the curve completes. Not Pump.fun.
+
+### 7. Analytics and dashboard admin
+
+- **DEX dashboard (self-built).** Total TVL across chains, 24-hour volume, fees,
+  active users, pools, farms, perps open interest and margin borrowed, from an
+  own real-time indexer. Not DexScreener.
+- **Pool, perps, margin and revenue analytics (self-built).** Per-pool TVL,
+  volume, fees, APR and IL; perp volume, open interest, funding, liquidations and
+  top-trader PnL; margin borrowed, utilization, health factor and liquidation
+  history; fees by source and the LP/veTGR/treasury/insurance split.
+
+## Summary
+
+- **Swap.** Own V2 xyK, V3 concentrated, V4 hooks, stable, weighted, single-sided
+  zap, multi-hop routing, TigerAggregator, MEV-protected private mempool, gasless
+  swaps, limit orders, DCA/TWAP/TWAMM, OTC and bridge+swap. No external DEX.
+- **Liquidity.** Own V2/V3/stable/weighted pools, zap, LP token, own analytics
+  indexer, lock and migration.
+- **Farm, staking, veTGR.** Own MasterChef variants, single and multi-reward
+  farms, auto-compounding vaults, veTGR, bribes and gauges. No external protocol.
+- **Perps and futures.** Own oracle perps, own order-book CLOB with a Rust
+  matching engine, funding arbitrage, copy trading and bots. Futures, perps and
+  USDT/USDC contracts are listed and settled by own engine. No external perps
+  venue.
+- **Options and margin.** Own options AMM, structured products, margin spot,
+  margin perps, lending pools, isolated lending and flash loans. No external
+  lending protocol.
+- **Launchpad and NFT.** Own IDO, meme launchpad, LBP and NFT marketplace.
+- **Bots.** Own market maker, grid, DCA, arbitrage, sniping, copy, TWAP,
+  rebalancing, yield and liquidation bots. No external bot API.
+- **Analytics and social.** Own DEX analytics, portfolio tracker, leaderboard,
+  social trading and on-chain signals.
+- **Admin.** Token listing, pool creation, farm creation, futures/perps/margin
+  listing, fee and treasury management, risk and emergency controls, user and
+  liquidity management, bridge and launchpad management, and analytics — all
+  self-built, with no dependency on any other CEX or DEX.
