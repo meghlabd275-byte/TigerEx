@@ -43,7 +43,17 @@ struct StockListing {
     double dividend_yield;
     uint64_t shares_outstanding;
     bool is_active;
-    StockListing() : market_cap(0), price(0), change_24h(0), change_percent_24h(0), volume_24h(0), high_52w(0), low_52w(0), pe_ratio(0), dividend_yield(0), shares_outstanding(0), is_active(true) {}
+
+    StockListing()
+        : market_cap(0), price(0), change_24h(0), change_percent_24h(0), volume_24h(0),
+          high_52w(0), low_52w(0), pe_ratio(0), dividend_yield(0), shares_outstanding(0),
+          is_active(false) {}
+
+    StockListing(std::string sym, std::string nm, std::string exch, std::string sec, bool active)
+        : symbol(std::move(sym)), name(std::move(nm)), exchange(std::move(exch)), sector(std::move(sec)),
+          market_cap(0), price(0), change_24h(0), change_percent_24h(0), volume_24h(0),
+          high_52w(0), low_52w(0), pe_ratio(0), dividend_yield(0), shares_outstanding(0),
+          is_active(active) {}
 };
 
 struct StockOrder {
@@ -87,24 +97,44 @@ private:
     mutable std::shared_mutex mutex_;
 
 public:
-    StockTradingEngine() { initialize_listings(); }
-    
-    void initialize_listings() {
-        listings_["AAPL"] = {"AAPL", "Apple Inc.", "NASDAQ", "Technology", 3000000000000.0, 185.50, 2.50, 1.36, 52000000, 198.23, 164.08, 32.5, 0.55, 15500000000, true};
-        listings_["MSFT"] = {"MSFT", "Microsoft Corporation", "NASDAQ", "Technology", 2800000000000.0, 378.20, 4.20, 1.12, 21000000, 420.82, 309.45, 36.2, 0.75, 7430000000, true};
-        listings_["GOOGL"] = {"GOOGL", "Alphabet Inc.", "NASDAQ", "Technology", 1700000000000.0, 138.50, 1.80, 1.32, 25000000, 153.78, 115.35, 25.8, 0.0, 12300000000, true};
-        listings_["AMZN"] = {"AMZN", "Amazon.com Inc.", "NASDAQ", "Consumer Cyclical", 1600000000000.0, 158.30, 2.10, 1.34, 45000000, 189.77, 118.35, 62.5, 0.0, 10300000000, true};
-        listings_["NVDA"] = {"NVDA", "NVIDIA Corporation", "NASDAQ", "Technology", 2500000000000.0, 485.60, 12.40, 2.62, 55000000, 502.66, 222.97, 120.5, 0.03, 2460000000, true};
-        listings_["META"] = {"META", "Meta Platforms Inc.", "NASDAQ", "Technology", 900000000000.0, 365.20, 5.30, 1.47, 18000000, 389.96, 274.38, 28.9, 0.35, 2580000000, true};
-        listings_["TSLA"] = {"TSLA", "Tesla Inc.", "NASDAQ", "Consumer Cyclical", 750000000000.0, 235.40, -3.20, -1.34, 98000000, 299.29, 152.37, 75.2, 0.0, 3170000000, true};
-        listings_["JPM"] = {"JPM", "JPMorgan Chase & Co.", "NYSE", "Financial", 520000000000.0, 172.50, 1.90, 1.11, 8500000, 200.94, 135.19, 11.2, 2.35, 2890000000, true};
-        listings_["V"] = {"V", "Visa Inc.", "NYSE", "Financial", 520000000000.0, 265.30, 2.10, 0.80, 6200000, 290.96, 227.68, 30.5, 0.75, 2060000000, true};
-        listings_["JNJ"] = {"JNJ", "Johnson & Johnson", "NYSE", "Healthcare", 380000000000.0, 158.40, 0.80, 0.51, 7100000, 175.97, 143.13, 15.8, 3.05, 2650000000, true};
-        listings_["AMD"] = {"AMD", "Advanced Micro Devices", "NASDAQ", "Technology", 180000000000.0, 111.20, 2.80, 2.58, 52000000, 164.46, 93.12, 280.5, 0.0, 1620000000, true};
-        listings_["COIN"] = {"COIN", "Coinbase Global Inc.", "NASDAQ", "Financial", 45000000000.0, 198.40, 5.60, 2.90, 8500000, 283.16, 78.12, 65.2, 0.0, 169000000, true};
-        listings_["MSTR"] = {"MSTR", "MicroStrategy Inc.", "NASDAQ", "Technology", 25000000000.0, 1450.30, 45.20, 3.22, 1800000, 1999.99, 290.00, 1250.0, 0.0, 17300000, true};
+    StockTradingEngine() = default;
+
+    /// Registers a tradable listing. Reference data (name, exchange, sector)
+    /// comes from the operator; prices are never seeded here. A listing starts
+    /// without a price and cannot be traded until update_price() supplies one.
+    void register_listing(const std::string& symbol, const std::string& name,
+                          const std::string& exchange, const std::string& sector) {
+        if (symbol.empty()) return;
+        std::unique_lock lock(mutex_);
+        listings_[symbol] = StockListing(symbol, name, exchange, sector, true);
     }
-    
+
+    /// Applies an observed market price and session statistics for a listing.
+    /// Rejects non-finite or non-positive prices so a bad feed cannot be traded.
+    bool update_price(const std::string& symbol, double price, double change_24h,
+                      double volume_24h, double high_52w, double low_52w) {
+        if (!std::isfinite(price) || price <= 0.0) return false;
+
+        std::unique_lock lock(mutex_);
+        auto it = listings_.find(symbol);
+        if (it == listings_.end()) return false;
+
+        auto& listing = it->second;
+        listing.price = price;
+        listing.change_24h = change_24h;
+        listing.change_percent_24h = price > 0.0 ? (change_24h / price) * 100.0 : 0.0;
+        listing.volume_24h = volume_24h;
+        listing.high_52w = high_52w;
+        listing.low_52w = low_52w;
+        return true;
+    }
+
+    void set_active(const std::string& symbol, bool active) {
+        std::unique_lock lock(mutex_);
+        auto it = listings_.find(symbol);
+        if (it != listings_.end()) it->second.is_active = active;
+    }
+
     std::optional<StockListing> get_listing(const std::string& symbol) const {
         std::shared_lock lock(mutex_);
         auto it = listings_.find(symbol);
@@ -128,7 +158,19 @@ public:
         
         auto listing_it = listings_.find(symbol);
         if (listing_it == listings_.end()) return std::nullopt;
-        if (quantity <= 0) return std::nullopt;
+        if (!listing_it->second.is_active) return std::nullopt;
+        if (!std::isfinite(quantity) || quantity <= 0.0) return std::nullopt;
+        if (!std::isfinite(price) || price < 0.0) return std::nullopt;
+
+        // A market order needs a real last price from the feed. Without one the
+        // order is rejected rather than filled at an invented price.
+        if (order_type == StockOrderType::MARKET) {
+            if (!std::isfinite(listing_it->second.price) || listing_it->second.price <= 0.0) {
+                return std::nullopt;
+            }
+        } else if (price <= 0.0) {
+            return std::nullopt;
+        }
         
         std::string order_id = "STK_" + std::to_string(next_order_id_.fetch_add(1));
         
@@ -158,6 +200,72 @@ public:
         orders_[order_id] = order;
         return order_id;
     }
+
+    /// Fills a resting order at an observed execution price. Limit orders fill
+    /// only when the market reaches the limit; stop orders only when it crosses
+    /// the stop. Returns false when the order is unknown, already terminal, or
+    /// the observed price does not satisfy it.
+    bool fill_order(const std::string& order_id, double market_price) {
+        std::unique_lock lock(mutex_);
+        if (!std::isfinite(market_price) || market_price <= 0.0) return false;
+
+        auto it = orders_.find(order_id);
+        if (it == orders_.end()) return false;
+
+        auto& order = it->second;
+        if (order.status != StockOrderStatus::PENDING) return false;
+
+        bool crosses = false;
+        switch (order.type) {
+            case StockOrderType::LIMIT:
+                crosses = order.side == StockOrderSide::BUY
+                    ? market_price <= order.price
+                    : market_price >= order.price;
+                break;
+            case StockOrderType::STOP:
+            case StockOrderType::STOP_LIMIT:
+                crosses = order.side == StockOrderSide::BUY
+                    ? market_price >= order.price
+                    : market_price <= order.price;
+                break;
+            case StockOrderType::MARKET:
+                crosses = true;
+                break;
+        }
+        if (!crosses) return false;
+        if (listings_.find(order.symbol) == listings_.end()) return false;
+
+        if (order.side == StockOrderSide::SELL &&
+            !has_sufficient_position(order.user_id, order.symbol, order.quantity)) {
+            order.status = StockOrderStatus::REJECTED;
+            return false;
+        }
+
+        order.status = StockOrderStatus::FILLED;
+        order.filled_quantity = order.quantity;
+        order.avg_fill_price = market_price;
+
+        update_position(order.user_id, order.symbol, order.side, order.quantity, market_price);
+        total_volume_.fetch_add(static_cast<uint64_t>(order.quantity * market_price));
+        total_trades_.fetch_add(1);
+        return true;
+    }
+
+    bool cancel_order(const std::string& order_id) {
+        std::unique_lock lock(mutex_);
+        auto it = orders_.find(order_id);
+        if (it == orders_.end()) return false;
+        if (it->second.status != StockOrderStatus::PENDING) return false;
+        it->second.status = StockOrderStatus::CANCELLED;
+        return true;
+    }
+
+    std::optional<StockOrder> get_order(const std::string& order_id) const {
+        std::shared_lock lock(mutex_);
+        auto it = orders_.find(order_id);
+        if (it != orders_.end()) return it->second;
+        return std::nullopt;
+    }
     
     std::vector<StockPosition> get_positions(const std::string& user_id) const {
         std::shared_lock lock(mutex_);
@@ -170,6 +278,15 @@ public:
     uint64_t get_total_trades() const { return total_trades_.load(); }
     
 private:
+    bool has_sufficient_position(const std::string& user_id, const std::string& symbol, double quantity) const {
+        auto it = user_positions_.find(user_id);
+        if (it == user_positions_.end()) return false;
+        for (const auto& pos : it->second) {
+            if (pos.symbol == symbol) return pos.quantity >= quantity;
+        }
+        return false;
+    }
+
     void update_position(const std::string& user_id, const std::string& symbol, StockOrderSide side, double quantity, double price) {
         auto& positions = user_positions_[user_id];
         
@@ -180,13 +297,19 @@ private:
                     pos.quantity += quantity;
                     pos.avg_cost = total_cost / pos.quantity;
                 } else {
+                    if (pos.quantity < quantity) return;
                     pos.quantity -= quantity;
                     pos.realized_pnl += (price - pos.avg_cost) * quantity;
                 }
+                pos.current_price = price;
+                pos.market_value = pos.quantity * price;
+                pos.unrealized_pnl = (price - pos.avg_cost) * pos.quantity;
                 pos.updated_at = std::chrono::system_clock::now().time_since_epoch().count();
                 return;
             }
         }
+
+        if (side == StockOrderSide::SELL) return;
         
         StockPosition new_pos;
         new_pos.position_id = user_id + "_" + symbol;

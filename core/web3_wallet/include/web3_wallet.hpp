@@ -10,6 +10,7 @@
 #ifndef TIGEREX_WEB3_WALLET_HPP
 #define TIGEREX_WEB3_WALLET_HPP
 
+#include <cstdint>
 #include <vector>
 #include <map>
 #include <unordered_map>
@@ -211,8 +212,30 @@ private:
     std::string account_;
     ChainId chain_;
     
-    std::function<std::optional<std::string>(const std::vector<std::string>&) request_func_;
+    std::function<std::optional<std::string>(const std::vector<std::string>&)> request_func_;
     
+    /// Decodes a JSON-RPC hex quantity ("0x1a", "0x0") into an integer.
+    /// Returns nullopt for an empty, malformed, or non-hex string.
+    static std::optional<uint64_t> parse_hex_quantity(const std::string& value) {
+        if (value.size() < 3 || value[0] != '0' || (value[1] != 'x' && value[1] != 'X')) {
+            return std::nullopt;
+        }
+        uint64_t result = 0;
+        for (size_t i = 2; i < value.size(); ++i) {
+            char c = value[i];
+            uint64_t digit;
+            if (c >= '0' && c <= '9') digit = static_cast<uint64_t>(c - '0');
+            else if (c >= 'a' && c <= 'f') digit = static_cast<uint64_t>(c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F') digit = static_cast<uint64_t>(c - 'A' + 10);
+            else return std::nullopt;
+
+            // Reject overflow rather than wrapping to a wrong balance.
+            if (result > (UINT64_MAX - digit) / 16) return std::nullopt;
+            result = result * 16 + digit;
+        }
+        return result;
+    }
+
 public:
     EIP1193Provider(const std::string& name, const std::string& version) 
         : name_(name), version_(version), is_injected_(false), status_(ConnectionStatus::DISCONNECTED), chain_(ChainId::ETHEREUM_MAINNET) {}
@@ -303,12 +326,18 @@ public:
     
     std::optional<double> get_balance(const std::string& address) override {
         if (!request_func_) return std::nullopt;
-        
+
         auto result = request_func_({"eth_getBalance", address, "latest"});
         if (!result.has_value()) return std::nullopt;
-        
-        // Parse hex balance
-        return 0.0;
+
+        // eth_getBalance returns a hex wei quantity. Decode it and scale to the
+        // native unit; a value we cannot decode is not a balance, so it fails
+        // closed rather than reporting zero.
+        auto wei = parse_hex_quantity(*result);
+        if (!wei.has_value()) return std::nullopt;
+
+        constexpr double kWeiPerEther = 1e18;
+        return static_cast<double>(*wei) / kWeiPerEther;
     }
     
     std::optional<double> get_token_balance(const std::string& address, const std::string& token) override {
