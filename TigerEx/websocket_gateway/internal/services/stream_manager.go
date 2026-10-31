@@ -187,7 +187,7 @@ func (sm *StreamManager) UpdatePrice(symbol string, price float64) {
 	sm.mu.Unlock()
 }
 
-// GenerateTrade generates a mock trade message
+// GenerateTrade is intentionally inert: trade events arrive from the matching engine.
 func (sm *StreamManager) GenerateTrade(symbol string) []byte {
 	// Trade events must come from a verified matching-engine event stream.
 	// No synthetic trades are emitted by this gateway.
@@ -195,7 +195,7 @@ func (sm *StreamManager) GenerateTrade(symbol string) []byte {
 	return nil
 }
 
-// GenerateKline generates a mock kline message
+// GenerateKline is intentionally inert: candles are built by the market-data service.
 func (sm *StreamManager) GenerateKline(symbol, interval string) []byte {
 	// Candles must be built from persisted/verified trades by the market-data service.
 	_ = symbol
@@ -203,14 +203,14 @@ func (sm *StreamManager) GenerateKline(symbol, interval string) []byte {
 	return nil
 }
 
-// GenerateDepth generates a mock depth message
+// GenerateDepth is intentionally inert: snapshots come from the matching engine.
 func (sm *StreamManager) GenerateDepth(symbol string) []byte {
 	// Order-book snapshots must be supplied by the authoritative matching engine.
 	_ = symbol
 	return nil
 }
 
-// GenerateTicker generates a mock ticker message
+// GenerateTicker is intentionally inert: tickers come from verified market data.
 func (sm *StreamManager) GenerateTicker(symbol string) []byte {
 	// Tickers must be derived from verified market-data events, never generated.
 	_ = symbol

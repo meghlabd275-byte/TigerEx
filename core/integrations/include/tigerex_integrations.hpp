@@ -27,8 +27,66 @@
 #include <queue>
 #include <sstream>
 
+#include "tigerex/crypto.hpp"
+#include "tigerex/market_data.hpp"
+
 namespace tigerex {
 namespace integrations {
+
+/// Token amounts and pool reserves are held in 128 bits. A single reserve can
+/// legitimately exceed 64 bits (1,000,000 TGR at 18 decimals is 10^24), and
+/// truncating it to uint64_t would silently lose value.
+using Amount = unsigned __int128;
+
+/// Parse a whole-number base-unit amount from a JSON value. A string is the
+/// preferred form because a JSON number of 10^24 loses precision before it is
+/// ever parsed. Rejects fractions, signs and any other non-digit input.
+inline Amount parse_amount(const nlohmann::json& value, const std::string& field) {
+    std::string text;
+    if (value.is_string()) {
+        text = value.get<std::string>();
+    } else if (value.is_number_unsigned()) {
+        text = value.dump();
+    } else {
+        throw std::runtime_error(field + " must be a decimal amount or a decimal string");
+    }
+    if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
+        throw std::runtime_error(field + " must be a whole number of base units, got \"" + text + "\"");
+    }
+    Amount result = 0;
+    for (char c : text) {
+        Amount next = result * 10 + static_cast<unsigned>(c - '0');
+        if (next < result) {
+            throw std::runtime_error(field + " overflows 128 bits: " + text);
+        }
+        result = next;
+    }
+    return result;
+}
+
+/// Read `field` from `object` as an amount.
+inline Amount amount_field(const nlohmann::json& object, const std::string& field,
+                           const Amount& fallback) {
+    auto it = object.find(field);
+    if (it == object.end()) {
+        return fallback;
+    }
+    return parse_amount(*it, field);
+}
+
+/// Render an amount as a decimal string.
+inline std::string amount_to_string(Amount value) {
+    if (value == 0) {
+        return "0";
+    }
+    std::string out;
+    while (value > 0) {
+        out.push_back(static_cast<char>('0' + static_cast<unsigned>(value % 10)));
+        value /= 10;
+    }
+    std::reverse(out.begin(), out.end());
+    return out;
+}
 
 // ============================================================
 // TigerSmartChain - EVM-Based Blockchain
@@ -66,13 +124,14 @@ struct TokenInfo {
     std::string name;
     uint8_t decimals;
     TokenStandard standard;
-    uint64_t total_supply;
+    Amount total_supply;
     std::string icon_url;
     double price_usd;
     bool is_verified;
     bool is_trading_enabled;
     
     TokenInfo() : decimals(18), standard(TokenStandard::ERC20), total_supply(0), price_usd(0), is_verified(false), is_trading_enabled(true) {}
+
 };
 
 // Bridge configuration
@@ -110,14 +169,26 @@ struct NFTInfo {
 class TigerSmartChain {
 private:
     std::unordered_map<std::string, ChainConfig> chains_;
+    // Keyed by contract address, or by symbol for a native coin that has no
+    // contract. symbol_index_ maps a symbol to that key.
     std::unordered_map<std::string, TokenInfo> tokens_;
+    std::unordered_map<std::string, std::string> symbol_index_;
     std::unordered_map<std::string, std::vector<BridgeConfig>> bridges_;
     std::atomic<uint64_t> next_chain_id_{1};
     mutable std::shared_mutex mutex_;
     
-    // TGR token address
-    std::string tgr_token_address_ = "0x000000000000000000000000000000000000TGR";
-    std::string rusd_token_address_ = "0x000000000000000000000000000000000RUSD";
+    // Addresses of the Tiger ecosystem contracts. These are deployment
+    // parameters, not constants: an unconfigured deployment has none, and
+    // get_tgr_token()/get_rusd_token() return an empty string rather than a
+    // plausible-looking placeholder.
+    std::string tgr_token_address_;
+    std::string rusd_token_address_;
+
+    // Live price oracle. Prices are fetched on demand and never invented.
+    mutable tigerex::market_data::CoinGeckoOracle price_oracle_;
+    // Maps a symbol to its aggregator id, set from configuration. A symbol
+    // with no id has no price.
+    std::unordered_map<std::string, std::string> price_ids_;
     
     // Dynamic chain/token counters
     std::atomic<uint64_t> total_chains_{0};
@@ -129,252 +200,146 @@ public:
         initialize_default_chains();
     }
     
+    /**
+     * Register the chains, tokens and bridges this deployment is configured to
+     * serve.
+     *
+     * Nothing here is invented. Chains come from `chains.json` in
+     * TIGEREX_CONFIG_DIR (rpc_url, chain_id, explorer, symbol, decimals and
+     * block_time are operator-supplied deployment facts), and token prices come
+     * from the live aggregator. A deployment with no configuration file simply
+     * serves no chains until an operator adds them through add_evm_chain() or
+     * add_nonevm_chain().
+     */
     void initialize_default_chains() {
-        // ==================== EVM BLOCKCHAINS (20+) ====================
-        
-        // Tiger SmartChain Mainnet
-        ChainConfig tsc_mainnet;
-        tsc_mainnet.chain_id = "0x1";
-        tsc_mainnet.name = "TigerSmartChain";
-        tsc_mainnet.rpc_url = "https://rpc.tigersmartchain.com";
-        tsc_mainnet.explorer_url = "https://explorer.tigersmartchain.com";
-        tsc_mainnet.symbol = "TGR";
-        tsc_mainnet.decimals = 18;
-        tsc_mainnet.block_time = 15000;
-        chains_["tiger_mainnet"] = tsc_mainnet;
-        
-        // Tiger SmartChain Testnet
-        ChainConfig tsc_testnet;
-        tsc_testnet.chain_id = "0x5";
-        tsc_testnet.name = "TigerSmartChain Testnet";
-        tsc_testnet.rpc_url = "https://rpc-testnet.tigersmartchain.com";
-        tsc_testnet.explorer_url = "https://testnet-explorer.tigersmartchain.com";
-        tsc_testnet.symbol = "TGR";
-        tsc_testnet.decimals = 18;
-        tsc_testnet.block_time = 15000;
-        chains_["tiger_testnet"] = tsc_testnet;
-        
-        // === EVM Blockchains ===
-        chains_["ethereum"] = {"0x1", "Ethereum", "https://eth-mainnet.g.alchemy.com/v2/demo", "https://etherscan.io", "ETH", 18, 12000, true};
-        chains_["goerli"] = {"0x5", "Ethereum Goerli", "https://eth-goerli.g.alchemy.com/v2/demo", "https://goerli.etherscan.io", "ETH", 18, 12000, true};
-        chains_["sepolia"] = {"0xaa36a7", "Ethereum Sepolia", "https://eth-sepolia.g.alchemy.com/v2/demo", "https://sepolia.etherscan.io", "ETH", 18, 12000, true};
-        chains_["polygon"] = {"0x89", "Polygon", "https://polygon-rpc.com", "https://polygonscan.com", "MATIC", 18, 2000, true};
-        chains_["polygon_zkevm"] = {"0x71AC", "Polygon zkEVM", "https://zkevm-rpc.com", "https://zkevm.polygonscan.com", "ETH", 18, 12000, true};
-        chains_["bsc"] = {"0x38", "BNB Smart Chain", "https://bsc-dataseed.binance.org", "https://bscscan.com", "BNB", 18, 3000, true};
-        chains_["bsc_testnet"] = {"0x61", "BNB Smart Chain Testnet", "https://data-seed-prebsc-1-s1.binance.org:8545", "https://testnet.bscscan.com", "BNB", 18, 3000, true};
-        chains_["avalanche"] = {"0xa86a", "Avalanche C-Chain", "https://api.avax.network/ext/bc/C/rpc", "https://snowtrace.io", "AVAX", 18, 1000, true};
-        chains_["avalanche_fuji"] = {"0xa869", "Avalanche Fuji", "https://api.avax-test.network/ext/bc/C/rpc", "https://testnet.snowtrace.io", "AVAX", 18, 1000, true};
-        chains_["fantom"] = {"0xfa", "Fantom Opera", "https://rpc.ftm.tools", "https://ftmscan.com", "FTM", 18, 1500, true};
-        chains_["fantom_testnet"] = {"0xfa2", "Fantom Testnet", "https://rpc.testnet.fantom.network", "https://testnet.ftmscan.com", "FTM", 18, 1500, true};
-        chains_["arbitrum"] = {"0xa4b1", "Arbitrum One", "https://arb1.arbitrum.io/rpc", "https://arbiscan.io", "ETH", 18, 2500, true};
-        chains_["arbitrum_sepolia"] = {"0x66eed", "Arbitrum Sepolia", "https://sepolia-rollup.arbitrum.io/rpc", "https://sepolia.arbiscan.io", "ETH", 18, 2500, true};
-        chains_["optimism"] = {"0xa", "Optimism", "https://mainnet.optimism.io", "https://optimistic.etherscan.io", "ETH", 18, 2000, true};
-        chains_["optimism_sepolia"] = {"0xaa", "Optimism Sepolia", "https://sepolia.optimism.io", "https://sepolia-optimism.etherscan.io", "ETH", 18, 2000, true};
-        chains_["base"] = {"0x2105", "Base", "https://mainnet.base.org", "https://basescan.org", "ETH", 18, 2000, true};
-        chains_["base_sepolia"] = {"0x14a33", "Base Sepolia", "https://sepolia.base.org", "https://sepolia.basescan.org", "ETH", 18, 2000, true};
-        chains_["celo"] = {"0xa4ec", "Celo", "https://forno.celo.org", "https://celoscan.io", "CELO", 18, 5000, true};
-        chains_["gnosis"] = {"0x64", "Gnosis Chain", "https://rpc.gnosischain.com", "https://gnosisscan.io", "XDAI", 18, 5000, true};
-        chains_["moonbeam"] = {"0x504", "Moonbeam", "https://rpc.api.moonbeam.network", "https://moonscan.io", "GLMR", 18, 12000, true};
-        chains_["moonriver"] = {"0x505", "Moonriver", "https://rpc.api.moonriver.moonbeam.network", "https://moonriver.moonscan.io", "MOVR", 18, 12000, true};
-        chains_["astar"] = {"0x250e", "Astar", "https://rpc.astar.network", "https://blockscout.com/astar", "ASTR", 18, 12000, true};
-        chains_["shibuya"] = {"0x51", "Shibuya", "https://rpc.shibuya.astar.network", "https://shibuya.blockscout.com", "SBY", 18, 12000, true};
-        
-        // === NON-EVM Blockchains (25+) ===
-        chains_["solana"] = {"solana", "Solana", "https://api.mainnet-beta.solana.com", "https://solscan.io", "SOL", 9, 400, true};
-        chains_["solana_devnet"] = {"solana_devnet", "Solana Devnet", "https://api.devnet.solana.com", "https://solscan.io/devnet", "SOL", 9, 400, true};
-        chains_["solana_testnet"] = {"solana_testnet", "Solana Testnet", "https://api.testnet.solana.com", "https://solscan.io/testnet", "SOL", 9, 400, true};
-        chains_["near"] = {"near", "NEAR Protocol", "https://rpc.near.org", "https://explorer.near.org", "NEAR", 24, 1000, true};
-        chains_["near_testnet"] = {"near_testnet", "NEAR Testnet", "https://rpc.testnet.near.org", "https://explorer.testnet.near.org", "NEAR", 24, 1000, true};
-        chains_["algorand"] = {"algorand", "Algorand", "https://mainnet-api.algorand.org", "https://algoexplorer.io", "ALGO", 6, 3500, true};
-        chains_["algorand_testnet"] = {"algorand_testnet", "Algorand Testnet", "https://testnet-api.algorand.org", "https://testnet.algoexplorer.io", "ALGO", 6, 3500, true};
-        chains_["aptos"] = {"aptos", "Aptos", "https://fullnode.mainnet.aptoslabs.com", "https://aptoscan.com", "APT", 8, 2000, true};
-        chains_["aptos_testnet"] = {"aptos_testnet", "Aptos Testnet", "https://fullnode.testnet.aptoslabs.com", "https://testnet.aptoscan.com", "APT", 8, 2000, true};
-        chains_["sui"] = {"sui", "Sui", "https://rpc.mainnet.sui.io", "https://suiscan.xyz", "SUI", 9, 3000, true};
-        chains_["sui_testnet"] = {"sui_testnet", "Sui Testnet", "https://rpc.testnet.sui.io", "https://testnet.suiscan.xyz", "SUI", 9, 3000, true};
-        chains_["cosmos"] = {"cosmos", "Cosmos Hub", "https://rpc.cosmoshub.io", "https://mintscan.io/cosmos-hub", "ATOM", 6, 7000, true};
-        chains_["osmosis"] = {"osmosis", "Osmosis", "https://rpc-osmosis.keplr.app", "https://mintscan.io/osmosis", "OSMO", 6, 6000, true};
-        chains_["juno"] = {"juno", "Juno", "https://rpc.junonetwork.io", "https://mintscan.io/juno", "JUNO", 6, 7000, true};
-        chains_["injective"] = {"injective", "Injective", "https://public.injective.network", "https://explorer.injective.network", "INJ", 18, 1500, true};
-        chains_["sei"] = {"sei", "Sei", "https://rpc.sei.io", "https://seistats.io", "SEI", 6, 500, true};
-        chains_["ton"] = {"ton", "TON", "https://toncenter.com/api/v2", "https://tonviewer.com", "TON", 9, 5000, true};
-        chains_["ton_testnet"] = {"ton_testnet", "TON Testnet", "https://toncenter.com/api/v2", "https://testnet.tonviewer.com", "TON", 9, 5000, true};
-        chains_["radix"] = {"radix", "Radix DLT", "https://mainnet.radixdlt.com", "https://dashboard.radixdlt.com", "XRD", 18, 0, true};
-        chains_["flow"] = {"flow", "Flow", "https://rest-mainnet.onflow.org", "https://flowdiver.io", "FLOW", 8, 2500, true};
-        chains_["flow_testnet"] = {"flow_testnet", "Flow Testnet", "https://rest-testnet.onflow.org", "https://testnet.flowdiver.io", "FLOW", 8, 2500, true};
-        chains_["hedera"] = {"hedera", "Hedera", "https://mainnet.mirror.hedera.com/api/v1", "https://hashscan.io/mainnet", "HBAR", 8, 2500, true};
-        chains_["icon"] = {"icon", "ICON", "https://ctz.solidwallet.io", "https://tracker.icon.foundation", "ICX", 18, 2000, true};
-        chains_["vechain"] = {"vechain", "VeChain", "https://mainnet.vechain.org", "https://vechainstats.com", "VET", 18, 10000, true};
-        chains_["theta"] = {"theta", "Theta Network", "https://rpc.theta.network", "https://thetascout.io", "THETA", 18, 5000, true};
-        chains_["elrond"] = {"elrond", "MultiversX", "https://api.multiversx.com", "https://explorer.multiversx.com", "EGLD", 18, 6000, true};
-        chains_["kusama"] = {"kusama", "Kusama", "https://kusama-rpc.polkadot.io", "https://kusama.subscan.io", "KSM", 12, 12000, true};
-        chains_["polkadot"] = {"polkadot", "Polkadot", "https://rpc.polkadot.io", "https://polkadot.subscan.io", "DOT", 10, 6000, true};
-        
-        // ==================== 200+ TOKENS ====================
-        
-        // Native Tokens
-        tokens_["ETH"] = {"0x000000000000000000000000000000000000000E", "ETH", "Ethereum", 18, TokenStandard::NATIVE, 120000000 * 1e18, "", 3500.0, true, true};
-        tokens_["BNB"] = {"0x000000000000000000000000000000000000000B", "BNB", "BNB", 18, TokenStandard::NATIVE, 200000000 * 1e18, "", 650.0, true, true};
-        tokens_["SOL"] = {"0x000000000000000000000000000000000000000S", "SOL", "Solana", 9, TokenStandard::NATIVE, 600000000 * 1e9, "", 180.0, true, true};
-        tokens_["MATIC"] = {"0x000000000000000000000000000000000000001M", "MATIC", "Polygon", 18, TokenStandard::NATIVE, 10000000000 * 1e18, "", 1.2, true, true};
-        tokens_["AVAX"] = {"0x000000000000000000000000000000000000000A", "AVAX", "Avalanche", 18, TokenStandard::NATIVE, 720000000 * 1e18, "", 45.0, true, true};
-        tokens_["FTM"] = {"0x000000000000000000000000000000000000000F", "FTM", "Fantom", 18, TokenStandard::NATIVE, 3175000000 * 1e18, "", 0.8, true, true};
-        tokens_["ARB"] = {"0x00000000000000000000000000000000000000A", "ARB", "Arbitrum", 18, TokenStandard::NATIVE, 1000000000 * 1e18, "", 1.8, true, true};
-        tokens_["OP"] = {"0x000000000000000000000000000000000000000O", "OP", "Optimism", 18, TokenStandard::NATIVE, 4300000000 * 1e18, "", 3.2, true, true};
-        
-        // TGR Token
-        tokens_[tgr_token_address_] = {"0xTGR", "TGR", "Tiger", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 5.0, true, true};
-        
-        // RUSD Stablecoin
-        tokens_[rusd_token_address_] = {"0xRUSD", "RUSD", "Royal Tiger USD", 6, TokenStandard::ERC20, 1000000000 * 1e6, "", 1.0, true, true};
-        
-        // USD Stablecoins
-        tokens_["USDT"] = {"0xdAC17F958D2ee523a2206206994597C13D831ec7", "USDT", "Tether USD", 6, TokenStandard::ERC20, 100000000000 * 1e6, "", 1.0, true, true};
-        tokens_["USDC"] = {"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "USDC", "USD Coin", 6, TokenStandard::ERC20, 50000000000 * 1e6, "", 1.0, true, true};
-        tokens_["DAI"] = {"0x6B175474E89094C44Da98b954E5eCD565D45A9a9", "DAI", "Dai Stablecoin", 18, TokenStandard::ERC20, 5000000000 * 1e18, "", 1.0, true, true};
-        tokens_["BUSD"] = {"0x4Fabb145d64652a948D72539023d6A0A5bb8b9A", "BUSD", "Binance USD", 18, TokenStandard::ERC20, 10000000000 * 1e18, "", 1.0, true, true};
-        tokens_["TUSD"] = {"0x0000000000085Ce4780aAD4e0dD96eD0153820580", "TUSD", "TrueUSD", 18, TokenStandard::ERC20, 5000000000 * 1e18, "", 1.0, true, true};
-        tokens_["USDP"] = {"0x8E870D67F660D95d5BE530380D0eC0bd388289E1", "USDP", "Pax Dollar", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 1.0, true, true};
-        tokens_["FRAX"] = {"0x853d955aCEf822Db058eb8505911ED77F175b99e", "FRAX", "Frax", 18, TokenStandard::ERC20, 500000000 * 1e18, "", 1.0, true, true};
-        
-        // Top 100 Cryptocurrencies
-        std::vector<TokenInfo> top_tokens = {
-            {"0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "WBTC", "Wrapped Bitcoin", 8, TokenStandard::ERC20, 150000 * 1e8, "", 65000.0, true, true},
-            {"0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9", "AAVE", "Aave", 18, TokenStandard::ERC20, 16000000 * 1e18, "", 350.0, true, true},
-            {"0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", "UNI", "Uniswap", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 12.0, true, true},
-            {"0x514910771AF9Ca656af840dff83E8264EcF986CA", "LINK", "Chainlink", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 18.0, true, true},
-            {"0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0", "MATIC", "Polygon", 18, TokenStandard::ERC20, 10000000000 * 1e18, "", 1.2, true, true},
-            {"0x0D8775F648430679A709E98d2e0EbC922E7416b9", "BAT", "Basic Attention Token", 18, TokenStandard::ERC20, 1500000000 * 1e18, "", 0.35, true, true},
-            {"0x1985365e9f78359a9B6AD760e32412f4a445E862", "REP", "Augur", 18, TokenStandard::ERC20, 11000000 * 1e18, "", 2.5, true, true},
-            {"0xE41d2489571d322189246DaFA5ebDe1F4699F498", "ZRX", "0x", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 0.45, true, true},
-            {"0x80fB784B7eD66732e427B5bE9C3004780988cCaC", "REN", "Ren", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 0.25, true, true},
-            {"0x0bc529c00C6401aEF6D220BE8C6Ea1665F6Ad51e", "YFI", "yearn.finance", 18, TokenStandard::ERC20, 36660 * 1e18, "", 8000.0, true, true},
-            {"0xC011a73ee8576Fb46F5E1c5751cC3BbC246aBCC2", "SNX", "Synthetix", 18, TokenStandard::ERC20, 190000000 * 1e18, "", 3.5, true, true},
-            {"0xDD6c68bb32462e01705011a4e2Ad1a60740f217F", "HOT", "Holo", 18, TokenStandard::ERC20, 173000000000 * 1e18, "", 0.008, true, true},
-            {"0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", "CRV", "Curve DAO", 18, TokenStandard::ERC20, 3000000000 * 1e18, "", 0.65, true, true},
-            {"0xD533a949740bb3306d119CC777fa900bA034cd52", "CRV", "Curve DAO", 18, TokenStandard::ERC20, 3000000000 * 1e18, "", 0.65, true, true},
-            {"0x5f98805A4e8bFC25550d46d4cD0A7cD0031B5c2", "LDO", "Lido DAO", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 2.8, true, true},
-            {"0x8798249c2E607446EfB7Ad49eC89dD1865Ff4272", "SUSHI", "SushiSwap", 18, TokenStandard::ERC20, 250000000 * 1e18, "", 1.5, true, true},
-            {"0xA4B31917dD5d2f58e3F5a4b5f2b3E9F8c2E1d5A", "RUNE", "THORChain", 18, TokenStandard::ERC20, 500000000 * 1e18, "", 6.5, true, true},
-            {"0xc00e94Cb662C3520282E6f5717214004A7f26888", "COMP", "Compound", 18, TokenStandard::ERC20, 10000000 * 1e18, "", 65.0, true, true},
-            {"0xE4eE8d40c85cA2fA76f34F0dFe4B1D5c4c8a1F5D", "MKR", "Maker", 18, TokenStandard::ERC20, 1000000 * 1e18, "", 2800.0, true, true},
-            {"0xD31aA6Fd3F92F6F89D1D6F171E36bD2387F8dE8A", "LDO", "Lido", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 2.8, true, true},
-            {"0x4EED0fa8dE12D5a86517f214C2f11586Ba2ED88", "THETA", "Theta", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 1.8, true, true},
-            {"0x0F5D2fB29fb7d3CFe07AcA9cBF1A9b7a1b8A7E6", "AXS", "Axie Infinity", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 7.5, true, true},
-            {"0xB16966c2A8D2A44b8AF92E0D2c52d0b2dB4cB6E5", "SAND", "The Sandbox", 18, TokenStandard::ERC20, 3000000000 * 1e18, "", 0.45, true, true},
-            {"0x958d208Cdf087d630f40E5A7BCD7A71C0C23f688", "MANA", "Decentraland", 18, TokenStandard::ERC20, 260000000 * 1e18, "", 0.55, true, true},
-            {"0xBB0E17EF65F82Ab018d8d776DB8fA40dC8153b7E", "AXS", "Axie", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 7.5, true, true},
-            {"0x7C3E92FDB0a2eD62F0F9d4E4f2c2d9c8d8c8d8E", "FTM", "Fantom", 18, TokenStandard::ERC20, 3175000000 * 1e18, "", 0.8, true, true},
-            {"0x2F6F07CDf5D3Cb1C5B4E7C4F1c9c8d1c2b3a4b5", "ALGO", "Algorand", 6, TokenStandard::ERC20, 10000000000 * 1e6, "", 0.25, true, true},
-            {"0x3D1A3cd8C8a2b8D4F5E6b7c9d0E1F2a3B4c5d6e", "XLM", "Stellar", 10, TokenStandard::ERC20, 100000000000 * 1e10, "", 0.12, true, true},
-            {"0x4F5E8E2C4b5a6c7d8e9f0a1b2c3d4e5f6a7b8c9", "XRP", "Ripple", 6, TokenStandard::ERC20, 100000000000 * 1e6, "", 0.65, true, true},
-            {"0x5A6B7c9d0E1f2a3B4c5d6e7f8a9b0c1d2e3f4a5", "ADA", "Cardano", 6, TokenStandard::ERC20, 45000000000 * 1e6, "", 0.55, true, true},
-            {"0x6B7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5", "DOT", "Polkadot", 10, TokenStandard::ERC20, 1000000000 * 1e10, "", 7.5, true, true},
-            {"0x7C8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6", "DOGE", "Dogecoin", 8, TokenStandard::ERC20, 140000000000 * 1e8, "", 0.15, true, true},
-            {"0x8D9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7", "SHIB", "Shiba Inu", 18, TokenStandard::ERC20, 1000000000000000000 * 1e18, "", 0.000025, true, true},
-            {"0x9E0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8", "PEPE", "Pepe", 18, TokenStandard::ERC20, 420000000000000000 * 1e18, "", 0.000002, true, true},
-            {"0x0A1e2d3c4b5a6c7d8e9f0a1b2c3d4e5f6a7b8c9", "APT", "Aptos", 8, TokenStandard::ERC20, 1000000000 * 1e8, "", 12.0, true, true},
-            {"0x1B2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", "SUI", "Sui", 9, TokenStandard::ERC20, 10000000000 * 1e9, "", 1.8, true, true},
-            {"0x2C3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1", "NEAR", "NEAR Protocol", 24, TokenStandard::ERC20, 1000000000 * 1e24, "", 5.5, true, true},
-            {"0x3D4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2", "INJ", "Injective", 18, TokenStandard::ERC20, 100000000 * 1e18, "", 35.0, true, true},
-            {"0x4E5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3", "ATOM", "Cosmos", 6, TokenStandard::ERC20, 500000000 * 1e6, "", 9.5, true, true},
-            {"0x5F6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4", "FIL", "Filecoin", 18, TokenStandard::ERC20, 2000000000 * 1e18, "", 5.8, true, true},
-            {"0x6G7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4g5", "HBAR", "Hedera", 8, TokenStandard::ERC20, 50000000000 * 1e8, "", 0.08, true, true},
-            {"0x7H8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6", "VET", "VeChain", 18, TokenStandard::ERC20, 86000000000 * 1e18, "", 0.035, true, true},
-            {"0x8I9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7", "ICP", "Internet Computer", 8, TokenStandard::ERC20, 500000000 * 1e8, "", 12.0, true, true},
-            {"0x9J0e1f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8", "QNT", "Quant", 18, TokenStandard::ERC20, 15000000 * 1e18, "", 120.0, true, true},
-            {"0x0K1f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9", "GRT", "The Graph", 18, TokenStandard::ERC20, 10000000000 * 1e18, "", 0.28, true, true},
-            {"0x1L2f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0", "STX", "Stacks", 6, TokenStandard::ERC20, 1800000000 * 1e6, "", 2.2, true, true},
-            {"0x2M3f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1", "RUNE", "THORChain", 18, TokenStandard::ERC20, 500000000 * 1e18, "", 6.5, true, true},
-            {"0x3N4f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2", "KAVA", "Kava", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 0.95, true, true},
-            {"0x4O5f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3", "EGLD", "MultiversX", 18, TokenStandard::ERC20, 25000000 * 1e18, "", 45.0, true, true},
-            {"0x5P6f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4", "MINA", "Mina", 9, TokenStandard::ERC20, 1000000000 * 1e9, "", 1.2, true, true},
-            {"0x6Q7f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5", "RNDR", "Render", 18, TokenStandard::ERC20, 500000000 * 1e18, "", 8.5, true, true},
-            {"0x7R8f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6", "IMX", "Immutable X", 18, TokenStandard::ERC20, 2000000000 * 1e18, "", 2.3, true, true},
-            {"0x8S9f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7", "OP", "Optimism", 18, TokenStandard::ERC20, 4300000000 * 1e18, "", 3.2, true, true},
-            {"0x9T0f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8", "ARB", "Arbitrum", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 1.8, true, true},
-            {"0x0U1f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9", "GMX", "GMX", 18, TokenStandard::ERC20, 17000000 * 1e18, "", 45.0, true, true},
-            {"0x1V2f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0", "BLUR", "Blur", 18, TokenStandard::ERC20, 3000000000 * 1e18, "", 0.35, true, true},
-            {"0x2W3f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1", "MASK", "Mask Network", 18, TokenStandard::ERC20, 100000000 * 1e18, "", 3.5, true, true},
-            {"0x3X4f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2", "DYDX", "dYdX", 18, TokenStandard::ERC20, 500000000 * 1e18, "", 2.8, true, true},
-            {"0x4Y5f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3", "GALA", "Gala", 8, TokenStandard::ERC20, 35000000000 * 1e8, "", 0.045, true, true},
-            {"0x5Z6f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4", "ENS", "Ethereum Name Service", 18, TokenStandard::ERC20, 20000000 * 1e18, "", 25.0, true, true},
-            {"0x6A7f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5", "1INCH", "1inch", 18, TokenStandard::ERC20, 1500000000 * 1e18, "", 0.45, true, true},
-            {"0x7B8f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6", "CELO", "Celo", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 0.85, true, true},
-            {"0x8C9f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7", "QTUM", "Qtum", 8, TokenStandard::ERC20, 100000000 * 1e8, "", 3.2, true, true},
-            {"0x9D0f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8", "NEO", "Neo", 8, TokenStandard::ERC20, 100000000 * 1e8, "", 12.0, true, true},
-            {"0x0E1f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9", "EOS", "EOS", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 0.85, true, true},
-            {"0x1F2f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0", "FLOW", "Flow", 8, TokenStandard::ERC20, 1500000000 * 1e8, "", 0.95, true, true},
-            {"0x2G3f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1", "CHZ", "Chiliz", 8, TokenStandard::ERC20, 9000000000 * 1e8, "", 0.095, true, true},
-            {"0x3H4f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2", "XTZ", "Tezos", 6, TokenStandard::ERC20, 1000000000 * 1e6, "", 1.05, true, true},
-            {"0x4I5f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3", "CAKE", "PancakeSwap", 18, TokenStandard::ERC20, 75000000 * 1e18, "", 2.8, true, true},
-            {"0x5J6f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4", "BTT", "BitTorrent", 18, TokenStandard::ERC20, 990000000000 * 1e18, "", 0.0012, true, true},
-            {"0x6K7f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5", "LTC", "Litecoin", 8, TokenStandard::NATIVE, 84000000 * 1e8, "", 85.0, true, true},
-            {"0x7L8f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6", "BCH", "Bitcoin Cash", 8, TokenStandard::NATIVE, 21000000 * 1e8, "", 450.0, true, true},
-            {"0x8M9f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7", "XMR", "Monero", 12, TokenStandard::NATIVE, 18000000 * 1e12, "", 165.0, true, true},
-            {"0x9N0f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8", "DASH", "Dash", 8, TokenStandard::NATIVE, 18900000 * 1e8, "", 35.0, true, true},
-            {"0x0O1f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9", "ZEC", "Zcash", 8, TokenStandard::NATIVE, 21000000 * 1e8, "", 45.0, true, true},
-            {"0x1P2f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0", "NEM", "NEM", 6, TokenStandard::NATIVE, 9000000000 * 1e6, "", 0.035, true, true},
-            {"0x2Q3f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1", "WAVES", "Waves", 8, TokenStandard::NATIVE, 120000000 * 1e8, "", 2.5, true, true},
-            {"0x3R4f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2", "ZIL", "Zilliqa", 12, TokenStandard::NATIVE, 21000000000 * 1e12, "", 0.035, true, true},
-            {"0x4S5f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3", "ENJ", "Enjin Coin", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 0.35, true, true},
-            {"0x5T6f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4", "BAT", "Basic Attention", 18, TokenStandard::ERC20, 1500000000 * 1e18, "", 0.35, true, true},
-            {"0x6U7f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5", "ANKR", "Ankr", 18, TokenStandard::ERC20, 10000000000 * 1e18, "", 0.035, true, true},
-            {"0x7V8f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6", "REN", "Ren", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 0.25, true, true},
-            {"0x8W9f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7", "OCEAN", "Ocean Protocol", 18, TokenStandard::ERC20, 1400000000 * 1e18, "", 0.85, true, true},
-            {"0x9X0f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8", "BAND", "Band Protocol", 18, TokenStandard::ERC20, 100000000 * 1e18, "", 1.85, true, true},
-            {"0x0Y1f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9", "SXP", "Swipe", 18, TokenStandard::ERC20, 300000000 * 1e18, "", 0.28, true, true},
-            {"0x1Z2f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0", "KSM", "Kusama", 12, TokenStandard::ERC20, 10000000 * 1e12, "", 28.0, true, true},
-            {"0x2A3f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1", "CRO", "Cronos", 8, TokenStandard::ERC20, 30000000000 * 1e8, "", 0.085, true, true},
-            {"0x3B4f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2", "NEAR", "NEAR", 24, TokenStandard::ERC20, 1000000000 * 1e24, "", 5.5, true, true},
-            {"0x4C5f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3", "AR", "Arweave", 12, TokenStandard::ERC20, 66000000 * 1e12, "", 35.0, true, true},
-            {"0x5D6f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4", "KCS", "KuCoin Token", 18, TokenStandard::ERC20, 200000000 * 1e18, "", 9.5, true, true},
-            {"0x6E7f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5", "TWT", "Trust Wallet", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 1.25, true, true},
-            {"0x7F8f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6", "RNDR", "Render", 18, TokenStandard::ERC20, 500000000 * 1e18, "", 8.5, true, true},
-            {"0x8G9f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7", "SEI", "Sei", 6, TokenStandard::ERC20, 1000000000 * 1e6, "", 0.65, true, true},
-            {"0x9H0f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8", "BLUR", "Blur", 18, TokenStandard::ERC20, 3000000000 * 1e18, "", 0.35, true, true},
-            {"0x0I1f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9", "JASMY", "JasmyCoin", 18, TokenStandard::ERC20, 50000000000 * 1e18, "", 0.035, true, true},
-            {"0x1J2f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0", "MEME", "Meme", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 0.025, true, true},
-            {"0x2K3f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1", "PEPE", "Pepe", 18, TokenStandard::ERC20, 420000000000000000 * 1e18, "", 0.000002, true, true},
-            {"0x3L4f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2", "BONK", "Bonk", 5, TokenStandard::ERC20, 100000000000 * 1e5, "", 0.00002, true, true},
-            {"0x4M5f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3", "WIF", "dogwifhat", 6, TokenStandard::ERC20, 100000000 * 1e6, "", 3.5, true, true},
-            {"0x5N6f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4", "ORDI", "ORDI", 8, TokenStandard::ERC20, 21000000 * 1e8, "", 85.0, true, true},
-            {"0x6O7f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5", "SATS", "Sats", 0, TokenStandard::ERC20, 210000000000000 * 1e0, "", 0.0004, true, true},
-            {"0x7P8f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6", "AI16Z", "AI16Z", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 0.85, true, true},
-            {"0x8Q9f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7", "VIRTUAL", "Virtual", 18, TokenStandard::ERC20, 2000000000 * 1e18, "", 2.5, true, true},
-            {"0x9R0f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8", "PNUT", "Peanut the Squirrel", 6, TokenStandard::ERC20, 1000000000 * 1e6, "", 1.2, true, true},
-            {"0x0S1f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9", "CETUS", "Cetus", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 0.35, true, true},
-            {"0x1T2f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0", "MOG", "Mog", 18, TokenStandard::ERC20, 1000000000000 * 1e18, "", 0.000015, true, true},
-            {"0x2U3f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1", "AIZ", "Aizon", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 0.25, true, true},
-            {"0x3V4f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2", "HAWK", "Hawk", 6, TokenStandard::ERC20, 1000000000 * 1e6, "", 0.22, true, true},
-            {"0x4W5f2a3b4c5d6e7f8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0g1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3", "SAFE", "Safe", 18, TokenStandard::ERC20, 1000000000 * 1e18, "", 1.45, true, true},
-        };
-        
-        // Add all tokens to map
-        for (const auto& token : top_tokens) {
-            tokens_[token.symbol] = token;
-        }
-        
-        // Bridges
-        BridgeConfig eth_bridge;
-        eth_bridge.bridge_address = "0x1234567890abcdef1234567890abcdef12345678";
-        eth_bridge.source_chain = "ethereum";
-        eth_bridge.target_chain = "tiger_mainnet";
-        eth_bridge.min_amount = 100;
-        eth_bridge.max_amount = 1000000;
-        eth_bridge.fee_percentage = 0.001;
-        eth_bridge.estimated_time = 600000;
-        bridges_["tiger_mainnet"].push_back(eth_bridge);
-        
-        BridgeConfig bsc_bridge;
-        bsc_bridge.bridge_address = "0xabcdef1234567890abcdef1234567890abcdef12";
-        bsc_bridge.source_chain = "bsc";
-        bsc_bridge.target_chain = "tiger_mainnet";
-        bsc_bridge.min_amount = 50;
-        bsc_bridge.max_amount = 500000;
-        bsc_bridge.fee_percentage = 0.001;
-        bsc_bridge.estimated_time = 600000;
-        bridges_["tiger_mainnet"].push_back(bsc_bridge);
+        load_chains_from_config();
+        load_bridges_from_config();
     }
+
+    /// Path of the chain/bridge configuration file, honouring TIGEREX_CONFIG_DIR.
+    static std::string config_path() {
+        const char* dir = std::getenv("TIGEREX_CONFIG_DIR");
+        std::string base = (dir != nullptr && *dir != '\0') ? std::string(dir) : std::string(".");
+        return base + "/chains.json";
+    }
+
+    void load_chains_from_config() {
+        std::ifstream file(config_path());
+        if (!file.is_open()) {
+            // No configuration deployed yet; serve no chains rather than a
+            // fabricated list.
+            return;
+        }
+
+        nlohmann::json config;
+        try {
+            file >> config;
+        } catch (const std::exception& e) {
+            throw std::runtime_error("chains.json is not valid JSON: " + std::string(e.what()));
+        }
+
+        if (!config.contains("chains") || !config["chains"].is_array()) {
+            throw std::runtime_error("chains.json must contain a \"chains\" array");
+        }
+
+        for (const auto& entry : config["chains"]) {
+            ChainConfig chain;
+            chain.chain_id = entry.value("chain_id", "");
+            chain.name = entry.value("name", "");
+            chain.rpc_url = entry.value("rpc_url", "");
+            chain.explorer_url = entry.value("explorer_url", "");
+            chain.symbol = entry.value("symbol", "");
+            chain.decimals = static_cast<uint8_t>(entry.value("decimals", 18));
+            chain.block_time = entry.value("block_time", 0);
+            chain.is_active = entry.value("is_active", true);
+            if (chain.chain_id.empty() || chain.name.empty()) {
+                throw std::runtime_error("every chain needs a chain_id and a name");
+            }
+            chains_[chain.name] = chain;
+            total_chains_.fetch_add(1);
+        }
+
+        if (config.contains("tgr_token_address")) {
+            tgr_token_address_ = config["tgr_token_address"].get<std::string>();
+        }
+        if (config.contains("rusd_token_address")) {
+            rusd_token_address_ = config["rusd_token_address"].get<std::string>();
+        }
+
+        if (config.contains("tokens") && config["tokens"].is_array()) {
+            for (const auto& entry : config["tokens"]) {
+                TokenInfo token;
+                token.address = entry.value("address", "");
+                token.symbol = entry.value("symbol", "");
+                token.name = entry.value("name", "");
+                token.decimals = static_cast<uint8_t>(entry.value("decimals", 18));
+                token.standard = entry.value("native", false) ? TokenStandard::NATIVE : TokenStandard::ERC20;
+                token.total_supply = amount_field(entry, "total_supply", 0);
+                token.icon_url = entry.value("icon_url", "");
+                token.is_verified = entry.value("verified", false);
+                token.is_trading_enabled = entry.value("trading_enabled", true);
+                if (token.symbol.empty()) {
+                    throw std::runtime_error("every token needs a symbol");
+                }
+                // price_usd stays 0 here: it is filled from the live oracle on
+                // demand by get_token()/get_token_by_symbol(), never baked in.
+                if (symbol_index_.count(token.symbol) != 0) {
+                    throw std::runtime_error("duplicate token symbol: " + token.symbol);
+                }
+                std::string key = token.address.empty() ? token.symbol : token.address;
+                tokens_[key] = token;
+                symbol_index_[token.symbol] = key;
+                total_tokens_.fetch_add(1);
+            }
+        }
+    }
+
+    void load_bridges_from_config() {
+        std::ifstream file(config_path());
+        if (!file.is_open()) {
+            return;
+        }
+        nlohmann::json config;
+        try {
+            file >> config;
+        } catch (const std::exception&) {
+            return;
+        }
+        if (!config.contains("bridges") || !config["bridges"].is_array()) {
+            return;
+        }
+        for (const auto& entry : config["bridges"]) {
+            BridgeConfig bridge;
+            bridge.bridge_address = entry.value("bridge_address", "");
+            bridge.source_chain = entry.value("source_chain", "");
+            bridge.target_chain = entry.value("target_chain", "");
+            bridge.min_amount = tigerex::market_data::json_uint64_field(entry, "min_amount", 0);
+            bridge.max_amount = tigerex::market_data::json_uint64_field(entry, "max_amount", 0);
+            if (bridge.max_amount < bridge.min_amount) {
+                throw std::runtime_error("bridge max_amount is below min_amount");
+            }
+            bridge.fee_percentage = entry.value("fee_percentage", 0.0);
+            bridge.estimated_time =
+                tigerex::market_data::json_uint64_field(entry, "estimated_time", 0);
+            if (bridge.bridge_address.empty() || bridge.target_chain.empty()) {
+                throw std::runtime_error("every bridge needs a bridge_address and a target_chain");
+            }
+            bridges_[bridge.target_chain].push_back(bridge);
+            total_bridges_.fetch_add(1);
+        }
+    }
+
+    /// Set the TGR/RUSD contract addresses (operator action after deployment).
+    void set_tgr_token_address(const std::string& address) {
+        std::unique_lock lock(mutex_);
+        tgr_token_address_ = address;
+    }
+
+    void set_rusd_token_address(const std::string& address) {
+        std::unique_lock lock(mutex_);
+        rusd_token_address_ = address;
+    }
+
     
     // Get chain configuration
     std::optional<ChainConfig> get_chain(const std::string& chain_key) const {
@@ -398,26 +363,46 @@ public:
         return result;
     }
     
-    // Get token info
+    // Get token info by contract address or native-coin key.
     std::optional<TokenInfo> get_token(const std::string& address) const {
         std::shared_lock lock(mutex_);
         auto it = tokens_.find(address);
-        if (it != tokens_.end()) {
-            return it->second;
+        if (it == tokens_.end()) {
+            return std::nullopt;
         }
-        return std::nullopt;
-    }
-    
-    // Get token by symbol
-    std::optional<TokenInfo> get_token_by_symbol(const std::string& symbol) const {
-        std::shared_lock lock(mutex_);
-        for (const auto& [addr, token] : tokens_) {
-            if (token.symbol == symbol) {
-                return token;
+        TokenInfo result = it->second;
+        auto id = price_ids_.find(result.symbol);
+        if (id != price_ids_.end()) {
+            if (auto price = price_oracle_.price(id->second)) {
+                result.price_usd = *price;
             }
         }
-        return std::nullopt;
+        return result;
     }
+
+    // Get token by symbol. When the symbol has a configured aggregator id the
+    // price is fetched live; otherwise it stays 0, which callers must read as
+    // "no price available".
+    std::optional<TokenInfo> get_token_by_symbol(const std::string& symbol) const {
+        std::shared_lock lock(mutex_);
+        auto key = symbol_index_.find(symbol);
+        if (key == symbol_index_.end()) {
+            return std::nullopt;
+        }
+        auto it = tokens_.find(key->second);
+        if (it == tokens_.end()) {
+            return std::nullopt;
+        }
+        TokenInfo result = it->second;
+        auto id = price_ids_.find(symbol);
+        if (id != price_ids_.end()) {
+            if (auto price = price_oracle_.price(id->second)) {
+                result.price_usd = *price;
+            }
+        }
+        return result;
+    }
+
     
     // Get all tokens
     std::vector<TokenInfo> get_all_tokens() const {
@@ -429,10 +414,17 @@ public:
         return result;
     }
     
-    // Add custom token
+    // Register a token. Returns false when the symbol is already registered, so
+    // a caller cannot silently shadow an existing listing.
     bool add_token(const TokenInfo& token) {
         std::unique_lock lock(mutex_);
-        tokens_[token.address] = token;
+        if (symbol_index_.count(token.symbol) != 0) {
+            return false;
+        }
+        std::string key = token.address.empty() ? token.symbol : token.address;
+        tokens_[key] = token;
+        symbol_index_[token.symbol] = key;
+        total_tokens_.fetch_add(1);
         return true;
     }
     
@@ -448,24 +440,26 @@ public:
     
     // Estimate bridge fee
     double estimate_bridge_fee(double amount, const std::string& from_chain, const std::string& to_chain) const {
-        auto chain_bridges = get_bridges(to_chain);
-        for (const auto& bridge : chain_bridges) {
+        for (const auto& bridge : get_bridges(to_chain)) {
             if (bridge.source_chain == from_chain) {
                 return amount * bridge.fee_percentage;
             }
         }
-        return amount * 0.001;  // Default 0.1%
+        throw std::runtime_error("no configured bridge from " + from_chain + " to " + to_chain);
     }
     
     // Get gas price
+    // Current gas price in wei, read from the chain's own RPC endpoint.
+    // Throws when the chain is unknown or the node does not answer.
     double get_gas_price(const std::string& chain_key) const {
         auto chain_opt = get_chain(chain_key);
         if (!chain_opt.has_value()) {
-            return 20e9;  // 20 Gwei default
+            throw std::runtime_error("unknown chain: " + chain_key);
         }
-        
-        // Dynamic gas pricing
-        return 20e9;  // Would fetch from network
+        if (chain_opt->rpc_url.empty()) {
+            throw std::runtime_error("chain " + chain_key + " has no rpc_url configured");
+        }
+        return tigerex::market_data::evm_gas_price(chain_opt->rpc_url);
     }
     
     // Get TGR token address
@@ -535,9 +529,8 @@ public:
      * Supports unlimited token addition
      */
     bool add_token(const std::string& address, const std::string& symbol, const std::string& name,
-                   uint8_t decimals, TokenStandard standard, uint64_t supply, double price_usd = 0.0) {
-        std::unique_lock lock(mutex_);
-        
+                   uint8_t decimals, TokenStandard standard, Amount supply,
+                   double price_usd = 0.0) {
         TokenInfo token;
         token.address = address;
         token.symbol = symbol;
@@ -545,15 +538,12 @@ public:
         token.decimals = decimals;
         token.standard = standard;
         token.total_supply = supply;
+        // A supplied price is an operator input, not a discovered one; it is
+        // kept only when the caller explicitly passes one.
         token.price_usd = price_usd;
         token.is_verified = true;
         token.is_trading_enabled = true;
-        
-        tokens_[symbol] = token;
-        tokens_[address] = token;
-        total_tokens_.fetch_add(1);
-        
-        return true;
+        return add_token(token);
     }
     
     /**
@@ -679,16 +669,17 @@ struct LiquidityPool {
     std::string pool_id;
     std::string token_a;
     std::string token_b;
-    uint64_t reserve_a;
-    uint64_t reserve_b;
+    Amount reserve_a;
+    Amount reserve_b;
     double fee_rate;
     double apy;
     std::string pool_type;  // "volatile" or "stable"
-    uint64_t liquidity;
-    uint64_t volume_24h;
+    Amount liquidity;
+    Amount volume_24h;
     double tvl;
     
-    LiquidityPool() : fee_rate(0.003), apy(0), liquidity(0), volume_24h(0), tvl(0) {}
+    LiquidityPool()
+        : reserve_a(0), reserve_b(0), fee_rate(0.003), apy(0), liquidity(0), volume_24h(0), tvl(0) {}
 };
 
 // Farm staking
@@ -696,8 +687,8 @@ struct FarmStaking {
     std::string farm_id;
     std::string pool_id;
     std::string reward_token;
-    uint64_t reward_rate;
-    uint64_t total_staked;
+    Amount reward_rate;
+    Amount total_staked;
     double apy;
     uint64_t lock_period;
     uint64_t start_time;
@@ -709,8 +700,8 @@ struct FarmStaking {
 
 // Swap quote
 struct SwapQuote {
-    uint64_t amount_in;
-    uint64_t amount_out;
+    Amount amount_in;
+    Amount amount_out;
     double price_impact;
     double execution_price;
     uint64_t gas_fee;
@@ -737,113 +728,145 @@ public:
         initialize_default_pools();
     }
     
+    /**
+     * Load liquidity pools and farms from `dex.json` in TIGEREX_CONFIG_DIR.
+     *
+     * A pool's reserves are real state: they exist because liquidity was
+     * deposited. With no configuration file the DEX therefore starts empty and
+     * pools appear only through add_liquidity(), instead of pre-seeded reserves
+     * that no one ever deposited.
+     */
     void initialize_default_pools() {
-        // TGR/USDT pool
-        LiquidityPool tgr_usdt;
-        tgr_usdt.pool_id = "pool_0";
-        tgr_usdt.token_a = "0xTGR";
-        tgr_usdt.token_b = "0xUSDT";
-        tgr_usdt.reserve_a = 1000000 * 1e18;
-        tgr_usdt.reserve_b = 500000 * 1e6;
-        tgr_usdt.fee_rate = 0.003;
-        tgr_usdt.pool_type = "volatile";
-        tgr_usdt.tvl = 500000;
-        pools_[tgr_usdt.pool_id] = tgr_usdt;
-        
-        // RUSD/USDT pool
-        LiquidityPool rusd_usdt;
-        rusd_usdt.pool_id = "pool_1";
-        rusd_usdt.token_a = "0xRUSD";
-        rusd_usdt.token_b = "0xUSDT";
-        rusd_usdt.reserve_a = 1000000 * 1e6;
-        rusd_usdt.reserve_b = 1000000 * 1e6;
-        rusd_usdt.fee_rate = 0.001;
-        rusd_usdt.pool_type = "stable";
-        rusd_usdt.tvl = 1000000;
-        pools_[rusd_usdt.pool_id] = rusd_usdt;
-        
-        // TGR/RUSD pool
-        LiquidityPool tgr_rusd;
-        tgr_rusd.pool_id = "pool_2";
-        tgr_rusd.token_a = "0xTGR";
-        tgr_rusd.token_b = "0xRUSD";
-        tgr_rusd.reserve_a = 500000 * 1e18;
-        tgr_rusd.reserve_b = 250000 * 1e6;
-        tgr_rusd.fee_rate = 0.003;
-        tgr_rusd.pool_type = "volatile";
-        tgr_rusd.tvl = 250000;
-        pools_[tgr_rusd.pool_id] = tgr_rusd;
-        
-        // TGR/ETH pool
-        LiquidityPool tgr_eth;
-        tgr_eth.pool_id = "pool_3";
-        tgr_eth.token_a = "0xTGR";
-        tgr_eth.token_b = "0xETH";
-        tgr_eth.reserve_a = 100000 * 1e18;
-        tgr_eth.reserve_b = 50 * 1e18;
-        tgr_eth.fee_rate = 0.003;
-        tgr_eth.pool_type = "volatile";
-        tgr_eth.tvl = 100000;
-        pools_[tgr_eth.pool_id] = tgr_eth;
-        
-        // Initialize farms
-        FarmStaking tgr_farm;
-        tgr_farm.farm_id = "farm_0";
-        tgr_farm.pool_id = "pool_0";
-        tgr_farm.reward_token = "0xTGR";
-        tgr_farm.reward_rate = 1000 * 1e18;  // Daily reward
-        tgr_farm.apy = 0.25;  // 25% APY
-        tgr_farm.start_time = std::chrono::system_clock::now().time_since_epoch().count();
-        tgr_farm.end_time = tgr_farm.start_time + 365 * 24 * 60 * 60 * 1000;
-        farms_[tgr_farm.farm_id] = tgr_farm;
-        
-        // Build token-pool mapping
-        for (const auto& [pool_id, pool] : pools_) {
-            token_pools_[pool.token_a].push_back(pool_id);
-            token_pools_[pool.token_b].push_back(pool_id);
+        const char* dir = std::getenv("TIGEREX_CONFIG_DIR");
+        std::string base = (dir != nullptr && *dir != '\0') ? std::string(dir) : std::string(".");
+        std::ifstream file(base + "/dex.json");
+        if (!file.is_open()) {
+            return;
+        }
+
+        nlohmann::json config;
+        try {
+            file >> config;
+        } catch (const std::exception& e) {
+            throw std::runtime_error("dex.json is not valid JSON: " + std::string(e.what()));
+        }
+
+        if (config.contains("pools") && config["pools"].is_array()) {
+            for (const auto& entry : config["pools"]) {
+                std::string pool_id = entry.value("pool_id", "");
+                std::string token_a = entry.value("token_a", "");
+                std::string token_b = entry.value("token_b", "");
+                Amount reserve_a = amount_field(entry, "reserve_a", 0);
+                Amount reserve_b = amount_field(entry, "reserve_b", 0);
+                if (pool_id.empty() || token_a.empty() || token_b.empty()) {
+                    throw std::runtime_error("every pool needs a pool_id, token_a and token_b");
+                }
+                if (reserve_a == 0 || reserve_b == 0) {
+                    throw std::runtime_error("pool " + pool_id + " has a zero reserve");
+                }
+                LiquidityPool pool;
+                pool.pool_id = pool_id;
+                pool.token_a = token_a;
+                pool.token_b = token_b;
+                pool.reserve_a = reserve_a;
+                pool.reserve_b = reserve_b;
+                pool.fee_rate = entry.value("fee_rate", 0.003);
+                pool.pool_type = entry.value("pool_type", "volatile");
+                // TVL is a display value; the reserves themselves stay exact.
+                pool.tvl = static_cast<double>(reserve_a + reserve_b);
+                pools_[pool_id] = pool;
+                token_pools_[token_a].push_back(pool_id);
+                token_pools_[token_b].push_back(pool_id);
+            }
+        }
+
+        if (config.contains("farms") && config["farms"].is_array()) {
+            for (const auto& entry : config["farms"]) {
+                FarmStaking farm;
+                farm.farm_id = entry.value("farm_id", "");
+                farm.pool_id = entry.value("pool_id", "");
+                farm.reward_token = entry.value("reward_token", "");
+                farm.reward_rate = amount_field(entry, "reward_rate", 0);
+                farm.apy = entry.value("apy", 0.0);
+                farm.start_time = tigerex::market_data::json_uint64_field(entry, "start_time", 0);
+                farm.end_time = tigerex::market_data::json_uint64_field(entry, "end_time", 0);
+                if (farm.farm_id.empty() || pools_.find(farm.pool_id) == pools_.end()) {
+                    throw std::runtime_error("farm " + farm.farm_id + " references an unknown pool");
+                }
+                farms_[farm.farm_id] = farm;
+            }
         }
     }
+
     
     // Get quote
-    SwapQuote get_quote(const std::string& token_in, const std::string& token_out, uint64_t amount_in) {
+    // Constant-product quote. Throws when the pair has no pool or the input is
+    // not a positive amount, so a caller can never mistake an empty quote for a
+    // priced one.
+    SwapQuote get_quote(const std::string& token_in, const std::string& token_out, Amount amount_in) {
+        if (amount_in == 0) {
+            throw std::invalid_argument("quote amount must be greater than zero");
+        }
+        if (token_in == token_out) {
+            throw std::invalid_argument("cannot quote a swap of a token for itself");
+        }
+
+        std::shared_lock lock(mutex_);
+
         SwapQuote quote;
         quote.amount_in = amount_in;
-        
-        // Find pool
+
         auto pools_it = token_pools_.find(token_in);
         if (pools_it == token_pools_.end()) {
-            return quote;
+            throw std::runtime_error("no pool trades " + token_in);
         }
-        
+
         for (const auto& pool_id : pools_it->second) {
             auto pool_it = pools_.find(pool_id);
             if (pool_it == pools_.end()) continue;
-            
+
             const auto& pool = pool_it->second;
             if (pool.token_b == token_out || pool.token_a == token_out) {
-                uint64_t reserve_in = (pool.token_a == token_in) ? pool.reserve_a : pool.reserve_b;
-                uint64_t reserve_out = (pool.token_a == token_out) ? pool.reserve_a : pool.reserve_b;
-                
-                // Calculate with fee
-                uint64_t amount_in_with_fee = amount_in * 997 / 1000;
-                uint64_t amount_out = amount_in_with_fee * reserve_out / (reserve_in * 1000 + amount_in_with_fee);
-                
+                Amount reserve_in = (pool.token_a == token_in) ? pool.reserve_a : pool.reserve_b;
+                Amount reserve_out = (pool.token_a == token_out) ? pool.reserve_a : pool.reserve_b;
+                if (reserve_in == 0 || reserve_out == 0) {
+                    throw std::runtime_error("pool " + pool_id + " has an empty reserve");
+                }
+
+                // x * y = k. fee_rate is a fraction, so the fee is applied in
+                // basis points to keep the amount exact: fee is floor(amount_in * fee_bps / 10000).
+                Amount fee_bps = static_cast<Amount>(pool.fee_rate * 10000.0 + 0.5);
+                Amount amount_in_with_fee = amount_in - (amount_in * fee_bps / 10000);
+                Amount denominator = reserve_in + amount_in_with_fee;
+                Amount amount_out = amount_in_with_fee * reserve_out / denominator;
+                if (amount_out == 0) {
+                    throw std::runtime_error("quote for " + token_in + " -> " + token_out + " rounds to zero");
+                }
+
                 quote.amount_out = amount_out;
                 quote.pool_id = pool_id;
-                quote.price_impact = static_cast<double>(amount_in) / static_cast<double>(reserve_in + amount_in);
-                quote.execution_price = static_cast<double>(amount_out) / static_cast<double>(amount_in);
-                quote.gas_fee = 150000 * 20e9;  // 150k gas * 20 gwei
+                quote.price_impact = static_cast<double>(amount_in_with_fee) /
+                                     static_cast<double>(denominator);
+                quote.execution_price = static_cast<double>(amount_out) /
+                                        static_cast<double>(amount_in);
+                // Gas is chain- and time-dependent; the caller fills this from
+                // get_gas_price() once the target chain is known.
+                quote.gas_fee = 0;
                 quote.path = {token_in, token_out};
-                
-                break;
+
+                return quote;
             }
         }
-        
-        return quote;
+
+        throw std::runtime_error("no pool trades the pair " + token_in + "/" + token_out);
     }
+
     
     // Add liquidity
-    bool add_liquidity(const std::string& token_a, const std::string& token_b, uint64_t amount_a, uint64_t amount_b) {
+    bool add_liquidity(const std::string& token_a, const std::string& token_b, Amount amount_a, Amount amount_b) {
+        if (amount_a == 0 || amount_b == 0) {
+            throw std::invalid_argument("liquidity amounts must both be greater than zero");
+        }
         std::unique_lock lock(mutex_);
         
         // Find existing pool or create new
@@ -853,9 +876,9 @@ public:
                 
                 pool.reserve_a += amount_a;
                 pool.reserve_b += amount_b;
-                pool.tvl += (amount_a + amount_b);
+                pool.tvl = static_cast<double>(pool.reserve_a + pool.reserve_b);
                 
-                total_fees_collected_.fetch_add(amount_a * pool.fee_rate + amount_b * pool.fee_rate);
+                // Depositing liquidity is not a trade: no fee is charged here.
                 return true;
             }
         }
@@ -869,7 +892,7 @@ public:
         new_pool.reserve_a = amount_a;
         new_pool.reserve_b = amount_b;
         new_pool.fee_rate = 0.003;
-        new_pool.tvl = amount_a + amount_b;
+        new_pool.tvl = static_cast<double>(amount_a + amount_b);
         
         pools_[pool_id] = new_pool;
         token_pools_[token_a].push_back(pool_id);
@@ -1108,7 +1131,9 @@ public:
 // Wallet account
 struct WalletAccount {
     std::string address;
-    std::string public_key;
+    std::string user_id;
+    std::string public_key;              // uncompressed, hex
+    std::string public_key_compressed;   // compressed, hex
     std::string name;
     std::vector<std::string> chains;
     double total_balance_usd;
@@ -1147,8 +1172,9 @@ struct WalletTransaction {
     uint64_t nonce;
     uint64_t timestamp;
     std::string status;
+    uint64_t confirmations;
     
-    WalletTransaction() : amount(0), gas_price(0), gas_limit(0), nonce(0), timestamp(0) {}
+    WalletTransaction() : amount(0), gas_price(0), gas_limit(0), nonce(0), timestamp(0), confirmations(0) {}
 };
 
 // TigerWallet
@@ -1157,7 +1183,7 @@ private:
     std::unordered_map<std::string, WalletAccount> accounts_;
     std::unordered_map<std::string, std::vector<WalletBalance>> balances_;
     std::unordered_map<std::string, std::vector<WalletTransaction>> transactions_;
-    std::atomic<uint64_t> next_wallet_id_{1};
+    std::unordered_map<std::string, std::string> key_material_;
     mutable std::shared_mutex mutex_;
     
     // Supported chains
@@ -1171,33 +1197,48 @@ public:
     }
     
     void initialize_default_wallets() {
-        // Default wallet for platform
+        // The platform wallet is derived from a freshly generated key pair, so
+        // its address is a real checksummed EVM address rather than a label.
         WalletAccount platform_wallet;
-        platform_wallet.address = "0xTigerWallet00000000000000000000000000";
+        // The platform wallet belongs to the exchange itself, not to a user.
+        platform_wallet.user_id = "tigerex-platform";
         platform_wallet.name = "TigerEx Platform";
         platform_wallet.chains = supported_chains_;
         platform_wallet.created_at = std::chrono::system_clock::now().time_since_epoch().count();
-        accounts_[platform_wallet.address] = platform_wallet;
+        register_wallet(platform_wallet);
+    }
+
+    /// Derive address and public keys for `wallet`, store the key material and
+    /// return the address.
+    std::string register_wallet(WalletAccount& wallet) {
+        crypto::KeyPair kp = crypto::generate_secp256k1_keypair();
+        wallet.public_key = crypto::to_hex(kp.public_key_uncompressed);
+        wallet.public_key_compressed = crypto::to_hex(kp.public_key_compressed);
+        wallet.address = crypto::evm_address_from_public_key(kp.public_key_uncompressed);
+        accounts_[wallet.address] = wallet;
+        // A hardware wallet's key never leaves the device, so this process keeps
+        // no copy of it and cannot sign on the device's behalf.
+        if (!wallet.is_hardware_wallet) {
+            key_material_[wallet.address] = kp.private_key_hex;
+        }
+        return wallet.address;
     }
     
     // Create wallet
-    std::string create_wallet(const std::string& name, bool is_hardware = false) {
+    // Create a wallet owned by `user_id`. The owner is recorded so that
+    // get_user_wallets() can return exactly that user's wallets.
+    std::string create_wallet(const std::string& user_id, const std::string& name,
+                              bool is_hardware = false) {
         std::unique_lock lock(mutex_);
-        
-        std::string address = "0x" + generate_address();
-        std::string public_key = "0x04" + generate_public_key();
-        
+
         WalletAccount wallet;
-        wallet.address = address;
-        wallet.public_key = public_key;
+        wallet.user_id = user_id;
         wallet.name = name;
         wallet.chains = supported_chains_;
         wallet.created_at = std::chrono::system_clock::now().time_since_epoch().count();
         wallet.is_hardware_wallet = is_hardware;
-        
-        accounts_[address] = wallet;
-        
-        return address;
+
+        return register_wallet(wallet);
     }
     
     // Get wallet
@@ -1214,10 +1255,12 @@ public:
     // Get all wallets for user
     std::vector<WalletAccount> get_user_wallets(const std::string& user_id) const {
         std::shared_lock lock(mutex_);
-        
+
         std::vector<WalletAccount> result;
         for (const auto& [addr, wallet] : accounts_) {
-            result.push_back(wallet);
+            if (wallet.user_id == user_id) {
+                result.push_back(wallet);
+            }
         }
         return result;
     }
@@ -1247,21 +1290,29 @@ public:
         balances_[address].push_back(balance);
     }
     
-    // Send transaction
-    std::string send_transaction(const WalletTransaction& tx) {
+    // Record a transaction the network has already accepted.
+    //
+    // This class holds no node connection: it cannot broadcast, and it cannot
+    // observe confirmations. Marking a locally-built transaction "confirmed"
+    // would fabricate state, so the caller supplies the on-chain hash and the
+    // status the network reported. A "confirmed" status is only accepted with a
+    // hash and at least one confirmation.
+    std::string record_transaction(const WalletTransaction& tx) {
         std::unique_lock lock(mutex_);
-        
-        std::string hash = "0x" + generate_hash();
-        
+
+        if (tx.hash.empty()) {
+            throw std::invalid_argument("transaction hash is required: this wallet does not broadcast");
+        }
+        if (tx.status == "confirmed" && tx.confirmations == 0) {
+            throw std::invalid_argument("a confirmed transaction must carry at least one confirmation");
+        }
+
         WalletTransaction new_tx = tx;
-        new_tx.hash = hash;
         new_tx.timestamp = std::chrono::system_clock::now().time_since_epoch().count();
-        new_tx.status = "confirmed";
-        
         transactions_[tx.from].push_back(new_tx);
-        
-        return hash;
+        return tx.hash;
     }
+
     
     // Get transaction history
     std::vector<WalletTransaction> get_transactions(const std::string& address, uint32_t limit = 50) const {
@@ -1280,17 +1331,37 @@ public:
         return std::vector<WalletTransaction>(txs.end() - limit, txs.end());
     }
     
-    // Sign message
+    // Sign a message with the wallet's own key. Returns an empty string when
+    // the wallet is unknown or is a hardware wallet, whose key never leaves
+    // the device and so cannot be used by this process.
     std::string sign_message(const std::string& address, const std::string& message) {
-        // Would sign using private key (not stored for security)
-        // Return mock signature for demo
-        return "0xSignature" + message.substr(0, 32);
+        std::shared_lock lock(mutex_);
+        
+        auto acct = accounts_.find(address);
+        if (acct == accounts_.end() || acct->second.is_hardware_wallet) {
+            return {};
+        }
+        auto key = key_material_.find(address);
+        if (key == key_material_.end()) {
+            return {};
+        }
+        try {
+            return crypto::sign_message_secp256k1(key->second, message);
+        } catch (const std::exception&) {
+            return {};
+        }
     }
     
-    // Verify signature
+    // Verify a signature against the stored public key of `address`.
     bool verify_signature(const std::string& address, const std::string& message, const std::string& signature) {
-        // Would verify using public key
-        return true;
+        std::shared_lock lock(mutex_);
+        
+        auto acct = accounts_.find(address);
+        if (acct == accounts_.end()) {
+            return false;
+        }
+        auto pub = crypto::from_hex(acct->second.public_key);
+        return crypto::verify_message_secp256k1(pub, message, signature);
     }
     
     // Get supported chains
@@ -1304,17 +1375,15 @@ public:
     }
     
 private:
-    std::string generate_address() {
-        // Would generate real address
-        return "Tiger" + std::to_string(next_wallet_id_.fetch_add(1));
-    }
-    
-    std::string generate_public_key() {
-        return std::string(128, '0');
-    }
-    
-    std::string generate_hash() {
-        return std::string(64, '0');
+    /// keccak256 over the canonical transaction fields, so a hash is
+    /// reproducible from the transaction instead of being a constant.
+    static std::string transaction_hash(const WalletTransaction& tx) {
+        std::ostringstream oss;
+        oss << tx.from << '|' << tx.to << '|' << tx.value << '|' << tx.data << '|'
+            << tx.token_address << '|' << tx.amount << '|' << tx.gas_price << '|'
+            << tx.gas_limit << '|' << tx.chain_id << '|' << tx.nonce;
+        auto digest = crypto::keccak256(oss.str());
+        return crypto::to_hex(digest.data(), digest.size());
     }
 };
 
@@ -1387,16 +1456,20 @@ public:
     
     // === TigerWallet Integration ===
     
-    std::string create_wallet(const std::string& name) {
-        return wallet_->create_wallet(name);
+    std::string create_wallet(const std::string& user_id, const std::string& name) {
+        return wallet_->create_wallet(user_id, name);
+    }
+
+    std::vector<WalletAccount> get_user_wallets(const std::string& user_id) const {
+        return wallet_->get_user_wallets(user_id);
     }
     
     std::vector<WalletBalance> get_wallet_balance(const std::string& address) const {
         return wallet_->get_balance(address);
     }
     
-    std::string send_wallet_transaction(const WalletTransaction& tx) {
-        return wallet_->send_transaction(tx);
+    std::string record_wallet_transaction(const WalletTransaction& tx) {
+        return wallet_->record_transaction(tx);
     }
     
     std::vector<WalletTransaction> get_wallet_transactions(const std::string& address, uint32_t limit = 50) const {
@@ -1412,7 +1485,7 @@ public:
         total += exchange_fees_.load();
         
         // DEX fees
-        total += tigerswap_->get_total_fees();
+        total += dex_fees_.load();
         
         // Bridge fees
         total += bridge_fees_.load();
@@ -1428,7 +1501,7 @@ public:
     }
     
     uint64_t get_dex_fees() const {
-        return tigerswap_->get_total_fees();
+        return dex_fees_.load();
     }
     
     uint64_t get_bridge_fees() const {
@@ -1449,6 +1522,10 @@ public:
     
     void add_wallet_fee(uint64_t fee) {
         wallet_fees_.fetch_add(fee);
+    }
+
+    void add_dex_fee(uint64_t fee) {
+        dex_fees_.fetch_add(fee);
     }
     
     // === Cross-Product Integration ===
@@ -1502,11 +1579,10 @@ public:
             }
         }
         
-        if (!best_token.empty()) {
-            return get_swap_quote(best_token, to_token, amount);
+        if (best_token.empty()) {
+            throw std::runtime_error("wallet " + wallet_address + " holds no balance to swap");
         }
-        
-        return {};
+        return get_swap_quote(best_token, to_token, amount);
     }
     
     // SmartChain + Wallet: Get cross-chain balance

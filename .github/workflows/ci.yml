@@ -73,7 +73,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install C++ build dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libssl-dev
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build libssl-dev \
+            libcurl4-openssl-dev nlohmann-json3-dev
 
       - name: Configure matching engine
         run: cmake -S backend/cpp/matching_engine -B build/matching-engine -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -89,6 +91,16 @@ jobs:
 
       - name: Run order book regression tests
         run: ctest --test-dir build/order-book --output-on-failure
+
+      - name: Configure integration layer tests
+        run: |
+          cmake -S core/integrations -B build/integrations -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compile integration layer
+        run: cmake --build build/integrations --parallel 2
+
+      - name: Run integration layer tests
+        run: ctest --test-dir build/integrations --output-on-failure
 
       - name: Compile and run C++ order-book regression tests
         run: |
