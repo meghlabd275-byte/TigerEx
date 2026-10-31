@@ -1,23 +1,23 @@
-// =============================================================================
-// TIGEREX v3.0 - COMPLETE DATABASE SCHEMA
-// All tables for production exchange
-// =============================================================================
+-- =============================================================================
+-- TIGEREX v3.0 - COMPLETE DATABASE SCHEMA
+-- All tables for production exchange
+-- =============================================================================
 
 -- ============================================================================
-// TIGEREX v3.0 - COMPLETE DATABASE SCHEMA
-// PostgreSQL Schema for Production Exchange
-// ============================================================================
+-- TIGEREX v3.0 - COMPLETE DATABASE SCHEMA
+-- PostgreSQL Schema for Production Exchange
+-- ============================================================================
 
 -- Extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ============================================================================
-// USERS & AUTHENTICATION
+-- USERS & AUTHENTICATION
 -- ============================================================================
 
 -- Users table
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email VARCHAR(255) UNIQUE NOT NULL,
     username VARCHAR(100) UNIQUE NOT NULL,
@@ -55,15 +55,15 @@ CREATE TABLE users (
     deleted_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE INDEX idx_users_email ON users(email);
-CREATE INDEX idx_users_username ON users(username);
-CREATE INDEX idx_users_status ON users(status);
-CREATE INDEX idx_users_kyc_level ON users(kyc_level);
-CREATE INDEX idx_users_referral_code ON users(referral_code);
-CREATE INDEX idx_users_created_at ON users(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+CREATE INDEX IF NOT EXISTS idx_users_kyc_level ON users(kyc_level);
+CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code);
+CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at DESC);
 
 -- User profiles
-CREATE TABLE user_profiles (
+CREATE TABLE IF NOT EXISTS user_profiles (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     first_name VARCHAR(100),
@@ -88,10 +88,10 @@ CREATE TABLE user_profiles (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_user_profiles_user_id ON user_profiles(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);
 
 -- User sessions
-CREATE TABLE user_sessions (
+CREATE TABLE IF NOT EXISTS user_sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     session_token VARCHAR(255) UNIQUE NOT NULL,
@@ -106,12 +106,12 @@ CREATE TABLE user_sessions (
     status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'expired', 'revoked'))
 );
 
-CREATE INDEX idx_user_sessions_user_id ON user_sessions(user_id);
-CREATE INDEX idx_user_sessions_token ON user_sessions(session_token);
-CREATE INDEX idx_user_sessions_expires ON user_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at);
 
 -- Login history
-CREATE TABLE login_history (
+CREATE TABLE IF NOT EXISTS login_history (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     login_timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -122,11 +122,11 @@ CREATE TABLE login_history (
     failure_reason VARCHAR(255)
 );
 
-CREATE INDEX idx_login_history_user_id ON login_history(user_id);
-CREATE INDEX idx_login_history_timestamp ON login_history(login_timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_login_history_user_id ON login_history(user_id);
+CREATE INDEX IF NOT EXISTS idx_login_history_timestamp ON login_history(login_timestamp DESC);
 
 -- API Keys
-CREATE TABLE api_keys (
+CREATE TABLE IF NOT EXISTS api_keys (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     key_id VARCHAR(64) UNIQUE NOT NULL,
@@ -142,15 +142,15 @@ CREATE TABLE api_keys (
     revoked_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE INDEX idx_api_keys_user_id ON api_keys(user_id);
-CREATE INDEX idx_api_keys_key_id ON api_keys(key_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id);
 
 -- ============================================================================
-// KYC & COMPLIANCE
+-- KYC & COMPLIANCE
 -- ============================================================================
 
 -- KYC Records
-CREATE TABLE kyc_records (
+CREATE TABLE IF NOT EXISTS kyc_records (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     level SMALLINT DEFAULT 0 CHECK (level BETWEEN 0 AND 4),
@@ -213,11 +213,11 @@ CREATE TABLE kyc_records (
     last_verified_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE INDEX idx_kyc_user_id ON kyc_records(user_id);
-CREATE INDEX idx_kyc_status ON kyc_records(status);
+CREATE INDEX IF NOT EXISTS idx_kyc_user_id ON kyc_records(user_id);
+CREATE INDEX IF NOT EXISTS idx_kyc_status ON kyc_records(status);
 
 -- AML Checks
-CREATE TABLE aml_checks (
+CREATE TABLE IF NOT EXISTS aml_checks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     check_type VARCHAR(50),
@@ -232,11 +232,11 @@ CREATE TABLE aml_checks (
     checked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_aml_checks_user_id ON aml_checks(user_id);
-CREATE INDEX idx_aml_checks_checked_at ON aml_checks(checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_aml_checks_user_id ON aml_checks(user_id);
+CREATE INDEX IF NOT EXISTS idx_aml_checks_checked_at ON aml_checks(checked_at DESC);
 
 -- Compliance Alerts
-CREATE TABLE compliance_alerts (
+CREATE TABLE IF NOT EXISTS compliance_alerts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     type VARCHAR(50) NOT NULL,
@@ -252,16 +252,16 @@ CREATE TABLE compliance_alerts (
     resolved_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE INDEX idx_compliance_alerts_user_id ON compliance_alerts(user_id);
-CREATE INDEX idx_compliance_alerts_status ON compliance_alerts(status);
-CREATE INDEX idx_compliance_alerts_created_at ON compliance_alerts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_compliance_alerts_user_id ON compliance_alerts(user_id);
+CREATE INDEX IF NOT EXISTS idx_compliance_alerts_status ON compliance_alerts(status);
+CREATE INDEX IF NOT EXISTS idx_compliance_alerts_created_at ON compliance_alerts(created_at DESC);
 
 -- ============================================================================
-// MARKETS & TRADING PAIRS
+-- MARKETS & TRADING PAIRS
 -- ============================================================================
 
 -- Markets
-CREATE TABLE markets (
+CREATE TABLE IF NOT EXISTS markets (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     symbol VARCHAR(20) UNIQUE NOT NULL,
     base_asset VARCHAR(20) NOT NULL,
@@ -299,11 +299,11 @@ CREATE TABLE markets (
     update_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_markets_symbol ON markets(symbol);
-CREATE INDEX idx_markets_status ON markets(status);
+CREATE INDEX IF NOT EXISTS idx_markets_symbol ON markets(symbol);
+CREATE INDEX IF NOT EXISTS idx_markets_status ON markets(status);
 
 -- Market Ticker (real-time)
-CREATE TABLE market_tickers (
+CREATE TABLE IF NOT EXISTS market_tickers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     market_id UUID NOT NULL REFERENCES markets(id),
     last_price DECIMAL(20, 8) NOT NULL,
@@ -320,15 +320,15 @@ CREATE TABLE market_tickers (
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_tickers_market_id ON market_tickers(market_id);
-CREATE INDEX idx_tickers_timestamp ON market_tickers(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_tickers_market_id ON market_tickers(market_id);
+CREATE INDEX IF NOT EXISTS idx_tickers_timestamp ON market_tickers(timestamp DESC);
 
 -- ============================================================================
-// ORDERS & TRADES
+-- ORDERS & TRADES
 -- ============================================================================
 
 -- Orders
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     order_id VARCHAR(50) UNIQUE NOT NULL,
     user_id UUID NOT NULL REFERENCES users(id),
@@ -385,15 +385,15 @@ CREATE TABLE orders (
     expired_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE INDEX idx_orders_user_id ON orders(user_id);
-CREATE INDEX idx_orders_market_id ON orders(market_id);
-CREATE INDEX idx_orders_status ON orders(status);
-CREATE INDEX idx_orders_created_at ON orders(created_at DESC);
-CREATE INDEX idx_orders_user_market ON orders(user_id, market_id);
-CREATE INDEX idx_orders_client_order_id ON orders(client_order_id);
+CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_orders_market_id ON orders(market_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_user_market ON orders(user_id, market_id);
+CREATE INDEX IF NOT EXISTS idx_orders_client_order_id ON orders(client_order_id);
 
 -- Trades
-CREATE TABLE trades (
+CREATE TABLE IF NOT EXISTS trades (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     trade_id VARCHAR(50) UNIQUE NOT NULL,
     order_id UUID NOT NULL REFERENCES orders(id),
@@ -426,18 +426,18 @@ CREATE TABLE trades (
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_trades_order_id ON trades(order_id);
-CREATE INDEX idx_trades_market_id ON trades(market_id);
-CREATE INDEX idx_trades_taker_user_id ON trades(taker_user_id);
-CREATE INDEX idx_trades_maker_user_id ON trades(maker_user_id);
-CREATE INDEX idx_trades_timestamp ON trades(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_order_id ON trades(order_id);
+CREATE INDEX IF NOT EXISTS idx_trades_market_id ON trades(market_id);
+CREATE INDEX IF NOT EXISTS idx_trades_taker_user_id ON trades(taker_user_id);
+CREATE INDEX IF NOT EXISTS idx_trades_maker_user_id ON trades(maker_user_id);
+CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp DESC);
 
 -- ============================================================================
-// POSITIONS (Margin/Futures)
-// ============================================================================
+-- POSITIONS (Margin/Futures)
+-- ============================================================================
 
 -- Margin Positions
-CREATE TABLE margin_positions (
+CREATE TABLE IF NOT EXISTS margin_positions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     position_id VARCHAR(50) UNIQUE NOT NULL,
     user_id UUID NOT NULL REFERENCES users(id),
@@ -468,52 +468,16 @@ CREATE TABLE margin_positions (
     closed_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE INDEX idx_margin_positions_user_id ON margin_positions(user_id);
-CREATE INDEX idx_margin_positions_market_id ON margin_positions(market_id);
-CREATE INDEX idx_margin_positions_status ON margin_positions(size);
-
--- Futures Positions
-CREATE TABLE futures_positions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    position_id VARCHAR(50) UNIQUE NOT NULL,
-    user_id UUID NOT NULL REFERENCES users(id),
-    contract_symbol VARCHAR(20) NOT NULL,
-    
-    side VARCHAR(10) CHECK (side IN ('long', 'short')),
-    size DECIMAL(20, 8) DEFAULT 0,
-    entry_price DECIMAL(20, 8) DEFAULT 0,
-    margin DECIMAL(20, 8) DEFAULT 0,
-    isolated_margin DECIMAL(20, 8) DEFAULT 0,
-    
-    leverage DECIMAL(5, 2) DEFAULT 1,
-    liquidation_price DECIMAL(20, 8),
-    mark_price DECIMAL(20, 8),
-    index_price DECIMAL(20, 8),
-    fair_price DECIMAL(20, 8),
-    
-    unrealized_pnl DECIMAL(20, 8) DEFAULT 0,
-    realized_pnl DECIMAL(20, 8) DEFAULT 0,
-    funding_fee DECIMAL(20, 8) DEFAULT 0,
-    
-    stop_loss_price DECIMAL(20, 8),
-    take_profit_price DECIMAL(20, 8),
-    
-    position_mode VARCHAR(20) DEFAULT 'cross',
-    
-    opened_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    closed_at TIMESTAMP WITH TIME ZONE
-);
-
-CREATE INDEX idx_futures_positions_user_id ON futures_positions(user_id);
-CREATE INDEX idx_futures_positions_symbol ON futures_positions(contract_symbol);
+CREATE INDEX IF NOT EXISTS idx_margin_positions_user_id ON margin_positions(user_id);
+CREATE INDEX IF NOT EXISTS idx_margin_positions_market_id ON margin_positions(market_id);
+CREATE INDEX IF NOT EXISTS idx_margin_positions_status ON margin_positions(size);
 
 -- ============================================================================
-// WALLETS & TRANSACTIONS
-// ============================================================================
+-- WALLETS & TRANSACTIONS
+-- ============================================================================
 
 -- Wallets
-CREATE TABLE wallets (
+CREATE TABLE IF NOT EXISTS wallets (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id),
     currency VARCHAR(20) NOT NULL,
@@ -536,78 +500,11 @@ CREATE TABLE wallets (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX idx_wallets_user_currency ON wallets(user_id, currency, chain);
-CREATE INDEX idx_wallets_user_id ON wallets(user_id);
-
--- Deposits
-CREATE TABLE deposits (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    deposit_id VARCHAR(50) UNIQUE NOT NULL,
-    user_id UUID NOT NULL REFERENCES users(id),
-    wallet_id UUID NOT NULL REFERENCES wallets(id),
-    currency VARCHAR(20) NOT NULL,
-    chain VARCHAR(50),
-    
-    amount DECIMAL(20, 8) NOT NULL,
-    fee DECIMAL(20, 8) DEFAULT 0,
-    net_amount DECIMAL(20, 8) NOT NULL,
-    
-    from_address TEXT,
-    to_address TEXT,
-    tx_hash VARCHAR(255),
-    
-    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'confirming', 'completed', 'failed', 'canceled')),
-    confirmations INT DEFAULT 0,
-    required_confirmations INT DEFAULT 3,
-    
-    provider VARCHAR(50),
-    provider_ref VARCHAR(255),
-    
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMP WITH TIME ZONE
-);
-
-CREATE INDEX idx_deposits_user_id ON deposits(user_id);
-CREATE INDEX idx_deposits_tx_hash ON deposits(tx_hash);
-CREATE INDEX idx_deposits_status ON deposits(status);
-CREATE INDEX idx_deposits_created_at ON deposits(created_at DESC);
-
--- Withdrawals
-CREATE TABLE withdrawals (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    withdrawal_id VARCHAR(50) UNIQUE NOT NULL,
-    user_id UUID NOT NULL REFERENCES users(id),
-    wallet_id UUID NOT NULL REFERENCES wallets(id),
-    currency VARCHAR(20) NOT NULL,
-    chain VARCHAR(50),
-    
-    amount DECIMAL(20, 8) NOT NULL,
-    fee DECIMAL(20, 8) DEFAULT 0,
-    network_fee DECIMAL(20, 8) DEFAULT 0,
-    net_amount DECIMAL(20, 8) NOT NULL,
-    
-    to_address TEXT NOT NULL,
-    memo TEXT,
-    
-    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'canceled')),
-    
-    provider VARCHAR(50),
-    provider_ref VARCHAR(255),
-    tx_hash VARCHAR(255),
-    
-    two_factor_verified BOOLEAN DEFAULT FALSE,
-    
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMP WITH TIME ZONE
-);
-
-CREATE INDEX idx_withdrawals_user_id ON withdrawals(user_id);
-CREATE INDEX idx_withdrawals_status ON withdrawals(status);
-CREATE INDEX idx_withdrawals_created_at ON withdrawals(created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wallets_user_currency ON wallets(user_id, currency, chain);
+CREATE INDEX IF NOT EXISTS idx_wallets_user_id ON wallets(user_id);
 
 -- Internal Transfers
-CREATE TABLE internal_transfers (
+CREATE TABLE IF NOT EXISTS internal_transfers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     transfer_id VARCHAR(50) UNIQUE NOT NULL,
     from_user_id UUID NOT NULL REFERENCES users(id),
@@ -621,15 +518,15 @@ CREATE TABLE internal_transfers (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_internal_transfers_from_user ON internal_transfers(from_user_id);
-CREATE INDEX idx_internal_transfers_to_user ON internal_transfers(to_user_id);
+CREATE INDEX IF NOT EXISTS idx_internal_transfers_from_user ON internal_transfers(from_user_id);
+CREATE INDEX IF NOT EXISTS idx_internal_transfers_to_user ON internal_transfers(to_user_id);
 
 -- ============================================================================
-// EARN PRODUCTS
+-- EARN PRODUCTS
 -- ============================================================================
 
 -- Earn Products
-CREATE TABLE earn_products (
+CREATE TABLE IF NOT EXISTS earn_products (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     product_id VARCHAR(50) UNIQUE NOT NULL,
     name VARCHAR(100) NOT NULL,
@@ -665,12 +562,12 @@ CREATE TABLE earn_products (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_earn_products_type ON earn_products(type);
-CREATE INDEX idx_earn_products_status ON earn_products(status);
-CREATE INDEX idx_earn_products_currency ON earn_products(currency);
+CREATE INDEX IF NOT EXISTS idx_earn_products_type ON earn_products(type);
+CREATE INDEX IF NOT EXISTS idx_earn_products_status ON earn_products(status);
+CREATE INDEX IF NOT EXISTS idx_earn_products_currency ON earn_products(currency);
 
 -- Earn Subscriptions
-CREATE TABLE earn_subscriptions (
+CREATE TABLE IF NOT EXISTS earn_subscriptions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     subscription_id VARCHAR(50) UNIQUE NOT NULL,
     user_id UUID NOT NULL REFERENCES users(id),
@@ -697,16 +594,16 @@ CREATE TABLE earn_subscriptions (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_earn_subscriptions_user_id ON earn_subscriptions(user_id);
-CREATE INDEX idx_earn_subscriptions_product_id ON earn_subscriptions(product_id);
-CREATE INDEX idx_earn_subscriptions_status ON earn_subscriptions(status);
+CREATE INDEX IF NOT EXISTS idx_earn_subscriptions_user_id ON earn_subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_earn_subscriptions_product_id ON earn_subscriptions(product_id);
+CREATE INDEX IF NOT EXISTS idx_earn_subscriptions_status ON earn_subscriptions(status);
 
 -- ============================================================================
-// P2P TRADING
-// ============================================================================
+-- P2P TRADING
+-- ============================================================================
 
 -- P2P Offers
-CREATE TABLE p2p_offers (
+CREATE TABLE IF NOT EXISTS p2p_offers (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     offer_id VARCHAR(50) UNIQUE NOT NULL,
     user_id UUID NOT NULL REFERENCES users(id),
@@ -726,12 +623,12 @@ CREATE TABLE p2p_offers (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_p2p_offers_user_id ON p2p_offers(user_id);
-CREATE INDEX idx_p2p_offers_status ON p2p_offers(status);
-CREATE INDEX idx_p2p_offers_currency ON p2p_offers(currency);
+CREATE INDEX IF NOT EXISTS idx_p2p_offers_user_id ON p2p_offers(user_id);
+CREATE INDEX IF NOT EXISTS idx_p2p_offers_status ON p2p_offers(status);
+CREATE INDEX IF NOT EXISTS idx_p2p_offers_currency ON p2p_offers(currency);
 
 -- P2P Trades
-CREATE TABLE p2p_trades (
+CREATE TABLE IF NOT EXISTS p2p_trades (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     trade_id VARCHAR(50) UNIQUE NOT NULL,
     offer_id UUID NOT NULL REFERENCES p2p_offers(id),
@@ -756,17 +653,17 @@ CREATE TABLE p2p_trades (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_p2p_trades_offer_id ON p2p_trades(offer_id);
-CREATE INDEX idx_p2p_trades_buyer_id ON p2p_trades(buyer_id);
-CREATE INDEX idx_p2p_trades_seller_id ON p2p_trades(seller_id);
-CREATE INDEX idx_p2p_trades_status ON p2p_trades(status);
+CREATE INDEX IF NOT EXISTS idx_p2p_trades_offer_id ON p2p_trades(offer_id);
+CREATE INDEX IF NOT EXISTS idx_p2p_trades_buyer_id ON p2p_trades(buyer_id);
+CREATE INDEX IF NOT EXISTS idx_p2p_trades_seller_id ON p2p_trades(seller_id);
+CREATE INDEX IF NOT EXISTS idx_p2p_trades_status ON p2p_trades(status);
 
 -- ============================================================================
-// NOTIFICATIONS
-// ============================================================================
+-- NOTIFICATIONS
+-- ============================================================================
 
 -- Notifications
-CREATE TABLE notifications (
+CREATE TABLE IF NOT EXISTS notifications (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id),
     type VARCHAR(50) NOT NULL,
@@ -784,12 +681,12 @@ CREATE TABLE notifications (
     error TEXT
 );
 
-CREATE INDEX idx_notifications_user_id ON notifications(user_id);
-CREATE INDEX idx_notifications_read ON notifications(user_id, read);
-CREATE INDEX idx_notifications_created_at ON notifications(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(user_id, read);
+CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);
 
 -- Push Tokens
-CREATE TABLE push_tokens (
+CREATE TABLE IF NOT EXISTS push_tokens (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id),
     token TEXT NOT NULL,
@@ -799,15 +696,15 @@ CREATE TABLE push_tokens (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_push_tokens_user_id ON push_tokens(user_id);
-CREATE UNIQUE INDEX idx_push_tokens_token ON push_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_push_tokens_user_id ON push_tokens(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_push_tokens_token ON push_tokens(token);
 
 -- ============================================================================
-// ADMIN & AUDIT
+-- ADMIN & AUDIT
 -- ============================================================================
 
 -- Admin Actions Log
-CREATE TABLE admin_actions (
+CREATE TABLE IF NOT EXISTS admin_actions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     admin_id UUID NOT NULL REFERENCES users(id),
     action VARCHAR(100) NOT NULL,
@@ -818,11 +715,11 @@ CREATE TABLE admin_actions (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_admin_actions_admin_id ON admin_actions(admin_id);
-CREATE INDEX idx_admin_actions_created_at ON admin_actions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_actions_admin_id ON admin_actions(admin_id);
+CREATE INDEX IF NOT EXISTS idx_admin_actions_created_at ON admin_actions(created_at DESC);
 
 -- Audit Log
-CREATE TABLE audit_logs (
+CREATE TABLE IF NOT EXISTS audit_logs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id),
     action VARCHAR(100) NOT NULL,
@@ -834,11 +731,11 @@ CREATE TABLE audit_logs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_audit_logs_user_id ON audit_logs(user_id);
-CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
 
 -- ============================================================================
-// UPDATE TIMESTAMP TRIGGER
+-- UPDATE TIMESTAMP TRIGGER
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -850,42 +747,52 @@ END;
 $$ language 'plpgsql';
 
 -- Apply triggers
+DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_user_profiles_updated_at ON user_profiles;
 CREATE TRIGGER update_user_profiles_updated_at BEFORE UPDATE ON user_profiles
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_orders_updated_at ON orders;
 CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON orders
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_wallets_updated_at ON wallets;
 CREATE TRIGGER update_wallets_updated_at BEFORE UPDATE ON wallets
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_withdrawals_updated_at ON withdrawals;
 CREATE TRIGGER update_withdrawals_updated_at BEFORE UPDATE ON withdrawals
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_margin_positions_updated_at ON margin_positions;
 CREATE TRIGGER update_margin_positions_updated_at BEFORE UPDATE ON margin_positions
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_futures_positions_updated_at ON futures_positions;
 CREATE TRIGGER update_futures_positions_updated_at BEFORE UPDATE ON futures_positions
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_earn_subscriptions_updated_at ON earn_subscriptions;
 CREATE TRIGGER update_earn_subscriptions_updated_at BEFORE UPDATE ON earn_subscriptions
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_p2p_offers_updated_at ON p2p_offers;
 CREATE TRIGGER update_p2p_offers_updated_at BEFORE UPDATE ON p2p_offers
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_p2p_trades_updated_at ON p2p_trades;
 CREATE TRIGGER update_p2p_trades_updated_at BEFORE UPDATE ON p2p_trades
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================================================
-// DEPOSITS & WITHDRAWALS
+-- DEPOSITS & WITHDRAWALS
 -- ============================================================================
 
 -- Deposits
-CREATE TABLE deposits (
+CREATE TABLE IF NOT EXISTS deposits (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     currency VARCHAR(20) NOT NULL,
@@ -898,11 +805,11 @@ CREATE TABLE deposits (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_deposits_user_id ON deposits(user_id);
-CREATE INDEX idx_deposits_txid ON deposits(txid);
+CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_id);
+CREATE INDEX IF NOT EXISTS idx_deposits_txid ON deposits(txid);
 
 -- Withdrawals
-CREATE TABLE withdrawals (
+CREATE TABLE IF NOT EXISTS withdrawals (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     currency VARCHAR(20) NOT NULL,
@@ -916,15 +823,15 @@ CREATE TABLE withdrawals (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_withdrawals_user_id ON withdrawals(user_id);
-CREATE INDEX idx_withdrawals_txid ON withdrawals(txid);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_user_id ON withdrawals(user_id);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_txid ON withdrawals(txid);
 
 -- ============================================================================
-// FUTURES & MARGIN TRADING
+-- FUTURES & MARGIN TRADING
 -- ============================================================================
 
 -- Futures Positions
-CREATE TABLE futures_positions (
+CREATE TABLE IF NOT EXISTS futures_positions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     symbol VARCHAR(20) NOT NULL,
@@ -954,12 +861,12 @@ CREATE TABLE futures_positions (
     closed_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE INDEX idx_futures_positions_user_id ON futures_positions(user_id);
-CREATE INDEX idx_futures_positions_symbol ON futures_positions(symbol);
-CREATE INDEX idx_futures_positions_status ON futures_positions(status);
+CREATE INDEX IF NOT EXISTS idx_futures_positions_user_id ON futures_positions(user_id);
+CREATE INDEX IF NOT EXISTS idx_futures_positions_symbol ON futures_positions(symbol);
+CREATE INDEX IF NOT EXISTS idx_futures_positions_status ON futures_positions(status);
 
 -- Margin Accounts
-CREATE TABLE margin_accounts (
+CREATE TABLE IF NOT EXISTS margin_accounts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     currency VARCHAR(20) NOT NULL,
@@ -970,5 +877,5 @@ CREATE TABLE margin_accounts (
     UNIQUE (user_id, currency)
 );
 
-CREATE INDEX idx_margin_accounts_user_id ON margin_accounts(user_id);
-CREATE INDEX idx_margin_accounts_currency ON margin_accounts(currency);
+CREATE INDEX IF NOT EXISTS idx_margin_accounts_user_id ON margin_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_margin_accounts_currency ON margin_accounts(currency);

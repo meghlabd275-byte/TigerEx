@@ -424,7 +424,7 @@ app.post("/api/v1/auth/logout", authenticateRequest, async (req, res) => {
 // Get current user
 app.get("/api/v1/auth/me", authenticateRequest, async (req, res) => {
   try {
-    const user = (await pool.query("SELECT id, email, username, kyc_level, country, created_at FROM users WHERE id = $1", [req.userId])).rows[0];
+    const user = (await pool.query("SELECT id, email, username, kyc_level, jurisdiction AS country, created_at FROM users WHERE id = $1", [req.userId])).rows[0];
     if (!user) {
       return res.status(404).json({ success: false, error: "User not found" });
     }
@@ -488,7 +488,7 @@ app.post("/api/v1/kyc/submit", authenticateRequest, async (req, res) => {
 // Get KYC status
 app.get("/api/v1/kyc/status", authenticateRequest, async (req, res) => {
   try {
-    const kycRecord = (await pool.query("SELECT kyc_level, status FROM kyc_records WHERE user_id = $1", [req.userId])).rows[0];
+    const kycRecord = (await pool.query("SELECT level AS kyc_level, status FROM kyc_records WHERE user_id = $1", [req.userId])).rows[0];
     if (!kycRecord) {
       return res.json({ success: true, data: { kycLevel: 0, kycStatus: "none" } });
     }
@@ -599,7 +599,7 @@ app.post("/api/v1/wallet/withdrawal", authenticateRequest, async (_req, res) => 
 app.get("/api/v1/wallet/balance", authenticateRequest, async (req, res) => {
   try {
     const wallets = (await pool.query(
-      `SELECT currency, balance, locked FROM wallets WHERE user_id = $1`,
+      `SELECT currency, balance, locked_balance AS locked FROM wallets WHERE user_id = $1`,
       [req.userId]
     )).rows;
     res.json({ success: true, data: wallets });
@@ -631,15 +631,16 @@ app.get("/api/v1/ticker/24hr", async (req, res) => {
     if (symbol) {
       const ticker = (await pool.query(
         `SELECT
-          symbol,
-          MAX(price) AS high,
-          MIN(price) AS low,
-          (SELECT price FROM trades WHERE symbol = $1 ORDER BY created_at DESC LIMIT 1) AS last_price,
-          SUM(quantity) AS volume,
-          (SELECT price * quantity FROM trades WHERE symbol = $1 ORDER BY created_at DESC LIMIT 1) AS quote_volume
-        FROM trades
-        WHERE symbol = $1 AND created_at >= NOW() - INTERVAL '24 hours'
-        GROUP BY symbol`,
+          m.symbol,
+          MAX(t.price) AS high,
+          MIN(t.price) AS low,
+          (SELECT t2.price FROM trades t2 WHERE t2.market_id = m.id ORDER BY t2.timestamp DESC LIMIT 1) AS last_price,
+          SUM(t.quantity) AS volume,
+          (SELECT t2.price * t2.quantity FROM trades t2 WHERE t2.market_id = m.id ORDER BY t2.timestamp DESC LIMIT 1) AS quote_volume
+        FROM trades t
+        JOIN markets m ON m.id = t.market_id
+        WHERE m.symbol = $1 AND t.timestamp >= NOW() - INTERVAL '24 hours'
+        GROUP BY m.id, m.symbol`,
         [symbol.toUpperCase()]
       )).rows[0];
 
@@ -651,15 +652,16 @@ app.get("/api/v1/ticker/24hr", async (req, res) => {
     } else {
       const tickers = (await pool.query(
         `SELECT
-          symbol,
-          MAX(price) AS high,
-          MIN(price) AS low,
-          (SELECT price FROM trades WHERE symbol = t.symbol ORDER BY created_at DESC LIMIT 1) AS last_price,
-          SUM(quantity) AS volume,
-          (SELECT price * quantity FROM trades WHERE symbol = t.symbol ORDER BY created_at DESC LIMIT 1) AS quote_volume
+          m.symbol,
+          MAX(t.price) AS high,
+          MIN(t.price) AS low,
+          (SELECT t2.price FROM trades t2 WHERE t2.market_id = m.id ORDER BY t2.timestamp DESC LIMIT 1) AS last_price,
+          SUM(t.quantity) AS volume,
+          (SELECT t2.price * t2.quantity FROM trades t2 WHERE t2.market_id = m.id ORDER BY t2.timestamp DESC LIMIT 1) AS quote_volume
         FROM trades t
-        WHERE created_at >= NOW() - INTERVAL '24 hours'
-        GROUP BY symbol`
+        JOIN markets m ON m.id = t.market_id
+        WHERE t.timestamp >= NOW() - INTERVAL '24 hours'
+        GROUP BY m.id, m.symbol`
       )).rows;
       res.json({ success: true, data: tickers });
     }
@@ -683,15 +685,17 @@ app.post("/api/v1/order", authenticateRequest, async (_req, res) => {
 app.get("/api/v1/openOrders", authenticateRequest, async (req, res) => {
   try {
     const { symbol } = req.query;
-    let query = "SELECT id, symbol, side, type, price, quantity, filled_quantity, status, created_at FROM orders WHERE user_id = $1 AND status IN ('new', 'partially_filled')";
+    let query = `SELECT o.id, m.symbol, o.side, o.type, o.price, o.quantity, o.filled_quantity, o.status, o.created_at
+                 FROM orders o JOIN markets m ON m.id = o.market_id
+                 WHERE o.user_id = $1 AND o.status IN ('new', 'partially_filled')`;
     const params = [req.userId];
 
     if (symbol) {
-      query += " AND symbol = $2";
+      query += " AND m.symbol = $2";
       params.push(symbol.toUpperCase());
     }
 
-    query += " ORDER BY created_at DESC LIMIT 100";
+    query += " ORDER BY o.created_at DESC LIMIT 100";
     const orders = (await pool.query(query, params)).rows;
 
     res.json({
@@ -718,16 +722,18 @@ app.get("/api/v1/openOrders", authenticateRequest, async (req, res) => {
 app.get("/api/v1/orderHistory", authenticateRequest, async (req, res) => {
   try {
     const { symbol, limit = 100, offset = 0 } = req.query;
-    let query = "SELECT id, symbol, side, type, price, quantity, filled_quantity, status, created_at FROM orders WHERE user_id = $1";
+    let query = `SELECT o.id, m.symbol, o.side, o.type, o.price, o.quantity, o.filled_quantity, o.status, o.created_at
+                 FROM orders o JOIN markets m ON m.id = o.market_id
+                 WHERE o.user_id = $1`;
     const params = [req.userId];
     let paramIndex = 2;
 
     if (symbol) {
-      query += ` AND symbol = $${paramIndex++}`;
+      query += ` AND m.symbol = $${paramIndex++}`;
       params.push(symbol.toUpperCase());
     }
 
-    query += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+    query += ` ORDER BY o.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
     params.push(limit, offset);
 
     const orders = (await pool.query(query, params)).rows;
@@ -756,16 +762,20 @@ app.get("/api/v1/orderHistory", authenticateRequest, async (req, res) => {
 app.get("/api/v1/tradeHistory", authenticateRequest, async (req, res) => {
   try {
     const { symbol, limit = 100, offset = 0 } = req.query;
-    let query = "SELECT id, symbol, side, price, quantity, fee, created_at FROM trades WHERE taker_id = $1 OR maker_id = $1";
+    let query = `SELECT t.id, m.symbol, t.side, t.price, t.quantity,
+                        CASE WHEN t.role = 'maker' THEN t.maker_fee ELSE t.taker_fee END AS fee,
+                        t.timestamp AS created_at
+                 FROM trades t JOIN markets m ON m.id = t.market_id
+                 WHERE t.taker_user_id = $1 OR t.maker_user_id = $1`;
     const params = [req.userId];
     let paramIndex = 2;
 
     if (symbol) {
-      query += ` AND symbol = $${paramIndex++}`;
+      query += ` AND m.symbol = $${paramIndex++}`;
       params.push(symbol.toUpperCase());
     }
 
-    query += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+    query += ` ORDER BY t.timestamp DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
     params.push(limit, offset);
 
     const trades = (await pool.query(query, params)).rows;
