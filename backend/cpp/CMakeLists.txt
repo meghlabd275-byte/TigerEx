@@ -48,3 +48,9 @@ enable_testing()
 add_executable(matching-engine-tests tests/matching_engine_test.cpp)
 target_link_libraries(matching-engine-tests PRIVATE tigerex_core Threads::Threads)
 add_test(NAME matching-engine-tests COMMAND matching-engine-tests)
+
+# Header-only low-latency engine and its regression tests.
+add_executable(hft-low-latency-tests tests/hft_low_latency_test.cpp)
+target_include_directories(hft-low-latency-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(hft-low-latency-tests PRIVATE Threads::Threads)
+add_test(NAME hft-low-latency-tests COMMAND hft-low-latency-tests)
