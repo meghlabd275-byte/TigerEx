@@ -4,6 +4,7 @@ package fiat
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 
@@ -11,22 +12,30 @@ import (
 )
 
 var (
-	ErrOrderNotFound = errors.New("order not found")
-	ErrInvalidAmount = errors.New("invalid amount")
+	ErrOrderNotFound    = errors.New("order not found")
+	ErrInvalidAmount    = errors.New("invalid amount")
+	ErrPriceUnavailable = errors.New("no price provider configured; refusing to quote an invented rate")
 )
 
+// PriceProvider returns the USD price of an asset. It is the seam a real
+// market-data service implements; without one the service fails closed rather
+// than converting fiat at a hardcoded rate.
+type PriceProvider interface {
+	GetPrice(ctx context.Context, asset string) (float64, error)
+}
+
 type Config struct {
-	SimplexAPIKey string
-	MoonPayAPIKey string
-	TransakAPIKey string
+	SimplexAPIKey     string
+	MoonPayAPIKey     string
+	TransakAPIKey     string
 	AdyenMerchantCode string
 }
 
 type FiatProvider struct {
-	ID               string
-	Name             string
-	Type             string
-	SupportedAssets  []string
+	ID              string
+	Name            string
+	Type            string
+	SupportedAssets []string
 	SupportedFiat   []string
 	MinAmount       float64
 	MaxAmount       float64
@@ -35,39 +44,39 @@ type FiatProvider struct {
 }
 
 type Order struct {
-	ID               string
-	UserID           string
-	Provider         string
-	Type             string
-	Asset            string
-	FiatCurrency     string
-	Amount           float64
+	ID              string
+	UserID          string
+	Provider        string
+	Type            string
+	Asset           string
+	FiatCurrency    string
+	Amount          float64
 	CryptoAmount    float64
-	Fee              float64
-	Status           string
-	ProviderOrderID  string
-	RedirectURL      string
+	Fee             float64
+	Status          string
+	ProviderOrderID string
+	RedirectURL     string
 	ReturnURL       string
-	CreatedAt        int64
-	UpdatedAt        int64
+	CreatedAt       int64
+	UpdatedAt       int64
 }
 
 type BankAccount struct {
 	ID            string
-	UserID       string
-	BankName     string
-	BankCode     string
+	UserID        string
+	BankName      string
+	BankCode      string
 	AccountNumber string
-	AccountName  string
-	AccountType  string
-	Country      string
-	Swift        string
-	Status       string
-	CreatedAt    int64
+	AccountName   string
+	AccountType   string
+	Country       string
+	Swift         string
+	Status        string
+	CreatedAt     int64
 }
 
 type Card struct {
-	ID         string
+	ID        string
 	UserID    string
 	Last4     string
 	Brand     string
@@ -79,15 +88,17 @@ type Card struct {
 
 type Service struct {
 	config       Config
+	price        PriceProvider
 	providers    map[string]*FiatProvider
 	orders       map[string]*Order
 	bankAccounts map[string]*BankAccount
 	cards        map[string]*Card
 }
 
-func NewService(config Config) *Service {
+func NewService(config Config, price PriceProvider) *Service {
 	return &Service{
-		config: config,
+		config:       config,
+		price:        price,
 		providers:    make(map[string]*FiatProvider),
 		orders:       make(map[string]*Order),
 		bankAccounts: make(map[string]*BankAccount),
@@ -128,7 +139,10 @@ func (s *Service) CreateDepositOrder(ctx context.Context, userID, providerID, as
 	if amount < provider.MinAmount || amount > provider.MaxAmount {
 		return nil, ErrInvalidAmount
 	}
-	price := 45000.0
+	price, err := s.quotePrice(ctx, asset)
+	if err != nil {
+		return nil, err
+	}
 	cryptoAmount := amount / price
 	fee := amount * provider.FeePercent / 100
 	order := &Order{
@@ -149,7 +163,10 @@ func (s *Service) CreateWithdrawalOrder(ctx context.Context, userID, providerID,
 	if amount < provider.MinAmount || amount > provider.MaxAmount {
 		return nil, ErrInvalidAmount
 	}
-	price := 45000.0
+	price, err := s.quotePrice(ctx, asset)
+	if err != nil {
+		return nil, err
+	}
 	cryptoAmount := amount / price
 	fee := amount * provider.FeePercent / 100
 	order := &Order{
@@ -221,14 +238,34 @@ func (s *Service) GetCards(userID string) []*Card {
 	return result
 }
 
-func (s *Service) GetExchangeRate(providerID, asset, fiatCurrency string, amount float64) (float64, float64, float64, error) {
+func (s *Service) GetExchangeRate(ctx context.Context, providerID, asset, fiatCurrency string, amount float64) (float64, float64, float64, error) {
 	provider, ok := s.providers[providerID]
 	if !ok {
 		return 0, 0, 0, errors.New("provider not found")
 	}
-	price := 45000.0
+	price, err := s.quotePrice(ctx, asset)
+	if err != nil {
+		return 0, 0, 0, err
+	}
 	cryptoAmount := amount / price
 	fee := amount * provider.FeePercent / 100
 	total := amount + fee
 	return cryptoAmount, fee, total, nil
+}
+
+// quotePrice asks the configured price provider for the asset's USD price.
+// A missing provider, a provider error, or a non-positive price is an error:
+// a fiat order must never be priced from an invented rate.
+func (s *Service) quotePrice(ctx context.Context, asset string) (float64, error) {
+	if s.price == nil {
+		return 0, ErrPriceUnavailable
+	}
+	price, err := s.price.GetPrice(ctx, asset)
+	if err != nil {
+		return 0, fmt.Errorf("price unavailable for %s: %w", asset, err)
+	}
+	if price <= 0 {
+		return 0, fmt.Errorf("%w: provider returned %v for %s", ErrPriceUnavailable, price, asset)
+	}
+	return price, nil
 }

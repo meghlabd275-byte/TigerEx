@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"sync"
@@ -82,7 +80,6 @@ type StakingHistory struct {
 	Amount    float64   `json:"amount"`
 	Reward    float64   `json:"reward"`
 	Status    string    `json:"status"`
-	TxHash    string    `json:"tx_hash"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -140,132 +137,116 @@ func NewStakingService() *StakingService {
 func (s *StakingService) initPools() {
 	pools := []*StakingPool{
 		{
-			ID:          "eth-staking-30d",
-			Name:        "Ethereum Staking 30 Days",
-			Asset:       "ETH",
-			Network:     "Ethereum",
-			Duration:    30,
-			APY:         5.5,
-			MinStake:    0.01,
-			MaxStake:    1000.0,
-			TotalStaked: 15420.5,
-			RewardPool:  50000.0,
-			Status:      "active",
-			StartTime:   time.Now().AddDate(0, -1, 0),
-			EndTime:     time.Now().AddDate(0, 2, 0),
-			CreatedAt:   time.Now().AddDate(0, -1, 0),
+			ID:        "eth-staking-30d",
+			Name:      "Ethereum Staking 30 Days",
+			Asset:     "ETH",
+			Network:   "Ethereum",
+			Duration:  30,
+			APY:       5.5,
+			MinStake:  0.01,
+			MaxStake:  1000.0,
+			Status:    "active",
+			StartTime: time.Now().AddDate(0, -1, 0),
+			EndTime:   time.Now().AddDate(0, 2, 0),
+			CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 		{
-			ID:          "eth-staking-60d",
-			Name:        "Ethereum Staking 60 Days",
-			Asset:       "ETH",
-			Network:     "Ethereum",
-			Duration:    60,
-			APY:         7.2,
-			MinStake:    0.01,
-			MaxStake:    1000.0,
-			TotalStaked: 8540.2,
-			RewardPool:  35000.0,
-			Status:      "active",
-			StartTime:   time.Now().AddDate(0, -1, 0),
-			EndTime:     time.Now().AddDate(0, 2, 0),
-			CreatedAt:   time.Now().AddDate(0, -1, 0),
+			ID:        "eth-staking-60d",
+			Name:      "Ethereum Staking 60 Days",
+			Asset:     "ETH",
+			Network:   "Ethereum",
+			Duration:  60,
+			APY:       7.2,
+			MinStake:  0.01,
+			MaxStake:  1000.0,
+			Status:    "active",
+			StartTime: time.Now().AddDate(0, -1, 0),
+			EndTime:   time.Now().AddDate(0, 2, 0),
+			CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 		{
-			ID:          "eth-staking-90d",
-			Name:        "Ethereum Staking 90 Days",
-			Asset:       "ETH",
-			Network:     "Ethereum",
-			Duration:    90,
-			APY:         9.5,
-			MinStake:    0.01,
-			MaxStake:    1000.0,
-			TotalStaked: 25680.8,
-			RewardPool:  120000.0,
-			Status:      "active",
-			StartTime:   time.Now().AddDate(0, -2, 0),
-			EndTime:     time.Now().AddDate(0, 3, 0),
-			CreatedAt:   time.Now().AddDate(0, -2, 0),
+			ID:        "eth-staking-90d",
+			Name:      "Ethereum Staking 90 Days",
+			Asset:     "ETH",
+			Network:   "Ethereum",
+			Duration:  90,
+			APY:       9.5,
+			MinStake:  0.01,
+			MaxStake:  1000.0,
+			Status:    "active",
+			StartTime: time.Now().AddDate(0, -2, 0),
+			EndTime:   time.Now().AddDate(0, 3, 0),
+			CreatedAt: time.Now().AddDate(0, -2, 0),
 		},
 		{
-			ID:          "dot-staking-30d",
-			Name:        "Polkadot Staking 30 Days",
-			Asset:       "DOT",
-			Network:     "Polkadot",
-			Duration:    30,
-			APY:         12.5,
-			MinStake:    10.0,
-			MaxStake:    100000.0,
-			TotalStaked: 125000.0,
-			RewardPool:  80000.0,
-			Status:      "active",
-			StartTime:   time.Now().AddDate(0, -1, 0),
-			EndTime:     time.Now().AddDate(0, 2, 0),
-			CreatedAt:   time.Now().AddDate(0, -1, 0),
+			ID:        "dot-staking-30d",
+			Name:      "Polkadot Staking 30 Days",
+			Asset:     "DOT",
+			Network:   "Polkadot",
+			Duration:  30,
+			APY:       12.5,
+			MinStake:  10.0,
+			MaxStake:  100000.0,
+			Status:    "active",
+			StartTime: time.Now().AddDate(0, -1, 0),
+			EndTime:   time.Now().AddDate(0, 2, 0),
+			CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 		{
-			ID:          "sol-staking-30d",
-			Name:        "Solana Staking 30 Days",
-			Asset:       "SOL",
-			Network:     "Solana",
-			Duration:    30,
-			APY:         8.5,
-			MinStake:    1.0,
-			MaxStake:    10000.0,
-			TotalStaked: 85000.0,
-			RewardPool:  65000.0,
-			Status:      "active",
-			StartTime:   time.Now().AddDate(0, -1, 0),
-			EndTime:     time.Now().AddDate(0, 2, 0),
-			CreatedAt:   time.Now().AddDate(0, -1, 0),
+			ID:        "sol-staking-30d",
+			Name:      "Solana Staking 30 Days",
+			Asset:     "SOL",
+			Network:   "Solana",
+			Duration:  30,
+			APY:       8.5,
+			MinStake:  1.0,
+			MaxStake:  10000.0,
+			Status:    "active",
+			StartTime: time.Now().AddDate(0, -1, 0),
+			EndTime:   time.Now().AddDate(0, 2, 0),
+			CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 		{
-			ID:          "ada-staking-30d",
-			Name:        "Cardano Staking 30 Days",
-			Asset:       "ADA",
-			Network:     "Cardano",
-			Duration:    30,
-			APY:         5.0,
-			MinStake:    100.0,
-			MaxStake:    1000000.0,
-			TotalStaked: 50000000.0,
-			RewardPool:  2500000.0,
-			Status:      "active",
-			StartTime:   time.Now().AddDate(0, -3, 0),
-			EndTime:     time.Now().AddDate(0, 6, 0),
-			CreatedAt:   time.Now().AddDate(0, -3, 0),
+			ID:        "ada-staking-30d",
+			Name:      "Cardano Staking 30 Days",
+			Asset:     "ADA",
+			Network:   "Cardano",
+			Duration:  30,
+			APY:       5.0,
+			MinStake:  100.0,
+			MaxStake:  1000000.0,
+			Status:    "active",
+			StartTime: time.Now().AddDate(0, -3, 0),
+			EndTime:   time.Now().AddDate(0, 6, 0),
+			CreatedAt: time.Now().AddDate(0, -3, 0),
 		},
 		{
-			ID:          "atom-staking-30d",
-			Name:        "Cosmos Staking 30 Days",
-			Asset:       "ATOM",
-			Network:     "Cosmos",
-			Duration:    30,
-			APY:         15.0,
-			MinStake:    10.0,
-			MaxStake:    100000.0,
-			TotalStaked: 250000.0,
-			RewardPool:  180000.0,
-			Status:      "active",
-			StartTime:   time.Now().AddDate(0, -1, 0),
-			EndTime:     time.Now().AddDate(0, 2, 0),
-			CreatedAt:   time.Now().AddDate(0, -1, 0),
+			ID:        "atom-staking-30d",
+			Name:      "Cosmos Staking 30 Days",
+			Asset:     "ATOM",
+			Network:   "Cosmos",
+			Duration:  30,
+			APY:       15.0,
+			MinStake:  10.0,
+			MaxStake:  100000.0,
+			Status:    "active",
+			StartTime: time.Now().AddDate(0, -1, 0),
+			EndTime:   time.Now().AddDate(0, 2, 0),
+			CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 		{
-			ID:          "avax-staking-30d",
-			Name:        "Avalanche Staking 30 Days",
-			Asset:       "AVAX",
-			Network:     "Avalanche",
-			Duration:    30,
-			APY:         9.8,
-			MinStake:    25.0,
-			MaxStake:    50000.0,
-			TotalStaked: 180000.0,
-			RewardPool:  90000.0,
-			Status:      "active",
-			StartTime:   time.Now().AddDate(0, -1, 0),
-			EndTime:     time.Now().AddDate(0, 2, 0),
-			CreatedAt:   time.Now().AddDate(0, -1, 0),
+			ID:        "avax-staking-30d",
+			Name:      "Avalanche Staking 30 Days",
+			Asset:     "AVAX",
+			Network:   "Avalanche",
+			Duration:  30,
+			APY:       9.8,
+			MinStake:  25.0,
+			MaxStake:  50000.0,
+			Status:    "active",
+			StartTime: time.Now().AddDate(0, -1, 0),
+			EndTime:   time.Now().AddDate(0, 2, 0),
+			CreatedAt: time.Now().AddDate(0, -1, 0),
 		},
 	}
 
@@ -362,7 +343,6 @@ func (s *StakingService) CreateStake(userID, poolID string, amount float64) (*St
 		Amount:    amount,
 		Reward:    0,
 		Status:    "completed",
-		TxHash:    s.generateTxHash(),
 		CreatedAt: now,
 	}
 	s.history[history.ID] = history
@@ -394,10 +374,15 @@ func (s *StakingService) Unstake(userID, positionID string) (*StakingReward, err
 		return nil, APIError{Code: 400, Message: "Lock period not yet over"}
 	}
 
-	// Calculate reward
+	// Calculate the accrued reward, then check the pool can actually pay it.
+	// The reward pool is funded from real fee revenue; paying from an unfunded
+	// pool would mint value out of nothing.
 	pool := s.pools[position.PoolID]
 	daysStaked := now.Sub(position.StartTime).Hours() / 24
 	reward := position.Amount * (pool.APY / 100) * (daysStaked / 365)
+	if reward > pool.RewardPool {
+		return nil, APIError{Code: 409, Message: "Reward pool is not funded; reward cannot be paid"}
+	}
 
 	// Create reward record
 	rewardRecord := &StakingReward{
@@ -431,7 +416,6 @@ func (s *StakingService) Unstake(userID, positionID string) (*StakingReward, err
 		Amount:    position.Amount,
 		Reward:    reward,
 		Status:    "completed",
-		TxHash:    s.generateTxHash(),
 		CreatedAt: now,
 	}
 	s.history[history.ID] = history
@@ -467,6 +451,9 @@ func (s *StakingService) EarlyUnstake(userID, positionID string) (*StakingReward
 	// Apply early unstake tax
 	tax := reward * s.config.EarlyUnstakeTax
 	netReward := reward - tax
+	if netReward > pool.RewardPool {
+		return nil, APIError{Code: 409, Message: "Reward pool is not funded; reward cannot be paid"}
+	}
 
 	// Create reward record
 	rewardRecord := &StakingReward{
@@ -484,6 +471,7 @@ func (s *StakingService) EarlyUnstake(userID, positionID string) (*StakingReward
 
 	// Update pool
 	pool.TotalStaked -= position.Amount
+	pool.RewardPool -= netReward
 
 	// Update position
 	position.Status = "unclaimed"
@@ -533,7 +521,6 @@ func (s *StakingService) ClaimReward(userID, rewardID string) error {
 		Amount:    reward.NetAmount,
 		Reward:    0,
 		Status:    "completed",
-		TxHash:    s.generateTxHash(),
 		CreatedAt: now,
 	}
 	s.history[history.ID] = history
@@ -570,7 +557,6 @@ func (s *StakingService) ClaimAllRewards(userID string) ([]*StakingReward, error
 				Amount:    reward.NetAmount,
 				Reward:    0,
 				Status:    "completed",
-				TxHash:    s.generateTxHash(),
 				CreatedAt: now,
 			}
 			s.history[history.ID] = history
@@ -620,7 +606,6 @@ func (s *StakingService) GetUserStats(userID string) *UserStakingStats {
 
 	stats := &UserStakingStats{
 		UserID:          userID,
-		TotalStaked:     0,
 		TotalRewards:    0,
 		PendingRewards:  0,
 		ActivePositions: 0,
@@ -824,11 +809,6 @@ func (s *StakingService) HealthCheck(c *gin.Context) {
 // =============================================================================
 // HELPERS
 // =============================================================================
-
-func (s *StakingService) generateTxHash() string {
-	hash := sha256.Sum256([]byte(uuid.New().String() + time.Now().Format(time.RFC3339Nano)))
-	return "0x" + hex.EncodeToString(hash[:])[:64]
-}
 
 // =============================================================================
 // MAIN

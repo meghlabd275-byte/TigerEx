@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+
+	"tigerex/backend/services/pricefeed"
 )
 
 // =============================================================================
@@ -119,7 +123,38 @@ type UserRating struct {
 // P2P SERVICE
 // =============================================================================
 
+// PriceProvider returns the current market price of an asset, in the quote
+// currency of the ad. It is the seam a real market-data service implements.
+type PriceProvider interface {
+	GetPrice(ctx context.Context, asset string) (float64, error)
+}
+
+// marketDataPrice quotes an asset in USDT from TigerEx's own market-data
+// service. Nothing is inferred: a symbol the exchange does not list, or an
+// unavailable feed, is an error.
+type marketDataPrice struct {
+	feed *pricefeed.PriceFeedService
+}
+
+func (m marketDataPrice) GetPrice(ctx context.Context, asset string) (float64, error) {
+	tick, err := m.feed.GetPrice(asset + "USDT")
+	if err != nil {
+		return 0, err
+	}
+	if tick == nil || tick.Price <= 0 {
+		return 0, fmt.Errorf("%w: no USDT market price for %s", ErrPriceUnavailable, asset)
+	}
+	return tick.Price, nil
+}
+
+// ErrPriceUnavailable is returned when a floating-price ad cannot be quoted
+// because no market price is available. A P2P trade must never be priced from
+// an invented rate.
+var ErrPriceUnavailable = errors.New("market price unavailable; refusing to price a float-rate P2P order")
+
 type P2PService struct {
+	price PriceProvider
+
 	// In production, use database
 	ads            map[string]*P2PAd
 	orders         map[string]*P2POrder
@@ -131,8 +166,9 @@ type P2PService struct {
 	mu sync.RWMutex
 }
 
-func NewP2PService() *P2PService {
+func NewP2PService(price PriceProvider) *P2PService {
 	svc := &P2PService{
+		price:          price,
 		ads:            make(map[string]*P2PAd),
 		orders:         make(map[string]*P2POrder),
 		users:          make(map[string]*User),
@@ -359,8 +395,19 @@ func (s *P2PService) CreateOrder(buyerID, adID string, fiatAmount float64) (*P2P
 	// Calculate crypto amount
 	cryptoPrice := ad.FixedPrice
 	if ad.PriceType == "float" {
-		// In production, get current market price and apply margin
-		cryptoPrice = 65000.0 * (1 + ad.PriceMargin/100)
+		// A floating-price ad follows the live market price plus the seller's
+		// margin. Without a price there is no quote, so the order is rejected.
+		if s.price == nil {
+			return nil, ErrPriceUnavailable
+		}
+		market, err := s.price.GetPrice(context.Background(), ad.Asset)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrPriceUnavailable, err)
+		}
+		if market <= 0 {
+			return nil, fmt.Errorf("%w: provider returned %v for %s", ErrPriceUnavailable, market, ad.Asset)
+		}
+		cryptoPrice = market * (1 + ad.PriceMargin/100)
 	}
 
 	cryptoAmount := fiatAmount / cryptoPrice
@@ -797,8 +844,17 @@ func main() {
 	// Set Gin to release mode
 	gin.SetMode(gin.ReleaseMode)
 
-	// Create service
-	p2pService := NewP2PService()
+	// Floating-price ads follow TigerEx's own market data. Without a
+	// configured feed the service still runs, but float-rate ads fail closed.
+	var price PriceProvider
+	if url := strings.TrimSpace(os.Getenv("TIGEREX_MARKETDATA_URL")); url != "" {
+		feed := pricefeed.NewPriceFeedService(pricefeed.NewHTTPSource(url))
+		feed.Start()
+		defer feed.Stop()
+		price = marketDataPrice{feed: feed}
+	}
+
+	p2pService := NewP2PService(price)
 
 	// Merchants, ads and balances are created by real users through the API.
 	// The service never seeds accounts or ads, because invented merchants with
