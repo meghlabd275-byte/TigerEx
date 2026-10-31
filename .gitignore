@@ -39,3 +39,10 @@ tigerex.db-wal
 *.db
 *.db-shm
 *.db-wal
+
+# Go build outputs
+backend/go/p2p_service
+backend/go/staking_service
+backend/go/pricefeed
+backend/go/API
+backend/go/admin_service
