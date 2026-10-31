@@ -1041,10 +1041,16 @@ impl TigerEcosystem {
             )));
         }
 
-        let from_price = self.tokens.read().unwrap()
-            .get(from_token)
-            .map(|t| t.price_usd)
-            .unwrap_or(1.0);
+        // The input token must have a real reference price: fee accounting is
+        // denominated in USD, and an unknown token is not worth one dollar.
+        let from_price = match self.tokens.read().unwrap().get(from_token) {
+            Some(token) if token.price_usd.is_finite() && token.price_usd > 0.0 => token.price_usd,
+            _ => {
+                return Err(TigerEcosystemError::TokenNotFound(format!(
+                    "no reference price for {from_token}"
+                )))
+            }
+        };
 
         // Advance the pool reserves so subsequent swaps see the post-trade state.
         // The constant-product invariant is preserved by construction.
@@ -1422,6 +1428,22 @@ mod tests {
         let result = ecosystem.swap("ETH", "USDT", 1.0, 0.5);
 
         assert!(result.is_ok());
+    }
+
+    /// A swap whose input token has no reference price is rejected rather than
+    /// booked at a made-up one dollar.
+    #[test]
+    fn swap_rejects_unpriced_token() {
+        let mut ecosystem = create_tiger_ecosystem();
+        // A listed token with no price feed yet, and a pool it can trade in.
+        ecosystem.add_token("NOPRICE", "No Price Token", "0xNOPRICE", "ethereum", 18, TokenStandard::ERC20, 1.0, 0.0);
+        ecosystem.create_pool("NOPRICE", "USDT", 0.003);
+        // Give the pool reserves directly: bootstrap_pool refuses to seed from a
+        // token that has no price, which is the behaviour under test.
+        ecosystem.add_liquidity("NOPRICE_USDT", 10_000.0, 10_000.0);
+
+        let result = ecosystem.swap("NOPRICE", "USDT", 1.0, 50.0);
+        assert!(matches!(result, Err(TigerEcosystemError::TokenNotFound(_))));
     }
 
     #[test]
