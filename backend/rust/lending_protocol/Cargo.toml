@@ -17,7 +17,3 @@ rand = "0.8"
 [lib]
 name = "tigerex_lending"
 path = "src/lib.rs"
-
-[[bin]]
-name = "tigerex-lendingd"
-path = "src/main.rs"

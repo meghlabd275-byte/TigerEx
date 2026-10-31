@@ -3,14 +3,11 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Utc};
-use rand::Rng;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::RwLock;
-use tracing::{info, warn, error};
+
 
 // ============================================================================
 // ERROR TYPES
@@ -34,6 +31,8 @@ pub enum LendingError {
     InterestError(String),
     #[error("Liquidation blocked: {0}")]
     LiquidationBlocked(String),
+    #[error("Price unavailable: {0}")]
+    PriceUnavailable(String),
 }
 
 impl Serialize for LendingError {
@@ -124,7 +123,7 @@ pub struct CollateralAsset {
     pub collateral_ratio: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PositionStatus {
     Active,
@@ -171,41 +170,85 @@ pub struct LendingStats {
 }
 
 // ============================================================================
-// PRICE ORACLE (Simplified)
+// PRICE ORACLE
 // ============================================================================
 
+/// Supplies the USD price of an asset. It is the seam a real oracle
+/// implementation fills, e.g. by reading TigerEx's own mark price feed.
+pub trait OracleSource: Send + Sync {
+    fn price_usd(&self, asset: &str) -> Result<f64, LendingError>;
+}
+
+/// A source with no prices configured. Every lookup fails, which is the safe
+/// default: a lending protocol must not value collateral from a guess.
+pub struct NoOracle;
+
+impl OracleSource for NoOracle {
+    fn price_usd(&self, asset: &str) -> Result<f64, LendingError> {
+        Err(LendingError::PriceUnavailable(format!(
+            "no oracle source configured; cannot price {}",
+            asset
+        )))
+    }
+}
+
+/// The oracle. It holds no default prices: an unpriced asset is an error, never
+/// a silent 1.0. Every collateral valuation, health factor and liquidation
+/// decision is derived from these prices, so a guess here is a funds risk.
 pub struct PriceOracle {
     prices: HashMap<String, f64>,
+    source: Arc<dyn OracleSource>,
 }
 
 impl PriceOracle {
+    /// An oracle with no source and no prices. Every lookup fails closed.
     pub fn new() -> Self {
-        let mut prices = HashMap::new();
-        // Initial prices (in production, fetch from oracle)
-        prices.insert("BTC".to_string(), 50000.0);
-        prices.insert("ETH".to_string(), 3000.0);
-        prices.insert("USDT".to_string(), 1.0);
-        prices.insert("USDC".to_string(), 1.0);
-        prices.insert("BNB".to_string(), 400.0);
-        prices.insert("SOL".to_string(), 100.0);
-        prices.insert("XRP".to_string(), 0.5);
-        prices.insert("ADA".to_string(), 0.35);
-        prices.insert("DOGE".to_string(), 0.08);
-        prices.insert("AVAX".to_string(), 35.0);
-        
-        PriceOracle { prices }
+        Self::with_source(Arc::new(NoOracle))
     }
 
-    pub fn get_price(&self, asset: &str) -> f64 {
-        self.prices.get(asset.to_uppercase()).copied().unwrap_or(1.0)
+    /// An oracle that reads through to `source`.
+    pub fn with_source(source: Arc<dyn OracleSource>) -> Self {
+        PriceOracle {
+            prices: HashMap::new(),
+            source,
+        }
     }
 
-    pub fn get_value_usd(&self, asset: &str, amount: f64) -> f64 {
-        amount * self.get_price(asset)
+    /// Returns the asset's USD price, or an error when it cannot be valued.
+    /// Non-finite and non-positive prices are rejected.
+    pub fn get_price(&self, asset: &str) -> Result<f64, LendingError> {
+        let symbol = asset.to_uppercase();
+        if let Some(price) = self.prices.get(&symbol) {
+            if price.is_finite() && *price > 0.0 {
+                return Ok(*price);
+            }
+        }
+        let price = self.source.price_usd(&symbol)?;
+        if !price.is_finite() || price <= 0.0 {
+            return Err(LendingError::PriceUnavailable(format!(
+                "oracle returned a non-positive price for {}",
+                symbol
+            )));
+        }
+        Ok(price)
     }
 
-    pub fn set_price(&mut self, asset: &str, price: f64) {
+    /// Returns the USD value of `amount` of `asset`, or an error when the asset
+    /// cannot be priced.
+    pub fn get_value_usd(&self, asset: &str, amount: f64) -> Result<f64, LendingError> {
+        Ok(amount * self.get_price(asset)?)
+    }
+
+    /// Records a price, rejecting values that would corrupt every valuation.
+    pub fn set_price(&mut self, asset: &str, price: f64) -> Result<(), LendingError> {
+        if !price.is_finite() || price <= 0.0 {
+            return Err(LendingError::PriceUnavailable(format!(
+                "refusing to store a non-positive price for {}",
+                asset
+            )));
+        }
         self.prices.insert(asset.to_uppercase(), price);
+        Ok(())
     }
 }
 
@@ -230,6 +273,22 @@ pub struct LendingProtocol {
 
 impl LendingProtocol {
     pub fn new() -> Self {
+        LendingProtocol::with_oracle(PriceOracle::new())
+    }
+
+    /// Builds a protocol that prices assets through `oracle`.
+    pub fn with_oracle(oracle: PriceOracle) -> Self {
+        LendingProtocol {
+            pools: HashMap::new(),
+            user_positions: HashMap::new(),
+            borrow_positions: HashMap::new(),
+            liquidations: Vec::new(),
+            config: Self::asset_configs(),
+            oracle,
+        }
+    }
+
+    fn asset_configs() -> HashMap<String, AssetConfig> {
         let mut config = HashMap::new();
 
         // BTC configuration
@@ -312,20 +371,7 @@ impl LendingProtocol {
             flash_loan_enabled: false,
         });
 
-        let oracle = PriceOracle::new();
-        let pools = HashMap::new();
-        let user_positions = HashMap::new();
-        let borrow_positions = HashMap::new();
-        let liquidations = Vec::new();
-
-        LendingProtocol {
-            pools,
-            user_positions,
-            borrow_positions,
-            liquidations,
-            config,
-            oracle,
-        }
+        config
     }
 
     // =========================================================================
@@ -404,7 +450,6 @@ impl LendingProtocol {
         }
 
         let pool = self.pools.get_mut(asset).unwrap();
-        let config = self.config.get(asset).unwrap();
 
         // Update pool
         pool.total_supplied += amount;
@@ -416,7 +461,9 @@ impl LendingProtocol {
         };
 
         // Update rates
-        let (supply_rate, borrow_rate) = self.calculate_rates(asset, pool.utilization_ratio);
+        let utilization = pool.utilization_ratio;
+        let (supply_rate, borrow_rate) = self.calculate_rates(asset, utilization);
+        let pool = self.pools.get_mut(asset).unwrap();
         pool.supply_rate = supply_rate;
         pool.borrow_rate = borrow_rate;
         pool.last_updated = Utc::now().timestamp();
@@ -465,7 +512,15 @@ impl LendingProtocol {
         // Check if user has borrowed against this asset
         let borrow_key = format!("{}_{}", user_id, asset);
         if let Some(borrow_pos) = self.borrow_positions.get(&borrow_key) {
-            let collateral_value = self.oracle.get_value_usd(asset, borrow_pos.collateral_assets.iter().find(|c| c.asset == asset).map(|c| c.amount).unwrap_or(0.0));
+            let collateral_value = self.oracle.get_value_usd(
+                asset,
+                borrow_pos
+                    .collateral_assets
+                    .iter()
+                    .find(|c| c.asset == asset)
+                    .map(|c| c.amount)
+                    .unwrap_or(0.0),
+            )?;
             
             // Calculate max withdrawable considering borrowed amount
             let max_withdrawable = position.supplied_amount + position.accrued_supply_interest - collateral_value;
@@ -512,10 +567,11 @@ impl LendingProtocol {
             return Err(LendingError::InvalidAmount("Amount must be positive".to_string()));
         }
 
-        let config = self.config.get(borrow_asset)
+        let borrow_config = self.config.get(borrow_asset)
             .ok_or_else(|| LendingError::AssetNotSupported(borrow_asset.to_string()))?;
+        let liquidation_threshold = borrow_config.liquidation_threshold;
 
-        if !config.is_borrowable {
+        if !borrow_config.is_borrowable {
             return Err(LendingError::AssetNotSupported(format!("{} is not borrowable", borrow_asset)));
         }
 
@@ -531,7 +587,7 @@ impl LendingProtocol {
                 return Err(LendingError::InvalidAmount(format!("{} is not a valid collateral", asset)));
             }
 
-            let value_usd = self.oracle.get_value_usd(asset, *amt);
+            let value_usd = self.oracle.get_value_usd(asset, *amt)?;
             total_collateral_usd += value_usd;
 
             collateral_list.push(CollateralAsset {
@@ -578,16 +634,25 @@ impl LendingProtocol {
         };
 
         // Update rates
-        let (supply_rate, borrow_rate) = self.calculate_rates(borrow_asset, pool.utilization_ratio);
+        let utilization = pool.utilization_ratio;
+        let (supply_rate, borrow_rate) = self.calculate_rates(borrow_asset, utilization);
+        let pool = self.pools.get_mut(borrow_asset).unwrap();
         pool.supply_rate = supply_rate;
         pool.borrow_rate = borrow_rate;
         pool.last_updated = Utc::now().timestamp();
 
-        // Create borrow position
+        // Price the borrowed asset before the pool is borrowed mutably. A
+        // borrow that cannot be priced is rejected: the health factor and the
+        // debt valuation both depend on this number.
+        let borrow_price = self.oracle.get_price(borrow_asset)?;
+
+        // Create borrow position. The map is keyed by user and asset, which is
+        // the key every other method (repay, liquidate, add collateral) looks up.
         let now = Utc::now().timestamp();
         let position_id = format!("pos_{}_{}_{}", user_id, borrow_asset, now);
+        let position_key = format!("{}_{}", user_id, borrow_asset);
 
-        let health_factor = total_collateral_usd / (amount * self.oracle.get_price(borrow_asset));
+        let health_factor = total_collateral_usd / (amount * borrow_price);
 
         let position = BorrowPosition {
             position_id: position_id.clone(),
@@ -597,13 +662,13 @@ impl LendingProtocol {
             borrowed_amount: amount,
             interest_accrued: 0.0,
             health_factor,
-            liquidation_threshold: config.liquidation_threshold,
+            liquidation_threshold,
             status: PositionStatus::Active,
             created_at: now,
             updated_at: now,
         };
 
-        self.borrow_positions.insert(position_id, position.clone());
+        self.borrow_positions.insert(position_key, position.clone());
         
         Ok(position)
     }
@@ -670,7 +735,7 @@ impl LendingProtocol {
             .ok_or_else(|| LendingError::InvalidAmount("No borrow position found".to_string()))?;
 
         // Add collateral
-        let value_usd = self.oracle.get_value_usd(&position.asset, amount);
+        let value_usd = self.oracle.get_value_usd(&position.asset, amount)?;
         
         if let Some(c) = position.collateral_assets.iter_mut().find(|c| c.asset == position.asset) {
             c.amount += amount;
@@ -686,7 +751,7 @@ impl LendingProtocol {
 
         // Recalculate health factor
         let collateral_value: f64 = position.collateral_assets.iter().map(|c| c.value_usd).sum();
-        let debt_value = position.borrowed_amount * self.oracle.get_price(&position.asset);
+        let debt_value = position.borrowed_amount * self.oracle.get_price(&position.asset)?;
         
         position.health_factor = if debt_value > 0.0 {
             collateral_value / debt_value
@@ -716,10 +781,10 @@ impl LendingProtocol {
             .map(|c| c.value_usd)
             .sum();
 
-        let debt_value = position.borrowed_amount * self.oracle.get_price(&position.asset);
+        let debt_value = position.borrowed_amount * self.oracle.get_price(&position.asset)?;
         
         // Check if removal would undercollateralize
-        let removal_value = self.oracle.get_value_usd(asset, amount);
+        let removal_value = self.oracle.get_value_usd(asset, amount)?;
         let new_collateral = current_collateral - removal_value;
         
         if debt_value > 0.0 && new_collateral / debt_value < MIN_COLLATERAL_RATIO {
@@ -770,15 +835,15 @@ impl LendingProtocol {
         asset: &str,
         liquidator_id: &str,
     ) -> Result<Liquidation, LendingError> {
-        let position_key = format!("{}_{}", user_id, asset);
-        let position = self.borrow_positions.get(&position_key)
-            .ok_or_else(|| LendingError::InvalidAmount("Position not found".to_string()))?;
-
         if !self.can_liquidate(user_id, asset) {
             return Err(LendingError::LiquidationBlocked("Position cannot be liquidated".to_string()));
         }
 
-        let debt_value = position.borrowed_amount * self.oracle.get_price(&position.asset);
+        let position_key = format!("{}_{}", user_id, asset);
+        let position = self.borrow_positions.get_mut(&position_key)
+            .ok_or_else(|| LendingError::InvalidAmount("Position not found".to_string()))?;
+
+        let debt_value = position.borrowed_amount * self.oracle.get_price(&position.asset)?;
         
         // Find collateral to liquidate (prefer highest value)
         let mut collateral_to_liquidate = None;
@@ -797,7 +862,8 @@ impl LendingProtocol {
         // Calculate liquidation amounts
         let debt_paid = position.borrowed_amount.min(max_value / (1.0 + LIQUIDATION_BONUS));
         let bonus = debt_paid * LIQUIDATION_BONUS;
-        let collateral_amount = (debt_paid + bonus) / self.oracle.get_price(&collateral.asset);
+        let collateral_price = self.oracle.get_price(&collateral.asset)?;
+        let collateral_amount = (debt_paid + bonus) / collateral_price;
 
         // Update pool - reduce debt
         if let Some(pool) = self.pools.get_mut(asset) {
@@ -819,7 +885,7 @@ impl LendingProtocol {
 
         // Recalculate health factor
         let collateral_value: f64 = position.collateral_assets.iter().map(|c| c.value_usd).sum();
-        let new_debt_value = position.borrowed_amount * self.oracle.get_price(asset);
+        let new_debt_value = position.borrowed_amount * self.oracle.get_price(asset)?;
         
         if position.borrowed_amount > 0.0 {
             position.health_factor = collateral_value / new_debt_value;
@@ -836,12 +902,12 @@ impl LendingProtocol {
             position_id: position.position_id.clone(),
             user_id: user_id.to_string(),
             liquidator: liquidator_id.to_string(),
-            collateral_asset: collateral.asset,
+            collateral_asset: collateral.asset.clone(),
             collateral_amount,
             debt_asset: asset.to_string(),
             debt_paid,
             bonus,
-            price: self.oracle.get_price(&collateral.asset),
+            price: collateral_price,
             executed_at: Utc::now().timestamp(),
         };
 
@@ -902,15 +968,16 @@ impl LendingProtocol {
             .collect()
     }
 
-    /// Get protocol statistics
-    pub fn get_stats(&self) -> LendingStats {
+    /// Get protocol statistics. Returns an error when a pool cannot be priced,
+    /// rather than reporting a total that silently omits it.
+    pub fn get_stats(&self) -> Result<LendingStats, LendingError> {
         let mut total_supply_usd = 0.0;
         let mut total_borrow_usd = 0.0;
         let mut total_collateral_usd = 0.0;
 
         for pool in self.pools.values() {
-            total_supply_usd += pool.total_supplied * self.oracle.get_price(&pool.asset);
-            total_borrow_usd += pool.total_borrowed * self.oracle.get_price(&pool.asset);
+            total_supply_usd += pool.total_supplied * self.oracle.get_price(&pool.asset)?;
+            total_borrow_usd += pool.total_borrowed * self.oracle.get_price(&pool.asset)?;
         }
 
         for position in self.borrow_positions.values() {
@@ -928,7 +995,7 @@ impl LendingProtocol {
             0.0
         };
 
-        LendingStats {
+        Ok(LendingStats {
             total_supply_usd,
             total_borrow_usd,
             total_collateral_usd,
@@ -941,7 +1008,7 @@ impl LendingProtocol {
                 .filter(|p| p.status == PositionStatus::Active)
                 .count() as u64,
             liquidations_24h: self.liquidations.len() as u64,
-        }
+        })
     }
 
     /// Get liquidation history
@@ -964,84 +1031,141 @@ impl Default for LendingProtocol {
 mod tests {
     use super::*;
 
+    /// A test oracle. Prices are supplied explicitly by each test, so a test
+    /// that forgets to price an asset fails with PriceUnavailable instead of
+    /// silently passing on a fabricated number.
+    struct TestOracle {
+        prices: HashMap<String, f64>,
+    }
+
+    impl TestOracle {
+        fn new(prices: &[(&str, f64)]) -> Arc<Self> {
+            Arc::new(TestOracle {
+                prices: prices
+                    .iter()
+                    .map(|(a, p)| (a.to_string(), *p))
+                    .collect(),
+            })
+        }
+    }
+
+    impl OracleSource for TestOracle {
+        fn price_usd(&self, asset: &str) -> Result<f64, LendingError> {
+            self.prices
+                .get(&asset.to_uppercase())
+                .copied()
+                .ok_or_else(|| LendingError::PriceUnavailable(asset.to_string()))
+        }
+    }
+
+    fn priced_protocol() -> LendingProtocol {
+        LendingProtocol::with_oracle(PriceOracle::with_source(TestOracle::new(&[
+            ("ETH", 30000.0),
+            ("BTC", 60000.0),
+            ("USDT", 1.0),
+        ])))
+    }
+
     #[test]
     fn test_supply_and_withdraw() {
-        let mut protocol = LendingProtocol::new();
-        
-        // Supply
+        let mut protocol = priced_protocol();
+
         let result = protocol.supply("user1", "USDT", 1000.0);
         assert!(result.is_ok());
-        
-        // Withdraw
+
         let result = protocol.withdraw("user1", "USDT", 500.0);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_borrow_with_collateral() {
-        let mut protocol = LendingProtocol::new();
-        
-        // Supply collateral (ETH)
+        let mut protocol = priced_protocol();
+
+        // A lender funds the USDT pool; a borrow draws on real supplied liquidity.
+        protocol.supply("lp", "USDT", 1_000_000.0).unwrap();
         protocol.supply("user1", "ETH", 10.0).unwrap();
-        
-        // Borrow USDT using ETH as collateral
-        let result = protocol.borrow(
-            "user1",
-            "USDT",
-            vec![("ETH".to_string(), 10.0)],
-            15000.0, // Borrow $15,000 (within 70% of $30,000 = $21,000)
-        );
+
+        // 10 ETH at the test price is $300,000; 75% LTV allows $225,000.
+        let result = protocol.borrow("user1", "USDT", vec![("ETH".to_string(), 10.0)], 15000.0);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_liquidation() {
-        let mut protocol = LendingProtocol::new();
-        
-        // Setup: Supply ETH, borrow USDT
+        let mut protocol = priced_protocol();
+
+        protocol.supply("lp", "USDT", 100_000.0).unwrap();
         protocol.supply("user1", "ETH", 1.0).unwrap();
-        let borrow = protocol.borrow(
-            "user1",
-            "USDT",
-            vec![("ETH".to_string(), 1.0)],
-            2500.0, // Borrow $2,500 against $30,000 ETH = 120% health
-        ).unwrap();
-        
-        // Manually set health factor low to trigger liquidation
-        // (in real scenario, price would drop)
-        let position = protocol.borrow_positions.get_mut(&format!("{}_{}", "user1", "USDT")).unwrap();
-        position.health_factor = 1.0; // Below threshold
-        
-        // Liquidate
+        protocol
+            .borrow("user1", "USDT", vec![("ETH".to_string(), 1.0)], 2500.0)
+            .unwrap();
+
+        // Force the position under water. In production a price drop does this;
+        // here the test sets the health factor directly.
+        let position = protocol
+            .borrow_positions
+            .get_mut(&format!("{}_{}", "user1", "USDT"))
+            .unwrap();
+        position.health_factor = 1.0;
+
         let result = protocol.liquidate("user1", "USDT", "liquidator1");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_interest_accrual() {
-        let mut protocol = LendingProtocol::new();
-        
+        let mut protocol = priced_protocol();
+
         protocol.supply("user1", "USDT", 1000.0).unwrap();
         protocol.supply("user2", "ETH", 1.0).unwrap();
-        
-        // Accrue 1 year of interest
+
         protocol.accrue_interest(365 * 24 * 3600);
-        
+
         let position = protocol.get_lending_position("user1", "USDT").unwrap();
         assert!(position.accrued_supply_interest > 0.0);
     }
 
     #[test]
     fn test_pool_rates() {
-        let mut protocol = LendingProtocol::new();
-        
-        // Initially low utilization
-        protocol.supply("user1", "USDT", 10000.0).unwrap();
-        
-        // High utilization after borrowing
-        protocol.borrow("user2", "USDT", vec![("BTC".to_string(), 0.5)], 5000.0).unwrap();
-        
+        let mut protocol = priced_protocol();
+
+        protocol.supply("lp", "USDT", 100_000.0).unwrap();
+        protocol
+            .borrow("user2", "USDT", vec![("BTC".to_string(), 0.5)], 5000.0)
+            .unwrap();
+
         let pool = protocol.get_pool("USDT").unwrap();
         assert!(pool.borrow_rate > pool.supply_rate);
+    }
+
+    /// An unpriced asset must never be valued. The old code fell back to a
+    /// hardcoded 1.0, which silently mispriced every collateral and debt.
+    #[test]
+    fn unpriced_asset_fails_closed() {
+        let protocol = LendingProtocol::new();
+        let err = protocol.oracle.get_price("ETH").unwrap_err();
+        assert!(matches!(err, LendingError::PriceUnavailable(_)));
+    }
+
+    /// A borrow whose collateral cannot be priced is rejected.
+    #[test]
+    fn borrow_with_unpriced_collateral_is_rejected() {
+        let mut protocol = LendingProtocol::new();
+        protocol.supply("user1", "ETH", 1.0).unwrap();
+        // The collateral cannot be priced, so the borrow is rejected before it
+        // ever reaches liquidity checks.
+        let result = protocol.borrow("user1", "USDT", vec![("ETH".to_string(), 1.0)], 100.0);
+        assert!(matches!(result, Err(LendingError::PriceUnavailable(_))));
+    }
+
+    /// Non-positive and non-finite prices are rejected at the boundary.
+    #[test]
+    fn rejects_invalid_prices() {
+        let mut oracle = PriceOracle::new();
+        assert!(oracle.set_price("BTC", 0.0).is_err());
+        assert!(oracle.set_price("BTC", -1.0).is_err());
+        assert!(oracle.set_price("BTC", f64::NAN).is_err());
+        assert!(oracle.set_price("BTC", 50000.0).is_ok());
+        assert_eq!(oracle.get_price("BTC").unwrap(), 50000.0);
     }
 }
