@@ -10,6 +10,7 @@ pub mod stream_processor;
 pub mod auth;
 pub mod risk;
 pub mod pnl;
+pub mod crypto_utils;
 
 
 pub mod crypto {

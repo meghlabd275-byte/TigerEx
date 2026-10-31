@@ -21,12 +21,12 @@ pub fn sha256(data: &str) -> String {
 
 /// HMAC-SHA256
 pub fn hmac_sha256(key: &str, data: &str) -> Result<String, String> {
-    let mut mac = HmacSha256::new_from_slice(key.as_bytes())
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(key.as_bytes())
         .map_err(|e| format!("HMAC error: {}", e))?;
     
     mac.update(data.as_bytes());
-    
-    Ok(format!("{:x}", mac.finalize()))
+
+    Ok(format!("{:x}", mac.finalize().into_bytes()))
 }
 
 /// Base64 encode
@@ -85,9 +85,18 @@ pub fn generate_nonce() -> [u8; 12] {
 /// Verify HMAC signature
 pub fn verify_hmac(key: &str, data: &str, signature: &str) -> bool {
     match hmac_sha256(key, data) {
-        Ok sig) => sig == signature,
+        Ok(expected) => constant_time_eq(expected.as_bytes(), signature.as_bytes()),
         Err(_) => false,
     }
+}
+
+/// Compare two byte strings without early exit, to avoid leaking how many
+/// leading bytes of a signature matched.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Hash structure for serialization
@@ -144,5 +153,14 @@ mod tests {
         let data = "data";
         let sig = hmac_sha256(key, data).unwrap();
         assert!(verify_hmac(key, data, &sig));
+    }
+
+    #[test]
+    fn verify_hmac_rejects_wrong_and_truncated_signatures() {
+        let sig = hmac_sha256("key", "data").unwrap();
+        assert!(!verify_hmac("key", "data", "deadbeef"));
+        assert!(!verify_hmac("key", "tampered", &sig));
+        assert!(!verify_hmac("other-key", "data", &sig));
+        assert!(!verify_hmac("key", "data", &sig[..sig.len() - 1]));
     }
 }
