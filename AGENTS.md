@@ -51,6 +51,37 @@ go test -mod=mod . ./internal/api ./internal/wallet ./internal/perpetual \
   ./internal/admin ./internal/trading ./services/admin ./cmd/admin_service
 ```
 
+## Database schema (canonical)
+
+`TigerEx/database_schema/complete_schema.sql` is applied by
+`server/db/migrate.js`, which `server/index.js` calls on every startup (and
+exits the process if it fails). Two rules follow from that:
+
+- The file must stay valid PostgreSQL. It once used JavaScript `//` comments
+  on line 1, which PostgreSQL rejects, so migration failed and the API could
+  never start. Comments are `--`.
+- The migration re-runs on every boot, so every object needs a guard:
+  `CREATE TABLE/INDEX IF NOT EXISTS`, and `DROP TRIGGER IF EXISTS` before
+  `CREATE TRIGGER`. Do not add a second `CREATE TABLE` for an existing table.
+
+`server/index.js` queries must match this schema. `orders` and `trades` have no
+`symbol` column (only `market_id`), so symbol filters and tickers join
+`markets`. Timestamps are `trades.timestamp` and `orders.created_at`; fees are
+`maker_fee`/`taker_fee` selected by `trades.role`; counterparties are
+`taker_user_id`/`maker_user_id`. `wallets` uses `locked_balance`, `kyc_records`
+uses `level`, and `users` has `jurisdiction` (not `country`).
+
+## Admin backends (two exist)
+
+The canonical API is the Go gateway (`backend/go/internal/api/gateway.go`,
+served on 8080; the frontend's `NEXT_PUBLIC_API_URL` points at it). Its order,
+balance, deposit and withdrawal handlers are deliberate fail-closed stubs that
+return `unavailable` — this is the "no simulation" rule, not a bug.
+
+`server/index.js` (Node, port 3000) and `server/admin-system.js` are a second,
+separate backend. `admin-system.js` is real but is not mounted by
+`server/index.js`, so its routes are currently unreachable.
+
 ## CI status
 
 - `CI` passes: `backend-go` (build + test), `test` (REST/WebSocket gateway, admin
