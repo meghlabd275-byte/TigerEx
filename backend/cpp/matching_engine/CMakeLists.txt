@@ -51,8 +51,8 @@ set_target_properties(tigerex_matching PROPERTIES
 )
 
 # Regression tests for the engine core. These assert the behaviour the engine
-# is relied on for: volume-weighted fill prices and fail-closed handling of
-# order types the engine does not implement.
+# is relied on for: volume-weighted fill prices, real conditional-order
+# triggers, and fail-closed handling of malformed orders.
 enable_testing()
 add_executable(matching_engine_core_tests tests/matching_engine_test.cpp)
 target_link_libraries(matching_engine_core_tests PRIVATE tigerex_matching Threads::Threads)

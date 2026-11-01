@@ -122,30 +122,172 @@ void test_avg_fill_price_is_volume_weighted() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Conditional order types must fail closed, not silently succeed.
+// 2. Conditional order types are parked off-book and fire on their trigger.
+//
+// These types used to be rejected outright ("not supported by this engine").
+// They are now real: a stop or take-profit rests off-book, does not trade on
+// arrival, and activates once the market trades through its trigger.
 // ---------------------------------------------------------------------------
-void test_conditional_orders_fail_closed() {
-    const OrderType unsupported[] = {
-        OrderType::StopLoss,
-        OrderType::TakeProfit,
-        OrderType::OCO,
-        OrderType::TrailingStop,
-    };
 
-    for (OrderType type : unsupported) {
-        MatchingEngine engine{EngineConfig{}};
+// Seed the book with a resting ask so a triggered buy order has something to
+// fill against.
+void seed_ask(MatchingEngine& engine, int64_t price, int64_t quantity,
+              uint64_t user_id = 900) {
+    Order ask = make_order(user_id, OrderSide::Sell, OrderType::Limit, price, quantity);
+    assert(engine.submit_order(ask).success);
+}
+
+void test_conditional_order_validation() {
+    // A conditional order without its trigger field cannot ever fire, so it
+    // must be refused rather than parked forever.
+    MatchingEngine engine{EngineConfig{}};
     setup_market(engine);
-        Order order = make_order(7, OrderSide::Buy, type, 1000, 1000);
-        OrderResult result = engine.submit_order(order);
 
-        // The defect: these returned success = true with no work done.
-        assert(!result.success);
-        assert(result.status == OrderStatus::Rejected);
-        assert(!result.error_message.empty());
-        assert(result.trades.empty());
-        std::printf("ok: %s rejected (%s)\n",
-                    order_type_name(type), result.error_message.c_str());
-    }
+    Order stop = make_order(7, OrderSide::Sell, OrderType::StopLoss, 0, 1000);
+    stop.stop_price = {0, kPricePrecision};
+    OrderResult r = engine.submit_order(stop);
+    assert(!r.success);
+    assert(r.status == OrderStatus::Rejected);
+    assert(!r.error_message.empty());
+
+    Order oco = make_order(8, OrderSide::Sell, OrderType::OCO, 0, 1000);
+    oco.stop_price = {900, kPricePrecision};
+    OrderResult r2 = engine.submit_order(oco);
+    assert(!r2.success);
+    assert(r2.status == OrderStatus::Rejected);
+
+    std::printf("ok: conditional orders without a trigger are rejected\n");
+}
+
+void test_stop_loss_sell_fires_on_a_fall() {
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+    seed_ask(engine, 1000, 5000);
+
+    // A sell stop at 900 protects a long: it must not fire while the market is
+    // above 900.
+    Order stop = make_order(7, OrderSide::Sell, OrderType::StopLoss, 0, 1000);
+    stop.stop_price = {900, kPricePrecision};
+    OrderResult parked = engine.submit_order(stop);
+    assert(parked.success);
+    assert(parked.trades.empty());
+
+    // It rests off-book and is visible as a conditional order.
+    auto pending = engine.get_conditional_orders(kSymbol, 7);
+    assert(pending.size() == 1);
+
+    // A trade at 950 is still above the stop: nothing fires.
+    assert(engine.check_conditional_orders(kSymbol, Price{950, kPricePrecision}) == 0);
+    assert(engine.get_conditional_orders(kSymbol, 7).size() == 1);
+
+    // A trade through 900 fires the stop, which sells into the resting bid.
+    Order bid = make_order(9, OrderSide::Buy, OrderType::Limit, 880, 1000);
+    assert(engine.submit_order(bid).success);
+    const uint32_t fired =
+        engine.check_conditional_orders(kSymbol, Price{880, kPricePrecision});
+    assert(fired == 1);
+    assert(engine.get_conditional_orders(kSymbol, 7).empty());
+
+    std::printf("ok: a sell stop fires only once price falls through it\n");
+}
+
+void test_take_profit_sell_fires_on_a_rise() {
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+
+    Order take_profit = make_order(11, OrderSide::Sell, OrderType::TakeProfit, 0, 1000);
+    take_profit.stop_price = {1200, kPricePrecision};
+    assert(engine.submit_order(take_profit).success);
+
+    // Below the target: still parked.
+    assert(engine.check_conditional_orders(kSymbol, Price{1150, kPricePrecision}) == 0);
+
+    // A resting bid to sell into, then a trade at the target.
+    Order bid = make_order(12, OrderSide::Buy, OrderType::Limit, 1200, 1000);
+    assert(engine.submit_order(bid).success);
+    assert(engine.check_conditional_orders(kSymbol, Price{1200, kPricePrecision}) == 1);
+    assert(engine.get_conditional_orders(kSymbol, 11).empty());
+
+    std::printf("ok: a sell take-profit fires once price rises to it\n");
+}
+
+void test_trailing_stop_ratchets_then_fires() {
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+
+    // Trade at 1100 so the market has a reference price; a trailing stop has
+    // nothing to hang from until something has traded.
+    seed_ask(engine, 1100, 5000);
+    Order opener = make_order(901, OrderSide::Buy, OrderType::Limit, 1100, 1000);
+    assert(engine.submit_order(opener).success);
+
+    // A sell trailing stop 100 below the peak.
+    Order trail = make_order(13, OrderSide::Sell, OrderType::TrailingStop, 0, 1000);
+    trail.trailing_distance = {100, kPricePrecision};
+    OrderResult parked = engine.submit_order(trail);
+    assert(parked.success);
+    assert(parked.trades.empty());
+
+    // Price rises: the peak ratchets up with it and the stop does not fire.
+    assert(engine.check_conditional_orders(kSymbol, Price{1150, kPricePrecision}) == 0);
+    assert(engine.get_conditional_orders(kSymbol, 13).size() == 1);
+
+    // A retrace of 50 from the 1150 peak is inside the 100 trail: still parked.
+    assert(engine.check_conditional_orders(kSymbol, Price{1100, kPricePrecision}) == 0);
+    assert(engine.get_conditional_orders(kSymbol, 13).size() == 1);
+
+    // A fall to 1050 is 100 below the peak: the trail fires and sells.
+    Order bid = make_order(14, OrderSide::Buy, OrderType::Limit, 1040, 1000);
+    assert(engine.submit_order(bid).success);
+    assert(engine.check_conditional_orders(kSymbol, Price{1050, kPricePrecision}) == 1);
+    assert(engine.get_conditional_orders(kSymbol, 13).empty());
+
+    std::printf("ok: a trailing stop ratchets with the peak and fires on the retrace\n");
+}
+
+void test_oco_fires_one_leg_only() {
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+
+    // OCO: sell at 1200 (take-profit) or 900 (stop). Whichever hits first
+    // cancels the other.
+    Order oco = make_order(15, OrderSide::Sell, OrderType::OCO, 1200, 1000);
+    oco.stop_price = {900, kPricePrecision};
+    assert(engine.submit_order(oco).success);
+    assert(engine.get_conditional_orders(kSymbol, 15).size() == 1);
+
+    Order bid = make_order(16, OrderSide::Buy, OrderType::Limit, 1190, 1000);
+    assert(engine.submit_order(bid).success);
+
+    assert(engine.check_conditional_orders(kSymbol, Price{1200, kPricePrecision}) == 1);
+    // Both legs are gone: one fired, the other was cancelled with it.
+    assert(engine.get_conditional_orders(kSymbol, 15).empty());
+
+    std::printf("ok: an OCO fires one leg and drops the other\n");
+}
+
+void test_cancel_reaches_parked_orders() {
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+
+    Order stop = make_order(17, OrderSide::Sell, OrderType::StopLoss, 0, 1000);
+    stop.stop_price = {900, kPricePrecision};
+    OrderResult parked = engine.submit_order(stop);
+    assert(parked.success);
+    assert(engine.get_conditional_orders(kSymbol, 17).size() == 1);
+
+    // A parked order is not in the book, so cancel must reach the parking map.
+    assert(engine.cancel_order(kSymbol, parked.order_id));
+    assert(engine.get_conditional_orders(kSymbol, 17).empty());
+
+    // Cancel-all sweeps parked orders too.
+    Order stop2 = make_order(18, OrderSide::Sell, OrderType::StopLoss, 0, 1000);
+    stop2.stop_price = {900, kPricePrecision};
+    assert(engine.submit_order(stop2).success);
+    assert(engine.cancel_all_orders(kSymbol, 18) == 1);
+    assert(engine.get_conditional_orders(kSymbol, 18).empty());
+
+    std::printf("ok: cancel and cancel-all reach parked conditional orders\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -557,7 +699,12 @@ void test_market_fee_rates_are_charged() {
 
 int main() {
     test_avg_fill_price_is_volume_weighted();
-    test_conditional_orders_fail_closed();
+    test_conditional_order_validation();
+    test_stop_loss_sell_fires_on_a_fall();
+    test_take_profit_sell_fires_on_a_rise();
+    test_trailing_stop_ratchets_then_fires();
+    test_oco_fires_one_leg_only();
+    test_cancel_reaches_parked_orders();
     test_fee_and_resting_behaviour();
     test_market_fee_rates_are_charged();
     test_maintenance_paths();

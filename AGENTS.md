@@ -33,6 +33,15 @@ The authoritative matching engine is **Rust** (`backend/rust/matching-engine`). 
 add a second matching engine in Go: the legacy Go engine that used to sit at
 `backend/go/*.go` was retired for exactly this reason.
 
+The latency-critical C++ engine at `backend/cpp/matching_engine` (spot order book,
+risk checks, fixed-point arithmetic) is the pre-trade path, not a second engine:
+it prices and matches an incoming order, the Rust engine is the settlement
+authority. Conditional orders (StopLoss, TakeProfit, OCO, TrailingStop) are
+implemented there: they park off-book in `MatchingEngine::conditional_orders_`
+and are activated by `check_conditional_orders`, which the engine calls itself
+after every trade. `execute_match` rejects a conditional type that reaches it
+unactivated — that is a programming error, not a supported path.
+
 ## Retired legacy Go code
 
 `backend/go/_legacy/` holds an earlier, unreferenced generation of the Go backend

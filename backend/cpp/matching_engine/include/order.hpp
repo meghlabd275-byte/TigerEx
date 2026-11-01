@@ -392,6 +392,14 @@ inline bool price_equal(const Price& a, const Price& b) {
     return lhs == rhs;
 }
 
+inline bool price_less_equal(const Price& a, const Price& b) {
+    return !price_greater(a, b);
+}
+
+inline bool price_greater_equal(const Price& a, const Price& b) {
+    return !price_less(a, b);
+}
+
 /**
  * Rescale a fixed-point value to a target precision. Returns false if the
  * rescale would overflow. A Price is [value, precision] and represents

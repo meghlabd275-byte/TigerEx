@@ -273,6 +273,30 @@ public:
     OrderResult replace_order(const std::string& symbol, 
                            const OrderId& old_order_id,
                            Order& new_order);
+
+    /**
+     * Evaluate parked conditional orders for a market against a new price.
+     *
+     * Stop, take-profit, trailing-stop and OCO orders rest off-book until
+     * their trigger condition is met; this is what activates them. Call it
+     * whenever the reference price for the market moves (the engine calls it
+     * itself after every trade). Triggered orders execute as market or limit
+     * orders, and their trades are delivered through the trade callback.
+     *
+     * @param symbol Market symbol
+     * @param price New reference price for the market
+     * @return Number of conditional orders triggered
+     */
+    uint32_t check_conditional_orders(const std::string& symbol, const Price& price);
+
+    /**
+     * List parked conditional orders for a user.
+     * @param symbol Market symbol (empty for all markets)
+     * @param user_id User ID
+     * @return Vector of parked orders
+     */
+    std::vector<Order> get_conditional_orders(const std::string& symbol,
+                                              uint64_t user_id) const;
     
     /**
      * Get order
@@ -594,6 +618,19 @@ private:
     
     // Recent trades (for get_recent_trades)
     std::unordered_map<std::string, std::deque<Trade>> recent_trades_;
+
+    // Conditional orders that are parked off-book until their trigger fires.
+    // Keyed by symbol, then by order id. These orders are not in the book, so
+    // they never match or consume liquidity until check_conditional_orders()
+    // activates them.
+    std::unordered_map<std::string, std::unordered_map<OrderId, Order>>
+        conditional_orders_;
+
+    // Running extreme price per symbol since the last trade, used as the
+    // reference for trailing-stop triggers.
+    // Ids for parked orders; the book's own sequence is not used because a
+    // parked order never enters a price level.
+    std::atomic<uint64_t> next_conditional_id_{1};
     
     // Callbacks
     TradeCallback trade_callback_;
@@ -643,6 +680,24 @@ private:
      * Get or create order book
      */
     OrderBook* get_or_create_book(const std::string& symbol);
+
+    /**
+     * Park a conditional order off-book. Returns false (with @p error set)
+     * when the order is malformed for its type.
+     */
+    bool park_conditional_order(Order& order, std::string& error);
+
+    /**
+     * True when the parked order's trigger condition holds for @p price.
+     */
+    bool is_conditional_triggered(const Order& order, const Price& price) const;
+
+    /**
+     * Activate every triggered conditional order for a market. Must be called
+     * with engine_mutex_ held (exclusive). Returns the number triggered.
+     */
+    uint32_t evaluate_conditional_orders_locked(const std::string& symbol,
+                                                const Price& price);
 };
 
 } // namespace tigerex

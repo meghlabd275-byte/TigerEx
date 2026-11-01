@@ -235,11 +235,21 @@ bool MatchingEngine::submit_order_async(Order& order) {
 
 bool MatchingEngine::cancel_order(const std::string& symbol, const OrderId& order_id) {
     std::unique_lock lock(engine_mutex_);
-    
+
+    // A parked conditional order is not in a book, so it must be removed from
+    // the parking map; the book path below would never find it.
+    auto parked_it = conditional_orders_.find(symbol);
+    if (parked_it != conditional_orders_.end()) {
+        if (parked_it->second.erase(order_id) > 0) {
+            stats_.total_orders.fetch_sub(1);
+            return true;
+        }
+    }
+
     // Get order book
     auto book_it = order_books_.find(symbol);
     if (book_it == order_books_.end()) return false;
-    
+
     // Cancel on order book
     bool result = book_it->second->remove_order(order_id);
     
@@ -278,6 +288,20 @@ uint32_t MatchingEngine::cancel_all_orders(const std::string& symbol, uint64_t u
         }
     }
     
+    // Parked conditional orders are not held by any book, so sweep them too.
+    for (auto& entry : conditional_orders_) {
+        if (!symbol.empty() && entry.first != symbol) continue;
+        auto& parked = entry.second;
+        for (auto it = parked.begin(); it != parked.end();) {
+            if (it->second.user_id == user_id) {
+                it = parked.erase(it);
+                ++count;
+            } else {
+                ++it;
+            }
+        }
+    }
+
     stats_.total_orders.fetch_sub(count);
     return count;
 }
@@ -299,10 +323,17 @@ OrderResult MatchingEngine::replace_order(const std::string& symbol,
 
 Order* MatchingEngine::get_order(const std::string& symbol, const OrderId& order_id) {
     std::shared_lock lock(engine_mutex_);
-    
+
+    // Parked conditional orders live outside the book, so look there first.
+    auto parked_it = conditional_orders_.find(symbol);
+    if (parked_it != conditional_orders_.end()) {
+        auto it = parked_it->second.find(order_id);
+        if (it != parked_it->second.end()) return &it->second;
+    }
+
     auto book_it = order_books_.find(symbol);
     if (book_it == order_books_.end()) return nullptr;
-    
+
     return book_it->second->get_order(order_id);
 }
 
@@ -483,8 +514,22 @@ RiskCheckResult MatchingEngine::check_risk(const Order& order) {
     // value can land between the minimum and maximum and let an oversized
     // order through. Compute in 128-bit and fail closed on overflow, the same
     // way RiskManager::check_order_risk does.
+    //
+    // A conditional order carries its exposure in the trigger price until it
+    // is activated, so value it against that. Using the (often zero) limit
+    // price would report every stop as a zero-value order.
+    Price effective_price = order.price[0] > 0 ? order.price : order.stop_price;
+    if (effective_price[0] <= 0 && order.type == OrderType::TrailingStop) {
+        // A trailing stop that has not been given a reference price yet values
+        // its exposure at the last traded price.
+        std::shared_lock book_lock(engine_mutex_);
+        auto book_it = order_books_.find(order.symbol);
+        if (book_it != order_books_.end()) {
+            effective_price = book_it->second->get_last_price();
+        }
+    }
     const __int128 wide_order_value =
-        static_cast<__int128>(order.price[0]) * order.quantity[0];
+        static_cast<__int128>(effective_price[0]) * order.quantity[0];
     if (wide_order_value > std::numeric_limits<int64_t>::max() ||
         wide_order_value < std::numeric_limits<int64_t>::min()) {
         result.allowed = false;
@@ -528,7 +573,7 @@ RiskCheckResult MatchingEngine::check_risk(const Order& order) {
         result.margin_required = order_value / leverage;
 
         const __int128 wide_position_value =
-            static_cast<__int128>(std::abs(new_position)) * order.price[0];
+            static_cast<__int128>(std::abs(new_position)) * effective_price[0];
         if (wide_position_value > std::numeric_limits<int64_t>::max()) {
             result.allowed = false;
             result.reason = "Position value overflow";
@@ -862,11 +907,37 @@ bool MatchingEngine::validate_order(const Order& order, std::string& error) {
         error = "Circuit breaker triggered";
         return false;
     }
-    
-    // Validate price
-    if (order.price[0] <= 0) {
-        error = "Invalid price";
-        return false;
+
+    // Conditional orders rest off-book, so their trigger field is validated
+    // here rather than a limit price. Without this a stop with no stop price
+    // would park forever and never fire.
+    switch (order.type) {
+        case OrderType::StopLoss:
+        case OrderType::TakeProfit:
+            if (order.stop_price[0] <= 0) {
+                error = "Conditional order requires a positive stop_price";
+                return false;
+            }
+            break;
+        case OrderType::TrailingStop:
+            if (order.trailing_distance[0] <= 0) {
+                error = "Trailing stop requires a positive trailing_distance";
+                return false;
+            }
+            break;
+        case OrderType::OCO:
+            if (order.price[0] <= 0 || order.stop_price[0] <= 0) {
+                error = "OCO requires a positive price and stop_price";
+                return false;
+            }
+            break;
+        default:
+            // Market orders carry no limit price; every other type does.
+            if (order.type != OrderType::Market && order.price[0] <= 0) {
+                error = "Invalid price";
+                return false;
+            }
+            break;
     }
     
     // Validate quantity
@@ -898,9 +969,39 @@ OrderResult MatchingEngine::process_order(Order& order) {
         return result;
     }
     
+    // A conditional order does not match on arrival: it is parked off-book and
+    // activated later by check_conditional_orders once its trigger fires.
+    // Parking here is what makes these types real rather than rejected.
+    switch (order.type) {
+        case OrderType::StopLoss:
+        case OrderType::TakeProfit:
+        case OrderType::TrailingStop:
+        case OrderType::OCO: {
+            std::string park_error;
+            if (!park_conditional_order(order, park_error)) {
+                result.success = false;
+                result.status = OrderStatus::Rejected;
+                result.error_message = park_error;
+                return result;
+            }
+            result.success = true;
+            result.order_id = order.id;
+            result.status = order.status;
+            result.filled_quantity = order.filled_quantity;
+            result.avg_fill_price = order.price;
+            result.fee = {0, order.price[1]};
+            result.created_at = order.created_at.count();
+            result.updated_at = order.updated_at.count();
+            if (order_callback_) order_callback_(order);
+            return result;
+        }
+        default:
+            break;
+    }
+
     // Execute match
     MatchResult match = execute_match(order);
-    
+
     if (!match.success) {
         result.success = false;
         result.status = OrderStatus::Rejected;
@@ -964,7 +1065,7 @@ OrderResult MatchingEngine::process_order(Order& order) {
     if (order_callback_) {
         order_callback_(order);
     }
-    
+
     for (const auto& trade : result.trades) {
         if (trade_callback_) {
             trade_callback_(trade);
@@ -976,7 +1077,14 @@ OrderResult MatchingEngine::process_order(Order& order) {
             recent_trades_[trade.symbol].pop_front();
         }
     }
-    
+
+    // A trade moves the reference price, so parked conditional orders for that
+    // market may now be triggered. Without this, stop and take-profit orders
+    // would never fire on their own.
+    for (const auto& trade : result.trades) {
+        check_conditional_orders(trade.symbol, trade.price);
+    }
+
     return result;
 }
 
@@ -1016,12 +1124,12 @@ MatchResult MatchingEngine::execute_match(Order& order) {
         case OrderType::TakeProfit:
         case OrderType::OCO:
         case OrderType::TrailingStop: {
-            // This engine does not implement conditional orders yet. Returning
-            // success here would tell the caller the order was accepted and
-            // working when it was silently dropped, so fail closed instead.
+            // Conditional orders are parked by process_order and never reach
+            // the matcher directly. If one does it is a programming error, so
+            // fail closed rather than matching a stop as if it were a limit.
             result.success = false;
             result.error_message =
-                "Conditional order types are not supported by this engine";
+                "Conditional order reached the matcher without being activated";
             return result;
         }
 
@@ -1046,6 +1154,227 @@ void MatchingEngine::update_position(const Trade& trade) {
     const int64_t taker_delta = (trade.side == OrderSide::Buy) ? qty : -qty;
     positions_[trade.taker_fee_user_id][trade.symbol] += taker_delta;
     positions_[trade.maker_fee_user_id][trade.symbol] -= taker_delta;
+}
+
+// ============================================================================
+// CONDITIONAL ORDERS
+// ============================================================================
+
+bool MatchingEngine::park_conditional_order(Order& order, std::string& error) {
+    // A trigger price of zero can never be reached by a positive price, so an
+    // order parked with one would rest forever. Refuse it instead.
+    switch (order.type) {
+        case OrderType::StopLoss:
+        case OrderType::TakeProfit:
+            if (order.stop_price[0] <= 0) {
+                error = "Conditional order requires a positive stop_price";
+                return false;
+            }
+            break;
+        case OrderType::TrailingStop:
+            if (order.trailing_distance[0] <= 0) {
+                error = "Trailing stop requires a positive trailing_distance";
+                return false;
+            }
+            // order.price carries the running extreme the trail hangs from.
+            // Seed it from the last trade when the caller supplied nothing;
+            // without a reference there is nothing to trail.
+            if (order.price[0] <= 0) {
+                auto book_it = order_books_.find(order.symbol);
+                if (book_it == order_books_.end()) {
+                    error = "Market not found";
+                    return false;
+                }
+                const Price last = book_it->second->get_last_price();
+                if (last[0] <= 0) {
+                    error = "Trailing stop needs a reference price; no trades yet";
+                    return false;
+                }
+                order.price = last;
+            }
+            break;
+        case OrderType::OCO:
+            if (order.price[0] <= 0 || order.stop_price[0] <= 0) {
+                error = "OCO requires a positive price and stop_price";
+                return false;
+            }
+            if (order.price[1] != order.stop_price[1]) {
+                error = "OCO price and stop_price must share a precision";
+                return false;
+            }
+            break;
+        default:
+            error = "Not a conditional order type";
+            return false;
+    }
+
+    order.id.server_order_id = next_conditional_id_.fetch_add(1);
+    order.id.sequence = order.id.server_order_id;
+    order.id.timestamp_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    order.status = OrderStatus::Open;
+    order.updated_at = std::chrono::nanoseconds(order.id.timestamp_ns);
+    if (order.created_at.count() == 0) order.created_at = order.updated_at;
+
+    conditional_orders_[order.symbol][order.id] = order;
+    return true;
+}
+
+bool MatchingEngine::is_conditional_triggered(const Order& order,
+                                              const Price& price) const {
+    switch (order.type) {
+        case OrderType::StopLoss:
+            // A sell stop protects a long and fires when the market falls to
+            // or below the stop; a buy stop protects a short and fires when it
+            // rises to or above it.
+            return order.side == OrderSide::Sell
+                       ? price_less_equal(price, order.stop_price)
+                       : price_greater_equal(price, order.stop_price);
+        case OrderType::TakeProfit:
+            // Mirror image: a sell take-profit fires on a rise, a buy
+            // take-profit fires on a fall.
+            return order.side == OrderSide::Sell
+                       ? price_greater_equal(price, order.stop_price)
+                       : price_less_equal(price, order.stop_price);
+        case OrderType::TrailingStop: {
+            // order.price is the running extreme. The trail sits
+            // trailing_distance away from it on the losing side, so a sell
+            // trail fires trailing_distance below the peak and a buy trail
+            // fires trailing_distance above the trough.
+            Price trigger;
+            if (order.side == OrderSide::Sell) {
+                if (!price_sub(order.price, order.trailing_distance, trigger)) {
+                    return false;
+                }
+                return price_less_equal(price, trigger);
+            }
+            if (!price_add(order.price, order.trailing_distance, trigger)) {
+                return false;
+            }
+            return price_greater_equal(price, trigger);
+        }
+        case OrderType::OCO:
+            // Either leg firing cancels the other.
+            return price_less_equal(price, order.stop_price) ||
+                   price_greater_equal(price, order.price);
+        default:
+            return false;
+    }
+}
+
+uint32_t MatchingEngine::check_conditional_orders(const std::string& symbol,
+                                                  const Price& price) {
+    std::unique_lock lock(engine_mutex_);
+    return evaluate_conditional_orders_locked(symbol, price);
+}
+
+uint32_t MatchingEngine::evaluate_conditional_orders_locked(
+    const std::string& symbol, const Price& price) {
+    if (order_books_.find(symbol) == order_books_.end()) return 0;
+
+    // Ratchet the trailing reference toward the favourable extreme before
+    // deciding what has fired, so a peak set by this tick is honoured now.
+    for (auto& entry : conditional_orders_[symbol]) {
+        Order& parked = entry.second;
+        if (parked.type != OrderType::TrailingStop ||
+            parked.status != OrderStatus::Open) {
+            continue;
+        }
+        if (parked.side == OrderSide::Sell) {
+            if (price_greater(price, parked.price)) parked.price = price;
+        } else if (price_less(price, parked.price)) {
+            parked.price = price;
+        }
+    }
+
+    // Collect what should fire, then execute after the scan so execution,
+    // which can call back into the engine, does not invalidate the iterators.
+    std::vector<Order> firing;
+    auto& parked_for_symbol = conditional_orders_[symbol];
+    for (auto it = parked_for_symbol.begin(); it != parked_for_symbol.end();) {
+        Order& parked = it->second;
+        if (parked.status != OrderStatus::Open) {
+            it = parked_for_symbol.erase(it);
+            continue;
+        }
+        if (!is_conditional_triggered(parked, price)) {
+            ++it;
+            continue;
+        }
+
+        // A triggered order enters the book as a limit order when it carries a
+        // limit price, and as a market order otherwise. An OCO's stop leg
+        // supplies the limit price when that is the leg that fired.
+        Order executable = parked;
+        if (executable.type == OrderType::OCO) {
+            if (price_less_equal(price, executable.stop_price)) {
+                executable.price = executable.stop_price;
+            }
+            executable.type = OrderType::Limit;
+        } else if (executable.type == OrderType::TrailingStop) {
+            // Trailing stops are protective: they exit at market.
+            executable.type = OrderType::Market;
+        } else {
+            executable.type = executable.price[0] > 0 ? OrderType::Limit
+                                                      : OrderType::Market;
+        }
+        if (executable.type == OrderType::Market) {
+            executable.tif = TimeInForce::ImmediateOrCancel;
+        }
+
+        firing.push_back(executable);
+        it = parked_for_symbol.erase(it);
+    }
+
+    if (firing.empty()) return 0;
+
+    uint32_t triggered = 0;
+    for (Order& executable : firing) {
+        MatchResult match = execute_match(executable);
+
+        // Publish the fills an activation produced, exactly as a normal
+        // submission does, so subscribers see conditional executions.
+        for (const auto& trade : match.trades) {
+            update_position(trade);
+            update_stats(trade, 0);
+            if (trade_callback_) trade_callback_(trade);
+            recent_trades_[trade.symbol].push_back(trade);
+            if (recent_trades_[trade.symbol].size() > 1000) {
+                recent_trades_[trade.symbol].pop_front();
+            }
+        }
+
+        // The order is no longer parked: it filled, rested as a limit order,
+        // or was rejected. Count only the activations that did something.
+        if (match.success) ++triggered;
+    }
+
+    return triggered;
+}
+
+std::vector<Order> MatchingEngine::get_conditional_orders(const std::string& symbol,
+                                                          uint64_t user_id) const {
+    std::shared_lock lock(engine_mutex_);
+    std::vector<Order> result;
+
+    auto collect = [&](const std::string& sym) {
+        auto it = conditional_orders_.find(sym);
+        if (it == conditional_orders_.end()) return;
+        for (const auto& entry : it->second) {
+            const Order& parked = entry.second;
+            if (user_id == 0 || parked.user_id == user_id) {
+                result.push_back(parked);
+            }
+        }
+    };
+
+    if (symbol.empty()) {
+        for (const auto& entry : conditional_orders_) collect(entry.first);
+    } else {
+        collect(symbol);
+    }
+    return result;
 }
 
 bool MatchingEngine::check_circuit_breaker(const std::string& symbol, const Price& price) {
