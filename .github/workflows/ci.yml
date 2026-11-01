@@ -65,6 +65,9 @@ jobs:
       - name: Type-check frontend
         run: npm run type-check
 
+      - name: Run ledger logic tests
+        run: npm run test:logic
+
   cpp-matching-engine:
     runs-on: ubuntu-latest
     permissions:

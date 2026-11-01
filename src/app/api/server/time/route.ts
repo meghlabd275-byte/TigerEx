@@ -1,9 +1,16 @@
 import { NextResponse } from 'next/server';
+import { backendBaseUrl } from '@/lib/backend-url';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
 
 // Get server time
 export async function GET() {
+  const API_BASE_URL = backendBaseUrl();
+  if (!API_BASE_URL) {
+    return NextResponse.json(
+      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
+      { status: 503 },
+    );
+  }
   try {
     const response = await fetch(`${API_BASE_URL}/server/time`, {
       method: 'GET',

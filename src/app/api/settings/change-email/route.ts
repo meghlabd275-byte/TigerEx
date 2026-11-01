@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { backendBaseUrl } from '@/lib/backend-url';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8080/api/v1');
 
 export async function POST(request: NextRequest) {
+  const API_BASE_URL = backendBaseUrl();
+  if (!API_BASE_URL) {
+    return NextResponse.json(
+      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
+      { status: 503 },
+    );
+  }
   if (!API_BASE_URL || (process.env.NODE_ENV === 'production' && !API_BASE_URL.startsWith('https://'))) return NextResponse.json({ success: false, error: { code: 'ACCOUNT_BACKEND_UNAVAILABLE', message: 'A secure account backend is not configured.' } }, { status: 503 });
   const authorization = request.headers.get('authorization');
   const sessionId = request.headers.get('x-session-id');

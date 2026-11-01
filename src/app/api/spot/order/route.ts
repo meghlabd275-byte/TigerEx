@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { backendBaseUrl } from '@/lib/backend-url';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
 
 // Place spot order
 export async function POST(request: NextRequest) {
+  const API_BASE_URL = backendBaseUrl();
+  if (!API_BASE_URL) {
+    return NextResponse.json(
+      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
+      { status: 503 },
+    );
+  }
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     const body = await request.json();
@@ -45,6 +52,13 @@ export async function POST(request: NextRequest) {
 
 // Get open orders
 export async function GET(request: NextRequest) {
+  const API_BASE_URL = backendBaseUrl();
+  if (!API_BASE_URL) {
+    return NextResponse.json(
+      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
+      { status: 503 },
+    );
+  }
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     
@@ -84,6 +98,13 @@ export async function GET(request: NextRequest) {
 
 // Cancel order
 export async function DELETE(request: NextRequest) {
+  const API_BASE_URL = backendBaseUrl();
+  if (!API_BASE_URL) {
+    return NextResponse.json(
+      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
+      { status: 503 },
+    );
+  }
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     const { searchParams } = new URL(request.url);

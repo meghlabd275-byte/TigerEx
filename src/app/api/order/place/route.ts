@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { backendBaseUrl } from '@/lib/backend-url';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8080/api/v1');
 
 function backendUrl(path: string): string | null {
-  if (!API_BASE_URL || (process.env.NODE_ENV === 'production' && !API_BASE_URL.startsWith('https://'))) return null;
-  return `${API_BASE_URL.replace(/\/$/, '')}${path}`;
+  const base = backendBaseUrl();
+  return base ? `${base}${path}` : null;
 }
 
 export async function POST(request: NextRequest) {

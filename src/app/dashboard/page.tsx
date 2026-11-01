@@ -40,18 +40,18 @@ interface User {
 }
 
 interface Balance {
-  asset: string;
+  coin: string;
   available: number;
   locked: number;
-  usdValue: number;
+  usdPrice: number | null;
+  usdValue: number | null;
 }
 
 interface PortfolioStats {
   totalBalance: number;
-  totalProfit: number;
-  profitPercent: number;
-  todayProfit: number;
-  todayPercent: number;
+  realizedPnl: number;
+  realizedPnl24h: number;
+  openOrders: number;
 }
 
 export default function DashboardPage() {
@@ -60,16 +60,16 @@ export default function DashboardPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [user, setUser] = useState<User | null>(null);
   const [balances, setBalances] = useState<Balance[]>([]);
+  const [unpricedAssets, setUnpricedAssets] = useState<string[]>([]);
   const [stats, setStats] = useState<PortfolioStats>({
     totalBalance: 0,
-    totalProfit: 0,
-    profitPercent: 0,
-    todayProfit: 0,
-    todayPercent: 0,
+    realizedPnl: 0,
+    realizedPnl24h: 0,
+    openOrders: 0,
   });
   const [loading, setLoading] = useState(true);
 
-  // Fetch real data from API
+  // Load the account's own ledger through the portfolio summary endpoint.
   useEffect(() => {
     const loadData = async () => {
       // Check for token
@@ -85,30 +85,29 @@ export default function DashboardPage() {
       }
 
       try {
-        // Fetch wallet balances from API
-        const balancesResponse = await fetch('/api/wallet/balances', {
+        const response = await fetch('/api/portfolio/summary', {
           headers: {
             'Authorization': `Bearer ${token}`,
           },
+          cache: 'no-store',
         });
 
-        if (balancesResponse.ok) {
-          const balancesData = await balancesResponse.json();
-          if (balancesData.balances) {
-            setBalances(balancesData.balances);
-            
-            const total = balancesData.balances.reduce((sum: number, b: Balance) => sum + (b.usdValue || 0), 0);
+        if (response.ok) {
+          const payload = await response.json();
+          const summary = payload?.data;
+          if (summary) {
+            setBalances(Array.isArray(summary.holdings) ? summary.holdings : []);
+            setUnpricedAssets(Array.isArray(summary.unpricedAssets) ? summary.unpricedAssets : []);
             setStats({
-              totalBalance: total,
-              totalProfit: total * 0.0523,
-              profitPercent: 5.23,
-              todayProfit: total * 0.0125,
-              todayPercent: 1.25,
+              totalBalance: Number(summary.totalBalanceUSDT) || 0,
+              realizedPnl: Number(summary.realizedPnlUSDT) || 0,
+              realizedPnl24h: Number(summary.realizedPnl24hUSDT) || 0,
+              openOrders: Number(summary.openOrders) || 0,
             });
           }
         }
       } catch (error) {
-        console.error('Failed to fetch wallet data:', error);
+        console.error('Failed to fetch portfolio data:', error);
       } finally {
         setLoading(false);
       }
@@ -257,23 +256,21 @@ export default function DashboardPage() {
               value={formatCurrency(stats.totalBalance)}
               icon={<Wallet className="w-6 h-6 text-purple-500" />}
             />
-            <StatCard 
-              title="Total Profit/Loss" 
-              value={formatCurrency(stats.totalProfit)}
-              percent={`${stats.profitPercent.toFixed(2)}%`}
-              positive={stats.totalProfit >= 0}
-              icon={<TrendingUp className="w-6 h-6 text-green-500" />}
+            <StatCard
+              title="Realized P/L"
+              value={formatCurrency(stats.realizedPnl)}
+              positive={stats.realizedPnl >= 0}
+              icon={stats.realizedPnl >= 0 ? <TrendingUp className="w-6 h-6 text-green-500" /> : <TrendingDown className="w-6 h-6 text-red-500" />}
             />
-            <StatCard 
-              title="Today's Profit/Loss" 
-              value={formatCurrency(stats.todayProfit)}
-              percent={`${stats.todayPercent.toFixed(2)}%`}
-              positive={stats.todayProfit >= 0}
-              icon={stats.todayProfit >= 0 ? <ArrowUpRight className="w-6 h-6 text-green-500" /> : <ArrowDownRight className="w-6 h-6 text-red-500" />}
+            <StatCard
+              title="Realized P/L (24h)"
+              value={formatCurrency(stats.realizedPnl24h)}
+              positive={stats.realizedPnl24h >= 0}
+              icon={stats.realizedPnl24h >= 0 ? <ArrowUpRight className="w-6 h-6 text-green-500" /> : <ArrowDownRight className="w-6 h-6 text-red-500" />}
             />
-            <StatCard 
-              title="Open Orders" 
-              value="3"
+            <StatCard
+              title="Open Orders"
+              value={String(stats.openOrders)}
               icon={<Activity className="w-6 h-6 text-blue-500" />}
             />
           </div>
@@ -315,28 +312,35 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {balances.map((balance) => (
-                    <tr key={balance.asset} className="border-b border-gray-700/50 hover:bg-gray-700/30">
+                  {balances.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-sm text-gray-500">
+                          No balances are recorded for this account yet.
+                        </td>
+                      </tr>
+                    )}
+                    {balances.map((balance) => (
+                    <tr key={balance.coin} className="border-b border-gray-700/50 hover:bg-gray-700/30">
                       <td className="py-4 px-4">
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white text-xs font-bold">
-                            {balance.asset.slice(0, 2)}
+                            {balance.coin.slice(0, 2)}
                           </div>
-                          <span className="text-white font-medium">{balance.asset}</span>
+                          <span className="text-white font-medium">{balance.coin}</span>
                         </div>
                       </td>
                       <td className="py-4 px-4 text-right text-white">
-                        {formatCrypto(balance.available)} {balance.asset}
+                        {formatCrypto(balance.available)} {balance.coin}
                       </td>
                       <td className="py-4 px-4 text-right text-gray-400">
-                        {balance.locked > 0 ? `${formatCrypto(balance.locked)} ${balance.asset}` : '-'}
+                        {balance.locked > 0 ? `${formatCrypto(balance.locked)} ${balance.coin}` : '-'}
                       </td>
                       <td className="py-4 px-4 text-right text-white font-medium">
-                        {formatCurrency(balance.usdValue)}
+                        {balance.usdValue === null ? <span className="text-gray-500">Unpriced</span> : formatCurrency(balance.usdValue)}
                       </td>
                       <td className="py-4 px-4 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <Link href={`/trade/${balance.asset}-USDT` as Route} className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-500 transition-colors">
+                          <Link href={`/trade/${balance.coin}-USDT` as Route} className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-500 transition-colors">
                             Trade
                           </Link>
                         </div>
