@@ -29,6 +29,7 @@ set(SOURCES
 set(HEADERS
     include/order.hpp
     include/order_book.hpp
+    include/risk_manager.hpp
     include/matching_engine.hpp
 )
 
@@ -55,6 +56,11 @@ enable_testing()
 add_executable(matching_engine_core_tests tests/matching_engine_test.cpp)
 target_link_libraries(matching_engine_core_tests PRIVATE tigerex_matching Threads::Threads)
 add_test(NAME matching_engine_core_tests COMMAND matching_engine_core_tests)
+
+# Risk manager: velocity limits, margin and position checks.
+add_executable(risk_manager_tests tests/risk_manager_test.cpp)
+target_link_libraries(risk_manager_tests PRIVATE tigerex_matching Threads::Threads)
+add_test(NAME risk_manager_tests COMMAND risk_manager_tests)
 
 # Installation
 install(TARGETS tigerex_matching
