@@ -334,6 +334,62 @@ void test_cancel_and_trade_stats() {
     std::printf("ok: resting orders cancel and trades accumulate in stats\n");
 }
 
+// ---------------------------------------------------------------------------
+// 7. Fixed-point price arithmetic must honour precision and must not silently
+//    wrap. price_add used to return a[0] + b[0] with a's precision, and
+//    get_mid_price returned that sum instead of half of it.
+// ---------------------------------------------------------------------------
+void test_fixed_point_arithmetic() {
+    Price out{0, 0};
+
+    // Same precision adds plainly: 1.50 + 2.50 = 4.00.
+    assert(price_add(Price{150, 2}, Price{250, 2}, out));
+    assert(out[0] == 400 && out[1] == 2);
+
+    // Different precisions must be reconciled: 1.50 + 2.5 = 4.00, not 1.75.
+    assert(price_add(Price{150, 2}, Price{25, 1}, out));
+    assert(out[0] == 400 && out[1] == 2);
+
+    // Subtraction, including a negative result.
+    assert(price_sub(Price{250, 2}, Price{150, 2}, out));
+    assert(out[0] == 100 && out[1] == 2);
+    assert(price_sub(Price{150, 2}, Price{250, 2}, out));
+    assert(out[0] == -100 && out[1] == 2);
+
+    // Multiplication divides by 10^b.precision, not by b.precision.
+    assert(price_multiply(Price{200, 2}, Price{300, 2}, out));
+    assert(out[0] == 600 && out[1] == 2);  // 2.00 * 3.00 = 6.00
+
+    // Division by zero fails rather than crashing.
+    assert(!price_divide(Price{100, 2}, 0, out));
+    assert(price_divide(Price{100, 2}, 2, out));
+    assert(out[0] == 50 && out[1] == 2);
+
+    // Overflow is reported, not wrapped.
+    assert(!price_add(Price{INT64_MAX, 2}, Price{INT64_MAX, 2}, out));
+    assert(!price_multiply(Price{INT64_MAX, 0}, Price{INT64_MAX, 0}, out));
+
+    // An out-of-range precision is rejected.
+    assert(!price_rescale(Price{100, 2}, -1, out[0]));
+
+    // get_mid_price is (bid + ask) / 2, not bid + ask.
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+    Order bid = make_order(61, OrderSide::Buy, OrderType::Limit, 1000, 1000);
+    Order ask = make_order(62, OrderSide::Sell, OrderType::Limit, 1200, 1000);
+    assert(engine.submit_order(bid).success);
+    assert(engine.submit_order(ask).success);
+
+    auto book = engine.get_order_book(kSymbol);
+    assert(book != nullptr);
+    const auto mid = book->get_mid_price();
+    assert(mid.has_value());
+    assert(mid->at(0) == 1100);  // (1000 + 1200) / 2
+    assert(mid->at(1) == kPricePrecision);
+
+    std::printf("ok: fixed-point price arithmetic honours precision\n");
+}
+
 }  // namespace
 
 int main() {
@@ -343,6 +399,7 @@ int main() {
     test_maintenance_paths();
     test_snapshot_persistence();
     test_cancel_and_trade_stats();
+    test_fixed_point_arithmetic();
     std::printf("all matching-engine regression tests passed\n");
     return 0;
 }

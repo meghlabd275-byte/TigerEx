@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstdint>
 #include <chrono>
+#include <limits>
 #include <string>
 #include <variant>
 #include <optional>
@@ -351,15 +352,103 @@ inline bool price_equal(const Price& a, const Price& b) {
     return a[0] * b[1] == b[0] * a[1];
 }
 
-inline Price price_add(const Price& a, const Price& b) {
-    // Simple implementation - in production use proper fixed-point arithmetic
-    int64_t result = a[0] + b[0];
-    return {result, a[1]};
+// 10^k for 0 <= k <= MAX_PRICE_PRECISION.
+inline int64_t pow10_fixed(int k) {
+    int64_t result = 1;
+    for (int i = 0; i < k; ++i) result *= 10;
+    return result;
 }
 
-inline Price price_multiply(const Price& a, const Price& b) {
-    int64_t result = (a[0] * b[0]) / b[1];
-    return {result, a[1]};
+/**
+ * Rescale a fixed-point value to a target precision. Returns false if the
+ * rescale would overflow. A Price is [value, precision] and represents
+ * value / 10^precision, so two Prices can only be combined after they share
+ * a precision: adding the raw values of 1.50 (150, 2) and 2.5 (25, 1) gives
+ * 175 at precision 2, which is 1.75, not 4.0.
+ */
+inline bool price_rescale(const Price& p, int precision, int64_t& out) {
+    if (precision < 0 || precision > MAX_PRICE_PRECISION) return false;
+    if (p[1] == precision) {
+        out = p[0];
+        return true;
+    }
+    if (precision > p[1]) {
+        const int64_t factor = pow10_fixed(precision - p[1]);
+        const __int128 scaled = static_cast<__int128>(p[0]) * factor;
+        if (scaled > std::numeric_limits<int64_t>::max() ||
+            scaled < std::numeric_limits<int64_t>::min()) {
+            return false;
+        }
+        out = static_cast<int64_t>(scaled);
+        return true;
+    }
+    out = p[0] / pow10_fixed(p[1] - precision);
+    return true;
+}
+
+/**
+ * Add two Prices, rescaling to the coarser precision first. Returns false on
+ * overflow rather than wrapping. Writes the result to @p out.
+ */
+inline bool price_add(const Price& a, const Price& b, Price& out) {
+    const int precision = a[1] > b[1] ? a[1] : b[1];
+    int64_t av = 0;
+    int64_t bv = 0;
+    if (!price_rescale(a, precision, av)) return false;
+    if (!price_rescale(b, precision, bv)) return false;
+    const __int128 sum = static_cast<__int128>(av) + bv;
+    if (sum > std::numeric_limits<int64_t>::max() ||
+        sum < std::numeric_limits<int64_t>::min()) {
+        return false;
+    }
+    out = Price{static_cast<int64_t>(sum), precision};
+    return true;
+}
+
+/**
+ * Subtract two Prices, rescaling to the coarser precision first. Returns
+ * false on overflow. Writes the result to @p out.
+ */
+inline bool price_sub(const Price& a, const Price& b, Price& out) {
+    const int precision = a[1] > b[1] ? a[1] : b[1];
+    int64_t av = 0;
+    int64_t bv = 0;
+    if (!price_rescale(a, precision, av)) return false;
+    if (!price_rescale(b, precision, bv)) return false;
+    const __int128 diff = static_cast<__int128>(av) - bv;
+    if (diff > std::numeric_limits<int64_t>::max() ||
+        diff < std::numeric_limits<int64_t>::min()) {
+        return false;
+    }
+    out = Price{static_cast<int64_t>(diff), precision};
+    return true;
+}
+
+/**
+ * Multiply two Prices. The product's precision is a's precision, so the raw
+ * product is divided by 10^b.precision rather than by b.precision itself.
+ * Returns false on overflow.
+ */
+inline bool price_multiply(const Price& a, const Price& b, Price& out) {
+    if (b[1] < 0 || b[1] > MAX_PRICE_PRECISION) return false;
+    const __int128 product = static_cast<__int128>(a[0]) * b[0] /
+                             pow10_fixed(b[1]);
+    if (product > std::numeric_limits<int64_t>::max() ||
+        product < std::numeric_limits<int64_t>::min()) {
+        return false;
+    }
+    out = Price{static_cast<int64_t>(product), a[1]};
+    return true;
+}
+
+/**
+ * Divide a Price by an integer, rounding toward zero. Returns false when the
+ * divisor is zero. Writes the result to @p out.
+ */
+inline bool price_divide(const Price& a, int64_t divisor, Price& out) {
+    if (divisor == 0) return false;
+    out = Price{a[0] / divisor, a[1]};
+    return true;
 }
 
 } // namespace tigerex

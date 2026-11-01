@@ -582,8 +582,13 @@ inline std::optional<Price> OrderBook::get_mid_price() const {
     const auto* bid = get_best_bid();
     const auto* ask = get_best_ask();
     if (!bid || !ask) return std::nullopt;
-    // (bid + ask) / 2
-    return price_add(bid->price, ask->price);
+    // (bid + ask) / 2. price_add rescales to a common precision; the old code
+    // returned bid + ask and ignored precision entirely.
+    Price sum{0, 0};
+    if (!price_add(bid->price, ask->price, sum)) return std::nullopt;
+    Price mid{0, 0};
+    if (!price_divide(sum, 2, mid)) return std::nullopt;
+    return mid;
 }
 
 inline Quantity OrderBook::total_bid_quantity() const {
