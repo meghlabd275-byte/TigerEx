@@ -17,7 +17,7 @@
     "docker:run": "docker run -p 3000:3000 tigerex/api",
     "db:migrate": "node server/db/migrate.js",
     "db:seed": "node server/db/seed.js",
-    "test:logic": "tsc src/lib/db/pnl.ts --outDir .test-build --module commonjs --target es2020 --skipLibCheck && node --test \"scripts/test/*.test.cjs\""
+    "test:logic": "tsc src/lib/db/pnl.ts --outDir .test-build --module commonjs --target es2020 --skipLibCheck && node --test scripts/test/*.test.cjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.0.5",
