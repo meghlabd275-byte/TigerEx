@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -997,11 +999,17 @@ func main() {
 
 	r := gin.Default()
 
-	// CORS middleware
+	// A wildcard origin lets any site call this API and read the response.
+	// Use an explicit allowlist, as the other TigerEx services do.
+	allowedOrigins := corsOrigins()
 	r.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		origin := c.GetHeader("Origin")
+		if origin != "" && allowedOrigins[origin] {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Vary", "Origin")
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		}
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
@@ -1043,4 +1051,16 @@ func main() {
 
 	fmt.Println("Starting Earn Service on :8088")
 	r.Run(":8088")
+}
+
+// corsOrigins reads the comma-separated TIGEREX_CORS_ORIGINS allowlist. An
+// empty list denies every cross-origin request rather than falling back to "*".
+func corsOrigins() map[string]bool {
+	origins := make(map[string]bool)
+	for _, o := range strings.Split(os.Getenv("TIGEREX_CORS_ORIGINS"), ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			origins[o] = true
+		}
+	}
+	return origins
 }
