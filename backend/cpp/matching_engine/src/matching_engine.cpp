@@ -6,6 +6,7 @@
 
 #include "matching_engine.hpp"
 #include <algorithm>
+#include <limits>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -477,8 +478,20 @@ RiskCheckResult MatchingEngine::check_risk(const Order& order) {
         leverage = std::max(1, market_it->second.max_leverage);
     }
 
-    // Check order value
-    int64_t order_value = order.price[0] * order.quantity[0];
+    // Check order value. price and quantity are independent fixed-point
+    // operands, so their product overflows int64 for large orders; a wrapped
+    // value can land between the minimum and maximum and let an oversized
+    // order through. Compute in 128-bit and fail closed on overflow, the same
+    // way RiskManager::check_order_risk does.
+    const __int128 wide_order_value =
+        static_cast<__int128>(order.price[0]) * order.quantity[0];
+    if (wide_order_value > std::numeric_limits<int64_t>::max() ||
+        wide_order_value < std::numeric_limits<int64_t>::min()) {
+        result.allowed = false;
+        result.reason = "Order value overflow";
+        return result;
+    }
+    const int64_t order_value = static_cast<int64_t>(wide_order_value);
     
     if (order_value > config_.max_order_value) {
         result.allowed = false;
@@ -494,13 +507,18 @@ RiskCheckResult MatchingEngine::check_risk(const Order& order) {
     
     // Check position limit
     int64_t current_position = get_position(order.user_id, order.symbol);
-    int64_t new_position = current_position + order.quantity[0];
-    
-    if (std::abs(new_position) > config_.max_position_size) {
+    // The sum can overflow int64, and a wrapped value would pass the limit
+    // check, so widen before comparing.
+    const __int128 wide_new_position =
+        static_cast<__int128>(current_position) + order.quantity[0];
+    const __int128 wide_position_limit = config_.max_position_size;
+    if (wide_new_position > wide_position_limit ||
+        wide_new_position < -wide_position_limit) {
         result.allowed = false;
         result.reason = "Position limit exceeded";
         return result;
     }
+    const int64_t new_position = static_cast<int64_t>(wide_new_position);
     
     // Calculate margin requirement
     if (order.market_type == MarketType::Margin || 
@@ -508,7 +526,15 @@ RiskCheckResult MatchingEngine::check_risk(const Order& order) {
         
         // For margin trading, calculate margin requirement
         result.margin_required = order_value / leverage;
-        result.position_value = std::abs(new_position) * order.price[0];
+
+        const __int128 wide_position_value =
+            static_cast<__int128>(std::abs(new_position)) * order.price[0];
+        if (wide_position_value > std::numeric_limits<int64_t>::max()) {
+            result.allowed = false;
+            result.reason = "Position value overflow";
+            return result;
+        }
+        result.position_value = static_cast<int64_t>(wide_position_value);
         
         // Check balance
         int64_t balance = get_balance(order.user_id, order.symbol);

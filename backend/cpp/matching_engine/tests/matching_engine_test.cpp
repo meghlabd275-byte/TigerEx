@@ -400,6 +400,34 @@ void test_fixed_point_arithmetic() {
 }
 
 // ---------------------------------------------------------------------------
+// 7b. An order whose notional overflows int64 must be rejected, not accepted
+//     on the strength of its wrapped product. price * quantity is computed in
+//     64 bits here, so 184467440737096 cents * 100000 milli-units wraps to
+//     48384, which sits inside [min_order_value, max_order_value].
+// ---------------------------------------------------------------------------
+void test_order_value_overflow_is_rejected() {
+    EngineConfig config;
+    MatchingEngine engine{config};
+    setup_market(engine);
+
+    const int64_t price = 184467440737096;   // raw, at kPricePrecision (2)
+    const int64_t quantity = 100000;         // raw, at kQtyPrecision (3)
+    // The true notional is far above the maximum; the 64-bit product wraps to
+    // 48384, which is inside the accepted range.
+    const __int128 true_value =
+        static_cast<__int128>(price) * static_cast<__int128>(quantity);
+    assert(true_value > config.max_order_value);
+
+    Order order = make_order(77, OrderSide::Buy, OrderType::Limit, price, quantity);
+    OrderResult result = engine.submit_order(order);
+
+    assert(!result.success);
+    assert(result.error_message == "Order value overflow");
+
+    std::printf("ok: order-value overflow is rejected instead of wrapped\n");
+}
+
+// ---------------------------------------------------------------------------
 // 8. Market creation must reject a market that cannot trade, and a dated
 //    future must stop accepting orders at its delivery time.
 // ---------------------------------------------------------------------------
@@ -536,6 +564,7 @@ int main() {
     test_snapshot_persistence();
     test_cancel_and_trade_stats();
     test_fixed_point_arithmetic();
+    test_order_value_overflow_is_rejected();
     test_market_creation_validation();
     std::printf("all matching-engine regression tests passed\n");
     return 0;
