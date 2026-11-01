@@ -173,7 +173,8 @@ func newTestService(db *fakeDB) *AuthService {
 func tempToken(t *testing.T, userID uint64) string {
 	t.Helper()
 	claims := JWTClaims{
-		UserID: userID,
+		UserID:    userID,
+		TokenType: tokenType2FAChallenge,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -186,6 +187,32 @@ func tempToken(t *testing.T, userID uint64) string {
 		t.Fatalf("sign temp token: %v", err)
 	}
 	return signed
+}
+
+// TestVerify2FARejectsNonChallengeToken is the regression test for a token
+// that is validly signed but was not issued as a 2FA challenge. Before the
+// token_type check, any validly signed JWT satisfied the 2FA gate.
+func TestVerify2FARejectsNonChallengeToken(t *testing.T) {
+	svc := newTestService(newFakeDB(testUser()))
+	ctx := context.Background()
+
+	claims := JWTClaims{
+		UserID: 1,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "tigerex",
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString([]byte(testJWTSecret))
+	if err != nil {
+		t.Fatalf("sign access-shaped token: %v", err)
+	}
+
+	if _, err := svc.Verify2FA(ctx, &Verify2FARequest{TempToken: signed, Code: "123456"}); err == nil {
+		t.Fatal("a token that is not a 2FA challenge must not satisfy Verify2FA")
+	}
 }
 
 func testUser() *User {

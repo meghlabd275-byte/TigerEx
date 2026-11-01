@@ -245,6 +245,9 @@ type JWTClaims struct {
 	TrustedDevice     bool     `json:"trusted_device"`
 	DeviceFingerprint string   `json:"device_fingerprint"`
 	Permissions       []string `json:"permissions"`
+	// TokenType distinguishes a short-lived 2FA challenge from an access or
+	// refresh token, so a token cannot be replayed outside its purpose.
+	TokenType string `json:"token_type,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -1228,12 +1231,13 @@ func (s *AuthService) generateTokens(user *User, deviceFingerprint string) (stri
 func (s *AuthService) generateTempToken(user *User) (string, error) {
 	now := time.Now()
 	claims := JWTClaims{
-		UserID: user.ID,
+		UserID:    user.ID,
+		TokenType: tokenType2FAChallenge,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(now.Add(10 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			Issuer:    "tigerex",
-			Subject:   fmt.Sprintf("%d_temp", user.ID),
+			Subject:   fmt.Sprintf("%d", user.ID),
 		},
 	}
 
@@ -1241,20 +1245,38 @@ func (s *AuthService) generateTempToken(user *User) (string, error) {
 	return token.SignedString([]byte(s.config.JWTsecret))
 }
 
+// tokenType2FAChallenge marks a token as usable only for the 2FA step of a
+// login. Without it validateTempToken accepted any validly signed token,
+// including a full access token, which let a caller replay a token that was
+// never issued for the 2FA exchange.
+const tokenType2FAChallenge = "2fa_challenge"
+
 func (s *AuthService) validateTempToken(tempToken string) (*JWTClaims, error) {
 	token, err := jwt.ParseWithClaims(tempToken, &JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return []byte(s.config.JWTsecret), nil
-	})
+	},
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithExpirationRequired(),
+	)
 
 	if err != nil {
 		return nil, err
 	}
 
-	if claims, ok := token.Claims.(*JWTClaims); ok && token.Valid {
-		return claims, nil
+	claims, ok := token.Claims.(*JWTClaims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token")
 	}
 
-	return nil, errors.New("invalid token")
+	// A token that is not a 2FA challenge must never satisfy the 2FA step.
+	if claims.TokenType != tokenType2FAChallenge {
+		return nil, errors.New("token is not a 2FA challenge")
+	}
+	if claims.UserID == 0 {
+		return nil, errors.New("token has no subject")
+	}
+
+	return claims, nil
 }
 
 // ============================================================================
