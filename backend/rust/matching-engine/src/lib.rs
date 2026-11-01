@@ -503,8 +503,12 @@ impl Trade {
             side,
             price,
             quantity,
-            fee: price * quantity * 0.0002,
-            fee_currency: "USDT".to_string(),
+            // The fee schedule lives on the market, so it cannot be known
+            // here. place_order stamps the real fee and quote currency once
+            // the trade is attributed; a fabricated 2 bps / "USDT" default
+            // would silently bill every market the same rate.
+            fee: 0.0,
+            fee_currency: String::new(),
             maker: false,
             buyer_user_id,
             seller_user_id,
@@ -792,7 +796,7 @@ impl MatchingEngine {
             orders.insert(order.id.clone(), order.clone());
         }
 
-        let trades = match order.order_type {
+        let mut trades = match order.order_type {
             OrderType::Limit => self.submit_limit(&order)?,
             OrderType::Market => self.submit_market(&order)?,
             _ => {
@@ -804,6 +808,18 @@ impl MatchingEngine {
                 ));
             }
         };
+
+        // Stamp the market's own fee schedule onto every trade. The trade
+        // factory has no access to the market, so leaving the fee to a
+        // hardcoded default billed every symbol the same rate.
+        let taker_fee = market.taker_fee;
+        let maker_fee = market.maker_fee;
+        let fee_currency = market.quote_asset.clone();
+        for trade in &mut trades {
+            let rate = if trade.maker { maker_fee } else { taker_fee };
+            trade.fee = trade.price * trade.quantity * rate;
+            trade.fee_currency = fee_currency.clone();
+        }
 
         // Update stats
         {
@@ -1304,6 +1320,30 @@ mod tests {
         book.add_order(&limit_order("bad2", "u1", Side::Buy, -5.0, 1.0));
         assert_eq!(book.best_bid(), 0.0);
         assert!(book.bids.is_empty());
+    }
+
+    #[test]
+    fn trade_fee_uses_the_markets_own_schedule() {
+        // The trade factory hardcoded 2 bps and "USDT". A market with a
+        // different taker fee and a non-USDT quote must be billed its own
+        // rate in its own currency.
+        let engine = MatchingEngine::new();
+        let mut market = Market::new("BTC".to_string(), "RUSD".to_string());
+        market.taker_fee = 0.0005; // 5 bps
+        market.maker_fee = 0.0001; // 1 bp
+        engine.add_market(market);
+
+        let mut ask = limit_order("ask", "maker", Side::Sell, 100.0, 2.0);
+        ask.market = "BTC/RUSD".to_string();
+        engine.place_order(ask).unwrap();
+        let mut bid = limit_order("bid", "taker", Side::Buy, 101.0, 1.0);
+        bid.market = "BTC/RUSD".to_string();
+        let trades = engine.place_order(bid).unwrap();
+
+        assert_eq!(trades.len(), 1);
+        // Notional 100.0 at the taker rate 0.0005 = 0.05.
+        assert!((trades[0].fee - 0.05).abs() < 1e-12, "fee was {}", trades[0].fee);
+        assert_eq!(trades[0].fee_currency, "RUSD");
     }
 
     #[test]
