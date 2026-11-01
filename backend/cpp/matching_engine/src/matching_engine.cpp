@@ -81,6 +81,7 @@ bool MatchingEngine::create_market(const MarketInfo& info) {
     auto book = std::make_unique<OrderBook>(info.symbol, info.market_type);
     book->set_price_limits(market.min_price, market.max_price);
     book->set_lot_limits(market.min_quantity, market.max_quantity);
+    book->set_fee_rates(market.maker_fee_bps, market.taker_fee_bps);
     
     // Store
     markets_[info.symbol] = market;
@@ -905,16 +906,22 @@ OrderResult MatchingEngine::process_order(Order& order) {
 
     // Bill only the fee attributed to this order's own user; each trade also
     // carries the counterparty's fee, which belongs to the other account.
+    // The per-trade fee is already scaled to the fee precision, so summing it
+    // and re-scaling by 10^filled_quantity_precision (as this did) multiplied
+    // the reported fee by 1000. Carry the trade's own fee precision instead.
     int64_t total_fee = 0;
+    int fee_precision = result.filled_quantity[1];
     for (const auto& trade : result.trades) {
         if (trade.maker_fee_user_id == order.user_id) {
             total_fee += trade.maker_fee[0];
+            fee_precision = trade.maker_fee[1];
         }
         if (trade.taker_fee_user_id == order.user_id) {
             total_fee += trade.taker_fee[0];
+            fee_precision = trade.taker_fee[1];
         }
     }
-    result.fee = int64_to_price(total_fee, result.filled_quantity[1]);
+    result.fee = {total_fee, fee_precision};
     
     result.created_at = order.created_at.count();
     result.updated_at = order.updated_at.count();

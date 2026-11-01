@@ -184,8 +184,15 @@ void test_fee_and_resting_behaviour() {
     assert(t.maker_order_id == maker.id.server_order_id);
     assert(t.taker_order_id == taker.id.server_order_id);
 
-    // The taker's own reported fee must be the taker fee, not the maker's.
+    // The taker's own reported fee must be the taker fee, not the maker's,
+    // and both fees must be exact for the fill: notional 20.00 at 2/4 bps
+    // gives 0.004 and 0.008. The old code multiplied the fixed-point price
+    // and quantity in int64 (overflow) and then re-scaled the already-scaled
+    // fee by the quantity precision, so the reported fee was wrong by 1000x.
     assert(tr.fee[0] == t.taker_fee[0]);
+    assert(tr.fee[1] == t.taker_fee[1]);
+    assert(t.maker_fee[0] == 4000 && t.maker_fee[1] == 6);
+    assert(t.taker_fee[0] == 8000 && t.taker_fee[1] == 6);
 
     // Both parties' positions must move, in opposite directions.
     assert(engine.get_position(11, kSymbol) == -2000);  // maker sold
@@ -476,12 +483,55 @@ void test_market_creation_validation() {
     std::printf("ok: market creation validates and dated futures expire\n");
 }
 
+void test_market_fee_rates_are_charged() {
+    // The engine billed every fill the hardcoded 2/4 bps default and ignored
+    // MarketInfo.maker_fee_bps / taker_fee_bps entirely. A market that
+    // configured a different rate must be billed that rate.
+    MatchingEngine engine{EngineConfig{}};
+
+    MarketInfo info;
+    info.symbol = kSymbol;
+    info.base_asset = "BTC";
+    info.quote_asset = "USDT";
+    info.market_type = MarketType::Spot;
+    info.state = MarketState::Open;
+    info.price_precision = kPricePrecision;
+    info.quantity_precision = kQtyPrecision;
+    info.min_price = int64_to_price(1, kPricePrecision);
+    info.max_price = int64_to_price(INT64_MAX / 1000000, kPricePrecision);
+    info.min_quantity = int64_to_quantity(1, kQtyPrecision);
+    info.max_quantity = int64_to_quantity(INT64_MAX / 1000000, kQtyPrecision);
+    info.tick_size = int64_to_price(1, kPricePrecision);
+    info.lot_size = int64_to_quantity(1, kQtyPrecision);
+    info.max_leverage = 125;
+    info.maker_fee_bps = 10;  // 0.10%
+    info.taker_fee_bps = 20;  // 0.20%
+    assert(engine.create_market(info));
+
+    Order maker = make_order(21, OrderSide::Sell, OrderType::Limit, 1000, 2000);
+    assert(engine.submit_order(maker).success);
+
+    Order taker = make_order(22, OrderSide::Buy, OrderType::Limit, 1000, 2000);
+    OrderResult tr = engine.submit_order(taker);
+    assert(tr.success);
+    assert(tr.trades.size() == 1);
+
+    // Notional 20.00 at 10 bps = 0.02 and at 20 bps = 0.04.
+    assert(tr.trades[0].maker_fee[0] == 20000 && tr.trades[0].maker_fee[1] == 6);
+    assert(tr.trades[0].taker_fee[0] == 40000 && tr.trades[0].taker_fee[1] == 6);
+    assert(tr.fee[0] == tr.trades[0].taker_fee[0]);
+    assert(tr.fee[1] == tr.trades[0].taker_fee[1]);
+
+    std::printf("ok: per-market maker/taker fee rates are charged exactly\n");
+}
+
 }  // namespace
 
 int main() {
     test_avg_fill_price_is_volume_weighted();
     test_conditional_orders_fail_closed();
     test_fee_and_resting_behaviour();
+    test_market_fee_rates_are_charged();
     test_maintenance_paths();
     test_snapshot_persistence();
     test_cancel_and_trade_stats();

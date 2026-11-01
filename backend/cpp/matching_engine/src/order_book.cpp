@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <mutex>
 
 namespace tigerex {
@@ -344,13 +345,43 @@ void OrderBook::process_single_match(Order& incoming, Order& resting,
     trade.isMaker = true;
 
     // Charge both sides. The resting order is the maker and the incoming
-    // order is the taker; each fee records the user it is billed to.
+    // order is the taker; each fee records the user it is billed to. Fees are
+    // charged on the matched notional, not on the raw fixed-point operands:
+    // price and quantity carry independent precision factors, so multiplying
+    // them directly scales the notional by 10^qty_precision and inflates every
+    // fee. Reduce the product to the quote amount at price precision first.
     const int64_t price_val = price_to_int64(match_price);
     const int64_t qty_val = quantity_to_int64(match_qty);
-    trade.maker_fee = int64_to_price(
-        calculate_maker_fee(price_val, qty_val), match_price[1]);
-    trade.taker_fee = int64_to_price(
-        calculate_taker_fee(price_val, qty_val), match_price[1]);
+    const int qty_prec = match_qty[1] < 0 ? 0
+                       : (match_qty[1] > MAX_QUANTITY_PRECISION
+                              ? MAX_QUANTITY_PRECISION : match_qty[1]);
+    const __int128 notional_fp =
+        static_cast<__int128>(price_val) * qty_val / pow10_fixed(qty_prec);
+
+    // A basis point is 1/10000, so a fee needs four decimals below the price
+    // scale to stay exact. Keeping the unscaled numerator as the fee value
+    // (notional * bps) at price_precision + 4 decimals means a small fill
+    // still bills a non-zero fee instead of truncating to zero. If that
+    // exceeds the representable precision, drop the surplus digits.
+    const int price_prec = match_price[1] < 0 ? 0
+                         : (match_price[1] > MAX_PRICE_PRECISION
+                                ? MAX_PRICE_PRECISION : static_cast<int>(match_price[1]));
+    const int fee_prec = std::min(price_prec + 4, MAX_PRICE_PRECISION);
+    const int fee_extra = price_prec + 4 - fee_prec;
+    const int64_t fee_div = pow10_fixed(fee_extra > 0 ? fee_extra : 0);
+
+    const auto fee_at = [&](int32_t bps) -> int64_t {
+        if (bps <= 0 || notional_fp <= 0) return 0;
+        __int128 fee = notional_fp * bps;
+        if (fee_extra > 0) fee /= fee_div;
+        if (fee > std::numeric_limits<int64_t>::max()) {
+            return std::numeric_limits<int64_t>::max();
+        }
+        return static_cast<int64_t>(fee);
+    };
+
+    trade.maker_fee = {fee_at(maker_fee_bps_), fee_prec};
+    trade.taker_fee = {fee_at(taker_fee_bps_), fee_prec};
     trade.maker_fee_user_id = resting.user_id;
     trade.taker_fee_user_id = incoming.user_id;
 
@@ -534,6 +565,11 @@ OrderBook::Snapshot OrderBook::create_snapshot(uint32_t depth) const {
 void OrderBook::set_price_limits(const Price& min_price, const Price& max_price) {
     min_price_ = min_price;
     max_price_ = max_price;
+}
+
+void OrderBook::set_fee_rates(int32_t maker_fee_bps, int32_t taker_fee_bps) {
+    maker_fee_bps_ = maker_fee_bps;
+    taker_fee_bps_ = taker_fee_bps;
 }
 
 bool OrderBook::is_price_valid(const Price& price) const {

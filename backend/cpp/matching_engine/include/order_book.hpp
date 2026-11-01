@@ -273,6 +273,13 @@ public:
      * Set price limits
      */
     void set_price_limits(const Price& min_price, const Price& max_price);
+
+    /**
+     * Set maker/taker fee rates in basis points. The engine charges these on
+     * each fill; without them every market was billed the 2/4 bps default
+     * regardless of what its MarketInfo configured.
+     */
+    void set_fee_rates(int32_t maker_fee_bps, int32_t taker_fee_bps);
     
     /**
      * Check if price is within limits
@@ -471,6 +478,10 @@ private:
     Price max_price_;
     Quantity min_lot_;
     Quantity max_lot_;
+
+    // Fee rates charged on each fill, in basis points.
+    int32_t maker_fee_bps_{2};
+    int32_t taker_fee_bps_{4};
     
     // ============================================================================
     // AUCTION MODE

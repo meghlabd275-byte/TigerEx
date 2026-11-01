@@ -7,6 +7,7 @@
 #include "order.hpp"
 #include <sstream>
 #include <iomanip>
+#include <limits>
 
 namespace tigerex {
 
@@ -227,17 +228,30 @@ int get_quantity_precision(const std::string& symbol) {
 // ============================================================================
 
 int64_t calculate_fee(int64_t price, int64_t quantity, int32_t fee_rate_bps) {
-    // fee = price * quantity * fee_rate / 10000
-    return (price * quantity * fee_rate_bps) / 10000;
+    // fee = price * quantity * fee_rate_bps / 10000, computed in 128-bit.
+    // The previous expression multiplied three int64 values in int64 and
+    // overflowed for ordinary orders: a 1000.00 price at precision 2 and a
+    // 2.0 quantity at precision 3 give 2e11, times 4 bps overflows int64 and
+    // the result wrapped to a negative or nonsensical fee. Reject a
+    // non-positive rate or size rather than emitting a negative charge.
+    if (price <= 0 || quantity <= 0 || fee_rate_bps <= 0) {
+        return 0;
+    }
+    const __int128 fee = static_cast<__int128>(price) * quantity * fee_rate_bps;
+    const __int128 scaled = fee / 10000;
+    if (scaled > std::numeric_limits<int64_t>::max()) {
+        return std::numeric_limits<int64_t>::max();
+    }
+    return static_cast<int64_t>(scaled);
 }
 
 int64_t calculate_maker_fee(int64_t price, int64_t quantity) {
-    // Maker fee: 0.02% = 2 bps
+    // Default maker fee: 0.02% = 2 bps
     return calculate_fee(price, quantity, 2);
 }
 
 int64_t calculate_taker_fee(int64_t price, int64_t quantity) {
-    // Taker fee: 0.04% = 4 bps
+    // Default taker fee: 0.04% = 4 bps
     return calculate_fee(price, quantity, 4);
 }
 
