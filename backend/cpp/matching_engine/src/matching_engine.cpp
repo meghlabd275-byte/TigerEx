@@ -755,13 +755,33 @@ OrderResult MatchingEngine::process_order(Order& order) {
     result.order_id = order.id;
     result.status = order.status;
     result.trades = std::move(match.trades);
-    result.avg_fill_price = order.price;
     result.filled_quantity = order.filled_quantity;
-    
-    // Calculate fees
+
+    // Average fill price is the volume-weighted mean of the fills, not the
+    // limit price: a limit order that sweeps several price levels would
+    // otherwise report a price it never actually traded at.
+    result.avg_fill_price = order.price;
+    const int64_t filled_qty = order.filled_quantity[0];
+    if (filled_qty > 0) {
+        __int128 notional = 0;
+        for (const auto& trade : result.trades) {
+            notional += static_cast<__int128>(trade.price[0]) *
+                        static_cast<__int128>(trade.quantity[0]);
+        }
+        result.avg_fill_price = {
+            static_cast<int64_t>(notional / filled_qty), order.price[1]};
+    }
+
+    // Bill only the fee attributed to this order's own user; each trade also
+    // carries the counterparty's fee, which belongs to the other account.
     int64_t total_fee = 0;
     for (const auto& trade : result.trades) {
-        total_fee += trade.fee[0];
+        if (trade.maker_fee_user_id == order.user_id) {
+            total_fee += trade.maker_fee[0];
+        }
+        if (trade.taker_fee_user_id == order.user_id) {
+            total_fee += trade.taker_fee[0];
+        }
     }
     result.fee = int64_to_price(total_fee, result.filled_quantity[1]);
     
@@ -820,31 +840,24 @@ MatchResult MatchingEngine::execute_match(Order& order) {
             // Calculate volume
             for (const auto& trade : result.trades) {
                 result.total_volume += trade.quantity[0] * trade.price[0];
-                result.total_fees += trade.fee[0];
+                result.total_fees += trade.maker_fee[0] + trade.taker_fee[0];
             }
             break;
         }
         
         case OrderType::StopLoss:
-        case OrderType::TakeProfit: {
-            // Stop orders - add to watch list
-            // In production, implement stop order processing
-            result.success = true;
-            break;
-        }
-        
-        case OrderType::OCO: {
-            // One Cancels Other - implement OCO logic
-            result.success = true;
-            break;
-        }
-        
+        case OrderType::TakeProfit:
+        case OrderType::OCO:
         case OrderType::TrailingStop: {
-            // Trailing stop - implement trailing logic
-            result.success = true;
-            break;
+            // This engine does not implement conditional orders yet. Returning
+            // success here would tell the caller the order was accepted and
+            // working when it was silently dropped, so fail closed instead.
+            result.success = false;
+            result.error_message =
+                "Conditional order types are not supported by this engine";
+            return result;
         }
-        
+
         default:
             result.success = false;
             result.error_message = "Unsupported order type";
@@ -856,13 +869,16 @@ MatchResult MatchingEngine::execute_match(Order& order) {
 
 void MatchingEngine::update_position(const Trade& trade) {
     std::unique_lock lock(balance_mutex_);
-    
-    int64_t position_change = trade.quantity[0];
-    if (trade.side == OrderSide::Sell) {
-        position_change = -position_change;
-    }
-    
-    positions_[trade.fee_user_id][trade.symbol] += position_change;
+
+    // Both parties' positions move by the traded quantity, in opposite
+    // directions. The trade side is the incoming (taker) order's side, so the
+    // resting (maker) order takes the opposite side. Previously only one
+    // party's position moved, and which one depended on the same timestamp
+    // comparison that mis-assigned maker/taker.
+    const int64_t qty = trade.quantity[0];
+    const int64_t taker_delta = (trade.side == OrderSide::Buy) ? qty : -qty;
+    positions_[trade.taker_fee_user_id][trade.symbol] += taker_delta;
+    positions_[trade.maker_fee_user_id][trade.symbol] -= taker_delta;
 }
 
 bool MatchingEngine::check_circuit_breaker(const std::string& symbol, const Price& price) {
@@ -889,7 +905,7 @@ bool MatchingEngine::check_circuit_breaker(const std::string& symbol, const Pric
 void MatchingEngine::update_stats(const Trade& trade, uint64_t latency_ns) {
     stats_.total_trades.fetch_add(1);
     stats_.total_volume.fetch_add(trade.quantity[0] * trade.price[0]);
-    stats_.total_fees.fetch_add(trade.fee[0]);
+    stats_.total_fees.fetch_add(trade.maker_fee[0] + trade.taker_fee[0]);
     
     // Update latency
     uint64_t old_min = stats_.min_latency.load();

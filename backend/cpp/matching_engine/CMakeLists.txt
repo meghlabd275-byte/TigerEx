@@ -48,6 +48,14 @@ set_target_properties(tigerex_matching PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin
 )
 
+# Regression tests for the engine core. These assert the behaviour the engine
+# is relied on for: volume-weighted fill prices and fail-closed handling of
+# order types the engine does not implement.
+enable_testing()
+add_executable(matching_engine_core_tests tests/matching_engine_test.cpp)
+target_link_libraries(matching_engine_core_tests PRIVATE tigerex_matching Threads::Threads)
+add_test(NAME matching_engine_core_tests COMMAND matching_engine_core_tests)
+
 # Installation
 install(TARGETS tigerex_matching
     LIBRARY DESTINATION lib

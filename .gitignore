@@ -46,3 +46,7 @@ backend/go/staking_service
 backend/go/pricefeed
 backend/go/API
 backend/go/admin_service
+
+# C++ build output written into the source tree by the matching engine target
+backend/cpp/matching_engine/lib/
+backend/cpp/matching_engine/bin/

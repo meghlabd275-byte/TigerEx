@@ -129,14 +129,16 @@ struct Order {
     OrderStatus status;
     MarketType market_type;
     
-    // Prices and quantities
-    Price price;
-    Price stop_price;
-    Price trigger_price;
-    Quantity quantity;
-    Quantity filled_quantity;
-    Quantity remaining_quantity;
-    Quantity iceberg_visible;
+    // Prices and quantities. These are std::array<int64_t, 2>; without the
+    // braces a default-constructed Order leaves them indeterminate, so an
+    // order whose quantity was never set would match on a garbage value.
+    Price price{};
+    Price stop_price{};
+    Price trigger_price{};
+    Quantity quantity{};
+    Quantity filled_quantity{};
+    Quantity remaining_quantity{};
+    Quantity iceberg_visible{};
     
     // Time settings
     TimeInForce tif;
@@ -146,7 +148,7 @@ struct Order {
     
     // Fees
     int64_t fee_currency;
-    Price fee_rate;
+    Price fee_rate{};
     Price filled_fee;
     
     // User info
@@ -237,15 +239,23 @@ struct Trade {
     std::chrono::nanoseconds timestamp;
     uint64_t maker_order_id;
     uint64_t taker_order_id;
-    Price fee;
-    uint64_t fee_user_id;
+
+    // Both sides of a trade are charged: the resting order pays the maker
+    // fee and the incoming order pays the taker fee. Each fee names the user
+    // it is billed to, so an order's own total is the fee whose user id
+    // matches that order.
+    Price maker_fee;
+    Price taker_fee;
+    uint64_t maker_fee_user_id;
+    uint64_t taker_fee_user_id;
     bool isMaker;
     bool isReplaced;  // From order replacement
     std::array<uint8_t, 32> fee_hash;  // For audit
-    
-    Trade() : trade_id(0), side(OrderSide::Buy), 
+
+    Trade() : trade_id(0), side(OrderSide::Buy),
               maker_order_id(0), taker_order_id(0),
-              fee_user_id(0), isMaker(false), isReplaced(false) {}
+              maker_fee_user_id(0), taker_fee_user_id(0),
+              isMaker(false), isReplaced(false) {}
 };
 
 // ============================================================================

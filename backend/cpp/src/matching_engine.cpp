@@ -122,10 +122,14 @@ std::vector<Trade> OrderBook::MatchOrder(uint64_t order_id) {
             trades.push_back(trade);
             recent_trades_.push_back(trade);
 
-            // Remove fully filled orders
+            // Remove fully filled orders. Capture the id before pop_front():
+            // that destroys the shared_ptr element `matched_order` refers to,
+            // so reading matched_order->order_id afterwards is a use-after-free
+            // (the deque keeps its block, so it is not always caught by ASan).
             if (matched_order->filled_quantity >= matched_order->quantity) {
+                const uint64_t matched_id = matched_order->order_id;
                 queue.pop_front();
-                orders_.erase(matched_order->order_id);
+                orders_.erase(matched_id);
             }
 
             if (order.filled_quantity >= order.quantity) {

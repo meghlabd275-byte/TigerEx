@@ -297,34 +297,28 @@ void OrderBook::process_single_match(Order& incoming, Order& resting,
         std::chrono::steady_clock::now().time_since_epoch()
     );
     
-    // Set maker/taker
-    if (incoming.type == OrderType::Market) {
-        trade.isMaker = true;
-        trade.maker_order_id = resting.id.server_order_id;
-        trade.taker_order_id = incoming.id.server_order_id;
-    } else if (resting.id.timestamp_ns <= incoming.id.timestamp_ns) {
-        // Resting order is older = maker
-        trade.isMaker = true;
-        trade.maker_order_id = resting.id.server_order_id;
-        trade.taker_order_id = incoming.id.server_order_id;
-    } else {
-        trade.isMaker = false;
-        trade.maker_order_id = incoming.id.server_order_id;
-        trade.taker_order_id = resting.id.server_order_id;
-    }
-    
-    // Calculate fees
-    int64_t price_val = price_to_int64(match_price);
-    int64_t qty_val = quantity_to_int64(match_qty);
-    
-    if (trade.isMaker) {
-        trade.fee = int64_to_price(calculate_maker_fee(price_val, qty_val), match_price[1]);
-        trade.fee_user_id = resting.user_id;
-    } else {
-        trade.fee = int64_to_price(calculate_taker_fee(price_val, qty_val), match_price[1]);
-        trade.fee_user_id = incoming.user_id;
-    }
-    
+    // The order already resting in the book is the maker; the order being
+    // matched against it is the taker. This was previously decided by
+    // comparing the two orders' timestamps, which is non-deterministic: two
+    // fills of the same incoming order could be attributed to opposite
+    // sides, so which user was charged and at which rate depended on clock
+    // resolution. The resting side is the maker by construction, which is
+    // also what the market-order path below already assumed.
+    trade.maker_order_id = resting.id.server_order_id;
+    trade.taker_order_id = incoming.id.server_order_id;
+    trade.isMaker = true;
+
+    // Charge both sides. The resting order is the maker and the incoming
+    // order is the taker; each fee records the user it is billed to.
+    const int64_t price_val = price_to_int64(match_price);
+    const int64_t qty_val = quantity_to_int64(match_qty);
+    trade.maker_fee = int64_to_price(
+        calculate_maker_fee(price_val, qty_val), match_price[1]);
+    trade.taker_fee = int64_to_price(
+        calculate_taker_fee(price_val, qty_val), match_price[1]);
+    trade.maker_fee_user_id = resting.user_id;
+    trade.taker_fee_user_id = incoming.user_id;
+
     // Add trade to vector
     trades.push_back(trade);
     
@@ -347,23 +341,27 @@ void OrderBook::process_single_match(Order& incoming, Order& resting,
     if (resting.remaining_quantity[0] == 0) {
         resting.status = OrderStatus::Filled;
         
-        // Remove from book
+        // Remove from book. Copy the price and id first: pop_front()
+        // destroys the list node that `resting` refers to, so reading
+        // resting.price or resting.id afterwards is a use-after-free.
+        const Price resting_price = resting.price;
+        const OrderId resting_id = resting.id;
         if (resting.side == OrderSide::Buy) {
-            auto it = bids_.find(resting.price);
+            auto it = bids_.find(resting_price);
             if (it != bids_.end()) {
                 it->second.orders.pop_front();
-                update_level_aggregate(bids_, resting.price);
+                update_level_aggregate(bids_, resting_price);
             }
         } else {
-            auto it = asks_.find(resting.price);
+            auto it = asks_.find(resting_price);
             if (it != asks_.end()) {
                 it->second.orders.pop_front();
-                update_level_aggregate(asks_, resting.price);
+                update_level_aggregate(asks_, resting_price);
             }
         }
-        
+
         // Remove from order map
-        orders_.erase(resting.id);
+        orders_.erase(resting_id);
     } else {
         resting.status = OrderStatus::PartiallyFilled;
     }
