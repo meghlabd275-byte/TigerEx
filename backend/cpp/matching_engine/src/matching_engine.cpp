@@ -7,6 +7,9 @@
 #include "matching_engine.hpp"
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <system_error>
 
 namespace tigerex {
 
@@ -181,6 +184,10 @@ OrderResult MatchingEngine::submit_order(Order& order) {
         
         uint64_t old_max = stats_.max_latency.load();
         while (latency > old_max && !stats_.max_latency.compare_exchange_weak(old_max, latency)) {}
+
+        // Record every submitted order, not just orders that traded, so p99
+        // reflects the real distribution of order latencies.
+        stats_.record_latency(static_cast<uint64_t>(latency));
     }
     
     return result;
@@ -588,7 +595,24 @@ double MatchingEngine::average_latency() const {
 }
 
 uint64_t MatchingEngine::p99_latency() const {
-    // Simplified p99 calculation
+    // Walk the latency histogram from the slowest bucket down until the top
+    // 1% of samples is covered, then report that bucket's upper bound. The
+    // old code returned max_latency, the slowest single sample, not p99.
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < EngineStats::kLatencyBuckets; ++i) {
+        total += stats_.latency_buckets[i].load();
+    }
+    if (total == 0) return 0;
+
+    const uint64_t target = total / 100 == 0 ? 1 : total / 100;
+    uint64_t seen = 0;
+    for (uint32_t i = EngineStats::kLatencyBuckets; i-- > 0;) {
+        seen += stats_.latency_buckets[i].load();
+        if (seen >= target) {
+            // Bucket i covers latencies up to 2^i microseconds.
+            return (uint64_t{1} << i) * 1000ULL;
+        }
+    }
     return stats_.max_latency.load();
 }
 
@@ -650,38 +674,94 @@ void MatchingEngine::set_market_callback(MarketCallback callback) {
 // ============================================================================
 
 uint32_t MatchingEngine::cleanup_expired_orders() {
-    std::unique_lock lock(engine_mutex_);
-    
-    uint32_t count = 0;
-    auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-    ).count();
-    
-    for (auto& book_pair : order_books_) {
-        auto& book = book_pair.second;
-        
-        // Get all orders and check expiration
-        std::vector<OrderId> expired_ids;
-        
-        // Note: In production, implement proper iteration
-        // For now, just return count
-        (void)now;
+    // Collect expired ids under the engine lock, then cancel them through
+    // the normal path, which takes the book's own lock.
+    std::vector<std::pair<OrderBook*, std::vector<OrderId>>> expired;
+    const uint64_t now = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+
+    {
+        std::shared_lock lock(engine_mutex_);
+        for (auto& book_pair : order_books_) {
+            std::vector<OrderId> ids;
+            book_pair.second->collect_expired_orders(now, ids);
+            if (!ids.empty()) {
+                expired.emplace_back(book_pair.second.get(), std::move(ids));
+            }
+        }
     }
-    
+
+    uint32_t count = 0;
+    for (auto& entry : expired) {
+        for (const auto& id : entry.second) {
+            if (entry.first->remove_order(id)) {
+                ++count;
+            }
+        }
+    }
     return count;
 }
 
 void MatchingEngine::compact_order_books() {
-    std::unique_lock lock(engine_mutex_);
-    
+    std::shared_lock lock(engine_mutex_);
     for (auto& book_pair : order_books_) {
-        // In production, implement compaction
-        (void)book_pair;
+        book_pair.second->compact();
     }
 }
 
-void MatchingEngine::sync_to_storage() {
-    // In production, implement persistence
+uint32_t MatchingEngine::sync_to_storage() {
+    // Persistence is opt-in: without a configured directory there is
+    // nothing to write, and saying so is better than a silent no-op.
+    if (config_.snapshot_dir.empty()) {
+        return 0;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(config_.snapshot_dir, ec);
+    if (ec) {
+        return 0;
+    }
+
+    uint32_t written = 0;
+    std::shared_lock lock(engine_mutex_);
+    for (auto& book_pair : order_books_) {
+        const OrderBook::Snapshot snap = book_pair.second->create_snapshot();
+        // Snapshot files are named by a sanitised symbol; '/' is not a legal
+        // filename character on every platform.
+        std::string name = snap.symbol;
+        for (char& c : name) {
+            if (c == '/' || c == '\\' || c == ':') c = '_';
+        }
+        const auto path = std::filesystem::path(config_.snapshot_dir) /
+                          (name + ".snapshot");
+
+        std::ofstream out(path, std::ios::trunc);
+        if (!out) continue;
+
+        out << "symbol=" << snap.symbol << '\n';
+        out << "sequence=" << snap.sequence << '\n';
+        out << "last_price=" << snap.last_price[0] << ':' << snap.last_price[1] << '\n';
+        out << "volume_24h=" << snap.volume_24h[0] << ':' << snap.volume_24h[1] << '\n';
+        out << "high_24h=" << snap.high_24h[0] << ':' << snap.high_24h[1] << '\n';
+        out << "low_24h=" << snap.low_24h[0] << ':' << snap.low_24h[1] << '\n';
+        out << "trades_24h=" << snap.trades_24h << '\n';
+        out << "bids=" << snap.bids.size() << '\n';
+        for (const auto& level : snap.bids) {
+            out << "bid=" << level.price[0] << ':' << level.price[1] << ','
+                << level.quantity[0] << ':' << level.quantity[1] << ','
+                << level.order_count << '\n';
+        }
+        out << "asks=" << snap.asks.size() << '\n';
+        for (const auto& level : snap.asks) {
+            out << "ask=" << level.price[0] << ':' << level.price[1] << ','
+                << level.quantity[0] << ':' << level.quantity[1] << ','
+                << level.order_count << '\n';
+        }
+
+        if (out.good()) ++written;
+    }
+    return written;
 }
 
 // ============================================================================
@@ -725,6 +805,14 @@ bool MatchingEngine::validate_order(const Order& order, std::string& error) {
         return false;
     }
     
+
+    // A GoodTillDate order is only meaningful with an expiry. Without one
+    // it would rest forever and cleanup_expired_orders could never find it,
+    // so reject it rather than silently treating it as GoodTillCancel.
+    if (order.tif == TimeInForce::GoodTillTime && order.expire_time.count() <= 0) {
+        error = "GoodTillDate order requires an expire_time";
+        return false;
+    }
     return true;
 }
 
@@ -788,9 +876,12 @@ OrderResult MatchingEngine::process_order(Order& order) {
     result.created_at = order.created_at.count();
     result.updated_at = order.updated_at.count();
     
-    // Update positions
+    // Update positions and exchange-wide trade statistics. update_stats was
+    // defined but never called, so total_trades, total_volume and total_fees
+    // stayed at zero no matter how much traded.
     for (const auto& trade : result.trades) {
         update_position(trade);
+        update_stats(trade, 0);
     }
     
     // Trigger callbacks
@@ -915,6 +1006,7 @@ void MatchingEngine::update_stats(const Trade& trade, uint64_t latency_ns) {
     while (latency_ns > old_max && !stats_.max_latency.compare_exchange_weak(old_max, latency_ns)) {}
     
     stats_.total_latency.fetch_add(latency_ns);
+    stats_.record_latency(latency_ns);
 }
 
 OrderBook* MatchingEngine::get_or_create_book(const std::string& symbol) {

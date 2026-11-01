@@ -15,6 +15,9 @@
 
 #include <cassert>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 using namespace tigerex;
@@ -196,12 +199,150 @@ void test_fee_and_resting_behaviour() {
     std::printf("ok: fees attributed to the taker, non-crossing order rests\n");
 }
 
+// ---------------------------------------------------------------------------
+// 4. Maintenance paths must do the work they claim.
+//    cleanup_expired_orders() and compact_order_books() used to be empty
+//    bodies that returned 0, and p99_latency() returned the max sample.
+// ---------------------------------------------------------------------------
+void test_maintenance_paths() {
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+
+    // A resting order with a deadline already in the past.
+    Order expiring = make_order(21, OrderSide::Buy, OrderType::Limit, 900, 1000);
+    expiring.tif = TimeInForce::GoodTillTime;
+    expiring.expire_time = std::chrono::nanoseconds{1};
+    OrderResult re = engine.submit_order(expiring);
+    assert(re.success);
+
+    // A resting order that never expires.
+    Order permanent = make_order(22, OrderSide::Buy, OrderType::Limit, 800, 1000);
+    OrderResult rp = engine.submit_order(permanent);
+    assert(rp.success);
+
+    const uint32_t removed = engine.cleanup_expired_orders();
+    assert(removed == 1);
+
+    // The permanent order is untouched.
+    auto orders = engine.get_user_orders(kSymbol, 22);
+    assert(orders.size() == 1);
+
+    // GoodTillDate without an expiry is rejected rather than resting forever.
+    Order no_expiry = make_order(23, OrderSide::Buy, OrderType::Limit, 700, 1000);
+    no_expiry.tif = TimeInForce::GoodTillTime;
+    OrderResult rn = engine.submit_order(no_expiry);
+    assert(!rn.success);
+    assert(rn.error_message.find("expire_time") != std::string::npos);
+
+    // Compaction is a no-op on an already consistent book.
+    engine.compact_order_books();
+
+    // p99 is a bound on the tail, never the max of a wide sample. Submit
+    // enough orders to populate the histogram and check it is finite.
+    for (int i = 0; i < 200; ++i) {
+        Order o = make_order(30, OrderSide::Buy, OrderType::Limit, 100 + i, 1000);
+        engine.submit_order(o);
+    }
+    const uint64_t p99 = engine.p99_latency();
+    const uint64_t max_latency = engine.get_stats().max_latency.load();
+    assert(p99 > 0);
+    // p99 is the upper bound of the bucket covering the slowest 1% of
+    // samples. Bucket bounds are powers of two, so it can exceed the single
+    // slowest sample by at most one doubling. It may also sit below the
+    // maximum, because one outlier is not a percentile.
+    assert(p99 <= max_latency * 2);
+
+    std::printf("ok: expiry cleanup, compaction and p99 behave as documented\n");
+}
+
+// ---------------------------------------------------------------------------
+// 5. sync_to_storage() must actually write a snapshot when configured, and be
+//    a documented no-op when it is not.
+// ---------------------------------------------------------------------------
+void test_snapshot_persistence() {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "tigerex_engine_test_snapshots";
+    fs::remove_all(dir);
+
+    EngineConfig config{};
+    config.snapshot_dir = dir.string();
+    MatchingEngine engine{config};
+    setup_market(engine);
+
+    // Persistence disabled means nothing is written.
+    assert(MatchingEngine{EngineConfig{}}.sync_to_storage() == 0);
+
+    Order ask = make_order(41, OrderSide::Sell, OrderType::Limit, 1000, 1000);
+    assert(engine.submit_order(ask).success);
+    Order bid = make_order(42, OrderSide::Buy, OrderType::Limit, 900, 1000);
+    assert(engine.submit_order(bid).success);
+
+    assert(engine.sync_to_storage() == 1);
+
+    // The snapshot must reflect the two resting orders.
+    const auto stats = engine.get_stats();
+    assert(stats.order_count == 2);
+
+    const fs::path file = dir / "BTC_USDT.snapshot";
+    assert(fs::exists(file));
+
+    std::ifstream in(file);
+    assert(in.good());
+    const std::string contents((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+    // The two resting orders must be in the written book, one per side.
+    assert(contents.find("symbol=BTC/USDT") != std::string::npos);
+    assert(contents.find("bids=1") != std::string::npos);
+    assert(contents.find("asks=1") != std::string::npos);
+
+    fs::remove_all(dir);
+    std::printf("ok: sync_to_storage writes real snapshots\n");
+}
+
+// ---------------------------------------------------------------------------
+// 6. A resting order must be indexed so it can be cancelled, and a match must
+//    accumulate the exchange's trade statistics. Resting orders used to be
+//    inserted into the price level without being indexed in orders_, so
+//    cancel_order could never find them, and update_stats was never called.
+// ---------------------------------------------------------------------------
+void test_cancel_and_trade_stats() {
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+
+    Order rest = make_order(51, OrderSide::Buy, OrderType::Limit, 900, 1000);
+    OrderResult rr = engine.submit_order(rest);
+    assert(rr.success);
+    assert(engine.get_user_orders(kSymbol, 51).size() == 1);
+
+    assert(engine.cancel_order(kSymbol, rest.id));
+    assert(engine.get_user_orders(kSymbol, 51).empty());
+    assert(engine.get_stats().order_count == 0);
+
+    // A real match must move the trade counters off zero.
+    Order ask = make_order(52, OrderSide::Sell, OrderType::Limit, 1000, 1000);
+    assert(engine.submit_order(ask).success);
+    Order buy = make_order(53, OrderSide::Buy, OrderType::Limit, 1000, 1000);
+    OrderResult rb = engine.submit_order(buy);
+    assert(rb.success);
+    assert(rb.trades.size() == 1);
+
+    const auto stats = engine.get_stats();
+    assert(stats.total_trades.load() == 1);
+    assert(stats.total_volume.load() > 0);
+    assert(stats.total_fees.load() > 0);
+
+    std::printf("ok: resting orders cancel and trades accumulate in stats\n");
+}
+
 }  // namespace
 
 int main() {
     test_avg_fill_price_is_volume_weighted();
     test_conditional_orders_fail_closed();
     test_fee_and_resting_behaviour();
+    test_maintenance_paths();
+    test_snapshot_persistence();
+    test_cancel_and_trade_stats();
     std::printf("all matching-engine regression tests passed\n");
     return 0;
 }

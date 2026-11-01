@@ -51,32 +51,30 @@ OrderBook::~OrderBook() = default;
 // ADD ORDER
 // ============================================================================
 
-bool OrderBook::add_order(Order& order) {
-    std::unique_lock lock(book_mutex_);
-
+bool OrderBook::add_order_locked(Order& order) {
     // Validate order
     if (order.symbol != symbol_) return false;
     if (!is_quantity_valid(order.quantity)) return false;
-    
+
     // Check price limits for limit orders
     if (order.type == OrderType::Limit || order.type == OrderType::StopLossLimit) {
         if (!is_price_valid(order.price)) return false;
     }
-    
+
     // Get unique order ID
     order.id.server_order_id = sequence_atom_.fetch_add(1);
     order.id.timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
     order.id.sequence = order.id.server_order_id;
-    
+
     // Get priority
     order_priority_[order.id.server_order_id] = priority_counter_.fetch_add(1);
-    
+
     // Update status
     order.status = OrderStatus::Open;
     order.updated_at = std::chrono::nanoseconds(order.id.timestamp_ns);
-    
+
     // Store the order in its price level and index the actual list iterator.
     // The index must never contain a default-constructed iterator.
     if (order.side == OrderSide::Buy) {
@@ -90,11 +88,16 @@ bool OrderBook::add_order(Order& order) {
         if (level == asks_.end() || level->second.orders.empty()) return false;
         orders_.insert_or_assign(order.id, std::prev(level->second.orders.end()));
     }
-    
+
     // Update sequence
     sequence_atom_.fetch_add(1);
-    
+
     return true;
+}
+
+bool OrderBook::add_order(Order& order) {
+    std::unique_lock lock(book_mutex_);
+    return add_order_locked(order);
 }
 
 // ============================================================================
@@ -112,6 +115,42 @@ std::vector<Order> OrderBook::get_user_orders(uint64_t user_id) const {
         }
     }
     return result;
+}
+
+uint32_t OrderBook::collect_expired_orders(uint64_t now_ns,
+                                           std::vector<OrderId>& out_ids) const {
+    std::shared_lock lock(book_mutex_);
+
+    uint32_t count = 0;
+    for (const auto& entry : orders_) {
+        const Order& order = *entry.second;
+        const uint64_t expire = static_cast<uint64_t>(order.expire_time.count());
+        // expire_time == 0 means the order never expires (e.g. GTC).
+        if (expire != 0 && expire <= now_ns) {
+            out_ids.push_back(entry.first);
+            ++count;
+        }
+    }
+    return count;
+}
+
+uint32_t OrderBook::compact() {
+    std::unique_lock lock(book_mutex_);
+
+    uint32_t removed = 0;
+    auto prune = [&removed](auto& book) {
+        for (auto it = book.begin(); it != book.end();) {
+            if (it->second.orders.empty()) {
+                it = book.erase(it);
+                ++removed;
+            } else {
+                ++it;
+            }
+        }
+    };
+    prune(bids_);
+    prune(asks_);
+    return removed;
 }
 
 bool OrderBook::remove_order(const OrderId& order_id) {
@@ -234,24 +273,20 @@ uint32_t OrderBook::process_match(Order& incoming, std::vector<Trade>& trades) {
     if (incoming.side == OrderSide::Buy) match_against(asks_);
     else match_against(bids_);
     
-    // Add remaining to book if not fully filled
+    // Add remaining to book if not fully filled. Rest through
+    // add_order_locked so the order is indexed in orders_: inserting into
+    // the price level alone left it invisible to cancel_order,
+    // cleanup_expired_orders and get_user_orders, so a resting order could
+    // never be found or removed again.
     if (incoming.remaining_quantity[0] > 0) {
         if (incoming.type == OrderType::Limit ||
             incoming.type == OrderType::StopLossLimit ||
             incoming.tif == TimeInForce::GoodTillCancel) {
-            
-            // Add to book
-            if (incoming.side == OrderSide::Buy) {
-                insert_order_to_level(bids_, incoming.price, incoming);
-            } else {
-                insert_order_to_level(asks_, incoming.price, incoming);
-            }
-            
-            // Update order status
-            incoming.status = OrderStatus::Open;
+
+            add_order_locked(incoming);
         }
     }
-    
+
     return match_count;
 }
 

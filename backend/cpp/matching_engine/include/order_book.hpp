@@ -104,6 +104,27 @@ public:
      * Check if order exists
      */
     bool has_order(const OrderId& order_id) const;
+
+    /**
+     * Assign an id and insert an order into its price level, indexing it in
+     * orders_ so it can later be cancelled, expired or listed. Caller must
+     * hold book_mutex_. add_order() and the matching path both use this.
+     */
+    bool add_order_locked(Order& order);
+
+    /**
+     * Collect the ids of resting orders whose expire_time has passed.
+     * @param now_ns Current time in nanoseconds since the steady-clock epoch
+     * @param out_ids Appended with the expired order ids
+     * @return Number of expired orders appended
+     */
+    uint32_t collect_expired_orders(uint64_t now_ns,
+                                    std::vector<OrderId>& out_ids) const;
+
+    /**
+     * Drop price levels that hold no orders. Returns levels removed.
+     */
+    uint32_t compact();
     
     // ============================================================================
     // MATCHING OPERATIONS

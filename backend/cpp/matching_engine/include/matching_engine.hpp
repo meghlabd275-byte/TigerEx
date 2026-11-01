@@ -12,6 +12,8 @@
 
 #include "order.hpp"
 #include "order_book.hpp"
+#include <array>
+#include <cstdint>
 #include <unordered_map>
 #include <optional>
 #include <shared_mutex>
@@ -54,6 +56,11 @@ struct EngineConfig {
     // Fee settings
     int32_t maker_fee_bps{2};   // 0.02%
     int32_t taker_fee_bps{4};    // 0.04%
+
+    // Directory that sync_to_storage() writes order-book snapshots to. When
+    // empty, snapshot persistence is disabled and sync_to_storage() is a
+    // documented no-op rather than a silent one.
+    std::string snapshot_dir{};
 };
 
 // ============================================================================
@@ -426,6 +433,22 @@ public:
         std::atomic<uint64_t> max_latency{0};
         std::atomic<uint64_t> total_latency{0};
 
+        // Latency histogram, in power-of-two microsecond buckets. A real p99
+        // needs the distribution, not just the extremes, so each sample bumps
+        // the bucket it falls in.
+        static constexpr uint32_t kLatencyBuckets = 24;  // up to ~8s
+        std::array<std::atomic<uint64_t>, kLatencyBuckets> latency_buckets{};
+
+        // Record one latency sample into the histogram.
+        void record_latency(uint64_t ns) {
+            uint64_t us = ns / 1000;
+            uint32_t bucket = 0;
+            while (bucket + 1 < kLatencyBuckets && (us >> bucket) > 0) {
+                ++bucket;
+            }
+            latency_buckets[bucket].fetch_add(1);
+        }
+
         // Market count
         uint32_t market_count{0};
         uint64_t order_count{0};
@@ -441,7 +464,11 @@ public:
               max_latency(other.max_latency.load()),
               total_latency(other.total_latency.load()),
               market_count(other.market_count),
-              order_count(other.order_count) {}
+              order_count(other.order_count) {
+            for (uint32_t i = 0; i < kLatencyBuckets; ++i) {
+                latency_buckets[i].store(other.latency_buckets[i].load());
+            }
+        }
 
         EngineStats& operator=(const EngineStats& other) {
             if (this != &other) {
@@ -452,6 +479,9 @@ public:
                 min_latency.store(other.min_latency.load());
                 max_latency.store(other.max_latency.load());
                 total_latency.store(other.total_latency.load());
+                for (uint32_t i = 0; i < kLatencyBuckets; ++i) {
+                    latency_buckets[i].store(other.latency_buckets[i].load());
+                }
                 market_count = other.market_count;
                 order_count = other.order_count;
             }
@@ -516,9 +546,11 @@ public:
     void compact_order_books();
     
     /**
-     * Force sync to storage
+     * Write a snapshot of every market's book to EngineConfig::snapshot_dir.
+     * Does nothing when that directory is empty (persistence disabled).
+     * @return Number of market snapshots written
      */
-    void sync_to_storage();
+    uint32_t sync_to_storage();
     
 private:
     // ============================================================================
