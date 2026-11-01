@@ -77,6 +77,15 @@ func InitDB() error {
 		return fmt.Errorf("failed to run migrations: %v", err)
 	}
 
+	// Admin and derivatives tables. initAdminTables was previously defined but
+	// never invoked, so admin auth and the instrument registry had no tables.
+	if err := initAdminTables(ctx); err != nil {
+		return fmt.Errorf("failed to initialize admin tables: %v", err)
+	}
+	if err := initDerivativesTables(ctx); err != nil {
+		return fmt.Errorf("failed to initialize derivatives tables: %v", err)
+	}
+
 	fmt.Println("✓ Database connected")
 	return nil
 }
