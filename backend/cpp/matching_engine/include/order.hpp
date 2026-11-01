@@ -328,28 +328,38 @@ inline int64_t quantity_to_int64(const Quantity& qty) {
     return qty[0];
 }
 
+// Build a fixed-point value from an integer. The precision is clamped to the
+// supported range, and a product that would overflow saturates instead of
+// wrapping: int64_to_price(INT64_MAX, 8) used to multiply INT64_MAX by 1e8,
+// which is undefined behaviour and produced a negative "maximum" price.
 inline Price int64_to_price(int64_t value, int precision) {
+    if (precision < 0) precision = 0;
+    if (precision > MAX_PRICE_PRECISION) precision = MAX_PRICE_PRECISION;
     int64_t factor = 1;
     for (int i = 0; i < precision; ++i) factor *= 10;
-    return {value * factor, precision};
+    const __int128 scaled = static_cast<__int128>(value) * factor;
+    if (scaled > std::numeric_limits<int64_t>::max()) {
+        return {std::numeric_limits<int64_t>::max(), precision};
+    }
+    if (scaled < std::numeric_limits<int64_t>::min()) {
+        return {std::numeric_limits<int64_t>::min(), precision};
+    }
+    return {static_cast<int64_t>(scaled), precision};
 }
 
 inline Quantity int64_to_quantity(int64_t value, int precision) {
+    if (precision < 0) precision = 0;
+    if (precision > MAX_QUANTITY_PRECISION) precision = MAX_QUANTITY_PRECISION;
     int64_t factor = 1;
     for (int i = 0; i < precision; ++i) factor *= 10;
-    return {value * factor, precision};
-}
-
-inline bool price_less(const Price& a, const Price& b) {
-    return a[0] * b[1] < b[0] * a[1];
-}
-
-inline bool price_greater(const Price& a, const Price& b) {
-    return a[0] * b[1] > b[0] * a[1];
-}
-
-inline bool price_equal(const Price& a, const Price& b) {
-    return a[0] * b[1] == b[0] * a[1];
+    const __int128 scaled = static_cast<__int128>(value) * factor;
+    if (scaled > std::numeric_limits<int64_t>::max()) {
+        return {std::numeric_limits<int64_t>::max(), precision};
+    }
+    if (scaled < std::numeric_limits<int64_t>::min()) {
+        return {std::numeric_limits<int64_t>::min(), precision};
+    }
+    return {static_cast<int64_t>(scaled), precision};
 }
 
 // 10^k for 0 <= k <= MAX_PRICE_PRECISION.
@@ -357,6 +367,29 @@ inline int64_t pow10_fixed(int k) {
     int64_t result = 1;
     for (int i = 0; i < k; ++i) result *= 10;
     return result;
+}
+
+// Compare a[0]/10^a[1] against b[0]/10^b[1] by cross-multiplying. The
+// intermediate is widened to __int128 because the int64 product overflows for
+// ordinary prices: a market max_price of 9223372036854775807 at precision 8
+// times 8 wraps, which silently inverted the comparison and made
+// create_market() reject a valid market.
+inline bool price_less(const Price& a, const Price& b) {
+    const __int128 lhs = static_cast<__int128>(a[0]) * pow10_fixed(b[1]);
+    const __int128 rhs = static_cast<__int128>(b[0]) * pow10_fixed(a[1]);
+    return lhs < rhs;
+}
+
+inline bool price_greater(const Price& a, const Price& b) {
+    const __int128 lhs = static_cast<__int128>(a[0]) * pow10_fixed(b[1]);
+    const __int128 rhs = static_cast<__int128>(b[0]) * pow10_fixed(a[1]);
+    return lhs > rhs;
+}
+
+inline bool price_equal(const Price& a, const Price& b) {
+    const __int128 lhs = static_cast<__int128>(a[0]) * pow10_fixed(b[1]);
+    const __int128 rhs = static_cast<__int128>(b[0]) * pow10_fixed(a[1]);
+    return lhs == rhs;
 }
 
 /**

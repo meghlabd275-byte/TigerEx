@@ -37,6 +37,32 @@ bool MatchingEngine::create_market(const MarketInfo& info) {
     if (markets_.find(info.symbol) != markets_.end()) {
         return false;
     }
+
+    // A market with no base or quote asset cannot be settled, and one with a
+    // zero or negative tick or lot size cannot price or size an order. Both
+    // used to be accepted, leaving a book whose limits reject every order.
+    if (info.symbol.empty() || info.base_asset.empty() || info.quote_asset.empty()) {
+        return false;
+    }
+    if (info.price_precision < 0 || info.price_precision > MAX_PRICE_PRECISION ||
+        info.quantity_precision < 0 ||
+        info.quantity_precision > MAX_QUANTITY_PRECISION) {
+        return false;
+    }
+    if (info.tick_size[0] <= 0 || info.lot_size[0] <= 0) {
+        return false;
+    }
+    if (info.min_price[0] <= 0 || info.max_price[0] <= 0 ||
+        price_less(info.max_price, info.min_price)) {
+        return false;
+    }
+    if (info.min_quantity[0] <= 0 || info.max_quantity[0] <= 0 ||
+        info.max_quantity[0] < info.min_quantity[0]) {
+        return false;
+    }
+    if (info.max_leverage < 1) {
+        return false;
+    }
     
     // Create market info
     MarketInfo market = info;
@@ -44,6 +70,12 @@ bool MatchingEngine::create_market(const MarketInfo& info) {
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
     market.updated_at = market.created_at;
+
+    // A dated future whose delivery time has already passed must not open
+    // for trading.
+    if (market.delivery_time_ns != 0 && market.delivery_time_ns <= market.created_at) {
+        return false;
+    }
     
     // Create order book
     auto book = std::make_unique<OrderBook>(info.symbol, info.market_type);
@@ -785,6 +817,17 @@ bool MatchingEngine::validate_order(const Order& order, std::string& error) {
     if (market->state != MarketState::Open) {
         error = "Market not open for trading";
         return false;
+    }
+
+    // A dated future must not accept orders once its delivery time has passed.
+    if (market->delivery_time_ns != 0) {
+        const uint64_t now = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        if (now >= market->delivery_time_ns) {
+            error = "Market has reached delivery";
+            return false;
+        }
     }
     
     // Check circuit breaker

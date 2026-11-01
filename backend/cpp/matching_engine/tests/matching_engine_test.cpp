@@ -12,11 +12,13 @@
 //
 // Both are asserted against the real engine, not a stub.
 #include "matching_engine.hpp"
+#include "market.hpp"
 
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <thread>
 #include <fstream>
 #include <string>
 
@@ -390,6 +392,90 @@ void test_fixed_point_arithmetic() {
     std::printf("ok: fixed-point price arithmetic honours precision\n");
 }
 
+// ---------------------------------------------------------------------------
+// 8. Market creation must reject a market that cannot trade, and a dated
+//    future must stop accepting orders at its delivery time.
+// ---------------------------------------------------------------------------
+void test_market_creation_validation() {
+    MatchingEngine engine{EngineConfig{}};
+
+    // A valid market is accepted.
+    assert(create_spot_market(engine, "TGR/USDT", "TGR", "USDT", 8, 8));
+    // A duplicate symbol is rejected.
+    assert(!create_spot_market(engine, "TGR/USDT", "TGR", "USDT", 8, 8));
+
+    // No base asset.
+    MarketInfo no_base;
+    no_base.symbol = "X/USDT";
+    no_base.base_asset = "";
+    no_base.quote_asset = "USDT";
+    no_base.market_type = MarketType::Spot;
+    no_base.state = MarketState::Open;
+    no_base.tick_size = int64_to_price(1, 2);
+    no_base.lot_size = int64_to_quantity(1, 3);
+    no_base.min_price = int64_to_price(1, 2);
+    no_base.max_price = int64_to_price(1000, 2);
+    no_base.min_quantity = int64_to_quantity(1, 3);
+    no_base.max_quantity = int64_to_quantity(1000, 3);
+    assert(!engine.create_market(no_base));
+
+    // Zero tick size: every order would be off-tick.
+    MarketInfo no_tick = no_base;
+    no_tick.symbol = "Y/USDT";
+    no_tick.base_asset = "Y";
+    no_tick.tick_size = {0, 2};
+    assert(!engine.create_market(no_tick));
+
+    // Inverted price bounds.
+    MarketInfo inverted = no_tick;
+    inverted.symbol = "Z/USDT";
+    inverted.tick_size = int64_to_price(1, 2);
+    inverted.min_price = int64_to_price(1000, 2);
+    inverted.max_price = int64_to_price(1, 2);
+    assert(!engine.create_market(inverted));
+
+    // Precision outside the supported range.
+    MarketInfo bad_precision = no_tick;
+    bad_precision.symbol = "W/USDT";
+    bad_precision.tick_size = int64_to_price(1, 2);
+    bad_precision.price_precision = MAX_PRICE_PRECISION + 1;
+    assert(!engine.create_market(bad_precision));
+
+    // A dated future in the past is rejected.
+    const uint64_t past = 1000;  // 1 microsecond after the epoch
+    assert(!create_futures_market(engine, "PAST-USD-1", "PAST", "USD", 8, 8, 100, past));
+
+    // A dated future in the future is accepted, records its delivery time,
+    // and then refuses orders once that time has passed.
+    const uint64_t soon = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count()) + 3600ULL * 1000000000ULL;
+    assert(create_futures_market(engine, "FUT-USD-1", "FUT", "USD", 8, 8, 100, soon));
+
+    auto info = engine.get_market("FUT-USD-1");
+    assert(info.has_value());
+    assert(info->delivery_time_ns == soon);
+
+    // While the delivery time is in the future the market trades.
+    Order live = make_order(70, OrderSide::Buy, OrderType::Limit, 1000, 1000);
+    live.symbol = "FUT-USD-1";
+    assert(engine.submit_order(live).success);
+
+    // A contract that has already settled refuses new orders.
+    const uint64_t gone = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count()) - 1;
+    assert(create_futures_market(engine, "SETTLED-USD-1", "SETTLED", "USD", 8, 8, 100, gone + 2));
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    Order late = make_order(71, OrderSide::Buy, OrderType::Limit, 1000, 1000);
+    late.symbol = "SETTLED-USD-1";
+    auto rejected = engine.submit_order(late);
+    assert(!rejected.success);
+    assert(rejected.error_message == "Market has reached delivery");
+
+    std::printf("ok: market creation validates and dated futures expire\n");
+}
+
 }  // namespace
 
 int main() {
@@ -400,6 +486,7 @@ int main() {
     test_snapshot_persistence();
     test_cancel_and_trade_stats();
     test_fixed_point_arithmetic();
+    test_market_creation_validation();
     std::printf("all matching-engine regression tests passed\n");
     return 0;
 }

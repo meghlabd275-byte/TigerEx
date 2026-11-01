@@ -30,6 +30,7 @@ set(HEADERS
     include/order.hpp
     include/order_book.hpp
     include/risk_manager.hpp
+    include/market.hpp
     include/matching_engine.hpp
 )
 

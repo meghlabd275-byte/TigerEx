@@ -100,6 +100,10 @@ struct MarketInfo {
     bool allow_margin{false};
     bool allow_short{false};
     int max_leverage{1};
+
+    // Delivery time for dated futures, in nanoseconds since the epoch.
+    // Zero means the market never expires (spot, margin, perpetual).
+    uint64_t delivery_time_ns{0};
     
     // Fee tiers
     int32_t maker_fee_bps{2};

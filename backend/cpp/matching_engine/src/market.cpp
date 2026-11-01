@@ -4,7 +4,7 @@
  * Target Latency: < 50 microseconds
  */
 
-#include "matching_engine.hpp"
+#include "market.hpp"
 #include <algorithm>
 
 namespace tigerex {
@@ -85,6 +85,10 @@ bool create_futures_market(MatchingEngine& engine, const std::string& symbol,
     info.allow_margin = true;
     info.allow_short = true;
     info.max_leverage = max_leverage;
+    // Carry the delivery time through: a dated contract must stop trading at
+    // settlement. The argument used to be accepted and silently discarded, so
+    // every dated future traded forever.
+    info.delivery_time_ns = delivery_time;
     info.maker_fee_bps = 2;
     info.taker_fee_bps = 4;
     
@@ -197,18 +201,6 @@ std::vector<MarketInfo> get_open_markets(const MatchingEngine& engine) {
 // ============================================================================
 // MARKET STATISTICS
 // ============================================================================
-
-struct MarketStatistics {
-    std::string symbol;
-    uint32_t order_count;
-    uint64_t volume_24h;
-    uint64_t trades_24h;
-    Price last_price;
-    Price high_24h;
-    Price low_24h;
-    Price change_24h;
-    double change_percent_24h;
-};
 
 MarketStatistics get_market_statistics(MatchingEngine& engine, 
                                      const std::string& symbol) {
