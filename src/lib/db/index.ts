@@ -346,6 +346,95 @@ function initializeSchema() {
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
     );
 
+    -- Admin console sessions. Separate from trader sessions because an admin
+    -- console session is a distinct privilege, not a second trader login.
+    CREATE TABLE IF NOT EXISTS admin_sessions (
+      session_id TEXT PRIMARY KEY,
+      admin_id TEXT NOT NULL,
+      access_token TEXT NOT NULL UNIQUE,
+      ip_address TEXT,
+      user_agent TEXT,
+      expires_at TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (admin_id) REFERENCES admin_users(admin_id) ON DELETE CASCADE
+    );
+
+    -- Futures and perpetual contract listings. Settlement, contract type and
+    -- risk parameters live with the listing so the engine can read one row.
+    CREATE TABLE IF NOT EXISTS futures_markets (
+      market_id TEXT PRIMARY KEY,
+      symbol TEXT UNIQUE NOT NULL,
+      base_asset TEXT NOT NULL,
+      quote_asset TEXT NOT NULL,
+      settlement_asset TEXT NOT NULL,
+      contract_type TEXT NOT NULL,
+      listing_type TEXT NOT NULL DEFAULT 'perpetual',
+      contract_size REAL NOT NULL,
+      tick_size REAL NOT NULL,
+      price_precision INTEGER NOT NULL DEFAULT 2,
+      quantity_precision INTEGER NOT NULL DEFAULT 3,
+      min_quantity REAL NOT NULL,
+      max_quantity REAL NOT NULL,
+      max_leverage INTEGER NOT NULL DEFAULT 125,
+      maker_fee_bps INTEGER NOT NULL DEFAULT 2,
+      taker_fee_bps INTEGER NOT NULL DEFAULT 5,
+      funding_interval_hours INTEGER NOT NULL DEFAULT 8,
+      funding_rate_cap REAL NOT NULL DEFAULT 0.01,
+      maintenance_margin_rate REAL NOT NULL DEFAULT 0.005,
+      initial_margin_rate REAL NOT NULL DEFAULT 0.008,
+      liquidation_fee_rate REAL NOT NULL DEFAULT 0.005,
+      insurance_fund_share REAL NOT NULL DEFAULT 0.1,
+      delivery_time_ns INTEGER,
+      status TEXT DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_futures_markets_status
+      ON futures_markets(status);
+
+    -- Spot margin listings. One row per pair with its collateral schedule and
+    -- interest model; the risk engine reads these to size loans.
+    CREATE TABLE IF NOT EXISTS margin_markets (
+      market_id TEXT PRIMARY KEY,
+      symbol TEXT UNIQUE NOT NULL,
+      base_asset TEXT NOT NULL,
+      quote_asset TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'cross',
+      max_leverage INTEGER NOT NULL DEFAULT 10,
+      collateral_ltv TEXT NOT NULL,
+      borrowable_assets TEXT NOT NULL,
+      interest_base_apr REAL NOT NULL DEFAULT 0.05,
+      interest_kink_utilization REAL NOT NULL DEFAULT 0.8,
+      interest_kink_apr REAL NOT NULL DEFAULT 0.5,
+      interest_max_apr REAL NOT NULL DEFAULT 1.0,
+      liquidation_thresholds TEXT NOT NULL,
+      liquidation_bonus REAL NOT NULL DEFAULT 0.05,
+      risk_tier TEXT NOT NULL DEFAULT 'medium',
+      status TEXT DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_margin_markets_status
+      ON margin_markets(status);
+
+    -- Immutable admin audit trail. Every administrative mutation appends a row
+    -- here; nothing in the application updates or deletes it.
+    CREATE TABLE IF NOT EXISTS admin_audit_log (
+      entry_id TEXT PRIMARY KEY,
+      admin_id TEXT,
+      admin_email TEXT,
+      action TEXT NOT NULL,
+      target_type TEXT,
+      target_id TEXT,
+      detail TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_created
+      ON admin_audit_log(created_at DESC);
+
     -- White label clients
     CREATE TABLE IF NOT EXISTS white_label_clients (
       client_id TEXT PRIMARY KEY,

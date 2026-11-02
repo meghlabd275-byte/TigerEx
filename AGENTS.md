@@ -56,6 +56,42 @@ copy code out of it without review:
 
 The supported implementation is `internal/*` + `services/*` + `cmd/*`.
 
+## Admin console
+
+The admin console authenticates against `admin_users` (bcrypt) and opens a
+session in `admin_sessions`; that token is a distinct privilege from a trader
+session, so `readAuthToken()` is not sufficient for an admin route. Admin
+routes call `requireAdmin()` from `src/lib/auth/admin.ts`, which joins
+`admin_sessions` to `admin_users` and rejects a non-active account.
+
+`admin_users` is empty unless `TIGEREX_BOOTSTRAP_ADMIN_EMAIL` and
+`TIGEREX_BOOTSTRAP_ADMIN_PASSWORD` (16+ chars) are set at first migration. No
+default account or password is ever created.
+
+Every administrative mutation appends to `admin_audit_log` via
+`recordAdminAction()`. The trail is append-only; `/api/admin/audit` reads it
+and nothing updates or deletes it.
+
+## Market listing
+
+Listing is native and DB-backed, and does not need an external backend:
+
+- `POST/GET/PUT/DELETE /api/admin/pairs` — spot pairs (`trading_pairs`),
+  validated by `src/lib/markets/listing.ts`.
+- `POST/GET/PUT/DELETE /api/admin/futures/markets` — linear (USDT/USDC/RUSD/
+  RYUSD/TGR-margined), inverse (COIN_M) and dated contracts
+  (`futures_markets`), validated by `src/lib/markets/futures.ts`.
+- `POST/GET/PUT/DELETE /api/admin/margin/markets` — cross and isolated margin
+  (`margin_markets`), same module. An isolated pool is the same row with
+  `mode = 'isolated'`, so it needs no separate table.
+
+Validation is fail-closed and unit-tested (`scripts/test/listing.test.cjs`,
+`scripts/test/futures.test.cjs`). Notable invariants: a perpetual must not
+carry a `deliveryTimeNs` and a dated contract must; `initialMarginRate` must be
+at least `maintenanceMarginRate`; each collateral asset's LTV must be below
+*its own* entry in `liquidationThresholds`; a fee is a fraction in `[0, 1)`.
+`minNotional` defaults to 1, never 0.
+
 ## Build and test
 
 ```bash

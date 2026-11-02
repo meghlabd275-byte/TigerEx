@@ -20,35 +20,44 @@ const MODULES = [
   'src/lib/db/index.ts',
   'src/lib/db/portfolio.ts',
   'src/lib/db/convert.ts',
+  'src/lib/markets/listing.ts',
+  'src/lib/markets/futures.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });
 
-const tsconfig = {
-  compilerOptions: {
-    target: 'es2020',
-    module: 'commonjs',
-    moduleResolution: 'node',
-    esModuleInterop: true,
-    skipLibCheck: true,
-    outDir: OUT,
-    baseUrl: ROOT,
-    paths: { '@/*': ['src/*'] },
-    strict: false,
-  },
-  files: MODULES.map((m) => path.join(ROOT, m)),
-};
-
-const tsconfigPath = path.join(OUT, 'tsconfig.json');
+// Each module is compiled on its own with its own directory as the root, so
+// the emitted files stay flat in OUT regardless of which source directory a
+// module lives in. Tests then require `../../.test-build/<name>.js` without
+// mirroring the source tree.
 fs.mkdirSync(OUT, { recursive: true });
-fs.writeFileSync(tsconfigPath, JSON.stringify(tsconfig, null, 2));
+for (const module of MODULES) {
+  const absolute = path.join(ROOT, module);
+  const tsconfig = {
+    compilerOptions: {
+      target: 'es2020',
+      module: 'commonjs',
+      moduleResolution: 'node',
+      esModuleInterop: true,
+      skipLibCheck: true,
+      outDir: OUT,
+      rootDir: path.dirname(absolute),
+      baseUrl: ROOT,
+      paths: { '@/*': ['src/*'] },
+      strict: false,
+    },
+    files: [absolute],
+  };
 
-execFileSync(
-  process.platform === 'win32' ? 'npx.cmd' : 'npx',
-  ['tsc', '-p', tsconfigPath],
-  { cwd: ROOT, stdio: 'inherit' },
-);
-fs.rmSync(tsconfigPath);
+  const tsconfigPath = path.join(OUT, `tsconfig.${path.basename(module, '.ts')}.json`);
+  fs.writeFileSync(tsconfigPath, JSON.stringify(tsconfig, null, 2));
+  execFileSync(
+    process.platform === 'win32' ? 'npx.cmd' : 'npx',
+    ['tsc', '-p', tsconfigPath],
+    { cwd: ROOT, stdio: 'inherit' },
+  );
+  fs.rmSync(tsconfigPath);
+}
 
 // Rewrite `@/lib/db/thing` -> `./thing` and `@/lib/db` -> `./index`.
 const alias = /@\/lib\/db\/([\w-]+)/g;
