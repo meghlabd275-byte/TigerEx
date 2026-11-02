@@ -1,5 +1,7 @@
 'use client';
 
+import { readAuthToken } from '@/lib/auth/token';
+
 import React, { useState, useEffect } from 'react';
 import { History, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 
@@ -20,7 +22,7 @@ export function TradeHistory({ limit = 20 }: { limit?: number }) {
 
   useEffect(() => {
     const fetchTrades = async () => {
-      const token = localStorage.getItem('tigerex_token');
+      const token = readAuthToken();
       if (!token) {
         setLoading(false);
         return;

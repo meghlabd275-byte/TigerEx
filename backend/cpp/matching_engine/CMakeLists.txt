@@ -9,9 +9,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -mtune=native -flto")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -fsanitize=address,undefined")
 
-# Find required packages
+# Find required packages. The engine uses no cryptographic primitives itself, so
+# it does not link OpenSSL; requiring it only blocked builds on hosts without
+# the development headers.
 find_package(Threads REQUIRED)
-find_package(OpenSSL REQUIRED)
 
 # Include directories
 include_directories(include)
@@ -40,8 +41,6 @@ add_library(tigerex_matching SHARED ${SOURCES})
 # Link libraries
 target_link_libraries(tigerex_matching
     Threads::Threads
-    OpenSSL::SSL
-    OpenSSL::Crypto
 )
 
 # Set output directory

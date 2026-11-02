@@ -15,6 +15,7 @@ import {
   AlertCircle, CheckCircle, XCircle
 } from 'lucide-react';
 import { API_BASE_URL, WS_BASE_URL } from '@/lib/config';
+import { readAuthToken } from '@/lib/auth/token';
 
 // =============================================================================
 // TYPES & INTERFACES
@@ -204,7 +205,7 @@ class TradingApiService {
   }
 
   private getAuthHeaders(): HeadersInit {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('tigerex_token') : null;
+    const token = readAuthToken();
     return {
       'Content-Type': 'application/json',
       ...(token ? { 'Authorization': `Bearer ${token}` } : {}),

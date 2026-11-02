@@ -1,5 +1,7 @@
 'use client';
 
+import { readAuthToken } from '@/lib/auth/token';
+
 import { useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useApiResource, toArray } from '@/lib/useApiResource';
@@ -51,9 +53,7 @@ export default function OTCPage() {
     setSubmitting(true);
     try {
       const token =
-        typeof window !== 'undefined'
-          ? window.localStorage.getItem('token') || window.localStorage.getItem('auth_token')
-          : null;
+        readAuthToken();
       const response = await fetch(
         `/api/otc/quote?symbol=${encodeURIComponent(asset)}&amount=${encodeURIComponent(amount)}`,
         {

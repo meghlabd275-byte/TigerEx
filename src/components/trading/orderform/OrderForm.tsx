@@ -1,5 +1,7 @@
 'use client';
 
+import { readAuthToken } from '@/lib/auth/token';
+
 import React, { useState, useEffect } from 'react';
 
 type OrderSide = 'buy' | 'sell';
@@ -32,7 +34,7 @@ export function OrderForm({ symbol = 'BTC-USDT', currentPrice = 0, onOrderSubmit
   // Fetch user balances
   useEffect(() => {
     const fetchBalances = async () => {
-      const token = localStorage.getItem('tigerex_token');
+      const token = readAuthToken();
       if (!token) return;
 
       try {
@@ -78,7 +80,7 @@ export function OrderForm({ symbol = 'BTC-USDT', currentPrice = 0, onOrderSubmit
     setError(null);
     setLoading(true);
 
-    const token = localStorage.getItem('tigerex_token');
+    const token = readAuthToken();
     if (!token) {
       setError('Please login first');
       setLoading(false);

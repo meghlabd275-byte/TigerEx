@@ -1,5 +1,7 @@
 'use client';
 
+import { readAuthToken } from '@/lib/auth/token';
+
 import React, { useState, useEffect } from 'react';
 import { Shield, Smartphone, CheckCircle, AlertCircle, Loader2, Copy } from 'lucide-react';
 
@@ -20,7 +22,7 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
   // Check 2FA status on mount
   useEffect(() => {
     const checkStatus = async () => {
-      const token = localStorage.getItem('tigerex_token');
+      const token = readAuthToken();
       if (!token) return;
 
       try {
@@ -44,7 +46,7 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
     setLoading(true);
     setError(null);
 
-    const token = localStorage.getItem('tigerex_token');
+    const token = readAuthToken();
     if (!token) {
       setError('Please login first');
       setLoading(false);
@@ -80,7 +82,7 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
     setLoading(true);
     setError(null);
 
-    const token = localStorage.getItem('tigerex_token');
+    const token = readAuthToken();
     if (!token) {
       setError('Please login first');
       setLoading(false);
@@ -121,7 +123,7 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
     setLoading(true);
     setError(null);
 
-    const token = localStorage.getItem('tigerex_token');
+    const token = readAuthToken();
     if (!token) {
       setError('Please login first');
       setLoading(false);

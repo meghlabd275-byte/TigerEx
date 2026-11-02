@@ -64,6 +64,48 @@ go build ./...          # must be green
 go test ./...           # must be green
 ```
 
+C++ matching engine (no OpenSSL; it uses no crypto primitives, so requiring the
+dev headers only blocked builds):
+
+```bash
+cd backend/cpp/matching_engine
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
+ctest --test-dir build --output-on-failure   # 2 suites, both must pass
+```
+
+Frontend:
+
+```bash
+npx tsc --noEmit        # must be green
+npm run test:logic      # pure-logic suite
+npm run build           # must be green
+```
+
+## Auth token keys (frontend)
+
+Trader sessions are written to `localStorage['tigerex_access_token']`; the admin
+console writes `localStorage['tigerex_admin_token']`. Nothing writes
+`tigerex_token`, `token` or `auth_token`. Read the token through
+`readAuthToken()` in `src/lib/auth/token.ts` rather than touching
+`localStorage` directly — 22 views once read the dead keys and therefore sent
+no credential.
+
+## Frontend data routes
+
+`src/app/api/**/route.ts` splits into two kinds:
+
+- **Same-origin handlers backed by `src/lib/db`** (`/api/wallet/balance`,
+  `/api/market/ticker24h`, `/api/market/exchangeInfo`, `/api/candles`, the
+  `/api/auth/*` and `/api/admin/*` families). These work with no external
+  backend and are what self-contained views should call.
+- **Proxies to `TIGEREX_BACKEND_URL`** (`src/lib/backend-url.ts`). They fail
+  closed with 503 when the backend is unset. Do not give them a default host.
+
+Before wiring a new view, confirm the route exists under `src/app/api`; the
+mounted terminal page used to call `/api/orders`, `/api/positions`,
+`/api/balances` and `/api/market/candles`, none of which were ever served.
+
 CI (`.github/workflows/ci.yml`) runs:
 
 ```bash

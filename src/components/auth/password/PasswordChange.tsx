@@ -1,5 +1,7 @@
 'use client';
 
+import { readAuthToken } from '@/lib/auth/token';
+
 import React, { useState } from 'react';
 import { Lock, Eye, EyeOff, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 
@@ -51,7 +53,7 @@ export function PasswordChange() {
 
     setLoading(true);
 
-    const token = localStorage.getItem('tigerex_token');
+    const token = readAuthToken();
     if (!token) {
       setError('Please login first');
       setLoading(false);

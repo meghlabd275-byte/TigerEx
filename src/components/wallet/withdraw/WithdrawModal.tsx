@@ -1,5 +1,7 @@
 'use client';
 
+import { readAuthToken } from '@/lib/auth/token';
+
 import React, { useState, useEffect } from 'react';
 
 interface WithdrawModalProps {
@@ -22,7 +24,7 @@ export function WithdrawModal({ currency = 'BTC', onClose }: WithdrawModalProps)
   // Get available balance
   useEffect(() => {
     const fetchBalance = async () => {
-      const token = localStorage.getItem('tigerex_token');
+      const token = readAuthToken();
       if (!token) return;
 
       try {
@@ -103,7 +105,7 @@ export function WithdrawModal({ currency = 'BTC', onClose }: WithdrawModalProps)
     setError(null);
     setLoading(true);
 
-    const token = localStorage.getItem('tigerex_token');
+    const token = readAuthToken();
     if (!token) {
       setError('Please login first');
       setLoading(false);

@@ -1,5 +1,7 @@
 'use client';
 
+import { readAuthToken } from '@/lib/auth/token';
+
 import React, { useState, useEffect } from 'react';
 
 interface WalletBalance {
@@ -24,7 +26,7 @@ export function BalanceList({ compact = false }: BalanceListProps) {
 
   useEffect(() => {
     const fetchBalances = async () => {
-      const token = localStorage.getItem('tigerex_token');
+      const token = readAuthToken();
       if (!token) {
         setError('Please login to view balances');
         setLoading(false);

@@ -12,6 +12,7 @@ import {
   Plus, Minus, AlertTriangle, Check, X, Info, Lock
 } from 'lucide-react';
 import { API_BASE_URL, WS_BASE_URL } from '@/lib/config';
+import { readAuthToken } from '@/lib/auth/token';
 
 declare global {
   interface Window {
@@ -149,7 +150,7 @@ class ApiService {
 
   async get<T>(endpoint: string): Promise<T> {
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      headers: { Authorization: `Bearer ${readAuthToken() ?? ''}` }
     });
     if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
     return response.json();
@@ -160,7 +161,7 @@ class ApiService {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${localStorage.getItem('token')}`
+        Authorization: `Bearer ${readAuthToken() ?? ''}`
       },
       body: JSON.stringify(data)
     });
@@ -224,6 +225,50 @@ class ApiService {
 }
 
 const apiService = new ApiService();
+
+/**
+ * Load the authenticated user's wallet balances.
+ *
+ * Reads the same-origin `/api/wallet/balance` handler, which values holdings
+ * from the exchange's own ledger and `market_data`. Returns an empty list when
+ * there is no session, so callers render an empty state rather than inventing
+ * a balance.
+ */
+async function fetchWalletBalances(): Promise<Balance[]> {
+  const token = readAuthToken();
+  if (!token) return [];
+
+  const response = await fetch('/api/wallet/balance', {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`Balance request failed with status ${response.status}`);
+  }
+
+  const body = await response.json();
+  const holdings: Array<{
+    coin?: string;
+    free?: string | number;
+    locked?: string | number;
+    usdValue?: string | number | null;
+  }> = Array.isArray(body?.balances) ? body.balances : [];
+
+  return holdings
+    .filter((holding) => typeof holding.coin === 'string' && holding.coin.length > 0)
+    .map((holding) => {
+      const free = Number(holding.free) || 0;
+      const locked = Number(holding.locked) || 0;
+      const usdValue = Number(holding.usdValue) || 0;
+      return {
+        currency: String(holding.coin).toUpperCase(),
+        available: free.toString(),
+        locked: locked.toString(),
+        total: (free + locked).toString(),
+        usdValue: usdValue.toString(),
+      };
+    });
+}
 
 // =============================================================================
 // UTILITY FUNCTIONS
@@ -329,23 +374,21 @@ function useOrderForm(symbol: string) {
   const [leverage, setLeverage] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Balances come from the wallet API. The percentage buttons used to size
+  // Balances come from the wallet ledger. The percentage buttons used to size
   // orders against a literal 1000, which is not this user's balance.
   const [balances, setBalances] = useState<Record<string, number>>({});
 
   useEffect(() => {
     let cancelled = false;
 
-    const fetchBalances = async () => {
+    const load = async () => {
       try {
-        const data = await apiService.get<{ balances?: { coin: string; free: string | number }[] }>(
-          '/wallet/balance',
-        );
+        const holdings = await fetchWalletBalances();
         if (cancelled) return;
         const next: Record<string, number> = {};
-        for (const holding of data?.balances ?? []) {
-          const free = typeof holding.free === 'string' ? parseFloat(holding.free) : holding.free;
-          if (Number.isFinite(free)) next[String(holding.coin).toUpperCase()] = free;
+        for (const holding of holdings) {
+          const available = parseFloat(holding.available);
+          if (Number.isFinite(available)) next[holding.currency] = available;
         }
         setBalances(next);
       } catch (error) {
@@ -353,8 +396,8 @@ function useOrderForm(symbol: string) {
       }
     };
 
-    fetchBalances();
-    const interval = setInterval(fetchBalances, 15000);
+    load();
+    const interval = setInterval(load, 15000);
 
     return () => {
       cancelled = true;
@@ -1548,42 +1591,22 @@ export function TradingApp() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  // Balances are the user's real wallet holdings. They were never fetched, so
-  // the assets panel and the order form both showed nothing.
+  // Balances are the user's real wallet holdings; the assets panel rendered an
+  // app-wide list that nothing ever populated.
   useEffect(() => {
     let cancelled = false;
 
-    const fetchBalances = async () => {
+    const load = async () => {
       try {
-        const data = await apiService.get<{
-          balances?: {
-            coin: string;
-            free: string | number;
-            locked: string | number;
-            usdValue?: string | number;
-          }[];
-        }>('/wallet/balance');
-        if (cancelled) return;
-
-        const next: Balance[] = (data?.balances ?? []).map((holding) => {
-          const free = Number(holding.free) || 0;
-          const locked = Number(holding.locked) || 0;
-          return {
-            currency: String(holding.coin).toUpperCase(),
-            available: free.toString(),
-            locked: locked.toString(),
-            total: (free + locked).toString(),
-            usdValue: (Number(holding.usdValue) || 0).toString(),
-          };
-        });
-        setBalances(next);
+        const holdings = await fetchWalletBalances();
+        if (!cancelled) setBalances(holdings);
       } catch (error) {
         console.error('Failed to fetch balances:', error);
       }
     };
 
-    fetchBalances();
-    const interval = setInterval(fetchBalances, 15000);
+    load();
+    const interval = setInterval(load, 15000);
 
     return () => {
       cancelled = true;

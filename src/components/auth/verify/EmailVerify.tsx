@@ -1,5 +1,7 @@
 'use client';
 
+import { readAuthToken } from '@/lib/auth/token';
+
 import React, { useState, useEffect } from 'react';
 import { Mail, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 
@@ -15,7 +17,7 @@ export function EmailVerify({ email = '' }: EmailVerifyProps) {
 
   useEffect(() => {
     const checkVerification = async () => {
-      const token = localStorage.getItem('tigerex_token');
+      const token = readAuthToken();
       if (!token) return;
 
       try {
@@ -39,7 +41,7 @@ export function EmailVerify({ email = '' }: EmailVerifyProps) {
     setSending(true);
     setError(null);
 
-    const token = localStorage.getItem('tigerex_token');
+    const token = readAuthToken();
     if (!token) {
       setError('Please login first');
       setSending(false);

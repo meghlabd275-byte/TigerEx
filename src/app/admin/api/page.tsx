@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { readAuthToken } from '@/lib/auth/token';
 
 interface APIKey {
   id: string;
@@ -31,11 +32,7 @@ export default function AdminAPIPage() {
     setLoading(true);
     setError(null);
     try {
-      const token = typeof window !== 'undefined'
-        ? (localStorage.getItem('tigerex_admin_token') ||
-           localStorage.getItem('tigerex_access_token') ||
-           localStorage.getItem('tigerex_token'))
-        : null;
+      const token = readAuthToken();
       if (!token) {
         setAPIKeys([]);
         setError('Admin authentication is required. Sign in to the admin console, then reload this page.');
@@ -68,9 +65,7 @@ export default function AdminAPIPage() {
     if (!key.enabled) return;
     if (!window.confirm(`Revoke API key “${key.name}”? This action cannot be undone.`)) return;
 
-    const token = localStorage.getItem('tigerex_admin_token') ||
-      localStorage.getItem('tigerex_access_token') ||
-      localStorage.getItem('tigerex_token');
+    const token = readAuthToken();
     if (!token) {
       setError('Admin authentication is required.');
       return;

@@ -1,5 +1,7 @@
 'use client';
 
+import { readAuthToken } from '@/lib/auth/token';
+
 import React, { useState, useEffect } from 'react';
 import QRCode from 'qrcode';
 
@@ -25,7 +27,7 @@ export function DepositModal({ currency = 'BTC', network = 'BTC', onClose }: Dep
 
   useEffect(() => {
     const fetchAddress = async () => {
-      const token = localStorage.getItem('tigerex_token');
+      const token = readAuthToken();
       if (!token) {
         setError('Please login first');
         setLoading(false);

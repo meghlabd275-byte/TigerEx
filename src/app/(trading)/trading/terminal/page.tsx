@@ -8,6 +8,7 @@
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { WS_BASE_URL } from '@/lib/config';
+import { readAuthToken } from '@/lib/auth/token';
 
 // Types
 interface Order {
@@ -73,9 +74,12 @@ const TradingChart = ({ symbol, theme = 'dark' }: { symbol?: string; theme?: 'li
   useEffect(() => {
     const fetchCandles = async () => {
       try {
-        const res = await fetch(`/api/market/candles?symbol=${symbol || 'BTCUSDT'}&interval=1h&limit=100`);
+        const res = await fetch(
+          `/api/candles?symbol=${encodeURIComponent(symbol || 'BTC/USDT')}&interval=1h&limit=100`,
+          { cache: 'no-store' },
+        );
         const data = await res.json();
-        setCandles(data.candles || []);
+        setCandles(data.candles || data.data || []);
       } catch (err) {
         console.error('Failed to fetch candles:', err);
       } finally {
@@ -140,7 +144,10 @@ const OrderBookPanel = ({ symbol, theme = 'dark' }: { symbol?: string; theme?: '
   useEffect(() => {
     const fetchOrderBook = async () => {
       try {
-        const res = await fetch(`/api/market/orderbook?symbol=${symbol || 'BTCUSDT'}&limit=20`);
+        const res = await fetch(
+          `/api/market/orderbook?symbol=${encodeURIComponent(symbol || 'BTC/USDT')}&limit=20`,
+          { cache: 'no-store' },
+        );
         const data = await res.json();
         setBids(data.bids || []);
         setAsks(data.asks || []);
@@ -254,9 +261,9 @@ const OrderEntry = ({
         reduceOnly,
       };
 
-      const res = await fetch('/api/orders', {
+      const res = await fetch('/api/spot/order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify(order),
       });
 
@@ -349,10 +356,14 @@ const OrderEntry = ({
 };
 
 // Component: Open Orders
-const OrdersPanel = ({ orders = [], onCancel, theme = 'dark' }: { orders?: Order[]; onCancel?: (id: string) => void; theme?: 'light' | 'dark' }) => {
+const OrdersPanel = ({ symbol, orders = [], onCancel, theme = 'dark' }: { symbol: string; orders?: Order[]; onCancel?: (id: string) => void; theme?: 'light' | 'dark' }) => {
   const handleCancel = async (orderId: string) => {
     try {
-      await fetch(`/api/orders/${orderId}`, { method: 'DELETE' });
+      const res = await fetch(
+        `/api/order/cancel?orderId=${encodeURIComponent(orderId)}&symbol=${encodeURIComponent(symbol)}`,
+        { method: 'DELETE', headers: authHeaders() },
+      );
+      if (!res.ok) throw new Error(`Cancel failed with status ${res.status}`);
       onCancel?.(orderId);
     } catch (err) {
       console.error('Cancel failed:', err);
@@ -448,9 +459,73 @@ const MarketStats = ({ ticker, theme = 'dark' }: { ticker?: Ticker | null; theme
   );
 };
 
+// ---------------------------------------------------------------------------
+// Same-origin data access. Every panel below reads a route the app actually
+// serves; requests carry the caller's session token.
+// ---------------------------------------------------------------------------
+
+function authHeaders(): Record<string, string> {
+  const token = readAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function num(value: unknown, fallback = 0): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Pull a list out of a bare array or a `{ orders: [...] }`-style envelope. */
+function toList<T>(payload: unknown, key: string): T[] {
+  if (Array.isArray(payload)) return payload as T[];
+  if (payload && typeof payload === 'object') {
+    const record = payload as Record<string, unknown>;
+    if (Array.isArray(record[key])) return record[key] as T[];
+    for (const alt of ['data', 'items', 'results']) {
+      if (Array.isArray(record[alt])) return record[alt] as T[];
+    }
+  }
+  return [];
+}
+
+/** Wallet balances keyed by currency, from the ledger-backed balance handler. */
+function balancesToMap(payload: unknown): Record<string, number> {
+  if (!payload || typeof payload !== 'object') return {};
+  const record = payload as Record<string, unknown>;
+  const list = Array.isArray(record.balances) ? record.balances : [];
+  const out: Record<string, number> = {};
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue;
+    const holding = entry as Record<string, unknown>;
+    if (typeof holding.coin !== 'string') continue;
+    out[holding.coin.toUpperCase()] = num(holding.free);
+  }
+  return out;
+}
+
+/** Map the ticker handler's field names onto the panel's shape. */
+function normaliseTicker(payload: unknown): Ticker | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const t = payload as Record<string, unknown>;
+  const last = num(t.last ?? t.price);
+  if (last <= 0) return null;
+  return {
+    symbol: String(t.symbol ?? ''),
+    bid: num(t.bid, last),
+    ask: num(t.ask, last),
+    last,
+    volume: num(t.volume ?? t.quoteVolume),
+    high: num(t.high ?? t.highPrice, last),
+    low: num(t.low ?? t.lowPrice, last),
+    open: num(t.open ?? t.openPrice, last),
+    change24h: num(t.priceChange ?? t.change24h),
+    changePercent24h: num(t.priceChangePercent ?? t.changePercent24h),
+    timestamp: num(t.timestamp ?? t.closeTime, Date.now()),
+  };
+}
+
 // Main: Trading Terminal Page
 export default function TradingTerminalPage() {
-  const [symbol] = useState('BTCUSDT');
+  const [symbol] = useState('BTC/USDT');
   const [ticker, setTicker] = useState<Ticker | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
@@ -462,16 +537,16 @@ export default function TradingTerminalPage() {
     const fetchData = async () => {
       try {
         const [tickerRes, ordersRes, positionsRes, balancesRes] = await Promise.all([
-          fetch(`/api/market/ticker?symbol=${symbol}`),
-          fetch('/api/orders'),
-          fetch('/api/positions'),
-          fetch('/api/balances'),
+          fetch(`/api/market/ticker?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' }),
+          fetch('/api/order/openOrders', { headers: authHeaders() }),
+          fetch('/api/futures/positions', { headers: authHeaders() }),
+          fetch('/api/wallet/balance', { headers: authHeaders() }),
         ]);
 
-        setTicker(await tickerRes.json());
-        setOrders((await ordersRes.json()).orders || []);
-        setPositions((await positionsRes.json()).positions || []);
-        setBalances((await balancesRes.json()).balances || {});
+        setTicker(normaliseTicker(await tickerRes.json()));
+        setOrders(toList<Order>(await ordersRes.json(), 'orders'));
+        setPositions(toList<Position>(await positionsRes.json(), 'positions'));
+        setBalances(balancesToMap(await balancesRes.json()));
       } catch (err) {
         console.error('Fetch failed:', err);
       }
@@ -496,7 +571,12 @@ export default function TradingTerminalPage() {
   const handleCancelOrder = (orderId: string) => setOrders(prev => prev.filter(o => o.id !== orderId));
   const handleClosePosition = async (positionId: string) => {
     try {
-      await fetch(`/api/positions/${positionId}/close`, { method: 'POST' });
+      const res = await fetch(`/api/futures/position/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ positionId }),
+      });
+      if (!res.ok) throw new Error(`Close failed with status ${res.status}`);
       setPositions(prev => prev.filter(p => p.id !== positionId));
     } catch (err) {
       console.error('Close failed:', err);
@@ -543,7 +623,7 @@ export default function TradingTerminalPage() {
             ))}
           </div>
           <div className="flex-1 p-2">
-            {currentView === 'orders' && <OrdersPanel orders={orders} onCancel={handleCancelOrder} />}
+            {currentView === 'orders' && <OrdersPanel symbol={symbol} orders={orders} onCancel={handleCancelOrder} />}
             {currentView === 'positions' && <PositionsPanel positions={positions} onClose={handleClosePosition} />}
           </div>
         </div>

@@ -1,5 +1,7 @@
 'use client';
 
+import { readAuthToken } from '@/lib/auth/token';
+
 import React, { useState, useEffect } from 'react';
 import { Users, Shield, Search, MoreVertical, Loader2 } from 'lucide-react';
 
@@ -20,7 +22,7 @@ export function UserManagement() {
 
   useEffect(() => {
     const fetchUsers = async () => {
-      const token = localStorage.getItem('tigerex_token');
+      const token = readAuthToken();
       if (!token) {
         setLoading(false);
         return;

@@ -1,5 +1,7 @@
 "use client";
 
+import { readAuthToken } from '@/lib/auth/token';
+
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowUp, AlertTriangle, CheckCircle, RefreshCw } from "lucide-react";
@@ -80,9 +82,7 @@ export default function WithdrawPage() {
     setSubmitting(true);
     try {
       const token =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem("token") || window.localStorage.getItem("auth_token")
-          : null;
+        readAuthToken();
       const response = await fetch("/api/wallet/withdraw", {
         method: "POST",
         headers: {
