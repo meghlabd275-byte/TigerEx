@@ -626,11 +626,12 @@ private:
     std::unordered_map<std::string, std::unordered_map<OrderId, Order>>
         conditional_orders_;
 
-    // Running extreme price per symbol since the last trade, used as the
-    // reference for trailing-stop triggers.
-    // Ids for parked orders; the book's own sequence is not used because a
-    // parked order never enters a price level.
-    std::atomic<uint64_t> next_conditional_id_{1};
+    // Ids for parked orders. They must not collide with a book's own
+    // server_order_id, or cancel_order and get_order would resolve an id to
+    // the parked order when the caller meant the resting one. Book ids count
+    // up from zero, so parking starts from a base they cannot reach.
+    static constexpr uint64_t kConditionalIdBase = 1ULL << 62;
+    std::atomic<uint64_t> next_conditional_id_{kConditionalIdBase};
     
     // Callbacks
     TradeCallback trade_callback_;

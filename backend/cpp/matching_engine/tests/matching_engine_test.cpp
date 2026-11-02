@@ -266,6 +266,45 @@ void test_oco_fires_one_leg_only() {
     std::printf("ok: an OCO fires one leg and drops the other\n");
 }
 
+void test_parked_and_book_order_ids_do_not_collide() {
+    // Parked orders are held outside the book, so their ids must not overlap
+    // the book's own server_order_id. If they did, cancel_order and get_order
+    // would resolve an id to the parked order when the caller meant the
+    // resting one, and a stop could cancel a live limit order.
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+
+    // A resting limit order takes a low id from the book's sequence.
+    Order resting = make_order(31, OrderSide::Sell, OrderType::Limit, 1500, 1000);
+    OrderResult rr = engine.submit_order(resting);
+    assert(rr.success);
+
+    // A parked stop takes an id from a separate space.
+    Order stop = make_order(32, OrderSide::Sell, OrderType::StopLoss, 0, 1000);
+    stop.stop_price = {900, kPricePrecision};
+    OrderResult pr = engine.submit_order(stop);
+    assert(pr.success);
+
+    assert(!(rr.order_id == pr.order_id));
+
+    // Cancelling the parked stop must leave the resting order in the book.
+    assert(engine.cancel_order(kSymbol, pr.order_id));
+    assert(engine.get_conditional_orders(kSymbol, 32).empty());
+    Order* still_resting = engine.get_order(kSymbol, rr.order_id);
+    assert(still_resting != nullptr);
+    assert(still_resting->status == OrderStatus::Open);
+
+    // And cancelling the resting order must not touch a parked one.
+    Order stop2 = make_order(33, OrderSide::Sell, OrderType::StopLoss, 0, 1000);
+    stop2.stop_price = {900, kPricePrecision};
+    OrderResult pr2 = engine.submit_order(stop2);
+    assert(pr2.success);
+    assert(engine.cancel_order(kSymbol, rr.order_id));
+    assert(engine.get_conditional_orders(kSymbol, 33).size() == 1);
+
+    std::printf("ok: parked and book order ids are isolated\n");
+}
+
 void test_cancel_reaches_parked_orders() {
     MatchingEngine engine{EngineConfig{}};
     setup_market(engine);
@@ -704,6 +743,7 @@ int main() {
     test_take_profit_sell_fires_on_a_rise();
     test_trailing_stop_ratchets_then_fires();
     test_oco_fires_one_leg_only();
+    test_parked_and_book_order_ids_do_not_collide();
     test_cancel_reaches_parked_orders();
     test_fee_and_resting_behaviour();
     test_market_fee_rates_are_charged();
