@@ -329,6 +329,45 @@ function useOrderForm(symbol: string) {
   const [leverage, setLeverage] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Balances come from the wallet API. The percentage buttons used to size
+  // orders against a literal 1000, which is not this user's balance.
+  const [balances, setBalances] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchBalances = async () => {
+      try {
+        const data = await apiService.get<{ balances?: { coin: string; free: string | number }[] }>(
+          '/wallet/balance',
+        );
+        if (cancelled) return;
+        const next: Record<string, number> = {};
+        for (const holding of data?.balances ?? []) {
+          const free = typeof holding.free === 'string' ? parseFloat(holding.free) : holding.free;
+          if (Number.isFinite(free)) next[String(holding.coin).toUpperCase()] = free;
+        }
+        setBalances(next);
+      } catch (error) {
+        console.error('Failed to fetch balances:', error);
+      }
+    };
+
+    fetchBalances();
+    const interval = setInterval(fetchBalances, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // A buy is paid for with the quote asset, a sell with the base asset.
+  const [baseAsset, quoteAsset] = useMemo(() => {
+    const parts = symbol.split('/');
+    return [(parts[0] || '').toUpperCase(), (parts[1] || '').toUpperCase()];
+  }, [symbol]);
+
   const total = useMemo(() => {
     const p = parseFloat(price) || 0;
     const q = parseFloat(quantity) || 0;
@@ -365,11 +404,18 @@ function useOrderForm(symbol: string) {
   };
 
   const setPercentage = (percent: number) => {
-    const balance = 1000; // Would fetch from context
     const p = parseFloat(price) || 0;
-    if (p > 0) {
-      setQuantity((balance * percent / p).toFixed(8));
-    }
+    if (p <= 0) return;
+
+    // A buy spends the quote asset, so size it as quoteBalance / price. A sell
+    // spends the base asset directly. Sizing both the same way would let a buy
+    // spend more quote than the account holds.
+    const balance =
+      side === 'buy' ? (balances[quoteAsset] ?? 0) : (balances[baseAsset] ?? 0);
+    if (balance <= 0) return;
+
+    const size = side === 'buy' ? (balance * percent) / p : balance * percent;
+    setQuantity(size.toFixed(8));
   };
 
   return {
@@ -1502,7 +1548,48 @@ export function TradingApp() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  // Identity and balances remain empty until authenticated, authoritative API data is supplied.
+  // Balances are the user's real wallet holdings. They were never fetched, so
+  // the assets panel and the order form both showed nothing.
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchBalances = async () => {
+      try {
+        const data = await apiService.get<{
+          balances?: {
+            coin: string;
+            free: string | number;
+            locked: string | number;
+            usdValue?: string | number;
+          }[];
+        }>('/wallet/balance');
+        if (cancelled) return;
+
+        const next: Balance[] = (data?.balances ?? []).map((holding) => {
+          const free = Number(holding.free) || 0;
+          const locked = Number(holding.locked) || 0;
+          return {
+            currency: String(holding.coin).toUpperCase(),
+            available: free.toString(),
+            locked: locked.toString(),
+            total: (free + locked).toString(),
+            usdValue: (Number(holding.usdValue) || 0).toString(),
+          };
+        });
+        setBalances(next);
+      } catch (error) {
+        console.error('Failed to fetch balances:', error);
+      }
+    };
+
+    fetchBalances();
+    const interval = setInterval(fetchBalances, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   return (
     <AppContext.Provider value={{
