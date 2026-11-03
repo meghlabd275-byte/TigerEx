@@ -22,6 +22,17 @@ const MODULES = [
   'src/lib/db/convert.ts',
   'src/lib/markets/listing.ts',
   'src/lib/markets/futures.ts',
+  'src/lib/trading/orderbook.ts',
+  'src/lib/trading/fees.ts',
+  'src/lib/trading/etf.ts',
+  'src/lib/trading/copy.ts',
+  'src/lib/risk/engine.ts',
+  'src/lib/oracle/aggregator.ts',
+  'src/lib/options/pricing.ts',
+  'src/lib/earn/products.ts',
+  'src/lib/bots/strategies.ts',
+  'src/lib/p2p/escrow.ts',
+  'src/lib/security/guards.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });

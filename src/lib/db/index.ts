@@ -559,6 +559,495 @@ function initializeSchema() {
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
     );
 
+    -- ======================================================================
+    -- Extended CEX instruments, risk, treasury and operational tables.
+    -- Every table is guarded with IF NOT EXISTS because the schema is applied
+    -- on every boot; nothing here seeds data.
+    -- ======================================================================
+
+    -- Options listings: one row per (underlying, expiry, strike, type).
+    CREATE TABLE IF NOT EXISTS options_markets (
+      market_id TEXT PRIMARY KEY,
+      symbol TEXT UNIQUE NOT NULL,
+      underlying TEXT NOT NULL,
+      settlement_asset TEXT NOT NULL,
+      option_type TEXT NOT NULL,
+      strike_price REAL NOT NULL,
+      expiry_ns INTEGER NOT NULL,
+      exercise_style TEXT NOT NULL DEFAULT 'european',
+      contract_size REAL NOT NULL DEFAULT 1,
+      tick_size REAL NOT NULL,
+      min_quantity REAL NOT NULL,
+      max_quantity REAL NOT NULL,
+      maker_fee_bps INTEGER NOT NULL DEFAULT 2,
+      taker_fee_bps INTEGER NOT NULL DEFAULT 5,
+      implied_volatility REAL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_options_markets_underlying
+      ON options_markets(underlying, expiry_ns);
+
+    -- Leveraged tokens / ETFs. NAV and leverage are maintained by the rebalancer.
+    CREATE TABLE IF NOT EXISTS etf_markets (
+      market_id TEXT PRIMARY KEY,
+      symbol TEXT UNIQUE NOT NULL,
+      underlying TEXT NOT NULL,
+      settlement_asset TEXT NOT NULL,
+      leverage INTEGER NOT NULL,
+      direction TEXT NOT NULL,
+      nav REAL NOT NULL,
+      last_rebalance_ns INTEGER,
+      rebalance_threshold REAL NOT NULL DEFAULT 0.05,
+      management_fee_apr REAL NOT NULL DEFAULT 0.02,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_etf_markets_underlying ON etf_markets(underlying);
+
+    -- TradFi instruments (stocks, FX, commodities, indices) traded 24/7.
+    CREATE TABLE IF NOT EXISTS tradfi_markets (
+      market_id TEXT PRIMARY KEY,
+      symbol TEXT UNIQUE NOT NULL,
+      instrument_type TEXT NOT NULL,
+      settlement_asset TEXT NOT NULL,
+      price_source TEXT NOT NULL,
+      reference_symbol TEXT NOT NULL,
+      tick_size REAL NOT NULL,
+      min_quantity REAL NOT NULL,
+      max_quantity REAL NOT NULL,
+      max_leverage INTEGER NOT NULL DEFAULT 1,
+      maker_fee_bps INTEGER NOT NULL DEFAULT 2,
+      taker_fee_bps INTEGER NOT NULL DEFAULT 5,
+      trading_hours TEXT NOT NULL DEFAULT '24/7',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_tradfi_markets_type ON tradfi_markets(instrument_type);
+
+    -- Per-contract insurance fund, refilled from a share of trading fees.
+    CREATE TABLE IF NOT EXISTS insurance_funds (
+      contract TEXT PRIMARY KEY,
+      balance REAL NOT NULL DEFAULT 0,
+      target_balance REAL NOT NULL DEFAULT 0,
+      fee_share REAL NOT NULL DEFAULT 0.1,
+      adl_enabled INTEGER NOT NULL DEFAULT 0,
+      adl_threshold REAL NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Funding rate history per perpetual contract.
+    CREATE TABLE IF NOT EXISTS funding_rates (
+      funding_id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      funding_rate REAL NOT NULL,
+      mark_price REAL NOT NULL,
+      index_price REAL NOT NULL,
+      premium REAL NOT NULL DEFAULT 0,
+      funding_time_ns INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_funding_rates_symbol
+      ON funding_rates(symbol, funding_time_ns DESC);
+
+    -- Oracle sources configured per symbol. Mark price is the weighted median
+    -- of the fresh, non-deviating sources; no single feed sets the price.
+    CREATE TABLE IF NOT EXISTS oracle_sources (
+      source_id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      source_name TEXT NOT NULL,
+      feed_reference TEXT,
+      weight REAL NOT NULL DEFAULT 1,
+      max_deviation REAL NOT NULL DEFAULT 0.05,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(symbol, source_name)
+    );
+
+    -- Latest observation from each oracle source.
+    CREATE TABLE IF NOT EXISTS oracle_prices (
+      price_id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      source_name TEXT NOT NULL,
+      price REAL NOT NULL,
+      confidence REAL NOT NULL DEFAULT 0,
+      published_ns INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(symbol, source_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_oracle_prices_symbol ON oracle_prices(symbol);
+
+    -- Position risk tiers per market (Binance-style leverage brackets).
+    CREATE TABLE IF NOT EXISTS risk_limits (
+      limit_id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      tier INTEGER NOT NULL,
+      max_position_notional REAL NOT NULL,
+      max_leverage INTEGER NOT NULL,
+      maintenance_margin_rate REAL NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(symbol, tier)
+    );
+
+    -- Liquidation work queue. A row is the instruction to a liquidation bot;
+    -- it is not a fabricated order.
+    CREATE TABLE IF NOT EXISTS liquidation_queue (
+      entry_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      position_type TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      entry_price REAL NOT NULL,
+      mark_price REAL NOT NULL,
+      margin_ratio REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT DEFAULT (datetime('now')),
+      executed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_liquidation_queue_status
+      ON liquidation_queue(status, created_at);
+
+    -- Exchange-wide and per-scope pause controls (circuit breakers).
+    CREATE TABLE IF NOT EXISTS exchange_controls (
+      scope TEXT PRIMARY KEY,
+      paused INTEGER NOT NULL DEFAULT 0,
+      reason TEXT,
+      updated_by TEXT,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Trading bot instances.
+    CREATE TABLE IF NOT EXISTS trading_bots (
+      bot_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      strategy TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      params TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'stopped',
+      realized_pnl REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_trading_bots_user ON trading_bots(user_id);
+
+    -- Copy-trading leader profiles.
+    CREATE TABLE IF NOT EXISTS copy_traders (
+      trader_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      markets TEXT NOT NULL DEFAULT '[]',
+      roi_7d REAL NOT NULL DEFAULT 0,
+      roi_30d REAL NOT NULL DEFAULT 0,
+      roi_90d REAL NOT NULL DEFAULT 0,
+      win_rate REAL NOT NULL DEFAULT 0,
+      followers INTEGER NOT NULL DEFAULT 0,
+      max_followers INTEGER NOT NULL DEFAULT 1000,
+      aum REAL NOT NULL DEFAULT 0,
+      profit_share REAL NOT NULL DEFAULT 0.1,
+      status TEXT NOT NULL DEFAULT 'pending',
+      approved_by TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- A follower's copy relationship with a leader.
+    CREATE TABLE IF NOT EXISTS copy_follows (
+      follow_id TEXT PRIMARY KEY,
+      follower_id TEXT NOT NULL,
+      trader_id TEXT NOT NULL,
+      copy_mode TEXT NOT NULL DEFAULT 'ratio',
+      fixed_amount REAL,
+      ratio REAL,
+      max_position REAL,
+      take_profit REAL,
+      stop_loss REAL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(follower_id, trader_id)
+    );
+
+    -- Earn products: flexible, locked, dual investment, shark fin, RYUSD vault,
+    -- auto-invest and launchpool all share this table with a product_type.
+    CREATE TABLE IF NOT EXISTS earn_products (
+      product_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      product_type TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      apy REAL NOT NULL,
+      duration_days INTEGER,
+      min_amount REAL NOT NULL DEFAULT 0,
+      max_amount REAL,
+      cap REAL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_earn_products_type ON earn_products(product_type);
+
+    -- A user's subscription to an earn product.
+    CREATE TABLE IF NOT EXISTS earn_subscriptions (
+      subscription_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      amount REAL NOT NULL,
+      accrued_reward REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      started_at TEXT DEFAULT (datetime('now')),
+      matures_at TEXT,
+      redeemed_at TEXT,
+      FOREIGN KEY (product_id) REFERENCES earn_products(product_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_earn_subscriptions_user ON earn_subscriptions(user_id);
+
+    -- P2P marketplace ads.
+    CREATE TABLE IF NOT EXISTS p2p_offers (
+      offer_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      side TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      fiat TEXT NOT NULL,
+      price REAL NOT NULL,
+      min_amount REAL NOT NULL,
+      max_amount REAL NOT NULL,
+      available REAL NOT NULL,
+      payment_methods TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_p2p_offers_pair ON p2p_offers(asset, fiat, side);
+
+    -- P2P escrow orders. Funds are held in escrow until release.
+    CREATE TABLE IF NOT EXISTS p2p_orders (
+      order_id TEXT PRIMARY KEY,
+      offer_id TEXT NOT NULL,
+      buyer_id TEXT NOT NULL,
+      seller_id TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      fiat TEXT NOT NULL,
+      price REAL NOT NULL,
+      amount REAL NOT NULL,
+      escrow_amount REAL NOT NULL,
+      payment_method TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT DEFAULT (datetime('now')),
+      released_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_p2p_orders_buyer ON p2p_orders(buyer_id);
+    CREATE INDEX IF NOT EXISTS idx_p2p_orders_seller ON p2p_orders(seller_id);
+
+    CREATE TABLE IF NOT EXISTS p2p_disputes (
+      dispute_id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      opened_by TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      resolution TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- TigerPay transfers between users, by email, phone or account id.
+    CREATE TABLE IF NOT EXISTS pay_transfers (
+      transfer_id TEXT PRIMARY KEY,
+      sender_id TEXT NOT NULL,
+      recipient_ref TEXT NOT NULL,
+      recipient_user_id TEXT,
+      asset TEXT NOT NULL,
+      amount REAL NOT NULL,
+      memo TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      claim_code TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      claimed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pay_transfers_sender ON pay_transfers(sender_id);
+
+    -- Treasury accounts per asset and network (hot, warm, cold).
+    CREATE TABLE IF NOT EXISTS treasury_accounts (
+      account_id TEXT PRIMARY KEY,
+      asset TEXT NOT NULL,
+      network TEXT NOT NULL,
+      account_type TEXT NOT NULL,
+      balance REAL NOT NULL DEFAULT 0,
+      address TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(asset, network, account_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS treasury_movements (
+      movement_id TEXT PRIMARY KEY,
+      asset TEXT NOT NULL,
+      from_account TEXT,
+      to_account TEXT,
+      amount REAL NOT NULL,
+      reason TEXT NOT NULL,
+      tx_ref TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Revenue ledger: one row per fee or interest event the exchange earned.
+    CREATE TABLE IF NOT EXISTS revenue_ledger (
+      entry_id TEXT PRIMARY KEY,
+      category TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      amount REAL NOT NULL,
+      user_id TEXT,
+      reference TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_revenue_ledger_category
+      ON revenue_ledger(category, created_at DESC);
+
+    -- Fee schedule by VIP level. Level 0 is the public tier.
+    CREATE TABLE IF NOT EXISTS fee_schedule (
+      level INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      spot_maker_bps REAL NOT NULL,
+      spot_taker_bps REAL NOT NULL,
+      futures_maker_bps REAL NOT NULL,
+      futures_taker_bps REAL NOT NULL,
+      volume_threshold REAL NOT NULL DEFAULT 0,
+      tgr_holding_threshold REAL NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Support desk.
+    CREATE TABLE IF NOT EXISTS support_tickets (
+      ticket_id TEXT PRIMARY KEY,
+      user_id TEXT,
+      subject TEXT NOT NULL,
+      category TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal',
+      status TEXT NOT NULL DEFAULT 'open',
+      assigned_to TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status);
+
+    CREATE TABLE IF NOT EXISTS support_messages (
+      message_id TEXT PRIMARY KEY,
+      ticket_id TEXT NOT NULL,
+      author_type TEXT NOT NULL,
+      author_id TEXT,
+      body TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (ticket_id) REFERENCES support_tickets(ticket_id) ON DELETE CASCADE
+    );
+
+    -- Open derivative positions. One row per user, symbol and position side.
+    CREATE TABLE IF NOT EXISTS futures_positions (
+      position_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      entry_price REAL NOT NULL,
+      mark_price REAL NOT NULL,
+      leverage INTEGER NOT NULL,
+      margin_mode TEXT NOT NULL DEFAULT 'cross',
+      position_mode TEXT NOT NULL DEFAULT 'one_way',
+      margin REAL NOT NULL,
+      liquidation_price REAL NOT NULL,
+      unrealized_pnl REAL NOT NULL DEFAULT 0,
+      realized_pnl REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'open',
+      opened_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(user_id, symbol, side, position_mode)
+    );
+    CREATE INDEX IF NOT EXISTS idx_futures_positions_user ON futures_positions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_futures_positions_symbol ON futures_positions(symbol);
+
+    -- Margin loans with accrued interest.
+    CREATE TABLE IF NOT EXISTS margin_loans (
+      loan_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      principal REAL NOT NULL,
+      interest_accrued REAL NOT NULL DEFAULT 0,
+      collateral_asset TEXT NOT NULL,
+      collateral_amount REAL NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'cross',
+      status TEXT NOT NULL DEFAULT 'open',
+      opened_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_margin_loans_user ON margin_loans(user_id);
+
+    -- Sub-accounts under a parent account.
+    CREATE TABLE IF NOT EXISTS subaccounts (
+      subaccount_id TEXT PRIMARY KEY,
+      parent_user_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      label TEXT,
+      permissions TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(parent_user_id, email)
+    );
+    CREATE INDEX IF NOT EXISTS idx_subaccounts_parent ON subaccounts(parent_user_id);
+
+    -- Launchpad projects and subscriptions.
+    CREATE TABLE IF NOT EXISTS launchpad_projects (
+      project_id TEXT PRIMARY KEY,
+      token_symbol TEXT NOT NULL,
+      name TEXT NOT NULL,
+      sale_price REAL NOT NULL,
+      total_allocation REAL NOT NULL,
+      raised REAL NOT NULL DEFAULT 0,
+      start_ns INTEGER NOT NULL,
+      end_ns INTEGER NOT NULL,
+      vesting TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'upcoming',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS launchpad_subscriptions (
+      subscription_id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      amount REAL NOT NULL,
+      allocation REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'committed',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(project_id, user_id)
+    );
+
+    -- Withdrawal address whitelist. An address must be whitelisted and
+    -- confirmed before a withdrawal to it is accepted.
+    CREATE TABLE IF NOT EXISTS withdrawal_whitelist (
+      entry_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      network TEXT NOT NULL,
+      address TEXT NOT NULL,
+      label TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(user_id, asset, network, address)
+    );
+    CREATE INDEX IF NOT EXISTS idx_withdrawal_whitelist_user ON withdrawal_whitelist(user_id);
+
+    -- Buyback and burn records.
+    CREATE TABLE IF NOT EXISTS buyback_records (
+      record_id TEXT PRIMARY KEY,
+      asset TEXT NOT NULL,
+      quote_asset TEXT NOT NULL,
+      amount_spent REAL NOT NULL,
+      asset_bought REAL NOT NULL,
+      asset_burned REAL NOT NULL,
+      fee_share REAL NOT NULL,
+      tx_ref TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- API rate-limit usage counters per key and window.
+    CREATE TABLE IF NOT EXISTS api_rate_usage (
+      key_id TEXT NOT NULL,
+      window_start INTEGER NOT NULL,
+      request_count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (key_id, window_start)
+    );
+
     -- Create indexes
     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
     CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
