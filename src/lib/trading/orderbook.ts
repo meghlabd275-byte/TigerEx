@@ -235,6 +235,21 @@ export class OrderBook {
     book[index].orders.push(order);
   }
 
+  /**
+   * Insert an already-validated resting order at its price and arrival time.
+   *
+   * Used when rebuilding the book from durable open orders: those orders were
+   * validated and reserved when they were placed, so re-validating them here
+   * would be redundant. The order is inserted behind any equal-priced order
+   * that arrived earlier, preserving price-time priority.
+   */
+  rest(order: Omit<RestingOrder, 'sequence'> & { sequence?: number }): void {
+    const book = order.side === 'buy' ? this.bids : this.asks;
+    const sequence = order.sequence ?? this.sequence++;
+    this.insert(book, { ...order, sequence }, order.side);
+    if (sequence >= this.sequence) this.sequence = sequence + 1;
+  }
+
   /** Remove a resting order. Returns the quantity that was still open. */
   cancel(orderId: string): number {
     for (const book of [this.bids, this.asks]) {

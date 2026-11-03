@@ -1,39 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { getDb } from '@/lib/db';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get insurance fund info
+/**
+ * Insurance fund balances.
+ *
+ * Reads the exchange's own `insurance_funds` table. A contract with no fund row
+ * is reported with a zero balance rather than an invented figure, and the
+ * balance is never negative.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const response = await fetch(`${API_BASE_URL}/insurance/fund`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+  const contract = request.nextUrl.searchParams.get('contract')?.trim().toUpperCase();
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch insurance fund' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Insurance fund API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (contract) {
+    clauses.push('contract = ?');
+    params.push(contract);
   }
+  const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
+
+  const rows = getDb()
+    .prepare(`SELECT contract, balance, target_balance, fee_share, adl_enabled, adl_threshold, updated_at FROM insurance_funds${where} ORDER BY contract`)
+    .all(...params) as Array<Record<string, unknown>>;
+
+  const total = rows.reduce((sum, row) => sum + (Number(row.balance) || 0), 0);
+
+  return NextResponse.json(
+    {
+      success: true,
+      funds: rows.map((row) => ({
+        contract: row.contract,
+        balance: Number(row.balance) || 0,
+        targetBalance: Number(row.target_balance) || 0,
+        feeShare: Number(row.fee_share) || 0,
+        adlEnabled: row.adl_enabled === 1,
+        adlThreshold: Number(row.adl_threshold) || 0,
+        updatedAt: row.updated_at,
+      })),
+      totalBalance: total,
+    },
+    { headers: NO_STORE },
+  );
 }

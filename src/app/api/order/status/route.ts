@@ -1,63 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { getOrder } from '@/lib/trading/spot-engine';
+import { fail, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get order status
+/** Fetch one of the caller's own orders by id. */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const orderId = searchParams.get('orderId');
-    const symbol = searchParams.get('symbol');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const orderId = request.nextUrl.searchParams.get('orderId')?.trim();
+  if (!orderId) return fail('VALIDATION_FAILED', 'orderId query parameter is required');
 
-    if (!orderId) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameter: orderId' },
-        { status: 400 }
-      );
-    }
+  const order = getOrder(auth.user.userId, orderId);
+  if (!order) return fail('UNKNOWN_ORDER', 'No such order', 404);
 
-    const url = symbol 
-      ? `${API_BASE_URL}/order/status?orderId=${orderId}&symbol=${symbol}`
-      : `${API_BASE_URL}/order/status?orderId=${orderId}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch order status' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Order status API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, order }, { headers: NO_STORE });
 }

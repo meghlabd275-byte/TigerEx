@@ -1,49 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { getDb } from '@/lib/db';
+import { fail, symbolParam, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get leverage brackets
+/**
+ * Leverage brackets for a market.
+ *
+ * Reads the exchange's own `risk_limits` table. The execution path uses the
+ * same rows to cap a position's leverage, so a client that shows these brackets
+ * shows exactly what the risk engine will enforce.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol');
+  const symbol = symbolParam(request.nextUrl.searchParams.get('symbol'));
+  if (!symbol) return fail('VALIDATION_FAILED', 'A symbol such as BTC/RUSD is required');
 
-    if (!symbol) {
-      return NextResponse.json(
-        { success: false, error: 'Symbol is required' },
-        { status: 400 }
-      );
-    }
+  const rows = getDb()
+    .prepare('SELECT tier, max_position_notional, max_leverage, maintenance_margin_rate FROM risk_limits WHERE symbol = ? ORDER BY tier')
+    .all(symbol) as Array<{
+    tier: number;
+    max_position_notional: number;
+    max_leverage: number;
+    maintenance_margin_rate: number;
+  }>;
 
-    const response = await fetch(`${API_BASE_URL}/leverage/brackets?symbol=${symbol}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch leverage brackets' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Leverage brackets API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json(
+    {
+      success: true,
+      symbol,
+      brackets: rows.map((row) => ({
+        tier: row.tier,
+        maxPositionNotional: row.max_position_notional,
+        maxLeverage: row.max_leverage,
+        maintenanceMarginRate: row.maintenance_margin_rate,
+      })),
+    },
+    { headers: NO_STORE },
+  );
 }

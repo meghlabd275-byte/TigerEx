@@ -193,6 +193,11 @@ function initializeSchema() {
       average_price REAL,
       status TEXT DEFAULT 'pending',
       time_in_force TEXT DEFAULT 'GTC',
+      stop_price REAL,
+      iceberg_quantity REAL,
+      hidden_quantity REAL DEFAULT 0,
+      locked_amount REAL DEFAULT 0,
+      locked_asset TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
@@ -1081,6 +1086,28 @@ function initializeSchema() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Executed spot trades. One row per fill, written by the settlement path
+    -- when a taker order matches a resting maker order. The maker and taker
+    -- user ids let a fee ledger attribute each side; nothing here is simulated.
+    CREATE TABLE IF NOT EXISTS spot_trades (
+      trade_id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      maker_order_id TEXT NOT NULL,
+      taker_order_id TEXT NOT NULL,
+      maker_user_id TEXT NOT NULL,
+      taker_user_id TEXT NOT NULL,
+      side TEXT NOT NULL,
+      price REAL NOT NULL,
+      quantity REAL NOT NULL,
+      quote_quantity REAL NOT NULL,
+      maker_fee REAL NOT NULL DEFAULT 0,
+      taker_fee REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_spot_trades_symbol ON spot_trades(symbol, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_spot_trades_maker ON spot_trades(maker_user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_spot_trades_taker ON spot_trades(taker_user_id, created_at DESC);
+
     -- ======================================================================
     -- Baseline fee schedule and risk controls. These are exchange parameters
     -- (a fee schedule must exist for the fee engine to resolve a tier), not
@@ -1167,6 +1194,11 @@ function applyColumnMigrations(database: Database.Database) {
   const migrations: Array<{ table: string; column: string; definition: string }> = [
     { table: 'users', column: 'referral_code', definition: 'TEXT' },
     { table: 'users', column: 'referred_by', definition: 'TEXT' },
+    { table: 'orders', column: 'stop_price', definition: 'REAL' },
+    { table: 'orders', column: 'iceberg_quantity', definition: 'REAL' },
+    { table: 'orders', column: 'hidden_quantity', definition: 'REAL DEFAULT 0' },
+    { table: 'orders', column: 'locked_amount', definition: 'REAL DEFAULT 0' },
+    { table: 'orders', column: 'locked_asset', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {

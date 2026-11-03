@@ -25,6 +25,10 @@ const MODULES = [
   'src/lib/markets/instruments.ts',
   'src/lib/trading/orderbook.ts',
   'src/lib/trading/fees.ts',
+  'src/lib/trading/spot-engine.ts',
+  'src/lib/trading/market-view.ts',
+  'src/lib/db/ledger.ts',
+  'src/lib/db/referral.ts',
   'src/lib/trading/etf.ts',
   'src/lib/trading/copy.ts',
   'src/lib/risk/engine.ts',
@@ -38,10 +42,9 @@ const MODULES = [
 
 fs.rmSync(OUT, { recursive: true, force: true });
 
-// Each module is compiled on its own with its own directory as the root, so
-// the emitted files stay flat in OUT regardless of which source directory a
-// module lives in. Tests then require `../../.test-build/<name>.js` without
-// mirroring the source tree.
+// Each module is compiled with `src` as the rootDir so one module can import
+// another; the emitted tree therefore mirrors `src`. It is flattened afterwards
+// so tests can require `../../.test-build/<name>.js` directly.
 fs.mkdirSync(OUT, { recursive: true });
 for (const module of MODULES) {
   const absolute = path.join(ROOT, module);
@@ -53,7 +56,7 @@ for (const module of MODULES) {
       esModuleInterop: true,
       skipLibCheck: true,
       outDir: OUT,
-      rootDir: path.dirname(absolute),
+      rootDir: path.join(ROOT, 'src'),
       baseUrl: ROOT,
       paths: { '@/*': ['src/*'] },
       strict: false,
@@ -71,16 +74,32 @@ for (const module of MODULES) {
   fs.rmSync(tsconfigPath);
 }
 
-// Rewrite `@/lib/db/thing` -> `./thing` and `@/lib/db` -> `./index`.
-const alias = /@\/lib\/db\/([\w-]+)/g;
-for (const file of fs.readdirSync(OUT)) {
-  if (!file.endsWith('.js')) continue;
-  const full = path.join(OUT, file);
+// Flatten the emitted tree, then rewrite `@/lib/<dir>/<name>` -> `./<name>` and
+// the bare `@/lib/db` -> `./index`. Every module ends up beside the others, so
+// the directory segment is dropped from every import.
+const emitted = [];
+(function walk(dir) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walk(full);
+    else if (entry.name.endsWith('.js')) emitted.push(full);
+  }
+})(OUT);
+
+const alias = /@\/lib\/[\w-]+\/([\w-]+)/g;
+for (const full of emitted) {
+  const flat = path.join(OUT, path.basename(full));
   const rewritten = fs
     .readFileSync(full, 'utf8')
     .replace(alias, './$1')
     .replace(/@\/lib\/db(["'])/g, './index$1');
-  fs.writeFileSync(full, rewritten);
+  fs.writeFileSync(flat, rewritten);
+  if (flat !== full) fs.rmSync(full);
+}
+
+// Remove the now-empty nested directories.
+for (const entry of fs.readdirSync(OUT, { withFileTypes: true })) {
+  if (entry.isDirectory()) fs.rmSync(path.join(OUT, entry.name), { recursive: true, force: true });
 }
 
 console.log(`Built ${MODULES.length} logic modules into ${path.relative(ROOT, OUT)}`);

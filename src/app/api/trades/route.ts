@@ -1,50 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { recentTrades, lastTradePrice } from '@/lib/trading/market-view';
+import { NO_STORE, symbolParam } from '@/lib/api/route-guards';
 
-
-// Get recent trades
+/**
+ * Recent settled trades for a symbol.
+ *
+ * Reads the exchange's own `spot_trades` tape; an untraded symbol returns an
+ * empty list and a null last price rather than a placeholder price.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
+  const symbol = symbolParam(request.nextUrl.searchParams.get('symbol'));
+  if (!symbol) {
     return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
+      { success: false, error: { code: 'VALIDATION_FAILED', message: 'A symbol such as BTC/RUSD is required' } },
+      { status: 400 },
     );
   }
-  try {
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol');
-    const limit = searchParams.get('limit') || '100';
 
-    if (!symbol) {
-      return NextResponse.json(
-        { success: false, error: 'Symbol is required' },
-        { status: 400 }
-      );
-    }
+  const limit = Number(request.nextUrl.searchParams.get('limit') ?? 100);
+  const trades = recentTrades(symbol, Number.isFinite(limit) ? limit : 100);
 
-    const response = await fetch(`${API_BASE_URL}/trades?symbol=${symbol}&limit=${limit}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch trades' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Trades API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json(
+    { success: true, symbol, lastPrice: lastTradePrice(symbol), trades },
+    { headers: NO_STORE },
+  );
 }

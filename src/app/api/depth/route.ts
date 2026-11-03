@@ -1,50 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { orderBookDepth } from '@/lib/trading/market-view';
+import { NO_STORE, symbolParam } from '@/lib/api/route-guards';
 
-
-// Get order book depth
+/**
+ * Order book depth.
+ *
+ * Aggregated from the exchange's own open orders, so the levels a client sees
+ * are the resting liquidity of this venue. An unknown or empty book returns
+ * empty levels rather than a fabricated spread.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
+  const symbol = symbolParam(request.nextUrl.searchParams.get('symbol'));
+  if (!symbol) {
     return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
+      { success: false, error: { code: 'VALIDATION_FAILED', message: 'A symbol such as BTC/RUSD is required' } },
+      { status: 400 },
     );
   }
-  try {
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol');
-    const limit = searchParams.get('limit') || '100';
 
-    if (!symbol) {
-      return NextResponse.json(
-        { success: false, error: 'Symbol is required' },
-        { status: 400 }
-      );
-    }
+  const limit = Number(request.nextUrl.searchParams.get('limit') ?? 20);
+  const depth = orderBookDepth(symbol, Number.isFinite(limit) ? limit : 20);
 
-    const response = await fetch(`${API_BASE_URL}/depth?symbol=${symbol}&limit=${limit}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch depth' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Depth API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json(
+    {
+      success: true,
+      symbol: depth.symbol,
+      bids: depth.bids,
+      asks: depth.asks,
+      bestBid: depth.bestBid,
+      bestAsk: depth.bestAsk,
+      midPrice: depth.midPrice,
+      lastPrice: depth.lastPrice,
+    },
+    { headers: NO_STORE },
+  );
 }

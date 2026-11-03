@@ -1,55 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { listTrades } from '@/lib/trading/spot-engine';
+import { symbolParam, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get trade history
+/**
+ * The caller's settled spot trades.
+ *
+ * `data` is the legacy key several views read; `trades` is the canonical name.
+ * Both carry the same rows.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol');
-    const limit = searchParams.get('limit') || '50';
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    let url = `${API_BASE_URL}/trades?limit=${limit}`;
-    if (symbol) url += `&symbol=${symbol}`;
+  const raw = request.nextUrl.searchParams.get('symbol');
+  const symbol = raw === null ? null : symbolParam(raw);
+  const limit = Math.min(Math.max(Number(request.nextUrl.searchParams.get('limit') ?? 100) || 100, 1), 1000);
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch trades' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Trade history API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  const trades = listTrades(auth.user.userId, symbol, limit);
+  return NextResponse.json({ success: true, trades, data: trades }, { headers: NO_STORE });
 }

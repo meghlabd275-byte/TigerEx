@@ -1,49 +1,62 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { getDb } from '@/lib/db';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get options contracts
+/**
+ * Listed options contracts.
+ *
+ * Reads the exchange's own `options_markets` table. Every row was created
+ * through the admin listing console, so an empty result means no contract has
+ * been listed, not that a backend is missing.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const { searchParams } = new URL(request.url);
+  const underlying = searchParams.get('underlying')?.trim().toUpperCase();
+  const optionType = searchParams.get('type')?.trim().toLowerCase();
+  const settlement = searchParams.get('settlement')?.trim().toUpperCase();
+
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (underlying) {
+    clauses.push('underlying = ?');
+    params.push(underlying);
   }
-  try {
-    const { searchParams } = new URL(request.url);
-    const underlying = searchParams.get('underlying');
-    const expiry = searchParams.get('expiry');
-    const type = searchParams.get('type');
-
-    const params = new URLSearchParams();
-    if (underlying) params.append('underlying', underlying);
-    if (expiry) params.append('expiry', expiry);
-    if (type) params.append('type', type);
-
-    const response = await fetch(`${API_BASE_URL}/options/contracts?${params.toString()}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch options contracts' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Options contracts API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+  if (optionType) {
+    clauses.push('option_type = ?');
+    params.push(optionType);
   }
+  if (settlement) {
+    clauses.push('settlement_asset = ?');
+    params.push(settlement);
+  }
+  const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
+
+  const rows = getDb()
+    .prepare(`SELECT * FROM options_markets${where} ORDER BY underlying, expiry_ns, strike_price`)
+    .all(...params) as Array<Record<string, unknown>>;
+
+  return NextResponse.json(
+    {
+      success: true,
+      contracts: rows.map((row) => ({
+        marketId: row.market_id,
+        symbol: row.symbol,
+        underlying: row.underlying,
+        settlementAsset: row.settlement_asset,
+        optionType: row.option_type,
+        strikePrice: row.strike_price,
+        expiryNs: row.expiry_ns,
+        exerciseStyle: row.exercise_style,
+        contractSize: row.contract_size,
+        tickSize: row.tick_size,
+        minQuantity: row.min_quantity,
+        maxQuantity: row.max_quantity,
+        makerFeeBps: row.maker_fee_bps,
+        takerFeeBps: row.taker_fee_bps,
+        impliedVolatility: row.implied_volatility ?? null,
+        status: row.status,
+      })),
+    },
+    { headers: NO_STORE },
+  );
 }

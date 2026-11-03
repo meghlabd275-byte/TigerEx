@@ -1,24 +1,47 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { placeSpotOrder, SpotError, type SpotOrderType } from '@/lib/trading/spot-engine';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-function backendUrl(path: string): string | null {
-  const base = backendBaseUrl();
-  return base ? `${base}${path}` : null;
-}
-
+/**
+ * Place a spot order.
+ *
+ * The order is validated, funds are reserved, and the order is matched against
+ * the venue's own book; a fill settles real balances. There is no backend hop:
+ * this handler is the order entry point for a self-contained deployment.
+ */
 export async function POST(request: NextRequest) {
-  const url = backendUrl('/order');
-  const authorization = request.headers.get('authorization');
-  const sessionId = request.headers.get('x-session-id');
-  if (!url) return NextResponse.json({ success: false, error: { code: 'TRADING_BACKEND_UNAVAILABLE', message: 'A secure order backend is not configured.' } }, { status: 503 });
-  if (!authorization || !/^Bearer [^\s]+$/.test(authorization) || !sessionId) return NextResponse.json({ success: false, error: 'Authorization and session are required' }, { status: 401 });
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'order.place');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const symbol = String(body.symbol ?? body.marketSymbol ?? '').trim().toUpperCase();
+  const side = String(body.side ?? '').trim().toLowerCase();
+  const rawType = String(body.type ?? body.orderType ?? 'limit').trim().toLowerCase();
+  const type = (rawType === 'stop' ? 'stop_limit' : rawType) as SpotOrderType;
+
   try {
-    const body = await request.json();
-    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: authorization, 'X-Session-ID': sessionId }, body: JSON.stringify(body), cache: 'no-store', signal: AbortSignal.timeout(10000) });
-    const data = await response.json().catch(() => ({ success: false, error: 'Invalid trading backend response' }));
-    return NextResponse.json(data, { status: response.status });
-  } catch {
-    return NextResponse.json({ success: false, error: { code: 'TRADING_BACKEND_UNAVAILABLE', message: 'Order service is unavailable.' } }, { status: 503 });
+    const order = placeSpotOrder(auth.user.userId, {
+      symbol,
+      side: side === 'sell' ? 'sell' : side === 'buy' ? 'buy' : ('' as 'buy'),
+      type,
+      price: body.price === undefined || body.price === null ? undefined : Number(body.price),
+      stopPrice: body.stopPrice === undefined || body.stopPrice === null ? undefined : Number(body.stopPrice),
+      quantity: Number(body.quantity ?? body.amount),
+      timeInForce: body.timeInForce ? (String(body.timeInForce).toUpperCase() as 'GTC') : undefined,
+      postOnly: body.postOnly === true,
+      icebergQuantity:
+        body.icebergQuantity === undefined || body.icebergQuantity === null ? undefined : Number(body.icebergQuantity),
+    });
+
+    return NextResponse.json({ success: true, order }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof SpotError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }

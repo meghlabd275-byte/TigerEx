@@ -1,59 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { cancelSpotOrder, SpotError } from '@/lib/trading/spot-engine';
+import { fail, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Cancel order
+/**
+ * Cancel a resting spot order.
+ *
+ * The order's own reservation is released back to available; a partially filled
+ * order releases only the remainder.
+ */
 export async function DELETE(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'order.cancel');
+  if (guard) return guard;
+
+  const orderId = request.nextUrl.searchParams.get('orderId')?.trim();
+  if (!orderId) return fail('VALIDATION_FAILED', 'orderId query parameter is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const orderId = searchParams.get('orderId');
-    const symbol = searchParams.get('symbol');
+    const order = cancelSpotOrder(auth.user.userId, orderId);
+    return NextResponse.json({ success: true, order }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof SpotError) return fail(error.code, error.message, error.status);
+    throw error;
+  }
+}
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+export async function POST(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!orderId || !symbol) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: orderId, symbol' },
-        { status: 400 }
-      );
-    }
+  const guard = enforceRequestGuards(request, 'order.cancel');
+  if (guard) return guard;
 
-    const response = await fetch(`${API_BASE_URL}/order/cancel?orderId=${orderId}&symbol=${symbol}`, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
+  let body: Record<string, unknown> = {};
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    body = {};
+  }
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to cancel order' },
-        { status: response.status }
-      );
-    }
+  const orderId = String(body.orderId ?? request.nextUrl.searchParams.get('orderId') ?? '').trim();
+  if (!orderId) return fail('VALIDATION_FAILED', 'orderId is required');
 
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Order cancel API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+  try {
+    const order = cancelSpotOrder(auth.user.userId, orderId);
+    return NextResponse.json({ success: true, order }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof SpotError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }
