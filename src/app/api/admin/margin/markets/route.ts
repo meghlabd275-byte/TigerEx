@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
+import { fail, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 import { validateMarginMarket } from '@/lib/markets/futures';
 
 /**
@@ -10,10 +11,6 @@ import { validateMarginMarket } from '@/lib/markets/futures';
  * interest model. Isolated listings carry the same fields with `mode` set to
  * `isolated`; an isolated pool therefore needs no separate table.
  */
-
-function fail(code: string, message: string, status = 400) {
-  return NextResponse.json({ success: false, error: { code, message } }, { status });
-}
 
 function parseJson<T>(raw: unknown, fallback: T): T {
   if (typeof raw !== 'string') return fallback;
@@ -80,6 +77,9 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'market.margin.create');
+  if (guard) return guard;
+
 
   let body: Record<string, unknown>;
   try {
@@ -136,6 +136,9 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'market.margin.update');
+  if (guard) return guard;
+
 
   let body: Record<string, unknown>;
   try {
@@ -189,6 +192,9 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'market.margin.delist');
+  if (guard) return guard;
+
 
   const symbol = new URL(request.url).searchParams.get('symbol')?.trim().toUpperCase();
   if (!symbol) return fail('VALIDATION_FAILED', 'symbol query parameter is required');

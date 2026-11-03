@@ -1,74 +1,93 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
+import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-const ADMIN_API_URL = process.env.TIGEREX_ADMIN_API_URL?.replace(/\/$/, '');
+/**
+ * The exchange fee schedule by VIP level.
+ *
+ * Rates are stored in basis points. Editing a level changes what the fee engine
+ * resolves for every user in it, so the change is validated and audited.
+ */
 
-function responseError(message: string, status: number) {
-  return NextResponse.json({ success: false, error: message }, { status });
+const RATE_MIN_BPS = 0;
+const RATE_MAX_BPS = 10_000; // a fee at or above 100% is not a fee
+
+function rowToTier(row: Record<string, unknown>) {
+  return {
+    id: String(row.level),
+    level: row.level,
+    name: row.name,
+    spot_maker_bps: row.spot_maker_bps,
+    spot_taker_bps: row.spot_taker_bps,
+    futures_maker_bps: row.futures_maker_bps,
+    futures_taker_bps: row.futures_taker_bps,
+    volume_threshold: row.volume_threshold,
+    tgr_holding_threshold: row.tgr_holding_threshold,
+    updated_at: row.updated_at,
+  };
 }
 
-function getBearer(request: NextRequest): string | null {
-  const header = request.headers.get('authorization');
-  return header && /^Bearer\s+\S+$/i.test(header) ? header : null;
-}
-
-async function forward(path: string, token: string, method = 'GET', body?: unknown) {
-  if (!ADMIN_API_URL) {
-    return responseError(
-      'TIGEREX_ADMIN_API_URL is not configured; fee configuration is disabled.',
-      503,
-    );
-  }
-  try {
-    const headers = new Headers({ Accept: 'application/json', Authorization: token });
-    const init: RequestInit = { method, headers, cache: 'no-store' };
-    if (body !== undefined) {
-      headers.set('Content-Type', 'application/json');
-      init.body = JSON.stringify(body);
-    }
-    const upstream = await fetch(ADMIN_API_URL + path, init);
-    const payload = await upstream
-      .json()
-      .catch(() => ({ success: false, error: 'Invalid admin backend response' }));
-    return NextResponse.json(payload, { status: upstream.status });
-  } catch {
-    return responseError('Admin backend is unavailable; no fee state was changed.', 502);
-  }
-}
-
-// List fee configurations from the durable admin backend.
 export async function GET(request: NextRequest) {
-  const token = getBearer(request);
-  if (!token) return responseError('Authorization required', 401);
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
 
-  const { searchParams } = new URL(request.url);
-  const query = new URLSearchParams();
-  for (const key of ['type', 'asset', 'network']) {
-    const value = searchParams.get(key);
-    if (value) query.set(key, value);
-  }
-  const suffix = query.toString() ? `?${query.toString()}` : '';
-  return forward(`/admin/fees${suffix}`, token);
+  const rows = getDb()
+    .prepare('SELECT * FROM fee_schedule ORDER BY level')
+    .all() as Array<Record<string, unknown>>;
+
+  return NextResponse.json({ success: true, data: rows.map(rowToTier) }, { headers: NO_STORE });
 }
 
-// Update a single fee configuration.
 export async function PUT(request: NextRequest) {
-  const token = getBearer(request);
-  if (!token) return responseError('Authorization required', 401);
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.fees');
+  if (guard) return guard;
 
-  let body: { id?: string; updates?: Record<string, unknown> };
-  try {
-    body = await request.json();
-  } catch {
-    return responseError('Invalid JSON body', 400);
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const level = Number(body.level ?? body.id);
+  if (!Number.isInteger(level) || level < 0 || level > 20) {
+    return fail('VALIDATION_FAILED', 'level must be an integer in [0, 20]');
   }
 
-  const id = body.id?.trim();
-  const updates = body.updates;
-  if (!id || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) {
-    return responseError('A valid fee id is required', 400);
+  const updates = (body.updates ?? body) as Record<string, unknown>;
+  const allowed = ['spot_maker_bps', 'spot_taker_bps', 'futures_maker_bps', 'futures_taker_bps', 'volume_threshold', 'tgr_holding_threshold'];
+  const assignments: string[] = [];
+  const values: unknown[] = [];
+
+  for (const column of allowed) {
+    if (!(column in updates)) continue;
+    const value = Number(updates[column]);
+    if (!Number.isFinite(value) || value < 0) {
+      return fail('VALIDATION_FAILED', `${column} must be a non-negative number`);
+    }
+    if (column.endsWith('_bps') && value >= RATE_MAX_BPS) {
+      return fail('VALIDATION_FAILED', `${column} must be below ${RATE_MAX_BPS} basis points`);
+    }
+    assignments.push(`${column} = ?`);
+    values.push(value);
   }
-  if (!updates || typeof updates !== 'object' || Object.keys(updates).length === 0) {
-    return responseError('A non-empty updates object is required', 400);
+
+  if (assignments.length === 0) return fail('VALIDATION_FAILED', 'No updatable fee fields were supplied');
+
+  const db = getDb();
+  if (!db.prepare('SELECT 1 FROM fee_schedule WHERE level = ?').get(level)) {
+    return fail('UNKNOWN_LEVEL', `VIP level ${level} does not exist`, 404);
   }
-  return forward(`/admin/fees/${encodeURIComponent(id)}`, token, 'PUT', { updates });
+
+  db.prepare(
+    `UPDATE fee_schedule SET ${assignments.join(', ')}, updated_at = datetime('now') WHERE level = ?`,
+  ).run(...values, level);
+
+  recordAdminAction(request, auth.admin, 'fees.update', {
+    type: 'fee_schedule',
+    id: String(level),
+    detail: updates,
+  });
+
+  const row = db.prepare('SELECT * FROM fee_schedule WHERE level = ?').get(level) as Record<string, unknown>;
+  return NextResponse.json({ success: true, data: rowToTier(row) }, { headers: NO_STORE });
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
+import { fail, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 import { validateFuturesMarket } from '@/lib/markets/futures';
 
 /**
@@ -11,10 +12,6 @@ import { validateFuturesMarket } from '@/lib/markets/futures';
  * oracle-independent risk parameters and fee schedule, so the execution path
  * reads one row rather than inferring defaults.
  */
-
-function fail(code: string, message: string, status = 400) {
-  return NextResponse.json({ success: false, error: { code, message } }, { status });
-}
 
 function rowToMarket(row: Record<string, unknown>) {
   return {
@@ -80,6 +77,9 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'market.futures.create');
+  if (guard) return guard;
+
 
   let body: Record<string, unknown>;
   try {
@@ -146,6 +146,9 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'market.futures.update');
+  if (guard) return guard;
+
 
   let body: Record<string, unknown>;
   try {
@@ -209,6 +212,9 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'market.futures.delist');
+  if (guard) return guard;
+
 
   const symbol = new URL(request.url).searchParams.get('symbol')?.trim().toUpperCase();
   if (!symbol) return fail('VALIDATION_FAILED', 'symbol query parameter is required');

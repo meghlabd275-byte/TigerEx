@@ -1048,6 +1048,71 @@ function initializeSchema() {
       PRIMARY KEY (key_id, window_start)
     );
 
+    -- Exchange settings as key/value pairs, edited from the admin console.
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'general',
+      updated_by TEXT,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Marketing banners served to the storefront once their window is active.
+    CREATE TABLE IF NOT EXISTS banners (
+      banner_id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      image_url TEXT NOT NULL,
+      link_url TEXT NOT NULL DEFAULT '',
+      placement TEXT NOT NULL DEFAULT 'home',
+      status TEXT NOT NULL DEFAULT 'draft',
+      starts_at TEXT,
+      ends_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Operator announcements shown to users.
+    CREATE TABLE IF NOT EXISTS announcements (
+      announcement_id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'info',
+      status TEXT NOT NULL DEFAULT 'draft',
+      published_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ======================================================================
+    -- Baseline fee schedule and risk controls. These are exchange parameters
+    -- (a fee schedule must exist for the fee engine to resolve a tier), not
+    -- fabricated market or account data.
+    -- ======================================================================
+    INSERT OR IGNORE INTO fee_schedule
+      (level, name, spot_maker_bps, spot_taker_bps, futures_maker_bps, futures_taker_bps, volume_threshold, tgr_holding_threshold)
+    VALUES
+      (0, 'VIP 0', 10, 10, 2, 5, 0, 0),
+      (1, 'VIP 1', 9, 10, 1.8, 4.5, 1000000, 100),
+      (2, 'VIP 2', 8, 9, 1.6, 4.2, 5000000, 500),
+      (3, 'VIP 3', 7, 8, 1.4, 4, 10000000, 1000),
+      (4, 'VIP 4', 6, 7, 1.2, 3.6, 50000000, 5000),
+      (5, 'VIP 5', 5, 6, 1, 3.2, 100000000, 10000),
+      (6, 'VIP 6', 4, 5, 0.8, 3, 500000000, 50000),
+      (7, 'VIP 7', 3, 4, 0.6, 2.8, 1000000000, 100000),
+      (8, 'VIP 8', 2, 3, 0.4, 2.5, 5000000000, 500000),
+      (9, 'VIP 9', 0, 2, 0, 2, 10000000000, 1000000);
+
+    INSERT OR IGNORE INTO exchange_controls (scope, paused) VALUES
+      ('spot', 0), ('futures', 0), ('margin', 0), ('options', 0), ('etf', 0),
+      ('tradfi', 0), ('deposits', 0), ('withdrawals', 0), ('p2p', 0), ('pay', 0),
+      ('exchange', 0);
+
+    INSERT OR IGNORE INTO system_settings (key, value, category) VALUES
+      ('maintenance_mode', 'false', 'operations'),
+      ('registration_enabled', 'true', 'operations'),
+      ('withdrawal_enabled', 'true', 'operations'),
+      ('trading_enabled', 'true', 'operations'),
+      ('p2p_enabled', 'true', 'operations'),
+      ('kyc_required_for_withdrawal', 'true', 'compliance');
+
     -- Create indexes
     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
     CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);

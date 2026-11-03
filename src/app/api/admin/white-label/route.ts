@@ -1,113 +1,162 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb, generateId } from '@/lib/db';
+import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
+import { fail, readJson, enforceRequestGuards, parseJsonColumn, NO_STORE } from '@/lib/api/route-guards';
 
-const ADMIN_API_URL = process.env.TIGEREX_ADMIN_API_URL?.replace(/\/$/, '');
+/**
+ * White-label clients.
+ *
+ * A client is an exchange deployment run under another brand. Its domain must be
+ * a fully qualified name (it is used to route incoming requests), and its slug
+ * is derived once from the domain or the name. Records live in the exchange's
+ * own database, so a self-contained deployment needs no external service.
+ */
 
-function responseError(message: string, status: number) {
-  return NextResponse.json({ success: false, error: message }, { status });
-}
+const STATUSES = ['active', 'pending', 'suspended'];
 
-function getBearer(request: NextRequest): string | null {
-  const header = request.headers.get('authorization');
-  return header && /^Bearer\s+\S+$/i.test(header) ? header : null;
-}
-
-async function forward(path: string, token: string, method = 'GET', body?: unknown) {
-  if (!ADMIN_API_URL) {
-    return responseError('TIGEREX_ADMIN_API_URL is not configured; white-label operations are disabled.', 503);
-  }
-  try {
-    const headers = new Headers({ Accept: 'application/json', Authorization: token });
-    const init: RequestInit = { method, headers, cache: 'no-store' };
-    if (body !== undefined) {
-      headers.set('Content-Type', 'application/json');
-      init.body = JSON.stringify(body);
-    }
-    const upstream = await fetch(ADMIN_API_URL + path, init);
-    const payload = await upstream.json().catch(() => ({ success: false, error: 'Invalid admin backend response' }));
-    return NextResponse.json(payload, { status: upstream.status });
-  } catch {
-    return responseError('Admin backend is unavailable; no white-label state was changed.', 502);
-  }
-}
+const DOMAIN_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
 export async function GET(request: NextRequest) {
-  const token = getBearer(request);
-  if (!token) return responseError('Authorization required', 401);
-  const status = new URL(request.url).searchParams.get('status');
-  const query = status ? '?status=' + encodeURIComponent(status) : '';
-  return forward('/admin/white-label/exchanges' + query, token);
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
+
+  const status = request.nextUrl.searchParams.get('status')?.trim();
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (status) {
+    clauses.push('status = ?');
+    params.push(status);
+  }
+  const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
+
+  const rows = getDb()
+    .prepare(`SELECT * FROM white_label_clients${where} ORDER BY created_at DESC`)
+    .all(...params) as Array<Record<string, unknown>>;
+
+  return NextResponse.json(
+    {
+      success: true,
+      clients: rows.map((row) => ({
+        id: row.client_id,
+        name: row.name,
+        domain: row.domain ?? null,
+        branding: parseJsonColumn<Record<string, unknown>>(row.branding, {}),
+        status: row.status,
+        createdAt: row.created_at,
+      })),
+    },
+    { headers: NO_STORE },
+  );
 }
 
+/** Register a white-label client. */
 export async function POST(request: NextRequest) {
-  const token = getBearer(request);
-  if (!token) return responseError('Authorization required', 401);
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.white-label');
+  if (guard) return guard;
 
-  let body: Record<string, unknown>;
-  try {
-    body = await request.json();
-  } catch {
-    return responseError('Invalid JSON body', 400);
-  }
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
 
   const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (name.length === 0 || name.length > 120) return fail('VALIDATION_FAILED', 'name is required and must be at most 120 characters');
+
   const domain = typeof body.domain === 'string' ? body.domain.trim().toLowerCase() : '';
-  const plan = typeof body.plan === 'string' ? body.plan.trim() : '';
-  if (!name || name.length > 120 || !plan || plan.length > 40) {
-    return responseError('Valid name and plan are required', 400);
-  }
-  if (domain && (domain.length > 253 || !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(domain))) {
-    return responseError('A valid fully qualified domain name is required', 400);
+  if (domain.length > 0 && (domain.length > 253 || !DOMAIN_RE.test(domain))) {
+    return fail('VALIDATION_FAILED', 'domain must be a fully qualified domain name');
   }
 
-  const slugSource = domain || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  const backendBody = {
-    name,
-    slug: slugSource.slice(0, 100),
-    status: 'pending',
-    branding: body.branding && typeof body.branding === 'object' ? body.branding : {},
-    domains: domain ? [domain] : [],
-    liquiditySources: [],
-    tradingPairSources: [],
-    infrastructure: {},
-    modules: body.features && typeof body.features === 'object' ? body.features : {},
-    adminPermissions: [],
-    deploymentConfig: { plan },
-  };
-  return forward('/admin/white-label/exchanges', token, 'POST', backendBody);
+  const branding = body.branding && typeof body.branding === 'object' && !Array.isArray(body.branding) ? body.branding : {};
+  const status = String(body.status ?? 'pending').toLowerCase();
+  if (!STATUSES.includes(status)) return fail('VALIDATION_FAILED', `status must be one of ${STATUSES.join(', ')}`);
+
+  const db = getDb();
+  if (domain && db.prepare('SELECT 1 FROM white_label_clients WHERE domain = ?').get(domain)) {
+    return fail('DUPLICATE_DOMAIN', 'A client already uses that domain', 409);
+  }
+
+  const clientId = generateId();
+  db.prepare(
+    `INSERT INTO white_label_clients (client_id, name, domain, branding, status)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(clientId, name, domain || null, JSON.stringify(branding), status);
+
+  recordAdminAction(request, auth.admin, 'white_label.create', {
+    type: 'white_label_client',
+    id: clientId,
+    detail: { name, domain, status },
+  });
+
+  return NextResponse.json({ success: true, clientId, name, domain, status }, { status: 201, headers: NO_STORE });
 }
 
+/** Update a client's name, domain, branding or status. */
 export async function PUT(request: NextRequest) {
-  const token = getBearer(request);
-  if (!token) return responseError('Authorization required', 401);
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.white-label.update');
+  if (guard) return guard;
 
-  let body: { whiteLabelId?: string; updates?: Record<string, unknown> };
-  try {
-    body = await request.json();
-  } catch {
-    return responseError('Invalid JSON body', 400);
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const clientId = typeof body.clientId === 'string' ? body.clientId.trim() : '';
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(clientId)) return fail('VALIDATION_FAILED', 'Invalid client id');
+
+  const db = getDb();
+  const existing = db.prepare('SELECT * FROM white_label_clients WHERE client_id = ?').get(clientId) as
+    | Record<string, unknown>
+    | undefined;
+  if (!existing) return fail('UNKNOWN_CLIENT', 'No such client', 404);
+
+  const name = body.name === undefined ? String(existing.name) : String(body.name).trim();
+  if (name.length === 0 || name.length > 120) return fail('VALIDATION_FAILED', 'name must be between 1 and 120 characters');
+
+  const domain = body.domain === undefined ? (existing.domain as string | null) ?? '' : String(body.domain).trim().toLowerCase();
+  if (domain.length > 0 && !DOMAIN_RE.test(domain)) {
+    return fail('VALIDATION_FAILED', 'domain must be a fully qualified domain name');
   }
-  const id = body.whiteLabelId?.trim();
-  const updates = body.updates;
-  if (!id || !/^[a-zA-Z0-9_-]{1,128}$/.test(id) || !updates || typeof updates !== 'object') {
-    return responseError('A valid whiteLabelId and updates object are required', 400);
+  if (domain && domain !== existing.domain && db.prepare('SELECT 1 FROM white_label_clients WHERE domain = ?').get(domain)) {
+    return fail('DUPLICATE_DOMAIN', 'A client already uses that domain', 409);
   }
 
-  // The durable API currently replaces the full configuration, not a partial patch.
-  // Refuse partial updates instead of silently clearing omitted fields.
-  const required = ['name', 'slug', 'status', 'branding', 'domains', 'liquiditySources',
-    'tradingPairSources', 'infrastructure', 'modules', 'adminPermissions', 'deploymentConfig'];
-  if (!required.every(key => Object.prototype.hasOwnProperty.call(updates, key))) {
-    return responseError('The backend requires a complete white-label configuration for updates; no changes were made.', 501);
-  }
-  return forward('/admin/white-label/exchanges/' + encodeURIComponent(id), token, 'PUT', updates);
+  const branding =
+    body.branding === undefined
+      ? (existing.branding as string | null)
+      : JSON.stringify(body.branding && typeof body.branding === 'object' ? body.branding : {});
+
+  const status = body.status === undefined ? String(existing.status) : String(body.status).toLowerCase();
+  if (!STATUSES.includes(status)) return fail('VALIDATION_FAILED', `status must be one of ${STATUSES.join(', ')}`);
+
+  db.prepare(
+    'UPDATE white_label_clients SET name = ?, domain = ?, branding = ?, status = ? WHERE client_id = ?',
+  ).run(name, domain || null, branding, status, clientId);
+
+  recordAdminAction(request, auth.admin, 'white_label.update', {
+    type: 'white_label_client',
+    id: clientId,
+    detail: { name, domain, status },
+  });
+
+  return NextResponse.json({ success: true, clientId }, { headers: NO_STORE });
 }
 
+/** Delete a white-label client. */
 export async function DELETE(request: NextRequest) {
-  const token = getBearer(request);
-  if (!token) return responseError('Authorization required', 401);
-  const id = new URL(request.url).searchParams.get('id')?.trim();
-  if (!id || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) {
-    return responseError('A valid white-label ID is required', 400);
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.white-label.delete');
+  if (guard) return guard;
+
+  const clientId = request.nextUrl.searchParams.get('clientId')?.trim();
+  if (!clientId || !/^[A-Za-z0-9_-]{1,64}$/.test(clientId)) {
+    return fail('VALIDATION_FAILED', 'clientId query parameter is required');
   }
-  return forward('/admin/white-label/exchanges/' + encodeURIComponent(id), token, 'DELETE');
+
+  const result = getDb().prepare('DELETE FROM white_label_clients WHERE client_id = ?').run(clientId);
+  if (result.changes === 0) return fail('UNKNOWN_CLIENT', 'No such client', 404);
+
+  recordAdminAction(request, auth.admin, 'white_label.delete', { type: 'white_label_client', id: clientId });
+  return NextResponse.json({ success: true, clientId }, { headers: NO_STORE });
 }

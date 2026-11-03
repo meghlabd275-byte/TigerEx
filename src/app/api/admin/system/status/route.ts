@@ -1,39 +1,53 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAdmin } from '@/lib/auth/admin';
+import { getDb } from '@/lib/db';
+import { exchangeStats } from '@/lib/db/analytics';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-const ADMIN_API_URL = process.env.TIGEREX_ADMIN_API_URL?.replace(/\/$/, '');
+/**
+ * Runtime system status for the console.
+ *
+ * Every field is measured here: the process uptime and memory, the exchange's
+ * own counters, and whether each venue is currently paused. Nothing is proxied
+ * to a backend that may not be configured.
+ */
 
-function responseError(message: string, status: number) {
-  return NextResponse.json({ success: false, error: message }, { status });
-}
+const START_TIME = Date.now();
 
-function getBearer(request: NextRequest): string | null {
-  const header = request.headers.get('authorization');
-  return header && /^Bearer\s+\S+$/i.test(header) ? header : null;
-}
-
-// Read measured runtime status from the admin backend.
 export async function GET(request: NextRequest) {
-  const token = getBearer(request);
-  if (!token) return responseError('Authorization required', 401);
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
 
-  if (!ADMIN_API_URL) {
-    return responseError(
-      'TIGEREX_ADMIN_API_URL is not configured; system status is disabled.',
-      503,
-    );
-  }
+  const memory = process.memoryUsage();
+  const db = getDb();
 
-  try {
-    const upstream = await fetch(`${ADMIN_API_URL}/admin/system/status`, {
-      method: 'GET',
-      headers: { Accept: 'application/json', Authorization: token },
-      cache: 'no-store',
-    });
-    const payload = await upstream
-      .json()
-      .catch(() => ({ success: false, error: 'Invalid admin backend response' }));
-    return NextResponse.json(payload, { status: upstream.status });
-  } catch {
-    return responseError('Admin backend is unavailable; system status could not be loaded.', 502);
-  }
+  const controls = db
+    .prepare('SELECT scope, paused, reason, updated_at FROM exchange_controls ORDER BY scope')
+    .all() as Array<{ scope: string; paused: number; reason: string | null; updated_at: string }>;
+
+  const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
+
+  return NextResponse.json(
+    {
+      success: true,
+      data: {
+        status: 'ok',
+        service: 'tigerex-api',
+        timestamp: new Date().toISOString(),
+        uptime: `${Math.floor(uptimeSeconds / 3600)}h ${Math.floor((uptimeSeconds % 3600) / 60)}m ${uptimeSeconds % 60}s`,
+        uptime_seconds: uptimeSeconds,
+        heap_bytes: memory.heapUsed,
+        rss_bytes: memory.rss,
+        node_version: process.version,
+        counters: exchangeStats() as unknown as Record<string, number>,
+        controls: controls.map((row) => ({
+          scope: row.scope,
+          paused: row.paused === 1,
+          reason: row.reason ?? null,
+          updatedAt: row.updated_at,
+        })),
+      },
+    },
+    { headers: NO_STORE },
+  );
 }

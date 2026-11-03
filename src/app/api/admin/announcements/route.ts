@@ -1,57 +1,92 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb, generateId } from '@/lib/db';
+import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-const ADMIN_API_URL = process.env.TIGEREX_ADMIN_API_URL?.replace(/\/$/, '');
+/**
+ * Operator announcements.
+ *
+ * The body is stored as plain text and rendered as text by the client, so no
+ * markup is interpreted. Publishing stamps the publish time.
+ */
 
-function error(message: string, status: number) {
-  return NextResponse.json({ success: false, error: message }, { status });
-}
-
-function getBearer(request: NextRequest): string | null {
-  const header = request.headers.get('authorization');
-  return header && /^Bearer\s+\S+$/i.test(header) ? header : null;
-}
-
-async function forward(path: string, token: string, method: string, body?: unknown) {
-  if (!ADMIN_API_URL) {
-    return error(
-      'TIGEREX_ADMIN_API_URL is not configured; announcement management is disabled.',
-      503,
-    );
-  }
-  try {
-    const headers = new Headers({ Accept: 'application/json', Authorization: token });
-    const init: RequestInit = { method, headers, cache: 'no-store' };
-    if (body !== undefined) {
-      headers.set('Content-Type', 'application/json');
-      init.body = JSON.stringify(body);
-    }
-    const response = await fetch(`${ADMIN_API_URL}${path}`, init);
-    const payload = await response
-      .json()
-      .catch(() => ({ success: false, error: 'Invalid admin backend response' }));
-    return NextResponse.json(payload, { status: response.status });
-  } catch {
-    return error('Admin backend is unavailable; no announcement state was changed.', 502);
-  }
-}
+const SEVERITIES = ['info', 'warning', 'critical'];
+const STATUSES = ['draft', 'published', 'archived'];
 
 export async function GET(request: NextRequest) {
-  const token = getBearer(request);
-  if (!token) return error('Authorization required', 401);
-  const { searchParams } = new URL(request.url);
-  const status = searchParams.get('status');
-  const suffix = status ? `?status=${encodeURIComponent(status)}` : '';
-  return forward(`/admin/announcements${suffix}`, token, 'GET');
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
+
+  const rows = getDb()
+    .prepare(
+      `SELECT announcement_id, title, body, severity, status, published_at, created_at
+         FROM announcements ORDER BY created_at DESC`,
+    )
+    .all() as Array<Record<string, unknown>>;
+
+  return NextResponse.json(
+    {
+      success: true,
+      data: rows.map((row) => ({
+        id: row.announcement_id,
+        title: row.title,
+        body: row.body,
+        severity: row.severity,
+        status: row.status,
+        published_at: row.published_at ?? '',
+        created_at: row.created_at,
+      })),
+    },
+    { headers: NO_STORE },
+  );
 }
 
 export async function POST(request: NextRequest) {
-  const token = getBearer(request);
-  if (!token) return error('Authorization required', 401);
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return error('Invalid JSON body', 400);
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.announcements.create');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const title = typeof body.title === 'string' ? body.title.trim() : '';
+  if (title.length === 0 || title.length > 200) {
+    return fail('VALIDATION_FAILED', 'title is required and must be at most 200 characters');
   }
-  return forward('/admin/announcements', token, 'POST', body);
+
+  const text = typeof body.body === 'string' ? body.body.trim() : '';
+  if (text.length === 0 || text.length > 20000) {
+    return fail('VALIDATION_FAILED', 'body is required and must be at most 20000 characters');
+  }
+
+  const severity = String(body.severity ?? 'info').toLowerCase();
+  if (!SEVERITIES.includes(severity)) {
+    return fail('VALIDATION_FAILED', `severity must be one of ${SEVERITIES.join(', ')}`);
+  }
+
+  const status = String(body.status ?? 'draft').toLowerCase();
+  if (!STATUSES.includes(status)) {
+    return fail('VALIDATION_FAILED', `status must be one of ${STATUSES.join(', ')}`);
+  }
+
+  const announcementId = generateId();
+  const publishedAt = status === 'published' ? new Date().toISOString() : null;
+  getDb()
+    .prepare(
+      `INSERT INTO announcements (announcement_id, title, body, severity, status, published_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(announcementId, title, text, severity, status, publishedAt);
+
+  recordAdminAction(request, auth.admin, 'announcement.create', {
+    type: 'announcement',
+    id: announcementId,
+    detail: { title, severity, status },
+  });
+
+  return NextResponse.json(
+    { success: true, announcement: { id: announcementId, title, severity, status, published_at: publishedAt } },
+    { status: 201, headers: NO_STORE },
+  );
 }

@@ -1,71 +1,59 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDb } from '@/lib/db';
+import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-const ADMIN_API_URL = process.env.TIGEREX_ADMIN_API_URL?.replace(/\/$/, '');
+/**
+ * Exchange settings, stored as key/value pairs.
+ *
+ * The settings the runtime reads (maintenance mode, whether trading and
+ * withdrawals are enabled) live in this table, so the console is the single
+ * place they are changed and the change is audited.
+ */
 
-function error(message: string, status: number) {
-  return NextResponse.json({ success: false, error: message }, { status });
-}
+const SETTING_KEY_RE = /^[a-z0-9_]{1,64}$/;
 
-function getBearer(request: NextRequest): string | null {
-  const header = request.headers.get('authorization');
-  return header && /^Bearer\s+\S+$/i.test(header) ? header : null;
-}
-
-// Read the system settings that the admin backend actually stores.
 export async function GET(request: NextRequest) {
-  const token = getBearer(request);
-  if (!token) return error('Authorization required', 401);
-  if (!ADMIN_API_URL) {
-    return error('TIGEREX_ADMIN_API_URL is not configured; settings are unavailable.', 503);
-  }
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
 
-  try {
-    const upstream = await fetch(`${ADMIN_API_URL}/admin/settings`, {
-      method: 'GET',
-      headers: { Accept: 'application/json', Authorization: token },
-      cache: 'no-store',
-    });
-    const payload = await upstream
-      .json()
-      .catch(() => ({ success: false, error: 'Invalid admin backend response' }));
-    return NextResponse.json(payload, { status: upstream.status });
-  } catch {
-    return error('Admin backend is unavailable; settings could not be loaded.', 502);
-  }
+  const rows = getDb()
+    .prepare('SELECT key, value, category, updated_by, updated_at FROM system_settings ORDER BY category, key')
+    .all() as Array<Record<string, unknown>>;
+
+  return NextResponse.json({ success: true, data: rows }, { headers: NO_STORE });
 }
 
-// Update one setting. The admin backend stores settings as key/value pairs.
 export async function PUT(request: NextRequest) {
-  const token = getBearer(request);
-  if (!token) return error('Authorization required', 401);
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.settings');
+  if (guard) return guard;
 
-  let body: { key?: unknown; value?: unknown };
-  try {
-    body = await request.json();
-  } catch {
-    return error('Invalid JSON body', 400);
-  }
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
 
   const key = typeof body.key === 'string' ? body.key : '';
-  if (!/^[a-z0-9_]{1,64}$/.test(key)) return error('A valid setting key is required', 400);
-  if (typeof body.value !== 'string') return error('Setting value must be a string', 400);
+  if (!SETTING_KEY_RE.test(key)) return fail('VALIDATION_FAILED', 'A valid setting key is required');
+  if (typeof body.value !== 'string') return fail('VALIDATION_FAILED', 'Setting value must be a string');
+  if (body.value.length > 4096) return fail('VALIDATION_FAILED', 'Setting value is too long');
 
-  if (!ADMIN_API_URL) {
-    return error('TIGEREX_ADMIN_API_URL is not configured; settings are unavailable.', 503);
-  }
+  const db = getDb();
+  const existing = db.prepare('SELECT value FROM system_settings WHERE key = ?').get(key) as
+    | { value: string }
+    | undefined;
 
-  try {
-    const upstream = await fetch(`${ADMIN_API_URL}/admin/settings`, {
-      method: 'PUT',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: token },
-      body: JSON.stringify({ key, value: body.value }),
-      cache: 'no-store',
-    });
-    const payload = await upstream
-      .json()
-      .catch(() => ({ success: false, error: 'Invalid admin backend response' }));
-    return NextResponse.json(payload, { status: upstream.status });
-  } catch {
-    return error('Admin backend is unavailable; the setting was not changed.', 502);
-  }
+  db.prepare(
+    `INSERT INTO system_settings (key, value, category, updated_by, updated_at)
+     VALUES (?, ?, 'general', ?, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = datetime('now')`,
+  ).run(key, body.value, auth.admin.email);
+
+  recordAdminAction(request, auth.admin, 'settings.update', {
+    type: 'setting',
+    id: key,
+    detail: { from: existing?.value ?? null, to: body.value },
+  });
+
+  return NextResponse.json({ success: true, key, value: body.value }, { headers: NO_STORE });
 }

@@ -22,6 +22,7 @@ const MODULES = [
   'src/lib/db/convert.ts',
   'src/lib/markets/listing.ts',
   'src/lib/markets/futures.ts',
+  'src/lib/markets/instruments.ts',
   'src/lib/trading/orderbook.ts',
   'src/lib/trading/fees.ts',
   'src/lib/trading/etf.ts',
