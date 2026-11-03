@@ -20,6 +20,7 @@ import {
   unlockAvailable,
   consumeLocked,
   availableBalance,
+  covers,
   recordTransaction,
   LedgerError,
 } from '@/lib/db/ledger';
@@ -184,6 +185,21 @@ export function spotRates(userId: string): { maker: number; taker: number; level
   });
 
   const rates = ratesFor(resolved, 'spot');
+  return { maker: rates.maker, taker: rates.taker, level: resolved.level };
+}
+
+/** Resolve a user's futures maker and taker rates from the same schedule. */
+export function futuresRates(userId: string): { maker: number; taker: number; level: number } {
+  const tiers = feeTiers();
+  if (tiers.length === 0) throw new SpotError('FEE_SCHEDULE_MISSING', 'No fee schedule is configured', 500);
+
+  const resolved = resolveFeeTier(tiers, {
+    volume30d: volume30d(userId),
+    holding: availableBalance(userId, 'TGR'),
+    payInNative: false,
+  });
+
+  const rates = ratesFor(resolved, 'futures');
   return { maker: rates.maker, taker: rates.taker, level: resolved.level };
 }
 

@@ -1,54 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { listPositions } from '@/lib/trading/futures-engine';
+import { toPositionPayload } from '@/lib/trading/position-view';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get futures positions
+/** The caller's open derivative positions, optionally filtered to one symbol. */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const symbol = request.nextUrl.searchParams.get('symbol');
+  const positions = listPositions(auth.user.userId, symbol).map((row) =>
+    toPositionPayload(row as unknown as Record<string, unknown>),
+  );
 
-    let url = `${API_BASE_URL}/futures/user/positions`;
-    if (symbol) url += `?symbol=${symbol}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch futures positions' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Futures positions API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, positions }, { headers: NO_STORE });
 }

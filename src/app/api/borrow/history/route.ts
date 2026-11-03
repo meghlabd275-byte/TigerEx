@@ -1,49 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { getDb } from '@/lib/db';
+import { requireSession } from '@/lib/db/session';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get borrow history
+/**
+ * The caller's borrow and repay history.
+ *
+ * Read from the transaction ledger, which records every margin movement, so the
+ * history is the same data the ledger used to move funds.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const limit = Math.min(Math.max(Number(request.nextUrl.searchParams.get('limit') ?? 100) || 100, 1), 1000);
+  const rows = getDb()
+    .prepare(
+      `SELECT transaction_id, type, currency, amount, fee, status, memo, created_at
+         FROM transactions
+        WHERE user_id = ? AND type IN ('margin_borrow', 'margin_repay', 'margin_liquidation')
+        ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(auth.user.userId, limit) as Array<Record<string, unknown>>;
 
-    const response = await fetch(`${API_BASE_URL}/borrow/history`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch borrow history' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Borrow history API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json(
+    {
+      success: true,
+      history: rows.map((row) => ({
+        transactionId: row.transaction_id,
+        type: row.type,
+        asset: row.currency,
+        amount: row.amount,
+        fee: row.fee,
+        status: row.status,
+        memo: row.memo,
+        createdAt: row.created_at,
+      })),
+    },
+    { headers: NO_STORE },
+  );
 }

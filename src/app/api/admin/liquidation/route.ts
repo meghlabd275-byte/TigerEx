@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
+import { scanPositions, processQueue } from '@/lib/trading/risk-supervisor';
 
 /**
  * The liquidation work queue.
@@ -81,4 +82,41 @@ export async function PUT(request: NextRequest) {
   });
 
   return NextResponse.json({ success: true, entryId, status }, { headers: NO_STORE });
+}
+
+/**
+ * Run the liquidation cycle.
+ *
+ * `action: 'scan'` re-prices every open position and enqueues the ones that
+ * have breached maintenance margin; `action: 'execute'` closes the queued
+ * positions at the mark and settles the insurance fund. Both are audited.
+ */
+export async function POST(request: NextRequest) {
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.liquidation.run');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  const action = String(body?.action ?? 'scan').toLowerCase();
+  if (action !== 'scan' && action !== 'execute') {
+    return fail('VALIDATION_FAILED', "action must be 'scan' or 'execute'");
+  }
+
+  if (action === 'scan') {
+    const result = scanPositions();
+    recordAdminAction(request, auth.admin, 'liquidation.scan', {
+      type: 'liquidation_cycle',
+      detail: { scanned: result.scanned, queued: result.queued.length, unpriced: result.unpriced.length },
+    });
+    return NextResponse.json({ success: true, action, ...result }, { headers: NO_STORE });
+  }
+
+  const limit = body?.limit === undefined ? 50 : Number(body.limit);
+  const result = processQueue(Number.isFinite(limit) ? limit : 50);
+  recordAdminAction(request, auth.admin, 'liquidation.execute', {
+    type: 'liquidation_cycle',
+    detail: { processed: result.processed.length, skipped: result.skipped.length },
+  });
+  return NextResponse.json({ success: true, action, ...result }, { headers: NO_STORE });
 }
