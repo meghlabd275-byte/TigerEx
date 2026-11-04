@@ -1,47 +1,15 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { NextResponse } from 'next/server';
+import { feeConfigs } from '@/lib/trading/fee-schedule';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get trading fees
-export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol');
-
-    let url = `${API_BASE_URL}/fees`;
-    if (symbol) {
-      url += `?symbol=${symbol}`;
-    }
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch fees' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Fees API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+/**
+ * The published fee schedule.
+ *
+ * Trading fees are read from the same `fee_schedule` the fee engine charges
+ * from, and withdrawal fees from the operator's own policies, so the page
+ * cannot show a rate the exchange will not apply. Public, like a fee page.
+ */
+export async function GET() {
+  const configs = feeConfigs();
+  return NextResponse.json({ success: true, fees: configs, data: configs }, { headers: NO_STORE });
 }

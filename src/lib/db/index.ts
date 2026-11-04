@@ -1249,6 +1249,13 @@ function applyColumnMigrations(database: Database.Database) {
     { table: 'orders', column: 'locked_asset', definition: 'TEXT' },
     { table: 'wallets', column: 'memo', definition: 'TEXT' },
     { table: 'wallets', column: 'address_index', definition: 'TEXT' },
+    // Security toggles are dedicated columns so a query that needs one does not
+    // parse a blob, and so a flag can be indexed or constrained later.
+    { table: 'users', column: 'anti_phishing_enabled', definition: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'withdrawal_whitelist_enabled', definition: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'login_alerts_enabled', definition: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'ip_whitelist_enabled', definition: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'password_changed_at', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {

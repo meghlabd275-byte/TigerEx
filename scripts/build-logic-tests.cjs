@@ -50,6 +50,9 @@ const MODULES = [
   'src/lib/wallet/transfers.ts',
   'src/lib/p2p/market.ts',
   'src/lib/earn/rewards.ts',
+  'src/lib/trading/vip.ts',
+  'src/lib/trading/fee-schedule.ts',
+  'src/lib/security/account.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });

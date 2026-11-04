@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
-import { Shield, Lock, Mail, Monitor, Trash2, RefreshCw } from 'lucide-react';
+import React, { useCallback, useMemo, useState } from 'react';
+import { Shield, Lock, Mail, Monitor, Plus, Trash2, RefreshCw } from 'lucide-react';
 import { useApiResource, toArray } from '@/lib/useApiResource';
+import { apiRequest, ApiError } from '@/lib/api/client-request';
 
 interface SecuritySettings {
   two_factor_enabled?: boolean;
@@ -10,6 +11,7 @@ interface SecuritySettings {
   withdrawal_whitelist_enabled?: boolean;
   login_alerts_enabled?: boolean;
   ip_whitelist_enabled?: boolean;
+  anti_phishing_code?: string | null;
   password_changed_at?: string;
 }
 
@@ -101,10 +103,66 @@ export default function SecurityPage() {
   const sessionList = useMemo(() => toArray<Session>(sessions.data), [sessions.data]);
   const apiKeyList = useMemo(() => toArray<ApiKey>(apiKeys.data), [apiKeys.data]);
 
-  const [revealedKey, setRevealedKey] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [newKeySecret, setNewKeySecret] = useState<string | null>(null);
 
   const enabled = (option: (typeof OPTION_DEFS)[number]): boolean =>
     settings ? Boolean(settings[option.key]) : false;
+
+  const run = useCallback(
+    async (action: () => Promise<void>, notice: string) => {
+      setBusy(true);
+      setActionError(null);
+      setActionNotice(null);
+      try {
+        await action();
+        setActionNotice(notice);
+      } catch (cause) {
+        setActionError(cause instanceof ApiError ? cause.message : 'The action failed.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
+
+  const toggleOption = (key: keyof SecuritySettings) =>
+    run(async () => {
+      await apiRequest('/api/user/security', { method: 'PUT', body: { [key]: !enabled({ key } as never) } });
+      security.reload();
+    }, 'Security setting updated.');
+
+  const revokeSession = (sessionId: string) =>
+    run(async () => {
+      await apiRequest(`/api/user/sessions?sessionId=${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+      sessions.reload();
+    }, 'Device signed out.');
+
+  const signOutOthers = () =>
+    run(async () => {
+      await apiRequest('/api/user/sessions', { method: 'POST', body: {} });
+      sessions.reload();
+    }, 'Other devices signed out.');
+
+  const createKey = () =>
+    run(async () => {
+      const result = await apiRequest<{ apiKey: { apiSecret: string } }>('/api/user/apiKeys', {
+        method: 'POST',
+        body: { name: newKeyName.trim(), permissions: ['read', 'trade'] },
+      });
+      setNewKeySecret(result.apiKey.apiSecret);
+      setNewKeyName('');
+      apiKeys.reload();
+    }, 'API key created. Copy the secret now; it will not be shown again.');
+
+  const revokeKey = (keyId: string) =>
+    run(async () => {
+      await apiRequest(`/api/user/apiKeys?keyId=${encodeURIComponent(keyId)}`, { method: 'DELETE' });
+      apiKeys.reload();
+    }, 'API key revoked.');
 
   return (
     <div className="min-h-screen bg-[#0A0A0F] text-white p-4">
@@ -123,6 +181,17 @@ export default function SecurityPage() {
         {security.error && (
           <div className="mb-4 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">
             Could not load security settings: {security.error}
+          </div>
+        )}
+        {actionError && (
+          <div className="mb-4 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-400">{actionError}</div>
+        )}
+        {actionNotice && (
+          <div className="mb-4 rounded-lg bg-green-500/10 px-4 py-3 text-sm text-green-400">{actionNotice}</div>
+        )}
+        {newKeySecret && (
+          <div className="mb-4 rounded-lg bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+            New API secret (shown once): <span className="font-mono break-all">{newKeySecret}</span>
           </div>
         )}
 
@@ -162,7 +231,18 @@ export default function SecurityPage() {
 
         {/* Login Devices */}
         <div className="bg-[#14141A] rounded-xl p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">Login Devices</h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Login Devices</h2>
+            {sessionList.some((session) => !session.current) && (
+              <button
+                onClick={signOutOthers}
+                disabled={busy}
+                className="text-xs text-gray-400 hover:text-white disabled:opacity-50"
+              >
+                Sign out all other devices
+              </button>
+            )}
+          </div>
           {sessions.loading && <p className="text-sm text-gray-500">Loading devices…</p>}
           {sessions.error && (
             <p className="text-sm text-red-400">Could not load devices: {sessions.error}</p>
@@ -197,7 +277,12 @@ export default function SecurityPage() {
                   </div>
                 </div>
                 {!session.current && (
-                  <button className="p-2 hover:bg-red-500/20 rounded-lg">
+                  <button
+                    onClick={() => revokeSession(session.id)}
+                    disabled={busy}
+                    title="Sign out this device"
+                    className="p-2 hover:bg-red-500/20 rounded-lg disabled:opacity-50"
+                  >
                     <Trash2 className="w-4 h-4 text-red-500" />
                   </button>
                 )}
@@ -208,7 +293,24 @@ export default function SecurityPage() {
 
         {/* API Keys */}
         <div className="bg-[#14141A] rounded-xl p-6 mb-6">
-          <h2 className="text-lg font-semibold mb-4">API Keys</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <h2 className="text-lg font-semibold">API Keys</h2>
+            <div className="flex items-center gap-2">
+              <input
+                value={newKeyName}
+                onChange={(event) => setNewKeyName(event.target.value)}
+                placeholder="Key name"
+                className="rounded bg-[#0A0A0F] px-3 py-1 text-sm text-white"
+              />
+              <button
+                onClick={createKey}
+                disabled={busy || newKeyName.trim().length === 0}
+                className="inline-flex items-center gap-1 rounded bg-[#FF6B35] px-3 py-1 text-sm text-white disabled:opacity-50"
+              >
+                <Plus className="w-3 h-3" /> Create
+              </button>
+            </div>
+          </div>
           {apiKeys.loading && <p className="text-sm text-gray-500">Loading API keys…</p>}
           {apiKeys.error && (
             <p className="text-sm text-red-400">Could not load API keys: {apiKeys.error}</p>
@@ -223,18 +325,20 @@ export default function SecurityPage() {
                   <p className="font-medium">{key.name || key.label || key.id}</p>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => setRevealedKey(revealedKey === key.id ? null : key.id)}
-                      className="text-xs text-gray-400 hover:text-white"
+                      onClick={() => revokeKey(key.id)}
+                      disabled={busy}
+                      title="Revoke this key"
+                      className="p-2 hover:bg-red-500/20 rounded-lg disabled:opacity-50"
                     >
-                      {revealedKey === key.id ? 'Hide' : 'Show'}
-                    </button>
-                    <button className="p-2 hover:bg-red-500/20 rounded-lg">
                       <Trash2 className="w-4 h-4 text-red-500" />
                     </button>
                   </div>
                 </div>
                 <p className="text-sm text-gray-500 font-mono">
-                  {revealedKey === key.id ? key.id : '••••••••••••••••'}
+                  Key ID: {key.id}
+                </p>
+                <p className="text-xs text-gray-600">
+                  The secret is shown once when the key is created and is never stored in plaintext.
                 </p>
                 <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
                   <span>Permissions: {permissionsLabel(key.permissions)}</span>
