@@ -1,64 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { advanceOrder, P2pError } from '@/lib/p2p/market';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Create P2P order appeal
+/**
+ * Open a dispute on an order.
+ *
+ * The escrow stays locked while the dispute is open; only an operator can
+ * resolve it from the admin console.
+ */
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'p2p.appeal', 10, 60_000);
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  const orderId = String(body?.orderId ?? request.nextUrl.searchParams.get('orderId') ?? '').trim();
+  const reason = String(body?.reason ?? '').trim();
+  if (!orderId) return fail('VALIDATION_FAILED', 'An order id is required');
+  if (reason.length < 3) return fail('VALIDATION_FAILED', 'A reason is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const { orderId, reason, description } = body;
-
-    if (!orderId || !reason) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: orderId, reason' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/p2p/orders/appeal`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        orderId,
-        reason,
-        description,
-      }),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to create P2P order appeal' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('P2P order appeal API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    const result = advanceOrder(auth.user.userId, orderId, 'dispute', { reason });
+    return NextResponse.json({ success: true, orderId, status: result.status }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof P2pError) return fail(error.code, error.message, error.status);
+    console.error('P2P appeal error:', error);
+    return fail('INTERNAL_ERROR', 'The dispute could not be opened', 500);
   }
 }

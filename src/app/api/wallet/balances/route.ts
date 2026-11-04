@@ -1,49 +1,76 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { getDb } from '@/lib/db';
+import { requireSession } from '@/lib/db/session';
+import { usdPrice } from '@/lib/db/portfolio';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get user balances
+/**
+ * The caller's balances per wallet.
+ *
+ * Each row is one wallet the user holds and the funds in it, valued at the
+ * exchange's own market price. An asset with no listed price is reported with a
+ * null value rather than being valued at an invented rate.
+ *
+ * `network` filters to one chain, which is what the Web3 view asks for; the
+ * same rows are also returned under `tokens` for that view.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const network = (request.nextUrl.searchParams.get('network') ?? '').trim().toUpperCase();
+
+  const clauses = ['w.user_id = ?', "w.status = 'active'"];
+  const params: string[] = [auth.user.userId];
+  if (network) {
+    clauses.push('UPPER(w.network) = ?');
+    params.push(network);
   }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
 
-    const response = await fetch(`${API_BASE_URL}/wallet/balances`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
+  const rows = getDb()
+    .prepare(
+      `SELECT w.wallet_id, w.wallet_type, w.currency, w.network, w.address,
+              b.available, b.locked
+         FROM wallets w
+         LEFT JOIN balances b ON b.wallet_id = w.wallet_id
+        WHERE ${clauses.join(' AND ')}
+        ORDER BY w.currency, w.wallet_type`,
+    )
+    .all(...params) as Array<{
+    wallet_id: string;
+    wallet_type: string;
+    currency: string;
+    network: string;
+    address: string | null;
+    available: number | null;
+    locked: number | null;
+  }>;
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch balances' },
-        { status: response.status }
-      );
-    }
+  const balances = rows.map((row) => {
+    const available = Number(row.available) || 0;
+    const locked = Number(row.locked) || 0;
+    const price = usdPrice(row.currency);
+    return {
+      id: row.wallet_id,
+      walletId: row.wallet_id,
+      walletType: row.wallet_type,
+      currency: row.currency,
+      asset: row.currency,
+      coin: row.currency,
+      network: row.network,
+      address: row.address,
+      available,
+      locked,
+      balance: available + locked,
+      usdPrice: price,
+      usdValue: price === null ? null : (available + locked) * price,
+    };
+  });
 
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Balances API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  const totalUsdt = balances.reduce((sum, balance) => sum + (balance.usdValue ?? 0), 0);
+
+  return NextResponse.json(
+    { success: true, balances, tokens: balances, data: balances, totalUSDT: totalUsdt },
+    { headers: NO_STORE },
+  );
 }

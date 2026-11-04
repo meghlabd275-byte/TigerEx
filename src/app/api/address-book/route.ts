@@ -1,152 +1,81 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { getDb, generateId } from '@/lib/db';
+import { requireSession } from '@/lib/db/session';
+import { addressBook } from '@/lib/wallet/withdrawals';
+import { validateAddress } from '@/lib/wallet/address';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get address book
+/**
+ * The account's saved withdrawal addresses.
+ *
+ * GET lists them; POST saves one. An address is stored only after it passes the
+ * real checksum for its network, so the book can never hold an address the
+ * exchange would refuse at withdrawal time.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    const response = await fetch(`${API_BASE_URL}/address-book`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch address book' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Address book API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  const asset = request.nextUrl.searchParams.get('asset') ?? request.nextUrl.searchParams.get('coin');
+  const entries = addressBook(auth.user.userId, asset ?? undefined);
+  return NextResponse.json({ success: true, entries, addresses: entries, data: entries }, { headers: NO_STORE });
 }
 
-// Add to address book
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'address-book');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const asset = String(body.asset ?? body.coin ?? '').trim().toUpperCase();
+  const network = String(body.network ?? '').trim().toUpperCase();
+  const address = String(body.address ?? '').trim();
+  const label = body.label === undefined || body.label === null ? null : String(body.label).slice(0, 64);
+
+  if (!asset) return fail('VALIDATION_FAILED', 'An asset is required');
+  if (!network) return fail('VALIDATION_FAILED', 'A network is required');
+
+  const checked = validateAddress(network, address);
+  if (!checked.valid || !checked.normalized) {
+    return fail('INVALID_ADDRESS', checked.reason ?? 'The address is not valid');
   }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
 
-    const response = await fetch(`${API_BASE_URL}/address-book`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to add address' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Add address API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+  const db = getDb();
+  const existing = db
+    .prepare('SELECT entry_id FROM withdrawal_whitelist WHERE user_id = ? AND asset = ? AND network = ? AND address = ?')
+    .get(auth.user.userId, asset, network, checked.normalized) as { entry_id: string } | undefined;
+  if (existing) {
+    return NextResponse.json({ success: true, id: existing.entry_id, duplicate: true }, { headers: NO_STORE });
   }
+
+  const entryId = generateId();
+  db.prepare(
+    `INSERT INTO withdrawal_whitelist (entry_id, user_id, asset, network, address, label, status)
+     VALUES (?, ?, ?, ?, ?, ?, 'active')`,
+  ).run(entryId, auth.user.userId, asset, network, checked.normalized, label);
+
+  return NextResponse.json(
+    { success: true, id: entryId, entry_id: entryId, asset, network, address: checked.normalized, label },
+    { headers: NO_STORE },
+  );
 }
 
-// Delete from address book
 export async function DELETE(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const addressId = searchParams.get('id');
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'address-book');
+  if (guard) return guard;
 
-    if (!addressId) {
-      return NextResponse.json(
-        { success: false, error: 'Address ID required' },
-        { status: 400 }
-      );
-    }
+  const entryId = (request.nextUrl.searchParams.get('addressId') ?? request.nextUrl.searchParams.get('id') ?? '').trim();
+  if (!entryId) return fail('VALIDATION_FAILED', 'An address id is required');
 
-    const response = await fetch(`${API_BASE_URL}/address-book/${addressId}`, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
+  const result = getDb()
+    .prepare('DELETE FROM withdrawal_whitelist WHERE entry_id = ? AND user_id = ?')
+    .run(entryId, auth.user.userId);
+  if (result.changes === 0) return fail('NOT_FOUND', 'No such saved address', 404);
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to delete address' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Delete address API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, id: entryId }, { headers: NO_STORE });
 }

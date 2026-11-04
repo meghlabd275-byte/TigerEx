@@ -1,75 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { claimRedPacket, RewardsError } from '@/lib/earn/rewards';
+import { LedgerError } from '@/lib/db/ledger';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Claim a red packet
+/**
+ * Claim a share of a red packet.
+ *
+ * One claim per account per packet is enforced by a unique key, and the share
+ * is paid from the creator's escrow, so a packet can never pay out more than it
+ * was funded with.
+ */
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'redpacket.claim', 30, 60_000);
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  const packetId = String(body?.packetId ?? body?.code ?? request.nextUrl.searchParams.get('packetId') ?? '').trim();
+  if (!packetId) return fail('VALIDATION_FAILED', 'A red packet id is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    if (!body?.packetId) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameter: packetId' },
-        { status: 400 }
-      );
-    }
-
-    const { packetId, ...rest } = body;
-
-    // The claimant is always the authenticated session owner.
-    const me = await fetch(new URL('/api/auth/me', request.nextUrl.origin), {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const meBody = await me.json().catch(() => null);
-    if (!me.ok || !meBody?.user?.userId) {
-      return NextResponse.json(
-        { success: false, error: 'Could not resolve the current user' },
-        { status: me.status === 200 ? 401 : me.status }
-      );
-    }
-
-    const response = await fetch(
-      `${API_BASE_URL}/earn/red-packet/claim/${encodeURIComponent(packetId)}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ ...rest, user_id: meBody.user.userId }),
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error?.message || data.error || 'Failed to claim red packet' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Claim red packet API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    const result = claimRedPacket(auth.user.userId, packetId);
+    return NextResponse.json({ success: true, amount: result.amount, data: result }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof RewardsError) return fail(error.code, error.message, error.status);
+    if (error instanceof LedgerError) return fail(error.code, error.message, error.status);
+    console.error('Red packet claim error:', error);
+    return fail('INTERNAL_ERROR', 'The red packet could not be claimed', 500);
   }
 }

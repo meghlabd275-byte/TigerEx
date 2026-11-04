@@ -1,120 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { createRedPacket, RewardsError } from '@/lib/earn/rewards';
+import { LedgerError } from '@/lib/db/ledger';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Look up a red packet by its code (packet id)
-export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const code = request.nextUrl.searchParams.get('code');
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    if (!code) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameter: code' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(
-      `${API_BASE_URL}/earn/red-packet/${encodeURIComponent(code)}`,
-      {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error?.message || data.error || 'Red packet not found' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Red packet API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
-
-// Create a red packet
+/**
+ * Create a red packet.
+ *
+ * The full amount is escrowed from the creator immediately, so every packet a
+ * claimer can find is backed by funds the exchange already holds.
+ */
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'redpacket.create', 20, 60_000);
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    // The creator is always the authenticated session owner.
-    const me = await fetch(new URL('/api/auth/me', request.nextUrl.origin), {
-      headers: { Authorization: `Bearer ${token}` },
+    const packet = createRedPacket({
+      userId: auth.user.userId,
+      asset: String(body.asset ?? body.coin ?? ''),
+      amount: Number(body.amount),
+      quantity: Number(body.quantity ?? body.count),
+      type: String(body.type ?? 'random').toLowerCase() === 'average' ? 'average' : 'random',
+      message: body.message === undefined || body.message === null ? null : String(body.message),
+      expiresAt: body.expiresAt === undefined || body.expiresAt === null ? null : String(body.expiresAt),
     });
-    const meBody = await me.json().catch(() => null);
-    if (!me.ok || !meBody?.user?.userId) {
-      return NextResponse.json(
-        { success: false, error: 'Could not resolve the current user' },
-        { status: me.status === 200 ? 401 : me.status }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/earn/red-packet`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ ...body, creator_id: meBody.user.userId }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error?.message || data.error || 'Failed to create red packet' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Create red packet API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true, packet, data: packet }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof RewardsError) return fail(error.code, error.message, error.status);
+    if (error instanceof LedgerError) return fail(error.code, error.message, error.status);
+    console.error('Red packet error:', error);
+    return fail('INTERNAL_ERROR', 'The red packet could not be created', 500);
   }
 }

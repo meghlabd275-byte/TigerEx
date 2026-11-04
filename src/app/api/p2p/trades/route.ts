@@ -1,106 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { userOrders } from '@/lib/p2p/market';
+import { NO_STORE } from '@/lib/api/route-guards';
 
+/**
+ * The caller's P2P trade history.
+ *
+ * This is the same set of orders as `/api/p2p/orders`, presented under the
+ * `trades` key that the history view reads.
+ */
+export async function GET(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-// Create P2P trade
-export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/p2p/trade`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to create trade' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('P2P trade API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
-
-// Confirm P2P trade
-export async function PUT(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const tradeId = searchParams.get('id');
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    if (!tradeId) {
-      return NextResponse.json(
-        { success: false, error: 'Trade ID required' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/p2p/trade/${tradeId}/confirm`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to confirm trade' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Confirm P2P trade API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  const limit = Number(request.nextUrl.searchParams.get('limit') ?? 100);
+  const trades = userOrders(auth.user.userId, Number.isFinite(limit) ? limit : 100);
+  return NextResponse.json({ success: true, trades, orders: trades, data: trades }, { headers: NO_STORE });
 }

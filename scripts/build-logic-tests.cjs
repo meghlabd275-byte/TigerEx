@@ -27,6 +27,7 @@ const MODULES = [
   'src/lib/trading/fees.ts',
   'src/lib/trading/spot-engine.ts',
   'src/lib/trading/market-view.ts',
+  'src/lib/trading/candles.ts',
   'src/lib/db/ledger.ts',
   'src/lib/db/referral.ts',
   'src/lib/trading/etf.ts',
@@ -43,6 +44,12 @@ const MODULES = [
   'src/lib/bots/strategies.ts',
   'src/lib/p2p/escrow.ts',
   'src/lib/security/guards.ts',
+  'src/lib/wallet/address.ts',
+  'src/lib/wallet/hd.ts',
+  'src/lib/wallet/withdrawals.ts',
+  'src/lib/wallet/transfers.ts',
+  'src/lib/p2p/market.ts',
+  'src/lib/earn/rewards.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });

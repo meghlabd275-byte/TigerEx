@@ -1,62 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { userWithdrawals } from '@/lib/wallet/withdrawals';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get withdrawal history
+/**
+ * The caller's withdrawal history.
+ *
+ * Read from the exchange's own `withdrawals` table; an account that has never
+ * withdrawn gets an empty list. Both `withdrawals` and `data` carry the rows,
+ * because the wallet history view reads the latter.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const coin = searchParams.get('coin');
-    const status = searchParams.get('status');
-    const startTime = searchParams.get('startTime');
-    const endTime = searchParams.get('endTime');
-    const limit = searchParams.get('limit') || '100';
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const asset = request.nextUrl.searchParams.get('coin') ?? request.nextUrl.searchParams.get('asset');
+  const status = request.nextUrl.searchParams.get('status');
+  const limit = Number(request.nextUrl.searchParams.get('limit') ?? 100);
 
-    const params = new URLSearchParams();
-    params.append('limit', limit);
-    if (coin) params.append('coin', coin);
-    if (status) params.append('status', status);
-    if (startTime) params.append('startTime', startTime);
-    if (endTime) params.append('endTime', endTime);
+  const withdrawals = userWithdrawals(auth.user.userId, {
+    asset: asset ?? undefined,
+    status: status ?? undefined,
+    limit: Number.isFinite(limit) ? limit : 100,
+  });
 
-    const response = await fetch(`${API_BASE_URL}/withdraw/history?${params.toString()}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch withdrawal history' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Withdrawal history API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, withdrawals, data: withdrawals }, { headers: NO_STORE });
 }

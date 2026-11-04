@@ -1,57 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { candlesFor, SUPPORTED_INTERVALS } from '@/lib/trading/candles';
+import { symbolParam, NO_STORE, fail } from '@/lib/api/route-guards';
 
-
-// Get candles/klines
+/**
+ * Candlestick history for a symbol.
+ *
+ * The candles are aggregated from this venue's own settled trades, so the chart
+ * reflects real trading rather than a mirrored feed. A symbol with no trades in
+ * the window returns an empty series.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const symbol = symbolParam(request.nextUrl.searchParams.get('symbol'));
+  if (!symbol) {
+    return fail('VALIDATION_FAILED', 'A symbol such as BTC/RUSD is required');
   }
-  try {
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol');
-    const interval = searchParams.get('interval') || '1h';
-    const limit = searchParams.get('limit') || '100';
-    const startTime = searchParams.get('startTime');
-    const endTime = searchParams.get('endTime');
 
-    if (!symbol) {
-      return NextResponse.json(
-        { success: false, error: 'Symbol is required' },
-        { status: 400 }
-      );
-    }
-
-    let url = `${API_BASE_URL}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-    if (startTime) url += `&startTime=${startTime}`;
-    if (endTime) url += `&endTime=${endTime}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch candles' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Candles API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+  const interval = (request.nextUrl.searchParams.get('interval') ?? '1m').trim().toLowerCase();
+  if (!SUPPORTED_INTERVALS.includes(interval)) {
+    return fail('VALIDATION_FAILED', `interval must be one of ${SUPPORTED_INTERVALS.join(', ')}`);
   }
+
+  const limit = Number(request.nextUrl.searchParams.get('limit') ?? 100);
+  const candles = candlesFor(symbol, interval, Number.isFinite(limit) ? limit : 100);
+
+  return NextResponse.json(
+    {
+      success: true,
+      symbol,
+      interval,
+      candles,
+      data: candles.map((candle) => [
+        candle.time,
+        candle.open,
+        candle.high,
+        candle.low,
+        candle.close,
+        candle.volume,
+      ]),
+    },
+    { headers: NO_STORE },
+  );
 }

@@ -1,49 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { portfolioSummary } from '@/lib/db/portfolio';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get portfolio
+/**
+ * Portfolio positions for the authenticated user.
+ *
+ * Each position is a holding valued at the venue's own market price, with the
+ * realized P&L attributed to it. An asset with no listed price is reported with
+ * a null value rather than being valued at an invented rate, and is excluded
+ * from the total.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+    const summary = portfolioSummary(auth.user.userId);
 
-    const response = await fetch(`${API_BASE_URL}/portfolio`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
+    const positions = summary.holdings.map((holding) => ({
+      symbol: holding.coin,
+      amount: holding.available + holding.locked,
+      value: holding.usdValue,
+      pnl: summary.realizedPnlUSDT,
+      pnlPercent: null,
+    }));
+
+    return NextResponse.json(
+      {
+        success: true,
+        data: {
+          positions,
+          totalValue: summary.totalBalanceUSDT,
+          totalPnL: summary.realizedPnlUSDT,
+          totalPnLPercent: null,
+          realizedPnl24h: summary.realizedPnl24hUSDT,
+          unrealizedPnl: summary.unrealizedPnlUSDT,
+          openOrders: summary.openOrders,
+          unpricedAssets: summary.unpricedAssets,
+        },
       },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch portfolio' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
+      { headers: NO_STORE },
+    );
+  } catch (error) {
     console.error('Portfolio API error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+      { status: 500 },
     );
   }
 }

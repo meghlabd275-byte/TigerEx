@@ -1,100 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { depositAddress, userDepositAddresses, DepositError } from '@/lib/wallet/deposit';
+import { fail, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get or generate deposit address
+/**
+ * The account's deposit address, or every address it holds.
+ *
+ * The address comes from the wallet row the exchange recorded, or is derived
+ * from the custody master seed when the account has none yet. No address is
+ * ever fabricated: when the seed is absent the route fails closed.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const coin = (request.nextUrl.searchParams.get('currency') ?? request.nextUrl.searchParams.get('coin') ?? '')
+    .trim()
+    .toUpperCase();
+  const network = (request.nextUrl.searchParams.get('network') ?? '').trim().toUpperCase();
+
+  if (!coin) {
+    const addresses = userDepositAddresses(auth.user.userId);
+    return NextResponse.json({ success: true, addresses, data: addresses }, { headers: NO_STORE });
   }
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const currency = searchParams.get('currency') || 'BTC';
-    const network = searchParams.get('network') || 'MAINNET';
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/wallet/deposit/address?currency=${currency}&network=${network}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to get address' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Address API error:', error);
+    const result = depositAddress(auth.user.userId, coin, network || coin);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      { success: true, address: result.address, coin: result.asset, network: result.network, memo: result.memo },
+      { headers: NO_STORE },
     );
-  }
-}
-
-// Generate new deposit address
-export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/wallet/deposit/address`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to generate address' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Address API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+  } catch (error) {
+    if (error instanceof DepositError) return fail(error.code, error.message, error.status);
+    console.error('Wallet address error:', error);
+    return fail('INTERNAL_ERROR', 'The deposit address could not be resolved', 500);
   }
 }

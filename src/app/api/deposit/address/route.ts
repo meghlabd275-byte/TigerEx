@@ -1,63 +1,50 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { depositAddress, userDepositAddresses, DepositError } from '@/lib/wallet/deposit';
+import { fail, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get deposit address
+/**
+ * Deposit addresses.
+ *
+ * Without a coin the response lists the addresses the account already holds.
+ * With a coin and network it returns that wallet's address, deriving one from
+ * the custody master seed when the account does not have one yet. When the seed
+ * is not configured the route fails closed rather than returning an address the
+ * exchange cannot spend from.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const coin = (request.nextUrl.searchParams.get('coin') ?? request.nextUrl.searchParams.get('currency') ?? '')
+    .trim()
+    .toUpperCase();
+  const network = (request.nextUrl.searchParams.get('network') ?? '').trim().toUpperCase();
+
+  if (!coin) {
+    const addresses = userDepositAddresses(auth.user.userId);
+    return NextResponse.json({ success: true, addresses, data: addresses }, { headers: NO_STORE });
   }
+
+  if (!network) return fail('VALIDATION_FAILED', 'A network is required when a coin is supplied');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const coin = searchParams.get('coin');
-    const network = searchParams.get('network');
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    if (!coin) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameter: coin' },
-        { status: 400 }
-      );
-    }
-
-    const url = network 
-      ? `${API_BASE_URL}/deposit/address?coin=${coin}&network=${network}`
-      : `${API_BASE_URL}/deposit/address?coin=${coin}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch deposit address' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Deposit address API error:', error);
+    const result = depositAddress(auth.user.userId, coin, network);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      {
+        success: true,
+        coin: result.asset,
+        asset: result.asset,
+        network: result.network,
+        address: result.address,
+        memo: result.memo,
+        created: result.created,
+      },
+      { headers: NO_STORE },
     );
+  } catch (error) {
+    if (error instanceof DepositError) return fail(error.code, error.message, error.status);
+    console.error('Deposit address error:', error);
+    return fail('INTERNAL_ERROR', 'The deposit address could not be resolved', 500);
   }
 }

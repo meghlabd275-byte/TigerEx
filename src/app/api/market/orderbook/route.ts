@@ -1,43 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { orderBookDepth } from '@/lib/trading/market-view';
+import { symbolParam, NO_STORE, fail } from '@/lib/api/route-guards';
 
-
-// Get order book for a symbol
+/**
+ * Order book depth for a symbol.
+ *
+ * Aggregated from this venue's own resting orders, so the levels are the real
+ * liquidity of the exchange. An empty or unknown book returns empty levels
+ * rather than a fabricated spread.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const symbol = symbolParam(request.nextUrl.searchParams.get('symbol'));
+  if (!symbol) {
+    return fail('VALIDATION_FAILED', 'A symbol such as BTC/RUSD is required');
   }
-  try {
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol') || 'BTC-USDT';
-    const limit = searchParams.get('limit') || '20';
 
-    const response = await fetch(`${API_BASE_URL}/markets/${symbol}/orderbook?limit=${limit}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
+  const requested = Number(request.nextUrl.searchParams.get('limit') ?? 20);
+  const depth = orderBookDepth(symbol, Number.isFinite(requested) ? requested : 20);
+  const spread = depth.bestBid !== null && depth.bestAsk !== null ? depth.bestAsk - depth.bestBid : 0;
+
+  return NextResponse.json(
+    {
+      success: true,
+      symbol: depth.symbol,
+      // The panel renders objects; a charting client wants the positional form,
+      // which is provided under `data` for the same request.
+      bids: depth.bids.map((level) => ({ price: level.price, amount: level.quantity, total: level.total })),
+      asks: depth.asks.map((level) => ({ price: level.price, amount: level.quantity, total: level.total })),
+      data: {
+        bids: depth.bids.map((level) => [level.price, level.quantity]),
+        asks: depth.asks.map((level) => [level.price, level.quantity]),
       },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch order book' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Orderbook API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+      bestBid: depth.bestBid,
+      bestAsk: depth.bestAsk,
+      midPrice: depth.midPrice,
+      lastPrice: depth.lastPrice,
+      spread,
+    },
+    { headers: NO_STORE },
+  );
 }

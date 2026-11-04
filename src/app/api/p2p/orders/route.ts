@@ -1,128 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { placeOrder, userOrders, P2pError } from '@/lib/p2p/market';
+import { LedgerError } from '@/lib/db/ledger';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get P2P orders
+/**
+ * The caller's P2P orders, and placing a new one.
+ *
+ * POST escrows the crypto side of the trade before the order is created, so a
+ * trade can never be opened without the funds to settle it. GET lists the
+ * caller's own orders as buyer or seller.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const adId = searchParams.get('adId');
-    const orderId = searchParams.get('orderId');
-    const tradeType = searchParams.get('tradeType');
-    const fiat = searchParams.get('fiat');
-    const paymentMethod = searchParams.get('paymentMethod');
-    const crypto = searchParams.get('crypto');
-    const status = searchParams.get('status');
-    const page = searchParams.get('page') || '1';
-    const rows = searchParams.get('rows') || '20';
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    let url = `${API_BASE_URL}/p2p/orders?page=${page}&rows=${rows}`;
-    if (adId) url += `&adId=${adId}`;
-    if (orderId) url += `&orderId=${orderId}`;
-    if (tradeType) url += `&tradeType=${tradeType}`;
-    if (fiat) url += `&fiat=${fiat}`;
-    if (paymentMethod) url += `&paymentMethod=${paymentMethod}`;
-    if (crypto) url += `&crypto=${crypto}`;
-    if (status) url += `&status=${status}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch P2P orders' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('P2P orders API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  const limit = Number(request.nextUrl.searchParams.get('limit') ?? 100);
+  const orders = userOrders(auth.user.userId, Number.isFinite(limit) ? limit : 100);
+  return NextResponse.json({ success: true, orders, data: orders }, { headers: NO_STORE });
 }
 
-// Create P2P order
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'p2p.orders', 30, 60_000);
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const offerId = String(body.offerId ?? body.adId ?? body.id ?? '').trim();
+  if (!offerId) return fail('VALIDATION_FAILED', 'An ad id is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const { adId, amount } = body;
-
-    if (!adId || !amount) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: adId, amount' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/p2p/orders`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        adId,
-        amount,
-      }),
+    const order = placeOrder({
+      buyerId: auth.user.userId,
+      offerId,
+      amount: Number(body.amount),
+      paymentMethod: String(body.paymentMethod ?? body.method ?? ''),
     });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to create P2P order' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('P2P orders API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true, order, data: order }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof P2pError) return fail(error.code, error.message, error.status);
+    if (error instanceof LedgerError) return fail(error.code, error.message, error.status);
+    console.error('P2P order error:', error);
+    return fail('INTERNAL_ERROR', 'The order could not be placed', 500);
   }
 }

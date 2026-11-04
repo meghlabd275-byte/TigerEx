@@ -1,56 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { userAds } from '@/lib/p2p/market';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get user's P2P ads
+/** The caller's own P2P ads. */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const status = searchParams.get('status');
-    const page = searchParams.get('page') || '1';
-    const rows = searchParams.get('rows') || '20';
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    let url = `${API_BASE_URL}/p2p/user/ads?page=${page}&rows=${rows}`;
-    if (status) url += `&status=${status}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch user P2P ads' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('P2P user ads API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  const limit = Number(request.nextUrl.searchParams.get('limit') ?? 100);
+  const ads = userAds(auth.user.userId, Number.isFinite(limit) ? limit : 100);
+  return NextResponse.json({ success: true, ads, data: ads }, { headers: NO_STORE });
 }

@@ -1,66 +1,64 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { orderBookDepth, rolling24h, listedMarkets } from '@/lib/trading/market-view';
+import { symbolParam, NO_STORE, fail } from '@/lib/api/route-guards';
 
 /**
- * Get 24hr Ticker - Production Implementation
- * Returns 24hr price change statistics from database
+ * 24-hour ticker statistics.
+ *
+ * With a symbol the response is that market's statistics; without one it is
+ * every listed market. All of it is computed from this venue's own trade tape
+ * and resting orders, so a market that has not traded reports a null price and
+ * a zero volume rather than a seeded quote.
  */
 export async function GET(request: NextRequest) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol');
-    
-    const db = getDb();
-    
-    if (symbol) {
-      // Return specific symbol
-      const ticker = db.prepare(`
-        SELECT * FROM market_data WHERE symbol = ?
-      `).get(symbol.toUpperCase());
-      
-      if (!ticker) {
-        return NextResponse.json(
-          { success: false, error: 'Symbol not found' },
-          { status: 404 }
-        );
-      }
-      
-      return NextResponse.json({
-        success: true,
-        symbol: (ticker as any).symbol,
-        price: (ticker as any).price,
-        priceChange: (ticker as any).change_24h,
-        priceChangePercent: (ticker as any).change_percent_24h,
-        highPrice: (ticker as any).high_24h,
-        lowPrice: (ticker as any).low_24h,
-        volume: (ticker as any).volume_24h,
-        quoteVolume: (ticker as any).volume_24h * (ticker as any).price,
-      });
+  const raw = request.nextUrl.searchParams.get('symbol');
+
+  if (raw !== null) {
+    const symbol = symbolParam(raw);
+    if (!symbol) {
+      return fail('VALIDATION_FAILED', 'A symbol such as BTC/RUSD is required');
     }
-    
-    // Return all tickers
-    const tickers = db.prepare(`
-      SELECT * FROM market_data ORDER BY symbol
-    `).all();
-    
-    return NextResponse.json({
-      success: true,
-      data: tickers.map((ticker: any) => ({
-        symbol: ticker.symbol,
-        price: ticker.price,
-        priceChange: ticker.change_24h,
-        priceChangePercent: ticker.change_percent_24h,
-        highPrice: ticker.high_24h,
-        lowPrice: ticker.low_24h,
-        volume: ticker.volume_24h,
-        quoteVolume: ticker.volume_24h * ticker.price,
-      })),
-    });
-  } catch (error: any) {
-    console.error('24hr ticker API error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Internal server error' },
-      { status: 500 }
-    );
+
+    const stats = rolling24h(symbol);
+    if (!stats) {
+      return fail('NO_TRADING_DATA', `${symbol} has no trades in the last 24 hours`, 404);
+    }
+
+    const book = orderBookDepth(symbol, 1);
+    const ticker = {
+      symbol,
+      lastPrice: stats.lastPrice,
+      price: stats.lastPrice,
+      openPrice: stats.openPrice,
+      open: stats.openPrice,
+      highPrice: stats.high,
+      high: stats.high,
+      lowPrice: stats.low,
+      low: stats.low,
+      volume: stats.volume,
+      quoteVolume: stats.quoteVolume,
+      priceChange: stats.priceChange,
+      priceChangePercent: stats.priceChangePercent,
+      bid: book.bestBid,
+      ask: book.bestAsk,
+      tradesCount: stats.trades,
+      closeTime: Date.now(),
+    };
+
+    return NextResponse.json({ success: true, ticker, data: ticker }, { headers: NO_STORE });
   }
+
+  const tickers = listedMarkets().map((market) => ({
+    symbol: market.symbol,
+    lastPrice: market.lastPrice,
+    price: market.lastPrice,
+    highPrice: null,
+    lowPrice: null,
+    volume: market.volume24h,
+    quoteVolume: market.quoteVolume24h,
+    priceChangePercent: market.priceChangePercent24h,
+    tradesCount: market.trades24h,
+  }));
+
+  return NextResponse.json({ success: true, ticker: tickers, data: tickers }, { headers: NO_STORE });
 }

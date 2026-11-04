@@ -1,45 +1,17 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { NextResponse } from 'next/server';
+import { paymentMethods } from '@/lib/p2p/market';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get P2P payment methods
-export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const { searchParams } = new URL(request.url);
-    const fiat = searchParams.get('fiat');
-
-    let url = `${API_BASE_URL}/p2p/paymentMethods`;
-    if (fiat) url += `?fiat=${fiat}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch P2P payment methods' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('P2P payment methods API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+/**
+ * The fiat payment methods currently offered by P2P ads.
+ *
+ * The list is derived from the live ads, so it is always a method a merchant
+ * actually accepts rather than a fixed menu.
+ */
+export async function GET() {
+  const methods = paymentMethods();
+  return NextResponse.json(
+    { success: true, methods, paymentMethods: methods, data: methods.map((name) => ({ name })) },
+    { headers: NO_STORE },
+  );
 }

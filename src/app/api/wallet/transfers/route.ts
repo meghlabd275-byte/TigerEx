@@ -1,110 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { internalTransfer, transferHistory, TransferError } from '@/lib/wallet/transfers';
+import { LedgerError } from '@/lib/db/ledger';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Internal transfer
+/**
+ * Internal transfers between accounts.
+ *
+ * POST moves funds to the recipient named by email or phone; GET lists the
+ * caller's own transfer history. The recipient must be a real account and the
+ * sender must hold the funds, so nothing is parked or fabricated.
+ */
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'wallet.transfers', 30, 60_000);
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const recipient = String(body.recipient ?? body.toEmail ?? body.to ?? '').trim();
+  const asset = String(body.coin ?? body.asset ?? body.currency ?? '').trim().toUpperCase();
+  const amount = Number(body.amount);
+
+  if (!recipient) return fail('VALIDATION_FAILED', 'A recipient email or phone is required');
+  if (!asset) return fail('VALIDATION_FAILED', 'An asset is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const { toEmail, coin, amount } = body;
-
-    if (!toEmail || !coin || !amount) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: toEmail, coin, amount' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/wallet/transfers`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        toEmail,
-        coin,
-        amount,
-      }),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Transfer failed' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Wallet transfer API error:', error);
+    const result = internalTransfer(auth.user.userId, recipient, asset, amount);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      {
+        success: true,
+        id: result.transferId,
+        transfer_id: result.transferId,
+        asset: result.asset,
+        amount: result.amount,
+        recipient: result.recipient,
+      },
+      { headers: NO_STORE },
     );
+  } catch (error) {
+    if (error instanceof TransferError) return fail(error.code, error.message, error.status);
+    if (error instanceof LedgerError) return fail(error.code, error.message, error.status);
+    console.error('Transfer error:', error);
+    return fail('INTERNAL_ERROR', 'The transfer could not be completed', 500);
   }
 }
 
-// Get transfer history
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/wallet/transfers`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch transfer history' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Wallet transfer API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  const limit = Number(request.nextUrl.searchParams.get('limit') ?? 100);
+  const transfers = transferHistory(auth.user.userId, Number.isFinite(limit) ? limit : 100);
+  return NextResponse.json({ success: true, transfers, transactions: transfers, data: transfers }, { headers: NO_STORE });
 }

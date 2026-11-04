@@ -1,62 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { advanceOrder, P2pError } from '@/lib/p2p/market';
+import { LedgerError } from '@/lib/db/ledger';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Release P2P order (mark as paid)
+/** Release the escrowed asset to the buyer once the fiat payment is confirmed. */
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'p2p.release', 30, 60_000);
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  const orderId = String(body?.orderId ?? request.nextUrl.searchParams.get('orderId') ?? '').trim();
+  if (!orderId) return fail('VALIDATION_FAILED', 'An order id is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const { orderId } = body;
-
-    if (!orderId) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameter: orderId' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/p2p/orders/release`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        orderId,
-      }),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to release P2P order' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('P2P order release API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    const result = advanceOrder(auth.user.userId, orderId, 'release');
+    return NextResponse.json({ success: true, orderId, status: result.status }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof P2pError) return fail(error.code, error.message, error.status);
+    if (error instanceof LedgerError) return fail(error.code, error.message, error.status);
+    console.error('P2P release error:', error);
+    return fail('INTERNAL_ERROR', 'The order could not be released', 500);
   }
 }

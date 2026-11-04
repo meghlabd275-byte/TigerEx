@@ -85,6 +85,8 @@ function initializeSchema() {
       currency TEXT NOT NULL,
       network TEXT NOT NULL,
       address TEXT,
+      memo TEXT,
+      address_index TEXT,
       public_key TEXT,
       is_default INTEGER DEFAULT 0,
       status TEXT DEFAULT 'active',
@@ -819,6 +821,52 @@ function initializeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_p2p_offers_pair ON p2p_offers(asset, fiat, side);
 
+    -- Coupons: single-use codes that credit a fixed amount to one account.
+    CREATE TABLE IF NOT EXISTS coupons (
+      coupon_id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      user_id TEXT NOT NULL,
+      coupon_type TEXT NOT NULL DEFAULT 'cash',
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL,
+      min_requirement REAL NOT NULL DEFAULT 0,
+      expires_at TEXT,
+      used_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_coupons_user ON coupons(user_id);
+
+    -- Red packets: a funded pool split between claimers.
+    CREATE TABLE IF NOT EXISTS red_packets (
+      packet_id TEXT PRIMARY KEY,
+      creator_id TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      amount REAL NOT NULL,
+      quantity INTEGER NOT NULL,
+      packet_type TEXT NOT NULL DEFAULT 'random',
+      claimed_count INTEGER NOT NULL DEFAULT 0,
+      message TEXT,
+      expires_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (creator_id) REFERENCES users(user_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_red_packets_creator ON red_packets(creator_id);
+
+    -- One claim per account per packet; the unique key makes that structural.
+    CREATE TABLE IF NOT EXISTS red_packet_claims (
+      claim_id TEXT PRIMARY KEY,
+      packet_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      amount REAL NOT NULL,
+      claimed_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(packet_id, user_id),
+      FOREIGN KEY (packet_id) REFERENCES red_packets(packet_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_red_packet_claims_user ON red_packet_claims(user_id);
+
     -- P2P escrow orders. Funds are held in escrow until release.
     CREATE TABLE IF NOT EXISTS p2p_orders (
       order_id TEXT PRIMARY KEY,
@@ -1199,6 +1247,8 @@ function applyColumnMigrations(database: Database.Database) {
     { table: 'orders', column: 'hidden_quantity', definition: 'REAL DEFAULT 0' },
     { table: 'orders', column: 'locked_amount', definition: 'REAL DEFAULT 0' },
     { table: 'orders', column: 'locked_asset', definition: 'TEXT' },
+    { table: 'wallets', column: 'memo', definition: 'TEXT' },
+    { table: 'wallets', column: 'address_index', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {

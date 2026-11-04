@@ -89,6 +89,72 @@ export function lastTradePrice(symbol: string): number | null {
   return Number.isFinite(price) && price > 0 ? price : null;
 }
 
+/**
+ * The exchange's listed markets with their live 24-hour statistics.
+ *
+ * Every field comes from the venue's own rows: `trading_pairs` for the listing
+ * metadata and settled trades for the price and volume. A market with no trades
+ * in the window reports a null price and a zero volume rather than a seeded
+ * quote, so a client can tell "not trading yet" from a real number.
+ */
+export function listedMarkets(): Array<{
+  symbol: string;
+  baseCurrency: string;
+  quoteCurrency: string;
+  status: string;
+  tickSize: number | null;
+  minQuantity: number | null;
+  minNotional: number | null;
+  makerFee: number | null;
+  takerFee: number | null;
+  lastPrice: number | null;
+  volume24h: number;
+  quoteVolume24h: number;
+  priceChangePercent24h: number | null;
+  trades24h: number;
+}> {
+  const rows = getDb()
+    .prepare(
+      `SELECT pair_id, symbol, base_currency, quote_currency, status, tick_size,
+              min_quantity, min_notional, maker_fee, taker_fee
+         FROM trading_pairs
+        WHERE status = 'active'
+        ORDER BY symbol`,
+    )
+    .all() as Array<{
+    pair_id: string;
+    symbol: string;
+    base_currency: string;
+    quote_currency: string;
+    status: string;
+    tick_size: number | null;
+    min_quantity: number | null;
+    min_notional: number | null;
+    maker_fee: number | null;
+    taker_fee: number | null;
+  }>;
+
+  return rows.map((row) => {
+    const stats = rolling24h(row.symbol);
+    return {
+      symbol: row.symbol,
+      baseCurrency: row.base_currency,
+      quoteCurrency: row.quote_currency,
+      status: row.status,
+      tickSize: row.tick_size === null ? null : Number(row.tick_size),
+      minQuantity: row.min_quantity === null ? null : Number(row.min_quantity),
+      minNotional: row.min_notional === null ? null : Number(row.min_notional),
+      makerFee: row.maker_fee === null ? null : Number(row.maker_fee),
+      takerFee: row.taker_fee === null ? null : Number(row.taker_fee),
+      lastPrice: stats ? stats.lastPrice : null,
+      volume24h: stats ? stats.volume : 0,
+      quoteVolume24h: stats ? stats.quoteVolume : 0,
+      priceChangePercent24h: stats ? stats.priceChangePercent : null,
+      trades24h: stats ? stats.trades : 0,
+    };
+  });
+}
+
 export interface PublicTrade {
   price: number;
   quantity: number;

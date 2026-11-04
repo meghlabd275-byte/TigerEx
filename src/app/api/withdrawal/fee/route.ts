@@ -1,54 +1,47 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { withdrawalPolicy, withdrawalPolicies } from '@/lib/wallet/withdrawals';
+import { NO_STORE, fail } from '@/lib/api/route-guards';
 
-
-// Get withdrawal fee
+/**
+ * Withdrawal fee and limits for an asset on a network.
+ *
+ * The fee, minimum and maximum are the operator's configured policy. A chain
+ * with no configured entry is reported as unavailable rather than being given
+ * an invented fee, so a client can never quote a fee the exchange will not
+ * honour.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const { searchParams } = new URL(request.url);
-    const coin = searchParams.get('coin');
-    const network = searchParams.get('network');
+  const coin = (request.nextUrl.searchParams.get('coin') ?? '').trim().toUpperCase();
+  const network = (request.nextUrl.searchParams.get('network') ?? '').trim().toUpperCase();
 
-    if (!coin) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameter: coin' },
-        { status: 400 }
-      );
+  if (!coin) return fail('VALIDATION_FAILED', 'A coin is required');
+
+  if (!network) {
+    const policies = withdrawalPolicies().filter((policy) => policy.asset === coin && policy.enabled);
+    if (policies.length === 0) {
+      return fail('CHAIN_NOT_CONFIGURED', `Withdrawals of ${coin} are not enabled`, 404);
     }
-
-    const url = network 
-      ? `${API_BASE_URL}/withdrawal/fee?coin=${coin}&network=${network}`
-      : `${API_BASE_URL}/withdrawal/fee?coin=${coin}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch withdrawal fee' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Withdrawal fee API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true, coin, data: policies }, { headers: NO_STORE });
   }
+
+  const policy = withdrawalPolicy(coin, network);
+  if (!policy) {
+    return fail('CHAIN_NOT_CONFIGURED', `Withdrawals of ${coin} on ${network} are not enabled`, 404);
+  }
+
+  return NextResponse.json(
+    {
+      success: true,
+      coin,
+      asset: policy.asset,
+      network: policy.network,
+      fee: policy.fee,
+      min_withdraw: policy.minAmount,
+      min: policy.minAmount,
+      max: policy.maxAmount,
+      enabled: policy.enabled,
+      data: policy,
+    },
+    { headers: NO_STORE },
+  );
 }
