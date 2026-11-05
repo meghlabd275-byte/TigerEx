@@ -912,6 +912,56 @@ function initializeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_pay_transfers_sender ON pay_transfers(sender_id);
 
+    -- User notifications. One row per event the venue wants to tell an account
+    -- about; read_at is the only mutable column and is set by the client.
+    CREATE TABLE IF NOT EXISTS notifications (
+      notification_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'system',
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'info',
+      read_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_user
+      ON notifications(user_id, created_at DESC);
+
+    -- OTC block-trade quotes. A quote is priced from the venue's own book and
+    -- expires; it is never filled at a rate that did not exist.
+    CREATE TABLE IF NOT EXISTS otc_quotes (
+      quote_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      amount REAL NOT NULL,
+      quote_price REAL NOT NULL,
+      fee REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'quoted',
+      expires_at TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_otc_quotes_user ON otc_quotes(user_id, created_at DESC);
+
+    -- Cross-chain transfers. A transfer records the burn on the source chain and
+    -- the mint on the destination; tx_ref carries the settlement reference.
+    CREATE TABLE IF NOT EXISTS cross_chain_transfers (
+      transfer_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      amount REAL NOT NULL,
+      from_chain TEXT NOT NULL,
+      to_chain TEXT NOT NULL,
+      to_address TEXT NOT NULL,
+      fee REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      tx_ref TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_cross_chain_user
+      ON cross_chain_transfers(user_id, created_at DESC);
+
     -- Treasury accounts per asset and network (hot, warm, cold).
     CREATE TABLE IF NOT EXISTS treasury_accounts (
       account_id TEXT PRIMARY KEY,
@@ -1256,6 +1306,9 @@ function applyColumnMigrations(database: Database.Database) {
     { table: 'users', column: 'login_alerts_enabled', definition: 'INTEGER DEFAULT 0' },
     { table: 'users', column: 'ip_whitelist_enabled', definition: 'INTEGER DEFAULT 0' },
     { table: 'users', column: 'password_changed_at', definition: 'TEXT' },
+    // KYC identity details are PII, so they are held as one encrypted blob
+    // rather than as searchable plaintext columns.
+    { table: 'users', column: 'kyc_personal_encrypted', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {

@@ -16,7 +16,9 @@ export type OtpPurpose =
   | 'password_reset'
   | '2fa_reset'
   | 'email_verify'
-  | 'phone_verify';
+  | 'phone_verify'
+  | 'email_change_old'
+  | 'email_change_new';
 
 export interface IssueOptions {
   purpose: OtpPurpose;

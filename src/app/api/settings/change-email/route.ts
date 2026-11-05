@@ -1,24 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { readJson, fail, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
+import { completeEmailChange, EmailChangeError } from '@/lib/security/email-change';
 
-
+/**
+ * Commit an email change.
+ *
+ * Both addresses must have been verified in the last 15 minutes. The update and
+ * the revocation of every other session run in one transaction, so a change can
+ * never leave a stolen session alive on the old address.
+ */
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  if (!API_BASE_URL || (process.env.NODE_ENV === 'production' && !API_BASE_URL.startsWith('https://'))) return NextResponse.json({ success: false, error: { code: 'ACCOUNT_BACKEND_UNAVAILABLE', message: 'A secure account backend is not configured.' } }, { status: 503 });
-  const authorization = request.headers.get('authorization');
-  const sessionId = request.headers.get('x-session-id');
-  if (!authorization || !/^Bearer [^\s]+$/.test(authorization) || !sessionId) return NextResponse.json({ success: false, error: 'Authorization and session are required' }, { status: 401 });
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'email-change-commit', 5, 60_000);
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON body is required');
+
+  const token = request.headers.get('authorization')?.slice(7).trim() ?? null;
+
   try {
-    const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/settings/change-email`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: authorization, 'X-Session-ID': sessionId }, body: JSON.stringify(await request.json()), cache: 'no-store', signal: AbortSignal.timeout(10000) });
-    const data = await response.json().catch(() => ({ success: false, error: 'Invalid account backend response' }));
-    return NextResponse.json(data, { status: response.status });
-  } catch {
-    return NextResponse.json({ success: false, error: { code: 'ACCOUNT_BACKEND_UNAVAILABLE', message: 'Account service is unavailable.' } }, { status: 503 });
+    const result = completeEmailChange(auth.user.userId, body.currentEmail, body.newEmail, token);
+    return NextResponse.json({ success: true, data: result }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof EmailChangeError) return fail(error.code, error.message, error.status);
+    return fail('EMAIL_CHANGE_FAILED', 'The email address could not be changed');
   }
 }

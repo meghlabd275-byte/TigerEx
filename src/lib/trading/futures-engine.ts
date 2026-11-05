@@ -512,6 +512,37 @@ export function listPositions(userId: string, symbol: string | null): PositionRo
     .all(...params) as PositionRow[];
 }
 
+/**
+ * Close an open position at its current mark price.
+ *
+ * The whole remaining quantity is closed, so the caller ends flat. Pricing at
+ * the mark means the close cannot be used to pick a favourable historical
+ * price, and the fee is the account's own taker rate.
+ */
+export function closePosition(userId: string, positionId: string): FuturesFillResult {
+  const id = String(positionId ?? '').trim();
+  if (!id) throw new FuturesError('VALIDATION_FAILED', 'positionId is required');
+
+  const db = getDb();
+  const existing = db
+    .prepare("SELECT * FROM futures_positions WHERE position_id = ? AND user_id = ? AND status = 'open'")
+    .get(id, userId) as PositionRow | undefined;
+  if (!existing) throw new FuturesError('NO_POSITION', 'No open position with that id', 404);
+
+  const market = loadMarket(existing.symbol);
+  const mark = markPriceFor(market.symbol);
+  if (mark === null) {
+    throw new FuturesError('NO_MARK_PRICE', `${market.symbol} has no mark price; the close is refused`, 409);
+  }
+
+  const rates = futuresRates(userId);
+  const feeBps = rates.taker > 0 ? rates.taker * 10000 : Number(market.taker_fee_bps);
+  const notional = mark * Number(existing.quantity) * (Number(market.contract_size) || 1);
+  const fee = (notional * feeBps) / 10000;
+
+  return reducePosition(db, market, existing, Number(existing.quantity), mark, fee, mark);
+}
+
 /** Set the leverage on an open position, refusing a value the venue does not allow. */
 export function setLeverage(userId: string, symbol: string, leverage: number): PositionRow {
   const market = loadMarket(symbol);

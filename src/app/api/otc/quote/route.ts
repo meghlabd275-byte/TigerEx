@@ -1,59 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { requestQuote, OtcError } from '@/lib/otc/quote';
+import { fail, enforceRequestGuards, symbolParam, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get OTC quote
+/**
+ * Request an OTC block quote.
+ *
+ * The quote is priced from the venue's own order book for the requested size,
+ * so it reflects the liquidity that actually exists. A size the book cannot
+ * absorb is still quoted, with the shortfall reported, rather than refused.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'otc.quote', 60, 60_000);
+  if (guard) return guard;
+
+  const params = request.nextUrl.searchParams;
+  const rawSymbol = params.get('symbol') ?? params.get('asset');
+  const symbol = symbolParam(rawSymbol);
+  const asset = symbol ? symbol.split('/')[0] : String(rawSymbol ?? '').trim().toUpperCase();
+  if (!asset) return fail('VALIDATION_FAILED', 'symbol or asset is required');
+
+  const side = String(params.get('side') ?? 'buy').trim().toLowerCase();
+  const amount = Number(params.get('amount'));
+  if (!Number.isFinite(amount) || amount <= 0) return fail('VALIDATION_FAILED', 'amount must be a positive number');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol');
-    const amount = searchParams.get('amount');
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    if (!symbol || !amount) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: symbol, amount' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/otc/quote?symbol=${symbol}&amount=${amount}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to get OTC quote' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('OTC quote API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    const quote = requestQuote(auth.user.userId, asset, side, amount);
+    return NextResponse.json({ success: true, ...quote, data: quote }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof OtcError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }

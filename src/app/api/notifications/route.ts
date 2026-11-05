@@ -1,105 +1,68 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { listNotifications, unreadCount, markNotificationRead, markAllNotificationsRead } from '@/lib/notifications/inbox';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get notifications
+/**
+ * The caller's notification inbox.
+ *
+ * Read from the exchange's own `notifications` table. An account that has no
+ * notifications gets an empty list and a zero unread count, never a fabricated
+ * message.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const limit = searchParams.get('limit') || '20';
-    const unread = searchParams.get('unread');
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    let url = `${API_BASE_URL}/notifications?limit=${limit}`;
-    if (unread === 'true') {
-      url += '&unread=true';
-    }
+  const params = request.nextUrl.searchParams;
+  const unreadOnly = params.get('unread') === 'true';
+  const limit = Number(params.get('limit') ?? 20);
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
+  const notifications = listNotifications(auth.user.userId, {
+    limit: Number.isFinite(limit) ? limit : 20,
+    unreadOnly,
+  });
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch notifications' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Notifications API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json(
+    {
+      success: true,
+      notifications,
+      data: notifications,
+      unread: unreadCount(auth.user.userId),
+    },
+    { headers: NO_STORE },
+  );
 }
 
-// Mark notification as read
+/** Mark one notification, or the whole inbox, as read. */
 export async function PUT(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'notifications.read');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const all = body.all === true;
+  if (all) {
+    const updated = markAllNotificationsRead(auth.user.userId);
+    return NextResponse.json({ success: true, updated, unread: 0 }, { headers: NO_STORE });
   }
+
+  const notificationId = String(body.notificationId ?? body.id ?? '').trim();
+  if (!notificationId) return fail('VALIDATION_FAILED', 'notificationId is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/notifications/read`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to mark as read' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Notifications mark read API error:', error);
+    const notification = markNotificationRead(auth.user.userId, notificationId);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+      { success: true, notification, unread: unreadCount(auth.user.userId) },
+      { headers: NO_STORE },
     );
+  } catch (error) {
+    const status = (error as { status?: number }).status ?? 400;
+    const code = (error as { code?: string }).code ?? 'VALIDATION_FAILED';
+    return fail(code, (error as Error).message, status);
   }
 }

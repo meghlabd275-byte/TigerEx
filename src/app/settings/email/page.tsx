@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { 
@@ -19,17 +19,10 @@ import OtpInput from '@/components/auth/OtpInput';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 // Steps
-type ChangeStep = 'current-email' | 'new-email' | 'verify-current' | 'verify-new' | 'liveness' | 'success';
-
-const livenessInstructions = [
-  { id: 1, text: "Look straight at the camera", icon: "👀" },
-  { id: 2, text: "Blink your eyes slowly", icon: "👁️" },
-  { id: 3, text: "Smile briefly", icon: "😊" },
-];
+type ChangeStep = 'current-email' | 'new-email' | 'verify-current' | 'verify-new' | 'success';
 
 export default function EmailChangePage() {
   const router = useRouter();
-  const videoRef = useRef<HTMLVideoElement>(null);
   
   // Form state
   const [currentEmail, setCurrentEmail] = useState('');
@@ -42,13 +35,6 @@ export default function EmailChangePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  
-  // Liveness state
-  const [livenessStep, setLivenessStep] = useState(0);
-  const [livenessProgress, setLivenessProgress] = useState(0);
-  const [isLivenessComplete, setIsLivenessComplete] = useState(false);
-  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
-  const [isVerifying, setIsVerifying] = useState(false);
   
   // OTP timer
   const [otpTimer, setOtpTimer] = useState(0);
@@ -172,64 +158,13 @@ export default function EmailChangePage() {
         return;
       }
       
-      // Start liveness verification
-      startLivenessVerification();
+      await completeEmailChange();
     } catch (err) {
       setError('Verification failed');
     } finally {
       setLoading(false);
     }
   };
-
-  // Start liveness verification
-  const startLivenessVerification = async () => {
-    setStep('liveness');
-    setLivenessStep(0);
-    setLivenessProgress(0);
-    setIsLivenessComplete(false);
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'user', width: 640, height: 480 } 
-      });
-      setCameraStream(stream);
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-    } catch (err) {
-      console.error('Camera access error:', err);
-      setError('Please allow camera access for identity verification');
-    }
-  };
-
-  // Handle liveness capture
-  const handleLivenessCapture = useCallback(() => {
-    if (isVerifying) return;
-    
-    setIsVerifying(true);
-    
-    setTimeout(() => {
-      const nextStep = livenessStep + 1;
-      const progress = (nextStep / livenessInstructions.length) * 100;
-      
-      setLivenessStep(nextStep);
-      setLivenessProgress(progress);
-      
-      if (nextStep >= livenessInstructions.length) {
-        setIsLivenessComplete(true);
-        
-        if (cameraStream) {
-          cameraStream.getTracks().forEach(track => track.stop());
-        }
-        
-        // Complete email change
-        completeEmailChange();
-      } else {
-        setIsVerifying(false);
-      }
-    }, 2000);
-  }, [livenessStep, cameraStream, isVerifying]);
 
   // Complete email change
   const completeEmailChange = async () => {
@@ -290,15 +225,6 @@ export default function EmailChangePage() {
       setLoading(false);
     }
   };
-
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [cameraStream]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
@@ -521,72 +447,6 @@ export default function EmailChangePage() {
           )}
 
           {/* Step 5: Liveness Verification */}
-          {step === 'liveness' && (
-            <div>
-              <div className="text-center mb-8">
-                <div className="w-16 h-16 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Camera className="w-8 h-8 text-purple-500" />
-                </div>
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                  Identity Verification
-                </h1>
-                <p className="text-gray-600 dark:text-gray-400">
-                  Complete face verification to confirm it's you
-                </p>
-              </div>
-
-              <div className="space-y-6">
-                <div className="mb-4">
-                  <div className="flex justify-between text-sm text-gray-600 dark:text-gray-400 mb-1">
-                    <span>Progress</span>
-                    <span>{Math.round(livenessProgress)}%</span>
-                  </div>
-                  <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-gradient-to-r from-orange-500 to-red-500 transition-all"
-                      style={{ width: `${livenessProgress}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className="relative rounded-lg overflow-hidden bg-gray-900 aspect-video">
-                  <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-                  
-                  {livenessStep < livenessInstructions.length && !isLivenessComplete && (
-                    <div className="absolute bottom-4 left-4 right-4 bg-black/70 rounded-lg p-4 text-white">
-                      <div className="flex items-center gap-3">
-                        <span className="text-3xl">{livenessInstructions[livenessStep].icon}</span>
-                        <div>
-                          <p className="font-medium">{livenessInstructions[livenessStep].text}</p>
-                          <p className="text-sm text-gray-300">{livenessStep + 1} of {livenessInstructions.length}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {!isLivenessComplete && (
-                  <button
-                    type="button"
-                    onClick={handleLivenessCapture}
-                    disabled={isVerifying}
-                    className="w-full flex items-center justify-center px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-lg hover:from-orange-600 hover:to-red-600 disabled:opacity-50"
-                  >
-                    {isVerifying ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Camera className="w-5 h-5 mr-2" />}
-                    {isVerifying ? 'Verifying...' : 'Capture'}
-                  </button>
-                )}
-
-                {error && (
-                  <div className="flex items-center p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                    <AlertCircle className="w-5 h-5 text-red-500 mr-2" />
-                    <span className="text-sm text-red-600 dark:text-red-400">{error}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           {/* Step 6: Success */}
           {step === 'success' && (
             <div className="text-center py-8">

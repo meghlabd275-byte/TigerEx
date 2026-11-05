@@ -1,55 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { spotRates, futuresRates } from '@/lib/trading/spot-engine';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get trading fee
+/**
+ * The caller's effective trading fee rates.
+ *
+ * Resolved by the fee engine from the same schedule it charges from, using the
+ * account's real 30-day volume and TGR balance, so the quoted rate is the rate
+ * the next trade will pay.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const symbol = searchParams.get('symbol');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const symbol = request.nextUrl.searchParams.get('symbol')?.trim().toUpperCase() ?? null;
+  const market = symbol && !symbol.includes('/') && !/^(FUTURES|SPOT)$/.test(symbol) ? 'futures' : null;
 
-    const url = symbol 
-      ? `${API_BASE_URL}/trading/fee?symbol=${symbol}`
-      : `${API_BASE_URL}/trading/fee`;
+  const spot = spotRates(auth.user.userId);
+  const futures = futuresRates(auth.user.userId);
+  const selected = market === 'futures' ? futures : spot;
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch trading fee' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Trading fee API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json(
+    {
+      success: true,
+      symbol,
+      level: selected.level,
+      maker: selected.maker,
+      taker: selected.taker,
+      makerFee: selected.maker,
+      takerFee: selected.taker,
+      spot,
+      futures,
+    },
+    { headers: NO_STORE },
+  );
 }

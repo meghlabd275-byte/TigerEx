@@ -53,6 +53,14 @@ const MODULES = [
   'src/lib/trading/vip.ts',
   'src/lib/trading/fee-schedule.ts',
   'src/lib/security/account.ts',
+  'src/lib/notifications/inbox.ts',
+  'src/lib/otc/quote.ts',
+  'src/lib/leaderboard/traders.ts',
+  'src/lib/bots/instances.ts',
+  'src/lib/earn/launchpool.ts',
+  'src/lib/earn/holdings.ts',
+  'src/lib/wallet/bridge.ts',
+  'src/lib/account/subaccounts.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });

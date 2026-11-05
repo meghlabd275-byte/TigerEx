@@ -1,38 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireSession } from '@/lib/db/session';
+import { stakeInCampaign, releaseStake, LaunchpoolError } from '@/lib/earn/launchpool';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-const EARN_API_URL = process.env.TIGEREX_EARN_API_URL?.replace(/\/$/, '');
-
-// Stake into a launchpool through the earn service.
+/**
+ * Stake into, or release a stake from, a launchpool campaign.
+ *
+ * A stake locks the caller's tokens in the balance ledger inside one database
+ * transaction, so the commitment and the locked balance cannot disagree.
+ */
 export async function POST(request: NextRequest) {
-  if (!EARN_API_URL) {
-    return NextResponse.json(
-      { success: false, error: 'TIGEREX_EARN_API_URL is not configured; airdrop staking is unavailable.' },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
-  }
+  const guard = enforceRequestGuards(request, 'earn.launchpool.stake');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
 
   try {
-    const upstream = await fetch(`${EARN_API_URL}/api/v1/earn/launchpool/stake`, {
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      cache: 'no-store',
-    });
-    const payload = await upstream
-      .json()
-      .catch(() => ({ success: false, error: 'Invalid earn service response' }));
-    return NextResponse.json(payload, { status: upstream.status });
-  } catch {
-    return NextResponse.json(
-      { success: false, error: 'Earn service is unavailable; the stake was not recorded.' },
-      { status: 502 },
-    );
+    const stake = stakeInCampaign(auth.user.userId, String(body.project_id ?? body.projectId ?? ''), Number(body.amount));
+    return NextResponse.json({ success: true, data: stake, stake }, { status: 201, headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof LaunchpoolError) return fail(error.code, error.message, error.status);
+    throw error;
+  }
+}
+
+/** Release a stake's locked balance once the campaign has ended. */
+export async function DELETE(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'earn.launchpool.release');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  const subscriptionId = String(body?.subscriptionId ?? body?.id ?? request.nextUrl.searchParams.get('subscriptionId') ?? '');
+  try {
+    releaseStake(auth.user.userId, subscriptionId);
+    return NextResponse.json({ success: true }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof LaunchpoolError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }

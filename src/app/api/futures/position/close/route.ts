@@ -1,58 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { closePosition, FuturesError } from '@/lib/trading/futures-engine';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
 /**
  * Close a futures position.
  *
- * Closing a position is a risk-reducing trade that must settle in the matching
- * engine and the ledger. Until a durable futures execution backend is
- * configured this returns 503 rather than reporting a close that did not
- * happen, which would leave the caller believing a live position was flat.
+ * The position is closed at the venue's current mark price, releasing its
+ * margin and settling the realized P&L and fee in the ledger. Closing an
+ * already-closed or unknown position is refused rather than reported as done.
  */
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: {
-          code: 'FUTURES_EXECUTION_UNAVAILABLE',
-          message: 'Position close requires a durable futures execution backend, which is not configured.',
-        },
-      },
-      { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-  const token = request.headers.get('authorization')?.replace('Bearer ', '');
-  if (!token) {
-    return NextResponse.json({ success: false, error: 'Authorization required' }, { status: 401 });
-  }
+  const guard = enforceRequestGuards(request, 'futures.position.close');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const positionId = String(body.positionId ?? body.position_id ?? '').trim();
+  if (!positionId) return fail('VALIDATION_FAILED', 'positionId is required');
 
   try {
-    const body = await request.json();
-    const upstream = await fetch(`${API_BASE_URL}/futures/position/close`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-      cache: 'no-store',
-      signal: AbortSignal.timeout(10000),
-    });
-    const data = await upstream.json().catch(() => ({
-      success: false,
-      error: 'Invalid futures backend response',
-    }));
-    return NextResponse.json(data, { status: upstream.status });
-  } catch {
-    return NextResponse.json(
-      {
-        success: false,
-        error: { code: 'FUTURES_EXECUTION_UNAVAILABLE', message: 'Futures service is unavailable.' },
-      },
-      { status: 503 },
-    );
+    const result = closePosition(auth.user.userId, positionId);
+    return NextResponse.json({ success: true, ...result }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof FuturesError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }

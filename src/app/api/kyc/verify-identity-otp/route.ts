@@ -1,24 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { readJson, fail, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
+import { verifyOtp } from '@/lib/security/otp';
 
-
+/**
+ * Confirm an identity-verification code.
+ *
+ * The code is checked against the account's own email or phone, so a verified
+ * flag can only ever be raised for an address the caller controls.
+ */
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'kyc-identity-verify', 10, 60_000);
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON body is required');
+  const code = String(body.code ?? '').trim();
+  if (!/^\d{6}$/.test(code)) return fail('VALIDATION_FAILED', 'A six-digit code is required');
+
+  const byEmail = auth.user.email
+    ? verifyOtp('email_verify', { email: auth.user.email }, code)
+    : { ok: false as const, reason: 'NOT_FOUND' as const };
+  if (byEmail.ok) {
+    return NextResponse.json({ success: true, data: { verified: true } }, { headers: NO_STORE });
   }
-  if (!API_BASE_URL || (process.env.NODE_ENV === 'production' && !API_BASE_URL.startsWith('https://'))) return NextResponse.json({ success: false, error: { code: 'KYC_BACKEND_UNAVAILABLE', message: 'A secure KYC backend is not configured.' } }, { status: 503 });
-  const authorization = request.headers.get('authorization');
-  const sessionId = request.headers.get('x-session-id');
-  if (!authorization || !/^Bearer [^\s]+$/.test(authorization) || !sessionId) return NextResponse.json({ success: false, error: 'Authorization and session are required' }, { status: 401 });
-  try {
-    const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/kyc/verify-identity-otp`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: authorization, 'X-Session-ID': sessionId }, body: JSON.stringify(await request.json()), cache: 'no-store', signal: AbortSignal.timeout(10000) });
-    const data = await response.json().catch(() => ({ success: false, error: 'Invalid KYC backend response' }));
-    return NextResponse.json(data, { status: response.status });
-  } catch {
-    return NextResponse.json({ success: false, error: { code: 'KYC_BACKEND_UNAVAILABLE', message: 'KYC service is unavailable.' } }, { status: 503 });
+
+  const byPhone = auth.user.phone
+    ? verifyOtp('phone_verify', { phone: auth.user.phone }, code)
+    : { ok: false as const, reason: 'NOT_FOUND' as const };
+  if (byPhone.ok) {
+    return NextResponse.json({ success: true, data: { verified: true } }, { headers: NO_STORE });
   }
+
+  const reason = byEmail.reason === 'TOO_MANY_ATTEMPTS' || byPhone.reason === 'TOO_MANY_ATTEMPTS'
+    ? 'TOO_MANY_ATTEMPTS'
+    : 'INVALID_CODE';
+  return fail(reason, 'The verification code is not valid', reason === 'TOO_MANY_ATTEMPTS' ? 429 : 400);
 }

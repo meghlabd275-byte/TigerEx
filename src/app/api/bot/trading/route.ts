@@ -1,110 +1,62 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { listUserBots, createBot, setBotStatus, BotError } from '@/lib/bots/instances';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get trading bots
+/**
+ * The caller's trading bots.
+ *
+ * Bots are the exchange's own `trading_bots` rows; the strategy parameters are
+ * validated with the same pure planners the bot engine runs with, so a bot
+ * cannot be stored in a state the engine would refuse to run.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const bots = listUserBots(auth.user.userId);
+  return NextResponse.json({ success: true, bots, data: bots }, { headers: NO_STORE });
+}
+
+export async function POST(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'bot.create');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const strategy = String(body.strategy ?? body.botType ?? body.type ?? '').trim();
+  const symbol = String(body.symbol ?? body.pair ?? '').trim();
+  const params = (body.params ?? body.config ?? {}) as Record<string, unknown>;
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/bot/trading`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch trading bots' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Trading bot API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    const bot = createBot(auth.user.userId, { strategy, symbol, params, status: String(body.status ?? 'stopped') });
+    return NextResponse.json({ success: true, bot, data: bot }, { status: 201, headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof BotError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }
 
-// Create trading bot
-export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+/** Start, pause or stop one of the caller's bots. */
+export async function PUT(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'bot.status');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const { botType, symbol, config } = body;
-
-    if (!botType || !symbol || !config) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: botType, symbol, config' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/bot/trading`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        botType,
-        symbol,
-        config,
-      }),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to create trading bot' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Trading bot API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    const bot = setBotStatus(auth.user.userId, String(body.botId ?? body.id ?? ''), String(body.status ?? ''));
+    return NextResponse.json({ success: true, bot, data: bot }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof BotError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }

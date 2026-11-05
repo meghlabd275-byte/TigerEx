@@ -1,97 +1,68 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { listSubaccounts, createSubaccount, setSubaccountStatus, SubaccountError } from '@/lib/account/subaccounts';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get subaccounts
+/**
+ * The caller's own sub-accounts.
+ *
+ * A parent account may create up to 300 sub-accounts to isolate balances and
+ * API keys. Reads and writes are scoped to the authenticated parent, so one
+ * account can never see or change another's sub-accounts.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const subaccounts = listSubaccounts(auth.user.userId);
+  return NextResponse.json({ success: true, subaccounts, data: subaccounts }, { headers: NO_STORE });
+}
+
+export async function POST(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'subaccount.create');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const permissions = Array.isArray(body.permissions) ? body.permissions.map(String) : [];
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/subaccounts`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch subaccounts' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Subaccounts API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+    const subaccount = createSubaccount(
+      auth.user.userId,
+      String(body.email ?? ''),
+      body.label === undefined || body.label === null ? undefined : String(body.label),
+      permissions,
     );
+    return NextResponse.json({ success: true, subaccount, data: subaccount }, { status: 201, headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof SubaccountError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }
 
-// Create subaccount
-export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+/** Freeze or reactivate one of the caller's sub-accounts. */
+export async function PUT(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'subaccount.status');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/subaccounts`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to create subaccount' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Create subaccount API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
+    const subaccount = setSubaccountStatus(
+      auth.user.userId,
+      String(body.subaccountId ?? body.id ?? ''),
+      String(body.status ?? ''),
     );
+    return NextResponse.json({ success: true, subaccount, data: subaccount }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof SubaccountError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }

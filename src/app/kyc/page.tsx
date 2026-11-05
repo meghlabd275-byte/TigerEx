@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { 
@@ -22,9 +22,10 @@ import SmartInput, { InputMode, Country, countries } from '@/components/auth/Sma
 import OtpInput from '@/components/auth/OtpInput';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useAuth } from '@/components/auth/AuthContext';
+import { apiRequest, ApiError } from '@/lib/api/client-request';
 
 // Steps
-type KycStep = 'identity' | 'personal' | 'documents' | 'liveness' | 'review' | 'success';
+type KycStep = 'identity' | 'personal' | 'documents' | 'upload' | 'success';
 
 // Document types
 type DocType = 'passport' | 'national_id' | 'drivers_license';
@@ -56,17 +57,23 @@ const countries_list = [
   { code: 'MX', name: 'Mexico' },
 ];
 
-const livenessInstructions = [
-  { id: 1, text: "Look straight at the camera", icon: "👀" },
-  { id: 2, text: "Turn your face slightly left", icon: "↩️" },
-  { id: 3, text: "Turn your face slightly right", icon: "↪️" },
-  { id: 4, text: "Smile briefly", icon: "😊" },
-];
+/** Read a selected file as base64, without the data-URL prefix. */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? '');
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : '');
+    };
+    reader.onerror = () => reject(new Error('The file could not be read'));
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function KycPage() {
   const router = useRouter();
   const { user, isAuthenticated } = useAuth();
-  const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Form state
@@ -100,12 +107,6 @@ export default function KycPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   
-  // Liveness state
-  const [livenessStep, setLivenessStep] = useState(0);
-  const [livenessProgress, setLivenessProgress] = useState(0);
-  const [isLivenessComplete, setIsLivenessComplete] = useState(false);
-  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
-  const [isVerifying, setIsVerifying] = useState(false);
   
   // OTP timer
   const [otpTimer, setOtpTimer] = useState(0);
@@ -123,23 +124,14 @@ export default function KycPage() {
     setLoading(true);
     
     try {
-      // Send OTP
-      const response = await fetch('/api/kyc/send-verification-otp', {
+      await apiRequest('/api/kyc/send-verification-otp', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          emailOrPhone: identity,
-          type: identityType === 'phone' ? 'phone' : 'email'
-        }),
+        body: { type: identityType === 'phone' ? 'phone' : 'email' },
       });
-      if (!response.ok) {
-        throw new Error('Verification-code delivery is unavailable');
-      }
-
       setStep('personal');
       startOtpTimer();
     } catch (err) {
-      setError('Failed to send verification code');
+      setError(err instanceof ApiError ? err.message : 'Failed to send verification code');
     } finally {
       setLoading(false);
     }
@@ -214,63 +206,42 @@ export default function KycPage() {
       return;
     }
     
-    // Start liveness verification
-    startLivenessVerification();
+    setStep('upload');
   };
-
-  // Start liveness verification
-  const startLivenessVerification = async () => {
-    setStep('liveness');
-    setLivenessStep(0);
-    setLivenessProgress(0);
-    setIsLivenessComplete(false);
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'user', width: 640, height: 480 } 
-      });
-      setCameraStream(stream);
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-    } catch (err) {
-      console.error('Camera access error:', err);
-      setError('Please allow camera access for identity verification');
-    }
-  };
-
-  // Simulate liveness check
-  const handleLivenessCapture = useCallback(() => {
-    // A camera prompt is not biometric liveness verification. Do not advance the
-    // KYC flow until a configured, audited liveness provider returns a verified result.
-    setError('Biometric liveness verification is unavailable. KYC cannot continue until the verification provider is configured.');
-  }, []);
-
 
   // Submit KYC
   const submitKyc = async () => {
+    if (!frontDoc || !selfieDoc) {
+      setError('Upload the front of your document and a selfie holding it.');
+      return;
+    }
+    if (docType !== 'passport' && !backDoc) {
+      setError('Upload the back of your document.');
+      return;
+    }
+
+    setError('');
     setLoading(true);
     try {
-      const formData = new FormData();
-      formData.append('personalInfo', JSON.stringify(personalInfo));
-      formData.append('documentType', docType);
-      if (frontDoc) formData.append('frontDocument', frontDoc);
-      if (backDoc) formData.append('backDocument', backDoc);
-      if (selfieDoc) formData.append('selfieDocument', selfieDoc);
-      
-      const response = await fetch('/api/kyc/submit', {
+      const selected: Array<[string, File]> = [['front', frontDoc]];
+      if (backDoc) selected.push(['back', backDoc]);
+      selected.push(['selfie', selfieDoc]);
+
+      const documents = await Promise.all(
+        selected.map(async ([kind, file]) => ({
+          kind,
+          contentType: file.type || 'image/jpeg',
+          data: await fileToBase64(file),
+        })),
+      );
+
+      await apiRequest('/api/kyc/submit', {
         method: 'POST',
-        body: formData,
+        body: { personalInfo, documentType: docType, documents },
       });
-      
-      if (response.ok) {
-        setStep('success');
-      } else {
-        setError('Failed to submit KYC. Please try again.');
-      }
+      setStep('success');
     } catch (err) {
-      setError('An error occurred');
+      setError(err instanceof ApiError ? err.message : 'An error occurred');
     } finally {
       setLoading(false);
     }
@@ -314,15 +285,6 @@ export default function KycPage() {
     }
   };
 
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [cameraStream]);
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
       {/* Header */}
@@ -350,10 +312,10 @@ export default function KycPage() {
         {step !== 'success' && (
           <div className="mb-8">
             <div className="flex items-center justify-between">
-              {['identity', 'personal', 'documents', 'liveness'].map((s, i) => (
+              {['identity', 'personal', 'documents', 'upload'].map((s, i) => (
                 <div key={s} className="flex items-center">
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium
-                    ${['identity', 'personal', 'documents', 'liveness'].indexOf(step) >= i 
+                    ${['identity', 'personal', 'documents', 'upload'].indexOf(step) >= i 
                       ? 'bg-orange-500 text-white' 
                       : 'bg-gray-300 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
                     }`}
@@ -362,7 +324,7 @@ export default function KycPage() {
                   </div>
                   {i < 3 && (
                     <div className={`w-16 sm:w-24 h-1 mx-2 
-                      ${['identity', 'personal', 'documents', 'liveness'].indexOf(step) > i 
+                      ${['identity', 'personal', 'documents', 'upload'].indexOf(step) > i 
                         ? 'bg-orange-500' 
                         : 'bg-gray-300 dark:bg-gray-600'
                       }`}
@@ -375,7 +337,7 @@ export default function KycPage() {
               <span>Verify</span>
               <span>Personal</span>
               <span>Documents</span>
-              <span>Liveness</span>
+              <span>Upload</span>
             </div>
           </div>
         )}
@@ -648,23 +610,22 @@ export default function KycPage() {
             </div>
           )}
 
-          {/* Step 3: Documents */}
-          {step === 'liveness' && (
+          {/* Step 3: Document Upload */}
+          {step === 'upload' && (
             <div>
               <div className="text-center mb-8">
                 <div className="w-16 h-16 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Camera className="w-8 h-8 text-purple-500" />
+                  <FileText className="w-8 h-8 text-purple-500" />
                 </div>
                 <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                  Document Upload & Liveness
+                  Document Upload
                 </h1>
                 <p className="text-gray-600 dark:text-gray-400">
-                  Upload your documents and complete face verification
+                  Upload a clear photo of your identity document
                 </p>
               </div>
 
               <div className="space-y-6">
-                {/* Document Type Selection */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Document Type</label>
                   <div className="grid grid-cols-3 gap-3">
@@ -674,8 +635,8 @@ export default function KycPage() {
                         type="button"
                         onClick={() => setDocType(type)}
                         className={`p-3 border rounded-lg text-sm font-medium transition-all
-                          ${docType === type 
-                            ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20 text-orange-500' 
+                          ${docType === type
+                            ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20 text-orange-500'
                             : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400'
                           }`}
                       >
@@ -687,13 +648,9 @@ export default function KycPage() {
                   </div>
                 </div>
 
-                {/* Front Document */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Front of Document</label>
-                  <div 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-orange-500 transition-colors"
-                  >
+                  <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center">
                     {frontDoc ? (
                       <div className="flex items-center justify-center text-green-500">
                         <CheckCircle className="w-6 h-6 mr-2" />
@@ -702,26 +659,46 @@ export default function KycPage() {
                     ) : (
                       <div className="text-gray-500 dark:text-gray-400">
                         <Upload className="w-8 h-8 mx-auto mb-2" />
-                        <p>Click to upload</p>
+                        <p>JPEG, PNG, WebP or PDF up to 10 MB</p>
                       </div>
                     )}
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      onChange={handleFileUpload('front')}
+                      className="mt-3 text-sm"
+                    />
                   </div>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFileUpload('front')}
-                    className="hidden"
-                  />
                 </div>
 
-                {/* Selfie with Document */}
+                {docType !== 'passport' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Back of Document</label>
+                    <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center">
+                      {backDoc ? (
+                        <div className="flex items-center justify-center text-green-500">
+                          <CheckCircle className="w-6 h-6 mr-2" />
+                          {backDoc.name}
+                        </div>
+                      ) : (
+                        <div className="text-gray-500 dark:text-gray-400">
+                          <Upload className="w-8 h-8 mx-auto mb-2" />
+                          <p>Upload the back of your document</p>
+                        </div>
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*,application/pdf"
+                        onChange={handleFileUpload('back')}
+                        className="mt-3 text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Selfie with Document</label>
-                  <div 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-orange-500 transition-colors"
-                  >
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Selfie Holding the Document</label>
+                  <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center">
                     {selfieDoc ? (
                       <div className="flex items-center justify-center text-green-500">
                         <CheckCircle className="w-6 h-6 mr-2" />
@@ -730,89 +707,26 @@ export default function KycPage() {
                     ) : (
                       <div className="text-gray-500 dark:text-gray-400">
                         <Camera className="w-8 h-8 mx-auto mb-2" />
-                        <p>Upload selfie with document</p>
+                        <p>Upload a selfie holding your document</p>
                       </div>
                     )}
-                  </div>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFileUpload('selfie')}
-                    className="hidden"
-                  />
-                </div>
-
-                {/* Liveness Section */}
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
-                  <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Face Verification</h3>
-                  
-                  {/* Progress */}
-                  <div className="mb-4">
-                    <div className="flex justify-between text-sm text-gray-600 dark:text-gray-400 mb-1">
-                      <span>Verification Progress</span>
-                      <span>{Math.round(livenessProgress)}%</span>
-                    </div>
-                    <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-gradient-to-r from-orange-500 to-red-500 transition-all duration-500"
-                        style={{ width: `${livenessProgress}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Camera */}
-                  <div className="relative rounded-lg overflow-hidden bg-gray-900 aspect-video mb-4">
-                    <video
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="w-full h-full object-cover"
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      onChange={handleFileUpload('selfie')}
+                      className="mt-3 text-sm"
                     />
-                    
-                    {livenessStep < livenessInstructions.length && !isLivenessComplete && (
-                      <div className="absolute bottom-4 left-4 right-4 bg-black/70 rounded-lg p-4 text-white">
-                        <div className="flex items-center gap-3">
-                          <span className="text-3xl">{livenessInstructions[livenessStep].icon}</span>
-                          <div>
-                            <p className="font-medium">{livenessInstructions[livenessStep].text}</p>
-                            <p className="text-sm text-gray-300">{livenessStep + 1} of {livenessInstructions.length}</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {isLivenessComplete && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                        <div className="text-white text-center">
-                          <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-2" />
-                          <p className="font-medium">Verification Complete!</p>
-                        </div>
-                      </div>
-                    )}
                   </div>
-
-                  {!isLivenessComplete && (
-                    <button
-                      type="button"
-                      onClick={handleLivenessCapture}
-                      disabled={isVerifying}
-                      className="w-full flex items-center justify-center px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-lg hover:from-orange-600 hover:to-red-600 transition-all disabled:opacity-50"
-                    >
-                      {isVerifying ? (
-                        <>
-                          <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                          Verifying...
-                        </>
-                      ) : (
-                        <>
-                          <Camera className="w-5 h-5 mr-2" />
-                          Capture
-                        </>
-                      )}
-                    </button>
-                  )}
                 </div>
+
+                <button
+                  type="button"
+                  onClick={submitKyc}
+                  disabled={loading || !frontDoc || !selfieDoc || (docType !== 'passport' && !backDoc)}
+                  className="w-full flex items-center justify-center px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-lg hover:from-orange-600 hover:to-red-600 transition-all disabled:opacity-50"
+                >
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <>Submit for review<ArrowRight className="w-5 h-5 ml-2" /></>}
+                </button>
 
                 {error && (
                   <div className="flex items-center p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">

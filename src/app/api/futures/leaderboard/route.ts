@@ -1,42 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { traderLeaderboard } from '@/lib/leaderboard/traders';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get futures leaderboard
+/**
+ * The futures P&L leaderboard.
+ *
+ * Ranked from closed positions' realized P&L, so only accounts that have
+ * actually closed a position appear.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const { searchParams } = new URL(request.url);
-    const period = searchParams.get('period') || '30d';
+  const params = request.nextUrl.searchParams;
+  const period = params.get('period') ?? '30d';
+  const limit = Number(params.get('limit') ?? 100);
 
-    const response = await fetch(`${API_BASE_URL}/futures/leaderboard?period=${period}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch leaderboard' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Futures leaderboard API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  const entries = traderLeaderboard('pnl', period, Number.isFinite(limit) ? limit : 100);
+  return NextResponse.json({ success: true, leaderboard: entries, data: entries }, { headers: NO_STORE });
 }

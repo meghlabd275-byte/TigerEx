@@ -1,49 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { userHoldings } from '@/lib/earn/holdings';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get user's savings holdings
+/**
+ * The caller's earn and staking holdings.
+ *
+ * Read from the exchange's own `earn_subscriptions` joined to the product, with
+ * the reward accrued from the product's APR and the real elapsed time.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const status = request.nextUrl.searchParams.get('status')?.trim().toLowerCase();
+  const holdings = userHoldings(auth.user.userId, status ? { status } : {});
 
-    const response = await fetch(`${API_BASE_URL}/savings/holdings`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch savings holdings' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Savings holdings API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, holdings, data: holdings }, { headers: NO_STORE });
 }

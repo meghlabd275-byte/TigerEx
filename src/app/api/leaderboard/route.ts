@@ -1,43 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { traderLeaderboard } from '@/lib/leaderboard/traders';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get leaderboard
+/**
+ * The exchange leaderboard.
+ *
+ * `type` selects the metric (`volume`, `pnl`, `copiers`); the underlying rows
+ * are the venue's own trades and positions.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const { searchParams } = new URL(request.url);
-    const type = searchParams.get('type') || 'volume'; // volume, pnl, trades
-    const limit = searchParams.get('limit') || '100';
+  const params = request.nextUrl.searchParams;
+  const type = params.get('type') ?? 'volume';
+  const period = params.get('period') ?? 'all';
+  const limit = Number(params.get('limit') ?? 100);
 
-    const response = await fetch(`${API_BASE_URL}/leaderboard?type=${type}&limit=${limit}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch leaderboard' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Leaderboard API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  const entries = traderLeaderboard(type, period, Number.isFinite(limit) ? limit : 100);
+  return NextResponse.json({ success: true, leaderboard: entries, data: entries }, { headers: NO_STORE });
 }

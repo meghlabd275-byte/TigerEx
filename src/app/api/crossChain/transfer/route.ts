@@ -1,121 +1,53 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { initiateTransfer, transferStatus, transferHistory, BridgeError } from '@/lib/wallet/bridge';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Cross-chain transfer
+/**
+ * Cross-chain bridge transfers.
+ *
+ * A transfer debits the caller's balance on the source side and records the
+ * destination chain and a validated destination address. GET without a
+ * `transferId` returns the caller's own bridge history.
+ */
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const guard = enforceRequestGuards(request, 'bridge.transfer', 30, 60_000);
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const { fromChain, toChain, token: tokenSymbol, amount, toAddress } = body;
-
-    if (!fromChain || !toChain || !tokenSymbol || !amount || !toAddress) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: fromChain, toChain, token, amount, toAddress' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/crossChain/transfer`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        fromChain,
-        toChain,
-        token: tokenSymbol,
-        amount,
-        toAddress,
-      }),
+    const transfer = initiateTransfer({
+      userId: auth.user.userId,
+      fromChain: String(body.fromChain ?? ''),
+      toChain: String(body.toChain ?? ''),
+      asset: String(body.token ?? body.asset ?? ''),
+      amount: Number(body.amount),
+      toAddress: String(body.toAddress ?? ''),
     });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to initiate cross-chain transfer' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Cross-chain transfer API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true, transfer, data: transfer }, { status: 201, headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof BridgeError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }
 
-// Get cross-chain transfer status
+/** One transfer's status, or the caller's whole bridge history. */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const transferId = request.nextUrl.searchParams.get('transferId')?.trim();
+  if (transferId) {
+    const transfer = transferStatus(auth.user.userId, transferId);
+    if (!transfer) return fail('UNKNOWN_TRANSFER', 'No such transfer for this account', 404);
+    return NextResponse.json({ success: true, transfer, data: transfer }, { headers: NO_STORE });
   }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const transferId = searchParams.get('transferId');
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    if (!transferId) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameter: transferId' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/crossChain/transfer?transferId=${transferId}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to get transfer status' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Cross-chain transfer API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  const transfers = transferHistory(auth.user.userId);
+  return NextResponse.json({ success: true, transfers, data: transfers }, { headers: NO_STORE });
 }
