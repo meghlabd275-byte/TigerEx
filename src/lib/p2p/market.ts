@@ -75,7 +75,7 @@ export function listAds(filter: { asset?: string; fiat?: string; side?: string; 
               payment_methods, status, created_at
          FROM p2p_offers
         WHERE ${clauses.join(' AND ')}
-        ORDER BY price, created_at DESC
+        ORDER BY price, created_at DESC, offer_id DESC
         LIMIT ?`,
     )
     .all(...params, limit) as Array<Record<string, unknown>>;
@@ -452,7 +452,7 @@ export function userOrders(userId: string, limit = 100): Array<Record<string, un
               payment_method, status, created_at, released_at
          FROM p2p_orders
         WHERE buyer_id = ? OR seller_id = ?
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, order_id DESC
         LIMIT ?`,
     )
     .all(userId, userId, Math.min(Math.max(Math.trunc(limit) || 100, 1), 500)) as Array<Record<string, unknown>>;
@@ -482,7 +482,7 @@ export function userAds(userId: string, limit = 100): P2pAd[] {
               payment_methods, status, created_at
          FROM p2p_offers
         WHERE user_id = ?
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, offer_id DESC
         LIMIT ?`,
     )
     .all(userId, Math.min(Math.max(Math.trunc(limit) || 100, 1), 500)) as Array<Record<string, unknown>>;

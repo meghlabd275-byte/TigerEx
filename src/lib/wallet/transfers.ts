@@ -103,7 +103,7 @@ export function transferHistory(userId: string, limit = 100): Array<Record<strin
       `SELECT transaction_id, type, currency, amount, fee, status, memo, created_at
          FROM transactions
         WHERE user_id = ? AND type IN ('transfer_in', 'transfer_out')
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, transaction_id DESC
         LIMIT ?`,
     )
     .all(userId, Math.min(Math.max(Math.trunc(limit) || 100, 1), 500)) as Array<Record<string, unknown>>;

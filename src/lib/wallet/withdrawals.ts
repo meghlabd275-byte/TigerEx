@@ -210,7 +210,7 @@ export function addressBook(userId: string, asset?: string): Array<{
       `SELECT entry_id, asset, network, address, label, status, created_at
          FROM withdrawal_whitelist
         WHERE ${clauses.join(' AND ')}
-        ORDER BY created_at DESC`,
+        ORDER BY created_at DESC, entry_id DESC`,
     )
     .all(...params) as Array<{
     entry_id: string;
@@ -422,7 +422,7 @@ export function userWithdrawals(
       `SELECT withdrawal_id, currency, network, amount, fee, address, memo, tx_hash, status, created_at, processed_at
          FROM withdrawals
         WHERE ${clauses.join(' AND ')}
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, withdrawal_id DESC
         LIMIT ?`,
     )
     .all(...params, limit) as Array<Record<string, unknown>>;
@@ -469,7 +469,7 @@ export function userDeposits(
               required_confirmations, status, created_at, credited_at
          FROM deposits
         WHERE ${clauses.join(' AND ')}
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, deposit_id DESC
         LIMIT ?`,
     )
     .all(...params, limit) as Array<Record<string, unknown>>;

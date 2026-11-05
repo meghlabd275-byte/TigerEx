@@ -138,7 +138,7 @@ export function loginHistory(userId: string, limit = 50): LoginEvent[] {
       `SELECT attempt_id, ip_address, success, failure_reason, created_at
          FROM login_attempts
         WHERE user_id = ?
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, attempt_id DESC
         LIMIT ?`,
     )
     .all(userId, capped) as Array<{
@@ -251,7 +251,7 @@ export function listApiKeys(userId: string): ApiKeyView[] {
   const rows = getDb()
     .prepare(
       `SELECT key_id, name, permissions, enabled, created_at, last_used_at, expires_at
-         FROM api_keys WHERE user_id = ? ORDER BY created_at DESC`,
+         FROM api_keys WHERE user_id = ? ORDER BY created_at DESC, key_id DESC`,
     )
     .all(userId) as Array<{
     key_id: string;

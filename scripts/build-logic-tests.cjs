@@ -61,6 +61,7 @@ const MODULES = [
   'src/lib/earn/holdings.ts',
   'src/lib/wallet/bridge.ts',
   'src/lib/account/subaccounts.ts',
+  'src/lib/api/api-auth.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });

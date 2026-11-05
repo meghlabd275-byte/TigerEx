@@ -159,7 +159,7 @@ export function listReferrals(userId: string, limit: number, offset: number): Re
          FROM referrals r
          LEFT JOIN users u ON u.user_id = r.referee_id
         WHERE r.referrer_id = ?
-        ORDER BY r.created_at DESC
+        ORDER BY r.created_at DESC, r.referral_id DESC
         LIMIT ? OFFSET ?`,
     )
     .all(userId, limit, offset) as Array<{
@@ -207,7 +207,7 @@ export function listCommissions(userId: string, limit: number, offset: number): 
               currency, status, created_at, paid_at
          FROM referral_commissions
         WHERE referrer_id = ?
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, commission_id DESC
         LIMIT ? OFFSET ?`,
     )
     .all(userId, limit, offset) as Array<{

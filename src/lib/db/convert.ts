@@ -190,7 +190,7 @@ export function listConvertHistory(userId: string, limit: number, offset: number
       `SELECT transaction_id, amount, fee, currency, memo, status, created_at
          FROM transactions
         WHERE user_id = ? AND type = 'convert'
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, transaction_id DESC
         LIMIT ? OFFSET ?`,
     )
     .all(userId, limit, offset) as Array<{

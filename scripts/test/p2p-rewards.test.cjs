@@ -158,7 +158,8 @@ test('cancelling an order returns the escrow to the seller and re-opens the ad',
   // The ad's escrow was never released, only reserved, so it is still locked
   // and the ad shows the full amount available again.
   assert.equal(lockedBalance(seller, 'USDT'), 100);
-  const ad2 = listAds({ asset: 'USDT' })[0];
+  const ad2 = listAds({ asset: 'USDT' }).find((entry) => entry.id === created.id);
+  assert.ok(ad2, 'the ad should be listed again');
   assert.equal(ad2.available, 100); // the order's 40 went back to the ad
   assert.equal(availableBalance(buyer, 'USDT'), 0);
 });
