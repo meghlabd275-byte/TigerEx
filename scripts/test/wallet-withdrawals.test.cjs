@@ -267,6 +267,51 @@ test('an unpriced asset cannot be measured against a USD cap, so it is refused',
   );
 });
 
+test('address locking refuses an address that is not saved, and allows a saved one', () => {
+  setFees({ 'RUSD:ERC20': { fee: 1, minAmount: 1, enabled: true } });
+  const user = seedUser('3');
+  fund(user, 'RUSD', 1000);
+
+  db.prepare('UPDATE users SET withdrawal_whitelist_enabled = 1 WHERE user_id = ?').run(user);
+
+  // A valid but unsaved address is refused once the account locks its addresses.
+  assert.throws(
+    () =>
+      createWithdrawal({
+        userId: user,
+        kycLevel: '3',
+        asset: 'RUSD',
+        network: 'ERC20',
+        amount: 100,
+        fee: 1,
+        address: EVM_ADDRESS,
+        usdPrice: USD_PRICE,
+      }),
+    (error) => error instanceof WithdrawalError && error.code === 'ADDRESS_NOT_WHITELISTED',
+  );
+  assert.equal(availableBalance(user, 'RUSD'), 1000);
+  assert.equal(lockedBalance(user, 'RUSD'), 0);
+
+  // Saving it in the address book unlocks exactly that address.
+  db.prepare(
+    `INSERT INTO withdrawal_whitelist (entry_id, user_id, asset, network, address, label, status)
+     VALUES (?, ?, 'RUSD', 'ERC20', ?, NULL, 'active')`,
+  ).run(generateId(), user, EVM_ADDRESS);
+
+  const result = createWithdrawal({
+    userId: user,
+    kycLevel: '3',
+    asset: 'RUSD',
+    network: 'ERC20',
+    amount: 100,
+    fee: 1,
+    address: EVM_ADDRESS,
+    usdPrice: USD_PRICE,
+  });
+  assert.equal(result.status, 'pending');
+  assert.equal(lockedBalance(user, 'RUSD'), 101);
+});
+
 test('the KYC limit tiers rise with the level', () => {
   const level0 = limitForLevel('none');
   const level3 = limitForLevel('3');

@@ -75,9 +75,29 @@ test('a security flag round-trips through the account columns', () => {
 test('a non-boolean flag is rejected rather than coerced', () => {
   const userId = seedUser();
   assert.throws(
-    () => updateSecuritySettings(userId, { two_factor_enabled: 'yes' }),
+    () => updateSecuritySettings(userId, { login_alerts_enabled: 'yes' }),
     (error) => error instanceof AccountError && error.code === 'VALIDATION_FAILED',
   );
+});
+
+test('the 2FA flag cannot be flipped from the settings endpoint', () => {
+  const userId = seedUser();
+  // A session token alone must not be able to strip the second factor; the
+  // dedicated endpoint verifies a password and a live code instead.
+  assert.throws(
+    () => updateSecuritySettings(userId, { two_factor_enabled: false }),
+    (error) => error instanceof AccountError && error.code === 'TWO_FACTOR_REQUIRES_VERIFICATION',
+  );
+  assert.throws(
+    () => updateSecuritySettings(userId, { two_factor_enabled: true }),
+    (error) => error instanceof AccountError && error.code === 'TWO_FACTOR_REQUIRES_VERIFICATION',
+  );
+  // The refusal is total: a request that also names a valid flag changes nothing.
+  assert.throws(
+    () => updateSecuritySettings(userId, { two_factor_enabled: true, login_alerts_enabled: true }),
+    (error) => error.code === 'TWO_FACTOR_REQUIRES_VERIFICATION',
+  );
+  assert.equal(securitySettings(userId).login_alerts_enabled, false);
 });
 
 test('an anti-phishing code can be set and cleared', () => {
@@ -88,7 +108,7 @@ test('an anti-phishing code can be set and cleared', () => {
 
 test('updating an unknown account fails closed', () => {
   assert.throws(
-    () => updateSecuritySettings('00000000-0000-0000-0000-000000000000', { two_factor_enabled: true }),
+    () => updateSecuritySettings('00000000-0000-0000-0000-000000000000', { login_alerts_enabled: true }),
     (error) => error instanceof AccountError && error.code === 'NOT_FOUND',
   );
 });

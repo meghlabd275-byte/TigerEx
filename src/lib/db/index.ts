@@ -296,6 +296,19 @@ function initializeSchema() {
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
     );
 
+    -- Sign-in IP allowlist entries. One row per CIDR or single address the
+    -- account trusts; the flag on the users table decides whether it is enforced.
+    CREATE TABLE IF NOT EXISTS user_ip_allowlist (
+      entry_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      cidr TEXT NOT NULL,
+      label TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(user_id, cidr),
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_ip_allowlist_user ON user_ip_allowlist(user_id);
+
     -- KYC documents
     CREATE TABLE IF NOT EXISTS kyc_documents (
       document_id TEXT PRIMARY KEY,

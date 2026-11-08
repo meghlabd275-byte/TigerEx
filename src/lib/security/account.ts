@@ -10,6 +10,7 @@
  */
 
 import { getDb, generateId, encrypt, decrypt } from '@/lib/db';
+import { parseCidr, ipAllowed, type ParsedCidr } from '@/lib/security/ip-allowlist';
 import { randomBytes, createHash } from 'crypto';
 
 export class AccountError extends Error {
@@ -37,7 +38,6 @@ export interface SecuritySettings {
 
 /** The security flags a user may change, and their `users` columns. */
 const FLAG_COLUMNS: Record<string, string> = {
-  two_factor_enabled: 'two_factor_enabled',
   anti_phishing_enabled: 'anti_phishing_enabled',
   withdrawal_whitelist_enabled: 'withdrawal_whitelist_enabled',
   login_alerts_enabled: 'login_alerts_enabled',
@@ -82,13 +82,25 @@ export function securitySettings(userId: string): SecuritySettings {
 /**
  * Update the security flags.
  *
- * Disabling two-factor authentication requires the current password, because
- * that flag is the last barrier between a stolen session and the account.
+ * `two_factor_enabled` is deliberately not settable here. Enabling it without a
+ * verified authenticator would leave an account claiming 2FA it cannot satisfy,
+ * and disabling it with a session token alone would let a stolen session strip
+ * the second factor. Both directions go through the dedicated endpoints that
+ * verify a password and a live code (`/api/auth/2fa/enable`, `/disable`), so a
+ * request naming the flag is refused rather than silently ignored.
  */
 export function updateSecuritySettings(
   userId: string,
   changes: Record<string, unknown>,
 ): SecuritySettings {
+  if (changes.two_factor_enabled !== undefined) {
+    throw new AccountError(
+      'TWO_FACTOR_REQUIRES_VERIFICATION',
+      'Two-factor authentication is changed through the 2FA endpoints, which verify your password and a code',
+      403,
+    );
+  }
+
   const assignments: string[] = [];
   const params: Array<number | string> = [];
 
@@ -128,6 +140,94 @@ export interface LoginEvent {
   success: boolean;
   failure_reason: string | null;
   created_at: string;
+}
+
+export interface IpAllowlistEntry {
+  id: string;
+  cidr: string;
+  label: string | null;
+  created_at: string;
+}
+
+/** The account's sign-in IP allowlist entries, newest first. */
+export function listIpAllowlist(userId: string): IpAllowlistEntry[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT entry_id, cidr, label, created_at
+         FROM user_ip_allowlist
+        WHERE user_id = ?
+        ORDER BY created_at DESC, entry_id DESC`,
+    )
+    .all(userId) as Array<{ entry_id: string; cidr: string; label: string | null; created_at: string }>;
+
+  return rows.map((row) => ({
+    id: row.entry_id,
+    cidr: row.cidr,
+    label: row.label,
+    created_at: row.created_at,
+  }));
+}
+
+/**
+ * Add an allowlist entry.
+ *
+ * The CIDR must parse before it is stored; a typo that would have allowed the
+ * whole internet is refused rather than saved and relied on later.
+ */
+export function addIpAllowlistEntry(userId: string, cidr: string, label: string | null): IpAllowlistEntry {
+  const parsed = parseCidr(cidr);
+  if (!parsed) throw new AccountError('INVALID_CIDR', 'That is not a valid IP address or CIDR block');
+  const canonical = canonicalCidr(parsed);
+  const db = getDb();
+  const exists = db
+    .prepare('SELECT entry_id FROM user_ip_allowlist WHERE user_id = ? AND cidr = ?')
+    .get(userId, canonical) as { entry_id: string } | undefined;
+  if (exists) return { id: exists.entry_id, cidr: canonical, label, created_at: '' };
+
+  const entryId = generateId();
+  db.prepare(
+    `INSERT INTO user_ip_allowlist (entry_id, user_id, cidr, label) VALUES (?, ?, ?, ?)`,
+  ).run(entryId, userId, canonical, label);
+
+  const row = db
+    .prepare('SELECT created_at FROM user_ip_allowlist WHERE entry_id = ?')
+    .get(entryId) as { created_at: string };
+  return { id: entryId, cidr: canonical, label, created_at: row.created_at };
+}
+
+export function removeIpAllowlistEntry(userId: string, entryId: string): void {
+  const result = getDb()
+    .prepare('DELETE FROM user_ip_allowlist WHERE entry_id = ? AND user_id = ?')
+    .run(entryId, userId);
+  if (result.changes === 0) throw new AccountError('NOT_FOUND', 'No such allowlist entry', 404);
+}
+
+/** Render a parsed CIDR back to canonical text. */
+function canonicalCidr(parsed: ParsedCidr): string {
+  if (parsed.version === 4) {
+    return `${parsed.bytes[0]}.${parsed.bytes[1]}.${parsed.bytes[2]}.${parsed.bytes[3]}/${parsed.prefix}`;
+  }
+  const groups: string[] = [];
+  for (let i = 0; i < 8; i += 1) {
+    groups.push(((parsed.bytes[i * 2] << 8) | parsed.bytes[i * 2 + 1]).toString(16));
+  }
+  return `${groups.join(':')}/${parsed.prefix}`;
+}
+
+/**
+ * Whether an address may sign in for this account.
+ *
+ * Returns `true` when the account has not enabled the control or has no stored
+ * entries, and `false` when the control is on and the address is not covered.
+ */
+export function isSignInIpAllowed(userId: string, address: string | null): boolean {
+  const row = getDb()
+    .prepare('SELECT ip_whitelist_enabled FROM users WHERE user_id = ?')
+    .get(userId) as { ip_whitelist_enabled: number } | undefined;
+  if (Number(row?.ip_whitelist_enabled ?? 0) !== 1) return true;
+  const entries = listIpAllowlist(userId).map((entry) => entry.cidr);
+  if (entries.length === 0) return true;
+  return ipAllowed(address ?? '', entries);
 }
 
 /** The account's recent sign-in attempts, newest first. */

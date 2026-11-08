@@ -252,6 +252,30 @@ export function withdrawalsEnabled(): { enabled: boolean; reason: string | null 
   return { enabled: true, reason: null };
 }
 
+/**
+ * Whether the account has turned on withdrawal-address locking.
+ *
+ * A missing user row is treated as off, matching the column default, so an
+ * unknown account cannot silently bypass the check.
+ */
+export function withdrawalWhitelistEnabled(userId: string): boolean {
+  const row = getDb()
+    .prepare('SELECT withdrawal_whitelist_enabled FROM users WHERE user_id = ?')
+    .get(userId) as { withdrawal_whitelist_enabled: number } | undefined;
+  return Number(row?.withdrawal_whitelist_enabled ?? 0) === 1;
+}
+
+/** Whether an address is a saved, active entry in the account's address book. */
+export function isWhitelistedAddress(userId: string, asset: string, network: string, address: string): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM withdrawal_whitelist
+        WHERE user_id = ? AND asset = ? AND network = ? AND address = ? AND status = 'active'`,
+    )
+    .get(userId, asset, network, address);
+  return Boolean(row);
+}
+
 export interface CreateWithdrawalInput {
   userId: string;
   kycLevel: string;
@@ -321,6 +345,17 @@ export function createWithdrawal(input: CreateWithdrawalInput): CreateWithdrawal
   const checked = validateAddress(network, input.address ?? '');
   if (!checked.valid || !checked.normalized) {
     throw new WithdrawalError('INVALID_ADDRESS', checked.reason ?? 'The withdrawal address is not valid');
+  }
+
+  if (
+    withdrawalWhitelistEnabled(input.userId) &&
+    !isWhitelistedAddress(input.userId, asset, network, checked.normalized)
+  ) {
+    throw new WithdrawalError(
+      'ADDRESS_NOT_WHITELISTED',
+      'Withdrawal address locking is on, so this address must be saved in your address book first',
+      403,
+    );
   }
 
   if (amount < policy.minAmount) {

@@ -9,6 +9,7 @@
  */
 
 import { getDb } from '@/lib/db';
+import { randomUUID } from 'crypto';
 
 export interface NotificationView {
   id: string;
@@ -103,4 +104,43 @@ export function markAllNotificationsRead(userId: string): number {
     .prepare("UPDATE notifications SET read_at = datetime('now') WHERE user_id = ? AND read_at IS NULL")
     .run(userId);
   return Number(result.changes) || 0;
+}
+
+export interface NewNotification {
+  userId: string;
+  type?: string;
+  title: string;
+  body: string;
+  severity?: 'info' | 'warning' | 'critical';
+}
+
+/**
+ * Write a notification into the account's inbox.
+ *
+ * Used by the sign-in alert and other account events; the caller owns the
+ * decision of whether the user asked for the notification.
+ */
+export function createNotification(input: NewNotification): NotificationView {
+  const title = String(input.title ?? '').trim();
+  const body = String(input.body ?? '').trim();
+  if (!title || !body) throw new Error('A notification needs a title and a body');
+
+  const db = getDb();
+  const notificationId = randomUUID();
+  db.prepare(
+    `INSERT INTO notifications (notification_id, user_id, type, title, body, severity)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    notificationId,
+    input.userId,
+    String(input.type ?? 'system'),
+    title,
+    body,
+    String(input.severity ?? 'info'),
+  );
+
+  const row = db
+    .prepare('SELECT * FROM notifications WHERE notification_id = ?')
+    .get(notificationId) as Record<string, unknown>;
+  return toView(row);
 }

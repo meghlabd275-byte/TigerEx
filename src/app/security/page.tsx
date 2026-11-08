@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { Shield, Lock, Mail, Monitor, Plus, Trash2, RefreshCw } from 'lucide-react';
 import { useApiResource, toArray } from '@/lib/useApiResource';
 import { apiRequest, ApiError } from '@/lib/api/client-request';
@@ -34,6 +35,13 @@ interface ApiKey {
   permissions?: string[] | string;
   created_at?: string;
   last_used_at?: string;
+}
+
+interface IpEntry {
+  id: string;
+  cidr: string;
+  label?: string | null;
+  created_at?: string;
 }
 
 const OPTION_DEFS: {
@@ -95,6 +103,7 @@ export default function SecurityPage() {
   const security = useApiResource<unknown>('/api/user/security');
   const sessions = useApiResource<unknown>('/api/user/sessions');
   const apiKeys = useApiResource<unknown>('/api/user/apiKeys');
+  const ipAllowlist = useApiResource<unknown>('/api/user/ipAllowlist');
 
   const settings = (security.data && typeof security.data === 'object'
     ? ((security.data as Record<string, unknown>).data ?? security.data)
@@ -102,12 +111,19 @@ export default function SecurityPage() {
 
   const sessionList = useMemo(() => toArray<Session>(sessions.data), [sessions.data]);
   const apiKeyList = useMemo(() => toArray<ApiKey>(apiKeys.data), [apiKeys.data]);
+  const ipList = useMemo(() => toArray<IpEntry>(ipAllowlist.data), [ipAllowlist.data]);
+  const ipEnabled = Boolean(
+    ipAllowlist.data && typeof ipAllowlist.data === 'object'
+      ? (ipAllowlist.data as Record<string, unknown>).enabled
+      : false,
+  );
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
   const [newKeySecret, setNewKeySecret] = useState<string | null>(null);
+  const [newCidr, setNewCidr] = useState('');
 
   const enabled = (option: (typeof OPTION_DEFS)[number]): boolean =>
     settings ? Boolean(settings[option.key]) : false;
@@ -164,6 +180,22 @@ export default function SecurityPage() {
       apiKeys.reload();
     }, 'API key revoked.');
 
+  const addIpEntry = () =>
+    run(async () => {
+      await apiRequest('/api/user/ipAllowlist', {
+        method: 'POST',
+        body: { cidr: newCidr.trim() },
+      });
+      setNewCidr('');
+      ipAllowlist.reload();
+    }, 'IP address added to the allowlist.');
+
+  const removeIpEntry = (entryId: string) =>
+    run(async () => {
+      await apiRequest(`/api/user/ipAllowlist?entryId=${encodeURIComponent(entryId)}`, { method: 'DELETE' });
+      ipAllowlist.reload();
+    }, 'IP address removed.');
+
   return (
     <div className="min-h-screen bg-[#0A0A0F] text-white p-4">
       <div className="max-w-3xl mx-auto">
@@ -202,6 +234,11 @@ export default function SecurityPage() {
           <div className="space-y-3">
             {OPTION_DEFS.map((option) => {
               const isEnabled = enabled(option);
+              const toggleable = option.key !== 'two_factor_enabled';
+              const stateLabel = security.loading ? '…' : isEnabled ? 'Enabled' : 'Disabled';
+              const stateClass = isEnabled
+                ? 'bg-green-500/20 text-green-500'
+                : 'bg-gray-500/20 text-gray-400';
               return (
                 <div
                   key={option.id}
@@ -216,13 +253,29 @@ export default function SecurityPage() {
                       <p className="text-xs text-gray-500">{option.description}</p>
                     </div>
                   </div>
-                  <span
-                    className={`text-xs px-3 py-1 rounded-full ${
-                      isEnabled ? 'bg-green-500/20 text-green-500' : 'bg-gray-500/20 text-gray-400'
-                    }`}
-                  >
-                    {security.loading ? '…' : isEnabled ? 'Enabled' : 'Disabled'}
-                  </span>
+                  {toggleable ? (
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={isEnabled}
+                      aria-label={option.name}
+                      disabled={busy || security.loading}
+                      onClick={() => toggleOption(option.key)}
+                      className={`text-xs px-3 py-1 rounded-full disabled:opacity-50 ${stateClass}`}
+                    >
+                      {stateLabel}
+                    </button>
+                  ) : (
+                    // 2FA needs a password and a live code, so it is configured
+                    // on its own page rather than toggled from a session alone.
+                    <Link
+                      href="/2fa"
+                      className={`text-xs px-3 py-1 rounded-full ${stateClass}`}
+                      aria-label={`${option.name}: ${stateLabel}. Open the 2FA settings.`}
+                    >
+                      {stateLabel} · Manage
+                    </Link>
+                  )}
                 </div>
               );
             })}
@@ -345,6 +398,60 @@ export default function SecurityPage() {
                   <span>Created: {formatDate(key.created_at)}</span>
                   <span>Last used: {formatDate(key.last_used_at)}</span>
                 </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Sign-in IP allowlist */}
+        <div className="bg-[#14141A] rounded-xl p-6 mb-6">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 className="text-lg font-semibold">Allowed Sign-in IPs</h2>
+              <p className="text-xs text-gray-500">
+                {ipEnabled
+                  ? 'Sign-in is restricted to the addresses below.'
+                  : 'Turn on IP Whitelist above to restrict sign-in to these addresses.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                value={newCidr}
+                onChange={(event) => setNewCidr(event.target.value)}
+                placeholder="203.0.113.0/24"
+                className="rounded bg-[#0A0A0F] px-3 py-1 text-sm text-white font-mono"
+              />
+              <button
+                onClick={addIpEntry}
+                disabled={busy || newCidr.trim().length === 0}
+                className="inline-flex items-center gap-1 rounded bg-[#FF6B35] px-3 py-1 text-sm text-white disabled:opacity-50"
+              >
+                <Plus className="w-3 h-3" /> Add
+              </button>
+            </div>
+          </div>
+          {ipAllowlist.loading && <p className="text-sm text-gray-500">Loading allowlist…</p>}
+          {ipAllowlist.error && (
+            <p className="text-sm text-red-400">Could not load the allowlist: {ipAllowlist.error}</p>
+          )}
+          {!ipAllowlist.loading && !ipAllowlist.error && ipList.length === 0 && (
+            <p className="text-sm text-gray-500">No addresses are allowlisted.</p>
+          )}
+          <div className="space-y-2">
+            {ipList.map((entry) => (
+              <div key={entry.id} className="flex items-center justify-between p-3 bg-[#0A0A0F] rounded-lg">
+                <div>
+                  <p className="font-mono text-sm">{entry.cidr}</p>
+                  {entry.label && <p className="text-xs text-gray-500">{entry.label}</p>}
+                </div>
+                <button
+                  onClick={() => removeIpEntry(entry.id)}
+                  disabled={busy}
+                  title="Remove this address"
+                  className="p-2 hover:bg-red-500/20 rounded-lg disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4 text-red-500" />
+                </button>
               </div>
             ))}
           </div>

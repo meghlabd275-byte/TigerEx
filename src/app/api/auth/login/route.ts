@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, verifyPassword, generateToken, generateId, hashPassword } from '@/lib/db';
+import { isSignInIpAllowed } from '@/lib/security/account';
+import { createNotification } from '@/lib/notifications/inbox';
 import { randomBytes } from 'crypto';
 
 /**
@@ -115,6 +117,29 @@ export async function POST(request: NextRequest) {
       WHERE user_id = ?
     `).run(user.user_id);
     
+    // Enforce the account's sign-in IP allowlist, when the account turned it on.
+    // A password that is otherwise correct still cannot open a session from an
+    // address the account did not authorise.
+    const signInIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+      || request.headers.get('x-real-ip')
+      || 'unknown';
+    if (!isSignInIpAllowed(user.user_id, signInIp)) {
+      db.prepare(`
+        INSERT INTO login_attempts (attempt_id, user_id, email, phone, ip_address, success, failure_reason)
+        VALUES (?, ?, ?, ?, ?, 0, 'ip_not_allowlisted')
+      `).run(
+        generateId(),
+        user.user_id,
+        isEmail ? credential.toLowerCase() : null,
+        isEmail ? null : credential,
+        signInIp,
+      );
+      return NextResponse.json(
+        { success: false, message: 'Sign-in is not permitted from this IP address' },
+        { status: 403 },
+      );
+    }
+
     // Check if 2FA is enabled
     if (user.two_factor_enabled) {
       // Generate temp token for 2FA verification
@@ -166,6 +191,22 @@ export async function POST(request: NextRequest) {
       rememberMe ? 1 : 0
     );
     
+    // Notify the account of the new sign-in when the user asked for alerts.
+    // Best-effort: a notification failure must never block a valid sign-in.
+    if (user.login_alerts_enabled) {
+      try {
+        createNotification({
+          userId: user.user_id,
+          type: 'security',
+          title: 'New sign-in to your account',
+          body: `A new sign-in was recorded from ${signInIp} at ${new Date().toISOString()}. If this was not you, change your password and revoke other sessions immediately.`,
+          severity: 'warning',
+        });
+      } catch (error) {
+        console.error('Login alert notification failed:', error);
+      }
+    }
+
     // Log successful login
     const attemptId = generateId();
     db.prepare(`

@@ -97,6 +97,32 @@ test('a notification is visible only to its own account', () => {
   assert.throws(() => inbox.markNotificationRead(bob, id), (error) => error.code === 'NOT_FOUND');
 });
 
+test('a notification written by the account-event helper lands in the inbox', () => {
+  const user = seedUser();
+  const created = inbox.createNotification({
+    userId: user,
+    type: 'security',
+    title: 'New sign-in to your account',
+    body: 'A new sign-in was recorded from 203.0.113.9.',
+    severity: 'warning',
+  });
+
+  assert.equal(created.type, 'security');
+  assert.equal(created.severity, 'warning');
+  assert.equal(created.read, false);
+
+  const listed = inbox.listNotifications(user);
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].id, created.id);
+  assert.equal(inbox.unreadCount(user), 1);
+
+  // A notification with no title or body is refused rather than stored blank.
+  assert.throws(
+    () => inbox.createNotification({ userId: user, title: '  ', body: 'x' }),
+    /title and a body/,
+  );
+});
+
 test('marking a notification read is idempotent and clears the unread count', () => {
   const user = seedUser();
   const id = generateId();
