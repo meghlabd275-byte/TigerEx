@@ -3,12 +3,15 @@ import { getDb, verifyPassword, generateToken, generateId, hashPassword } from '
 import { isSignInIpAllowed } from '@/lib/security/account';
 import { createNotification } from '@/lib/notifications/inbox';
 import { randomBytes } from 'crypto';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Login API - Production Implementation
  * Authenticates user and creates session
  */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.login', 10, 60_000);
+  if (guard) return guard;
   try {
     const body = await request.json();
     const { credential, password, rememberMe } = body;

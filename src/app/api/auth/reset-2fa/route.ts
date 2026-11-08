@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { isOtpVerified } from '@/lib/security/otp';
 import { parseDestination, readJson } from '@/lib/security/otp-request';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Reset a lost second factor.
@@ -12,6 +13,8 @@ import { parseDestination, readJson } from '@/lib/security/otp-request';
  * control of the recovery channel, not of the existing sessions.
  */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.reset-2fa', 5, 60_000);
+  if (guard) return guard;
   const body = await readJson(request);
   const destination = parseDestination(body.emailOrPhone);
 

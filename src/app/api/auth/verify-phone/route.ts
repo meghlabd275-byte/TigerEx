@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { checkOtp } from '@/lib/security/otp-verify-request';
 import { readJson } from '@/lib/security/otp-request';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /** Verify a phone number with the registration code sent to it. */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.otp.verify', 10, 60_000);
+  if (guard) return guard;
   const body = await readJson(request);
   const result = checkOtp('register', body.phone ?? body.emailOrPhone, body.code);
   if ('response' in result) return result.response;

@@ -1,8 +1,11 @@
 import { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { parseDestination, readJson, sendRegistrationOtp } from '@/lib/security/otp-request';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.otp.send', 5, 60_000);
+  if (guard) return guard;
   const body = await readJson(request);
   const destination = parseDestination(body.emailOrPhone);
   if (!destination) {

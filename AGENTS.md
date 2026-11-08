@@ -68,6 +68,13 @@ routes call `requireAdmin()` from `src/lib/auth/admin.ts`, which joins
 `TIGEREX_BOOTSTRAP_ADMIN_PASSWORD` (16+ chars) are set at first migration. No
 default account or password is ever created.
 
+Sign-in is `/admin/login`, which posts to `/api/admin/auth/login` and stores the
+returned token under `localStorage['tigerex_admin_token']`; `/api/admin/auth/logout`
+deletes the `admin_sessions` row. Both `/api/admin/auth/login` and every trader
+auth route (`/api/auth/login`, `/api/auth/register`, the OTP send/verify family)
+pass `enforceRequestGuards` first, so credential guessing and OTP spam are
+rate-limited per client address.
+
 Every administrative mutation appends to `admin_audit_log` via
 `recordAdminAction()`. The trail is append-only; `/api/admin/audit` reads it
 and nothing updates or deletes it.

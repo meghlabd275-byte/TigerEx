@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { requireSession } from '@/lib/db/session';
 import { decryptSecret, verifyTotp } from '@/lib/security/totp';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Verify a submitted authenticator code for a sensitive action.
@@ -10,6 +11,8 @@ import { decryptSecret, verifyTotp } from '@/lib/security/totp';
  * an operation on a fresh code should call this immediately before performing it.
  */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.2fa', 10, 60_000);
+  if (guard) return guard;
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
 

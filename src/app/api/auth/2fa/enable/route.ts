@@ -9,6 +9,7 @@ import {
   verifyTotp,
   decryptSecret,
 } from '@/lib/security/totp';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Begin or confirm authenticator (TOTP) enrolment.
@@ -22,6 +23,8 @@ import {
  * reported as on before the user has proven possession of the secret.
  */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.2fa', 10, 60_000);
+  if (guard) return guard;
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
 

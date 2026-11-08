@@ -3,12 +3,15 @@ import { getDb, hashPassword, generateId, generateToken } from '@/lib/db';
 import { attachReferral, ensureReferralCode } from '@/lib/db/referral';
 import { checkPassword } from '@/lib/auth/password';
 import { randomBytes } from 'crypto';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Register API - Production Implementation
  * Creates new user account
  */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.register', 5, 60_000);
+  if (guard) return guard;
   try {
     const body = await request.json();
     const { emailOrPhone, password, username, referralCode } = body;

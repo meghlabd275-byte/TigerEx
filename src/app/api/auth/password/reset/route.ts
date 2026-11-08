@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { backendBaseUrl } from '@/lib/backend-url';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 
 // Request password reset
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.password-reset', 5, 60_000);
+  if (guard) return guard;
   const API_BASE_URL = backendBaseUrl();
   if (!API_BASE_URL) {
     return NextResponse.json(

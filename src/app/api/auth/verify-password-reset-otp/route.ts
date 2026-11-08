@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkOtp } from '@/lib/security/otp-verify-request';
 import { readJson } from '@/lib/security/otp-request';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Verify a password-reset code.
@@ -9,6 +10,8 @@ import { readJson } from '@/lib/security/otp-request';
  * freshly verified code exists for the account.
  */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.otp.verify', 10, 60_000);
+  if (guard) return guard;
   const body = await readJson(request);
   const result = checkOtp('password_reset', body.emailOrPhone, body.code);
   if ('response' in result) return result.response;

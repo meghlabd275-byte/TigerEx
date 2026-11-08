@@ -4,6 +4,7 @@ import { checkOtp } from '@/lib/security/otp-verify-request';
 import { readJson } from '@/lib/security/otp-request';
 import { issueSession } from '@/lib/security/session-issue';
 import { decryptSecret, verifyTotp } from '@/lib/security/totp';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Second-factor verification for an in-progress login.
@@ -14,6 +15,8 @@ import { decryptSecret, verifyTotp } from '@/lib/security/totp';
  * full session only after a code is confirmed.
  */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.otp.verify', 10, 60_000);
+  if (guard) return guard;
   const body = await readJson(request);
   const credential = String(body.credential ?? '').trim();
   const otp = String(body.otp ?? '').trim();

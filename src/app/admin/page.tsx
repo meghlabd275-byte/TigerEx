@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import AdminSessionBar from '@/components/admin/AdminSessionBar';
 import {
   Activity,
   AlertTriangle,
@@ -116,7 +117,10 @@ const SECTIONS: Array<{ group: string; items: Array<{ href: string; label: strin
 export default function AdminIndexPage() {
   return (
     <div className="min-h-screen bg-gray-50 p-6">
-      <h1 className="text-2xl font-bold">TigerEx Admin</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold">TigerEx Admin</h1>
+        <AdminSessionBar />
+      </div>
       <p className="mt-1 max-w-3xl text-sm text-gray-500">
         Every section below is backed by the exchange&apos;s own database. Each route authenticates the admin
         session before it serves or changes anything, and every mutation is written to the append-only audit trail.

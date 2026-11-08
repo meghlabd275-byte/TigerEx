@@ -4,6 +4,7 @@ import { isOtpVerified } from '@/lib/security/otp';
 import { parseDestination, readJson } from '@/lib/security/otp-request';
 import { decryptSecret, verifyTotp } from '@/lib/security/totp';
 import { checkPassword } from '@/lib/auth/password';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Complete a password reset.
@@ -16,6 +17,8 @@ import { checkPassword } from '@/lib/auth/password';
  * revoked once the password changes.
  */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.password-reset', 5, 60_000);
+  if (guard) return guard;
   const body = await readJson(request);
   const destination = parseDestination(body.emailOrPhone);
   const newPassword = String(body.newPassword ?? '');

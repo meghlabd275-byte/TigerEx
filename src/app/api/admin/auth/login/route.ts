@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateAdmin, recordAdminAction } from '@/lib/auth/admin';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Administrator sign-in.
@@ -9,6 +10,8 @@ import { authenticateAdmin, recordAdminAction } from '@/lib/auth/admin';
  * the response does not disclose whether the address exists.
  */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'admin.login', 10, 60_000);
+  if (guard) return guard;
   let body: unknown;
   try {
     body = await request.json();

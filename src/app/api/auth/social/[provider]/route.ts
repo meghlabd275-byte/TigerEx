@@ -19,9 +19,10 @@ import { randomBytes } from 'crypto';
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { provider: string } },
+  { params }: { params: Promise<{ provider: string }> },
 ) {
-  const provider = providerById(params.provider);
+  const { provider: providerId } = await params;
+  const provider = providerById(providerId);
   if (!provider) {
     return NextResponse.json(
       { success: false, error: { code: 'UNKNOWN_PROVIDER', message: 'That sign-in provider is not supported' } },

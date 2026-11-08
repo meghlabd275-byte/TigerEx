@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Check Account API - Production Implementation
  * Checks if user exists in the database
  */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'auth.check-account', 20, 60_000);
+  if (guard) return guard;
   try {
     const body = await request.json();
     const { emailOrPhone } = body;
