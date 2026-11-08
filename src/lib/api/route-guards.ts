@@ -55,9 +55,31 @@ function allowedOrigins(): string[] {
 }
 
 /**
+ * The request's own origin, reconstructed from the host headers.
+ *
+ * A browser sets `Host` to the address it connected to, so a request that
+ * reaches this server has a host the caller did not choose; a cross-site page
+ * cannot forge it. This value is used only to recognise a same-origin request,
+ * which by definition is not CSRF.
+ */
+function requestOrigin(request: NextRequest): string | null {
+  const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+  if (!host) return null;
+  const proto =
+    request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() ||
+    (request.nextUrl.protocol ? request.nextUrl.protocol.replace(':', '') : 'https');
+  return `${proto}://${host}`;
+}
+
+/**
  * Reject a state-changing request that did not originate from an allowed
  * origin. Read-only methods are not checked because they cannot be used to
  * perform an action on a victim's behalf.
+ *
+ * A request whose `Origin` matches the host it was sent to is same-origin and
+ * is always permitted; otherwise the configured allowlist decides. This means
+ * the app's own pages work without an operator having to list their own host,
+ * while a cross-site request is still refused.
  */
 export function enforceOrigin(request: NextRequest): NextResponse | null {
   const method = request.method.toUpperCase();
@@ -65,7 +87,10 @@ export function enforceOrigin(request: NextRequest): NextResponse | null {
 
   const origin = request.headers.get('origin');
   const site = request.headers.get('sec-fetch-site');
-  if (isAllowedOrigin(origin, allowedOrigins(), site)) return null;
+
+  const own = requestOrigin(request);
+  const allowed = own ? [...allowedOrigins(), own] : allowedOrigins();
+  if (isAllowedOrigin(origin, allowed, site)) return null;
 
   return fail('ORIGIN_NOT_ALLOWED', 'This origin is not permitted to perform the request', 403);
 }

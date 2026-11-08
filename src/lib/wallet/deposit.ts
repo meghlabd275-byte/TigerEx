@@ -13,6 +13,7 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { isEvmNetwork, deriveEvmAddress } from '@/lib/wallet/hd';
+import { networkEnabled } from '@/lib/wallet/networks';
 
 export class DepositError extends Error {
   constructor(
@@ -81,6 +82,17 @@ export function depositAddress(userId: string, asset: string, network: string): 
 
   if (existing?.address) {
     return { asset: upperAsset, network: upperNetwork, address: existing.address, memo: existing.memo ?? null, created: false };
+  }
+
+  // The asset/network pair must be listed active. This is checked before the
+  // seed so a request for an unserved chain fails as a plain refusal rather
+  // than a misleading custody error.
+  if (!networkEnabled(upperAsset, upperNetwork)) {
+    throw new DepositError(
+      'UNSUPPORTED_NETWORK',
+      `${upperAsset} deposits on ${upperNetwork} are not enabled`,
+      409,
+    );
   }
 
   const mnemonic = custodyMnemonic();

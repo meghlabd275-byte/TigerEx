@@ -63,6 +63,10 @@ const MODULES = [
   'src/lib/account/subaccounts.ts',
   'src/lib/api/api-auth.ts',
   'src/lib/security/ip-allowlist.ts',
+  'src/lib/wallet/networks.ts',
+  'src/lib/wallet/deposit.ts',
+  'src/lib/auth/oidc.ts',
+  'src/lib/auth/password.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });

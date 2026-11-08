@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, finite, positive, upper, NO_STORE } from '@/lib/api/route-guards';
 
@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
 
   const txRef = body.txRef === undefined || body.txRef === null ? null : String(body.txRef).slice(0, 200);
 
-  const recordId = `bb_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const recordId = `bb_${Date.now()}_${generateId().replace(/-/g, '').slice(0, 12)}`;
   getDb()
     .prepare(
       `INSERT INTO buyback_records (record_id, asset, quote_asset, amount_spent, asset_bought, asset_burned, fee_share, tx_ref)

@@ -26,6 +26,7 @@ import OtpInput from '@/components/auth/OtpInput';
 import PasswordInput from '@/components/auth/PasswordInput';
 import { useAuth } from '@/components/auth/AuthContext';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { SOCIAL_PROVIDERS_MENU } from '@/lib/auth/social-providers';
 declare global {
   interface Window {
     ethereum?: {
@@ -489,17 +490,17 @@ export default function LoginPage() {
                   {/* Social Dropdown */}
                   {showSocialDropdown && (
                     <div className="absolute mt-1 w-48 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg z-10">
-                      {['telegram', 'twitter', 'discord', 'facebook'].map((provider) => (
+                      {SOCIAL_PROVIDERS_MENU.map((provider) => (
                         <button
-                          key={provider}
+                          key={provider.id}
                           type="button"
                           onClick={() => {
-                            handleSocialLogin(provider);
+                            handleSocialLogin(provider.id);
                             setShowSocialDropdown(false);
                           }}
                           className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 capitalize first:rounded-t-lg last:rounded-b-lg"
                         >
-                          {provider}
+                          {provider.label}
                         </button>
                       ))}
                     </div>

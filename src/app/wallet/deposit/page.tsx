@@ -6,15 +6,12 @@ import { Copy, CheckCircle, RefreshCw } from "lucide-react";
 import { useApiResource, toArray } from "@/lib/useApiResource";
 
 interface NetworkInfo {
-  id?: string;
-  coin?: string;
-  symbol?: string;
-  asset?: string;
-  network?: string;
-  chain?: string;
-  min_deposit?: number;
-  min_amount?: number;
+  asset: string;
+  network: string;
+  displayName?: string;
+  minDeposit?: number;
   confirmations?: number;
+  memoRequired?: boolean;
 }
 
 interface DepositAddress {
@@ -176,11 +173,10 @@ export default function DepositPage() {
 
             <div className="mt-4 text-sm text-gray-400">
               <div>
-                Min deposit: {addressData?.min_deposit ?? selected.min_deposit ?? selected.min_amount ?? "—"}{" "}
-                {coinOf(selected)}
+                Min deposit: {selected.minDeposit ?? "—"} {coinOf(selected)}
               </div>
               <div className="mt-1">
-                Confirmations required: {addressData?.confirmations ?? selected.confirmations ?? "—"}
+                Confirmations required: {selected.confirmations ?? "—"}
               </div>
             </div>
           </div>
@@ -191,11 +187,11 @@ export default function DepositPage() {
 }
 
 function coinOf(net: NetworkInfo): string {
-  return net.coin || net.symbol || net.asset || "—";
+  return net.asset || "—";
 }
 
 function networkOf(net: NetworkInfo): string {
-  return net.network || net.chain || "—";
+  return net.network || "—";
 }
 
 function networkKey(net: NetworkInfo): string {

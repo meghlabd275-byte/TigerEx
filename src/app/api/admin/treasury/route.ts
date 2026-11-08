@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, finite, positive, upper, NO_STORE } from '@/lib/api/route-guards';
 
@@ -145,7 +145,7 @@ export async function PUT(request: NextRequest) {
       db.prepare(
         `INSERT INTO treasury_movements (movement_id, asset, from_account, to_account, amount, reason, tx_ref)
          VALUES (?, ?, NULL, ?, ?, ?, ?)`,
-      ).run(`mov_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`, account.asset, account.account_id, amount, reason, txRef);
+      ).run(`mov_${Date.now()}_${generateId().replace(/-/g, '').slice(0, 12)}`, account.asset, account.account_id, amount, reason, txRef);
     })();
 
     recordAdminAction(request, auth.admin, 'treasury.deposit', { type: 'treasury_account', id: account.account_id, detail: { amount, reason, txRef } });
@@ -166,7 +166,7 @@ export async function PUT(request: NextRequest) {
       db.prepare(
         `INSERT INTO treasury_movements (movement_id, asset, from_account, to_account, amount, reason, tx_ref)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).run(`mov_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`, from.asset, from.account_id, to.account_id, amount, reason, txRef);
+      ).run(`mov_${Date.now()}_${generateId().replace(/-/g, '').slice(0, 12)}`, from.asset, from.account_id, to.account_id, amount, reason, txRef);
     })();
 
     recordAdminAction(request, auth.admin, 'treasury.transfer', {

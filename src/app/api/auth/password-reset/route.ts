@@ -3,6 +3,7 @@ import { getDb, hashPassword } from '@/lib/db';
 import { isOtpVerified } from '@/lib/security/otp';
 import { parseDestination, readJson } from '@/lib/security/otp-request';
 import { decryptSecret, verifyTotp } from '@/lib/security/totp';
+import { checkPassword } from '@/lib/auth/password';
 
 /**
  * Complete a password reset.
@@ -25,9 +26,10 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
-  if (newPassword.length < 8) {
+  const policy = checkPassword(newPassword);
+  if (!policy.ok) {
     return NextResponse.json(
-      { success: false, error: { code: 'WEAK_PASSWORD', message: 'Password must be at least 8 characters' } },
+      { success: false, error: { code: 'WEAK_PASSWORD', message: `Password does not meet the policy: ${policy.problems.join(', ')}` } },
       { status: 400 },
     );
   }

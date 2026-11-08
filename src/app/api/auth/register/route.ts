@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, hashPassword, generateId, generateToken } from '@/lib/db';
 import { attachReferral, ensureReferralCode } from '@/lib/db/referral';
+import { checkPassword } from '@/lib/auth/password';
 import { randomBytes } from 'crypto';
 
 /**
@@ -19,10 +20,11 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Validate password strength
-    if (password.length < 8) {
+    // Validate password strength against the shared policy.
+    const policy = checkPassword(password);
+    if (!policy.ok) {
       return NextResponse.json(
-        { success: false, message: 'Password must be at least 8 characters' },
+        { success: false, message: `Password does not meet the policy: ${policy.problems.join(', ')}` },
         { status: 400 }
       );
     }

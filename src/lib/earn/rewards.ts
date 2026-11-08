@@ -11,6 +11,7 @@
  */
 
 import { getDb, generateId } from '@/lib/db';
+import { randomInt } from 'crypto';
 import { lockAvailable, unlockAvailable, creditAvailable, consumeLocked, recordTransaction } from '@/lib/db/ledger';
 
 export class RewardsError extends Error {
@@ -292,7 +293,9 @@ export function claimRedPacket(userId: string, packetId: string): { amount: numb
     const maxShareUnits = remainingUnits - (sharesLeft - 1);
     const fairUnits = Math.floor((remainingUnits / sharesLeft) * 2);
     const bound = Math.max(1, Math.min(maxShareUnits, fairUnits));
-    shareUnits = 1 + Math.floor(Math.random() * bound);
+    // The share is drawn from the platform CSPRNG: a predictable draw would let
+    // a claimer bias their own payout by observing the generator's state.
+    shareUnits = 1 + randomInt(0, bound);
     if (shareUnits > maxShareUnits) shareUnits = maxShareUnits;
   }
   shareUnits = Math.max(1, Math.min(shareUnits, remainingUnits));

@@ -82,9 +82,15 @@ export function candlesFor(symbol: string, interval: string, limit: number): Can
   const normalized = symbol.trim().toUpperCase();
   const count = Math.min(Math.max(Math.trunc(limit) || 100, 1), 1000);
 
-  // Read enough trades to fill the requested buckets. The window is the number
-  // of buckets plus one, so the oldest partial bucket is included too.
-  const windowStart = new Date(Date.now() - width * (count + 1)).toISOString().slice(0, 19).replace('T', ' ');
+  // Read enough trades to fill the requested buckets. The window is anchored to
+  // the start of the current bucket rather than to `now`: `now` drifts toward the
+  // end of the bucket, which would cut the oldest requested bucket short and drop
+  // a candle near the end of a minute. One extra bucket of reach keeps the oldest
+  // requested candle whole, since empty buckets between trades are not reported.
+  const now = Date.now();
+  const currentBucketStart = Math.floor(now / width) * width;
+  const windowStartMs = currentBucketStart - width * (count + 1);
+  const windowStart = new Date(windowStartMs).toISOString().slice(0, 19).replace('T', ' ');
 
   const rows = getDb()
     .prepare(

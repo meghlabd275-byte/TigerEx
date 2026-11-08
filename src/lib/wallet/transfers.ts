@@ -7,7 +7,7 @@
  * unknown recipient is refused rather than parked.
  */
 
-import { getDb } from '@/lib/db';
+import { getDb, generateId } from '@/lib/db';
 import { debitAvailable, creditAvailable, recordTransaction } from '@/lib/db/ledger';
 
 export class TransferError extends Error {
@@ -78,7 +78,7 @@ export function internalTransfer(
   }
 
   const db = getDb();
-  const transferId = `tr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  const transferId = `tr_${Date.now().toString(36)}_${generateId().replace(/-/g, '').slice(0, 12)}`;
 
   db.transaction(() => {
     debitAvailable(senderId, upperAsset, value);

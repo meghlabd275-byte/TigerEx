@@ -309,6 +309,25 @@ function initializeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_user_ip_allowlist_user ON user_ip_allowlist(user_id);
 
+    -- Deposit network configuration. Which asset may be deposited on which
+    -- chain, and the minimum and confirmation policy for it, is operator
+    -- configuration rather than a built-in list; the deposit view reads it and
+    -- an address is only issued for an asset/network listed active here.
+    CREATE TABLE IF NOT EXISTS deposit_networks (
+      network_id TEXT PRIMARY KEY,
+      asset TEXT NOT NULL,
+      network TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      min_deposit REAL NOT NULL,
+      confirmations INTEGER NOT NULL,
+      memo_required INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(asset, network)
+    );
+    CREATE INDEX IF NOT EXISTS idx_deposit_networks_asset ON deposit_networks(asset);
+
     -- KYC documents
     CREATE TABLE IF NOT EXISTS kyc_documents (
       document_id TEXT PRIMARY KEY,
@@ -337,6 +356,22 @@ function initializeSchema() {
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
       UNIQUE(provider, provider_user_id)
     );
+
+    -- Single-use codes exchanged for session tokens after a social sign-in.
+    -- The access token is never placed in a redirect URL; the callback redirects
+    -- with an opaque code that is hashed at rest and redeemed once.
+    CREATE TABLE IF NOT EXISTS oauth_login_codes (
+      code_id TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL UNIQUE,
+      user_id TEXT NOT NULL,
+      access_token TEXT NOT NULL,
+      refresh_token TEXT,
+      expires_at TEXT NOT NULL,
+      redeemed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_oauth_login_codes_hash ON oauth_login_codes(code_hash);
 
     -- Market data
     CREATE TABLE IF NOT EXISTS market_data (

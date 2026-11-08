@@ -12,10 +12,11 @@ interface TwoFactorAuthProps {
 export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
   const [isEnabled, setIsEnabled] = useState(enabled);
   const [loading, setLoading] = useState(false);
-  const [setupStep, setSetupStep] = useState<'init' | 'scan' | 'verify'>('init');
+  const [setupStep, setSetupStep] = useState<'init' | 'scan' | 'verify' | 'disable'>('init');
   const [secret, setSecret] = useState('');
   const [qrCode, setQrCode] = useState('');
   const [code, setCode] = useState('');
+  const [disablePassword, setDisablePassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
@@ -26,13 +27,12 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
       if (!token) return;
 
       try {
-        const res = await fetch('/api/auth/me', {
-          headers: { 'Authorization': `Bearer ${token}` }
+        const res = await fetch('/api/auth/2fa', {
+          headers: { 'Authorization': `Bearer ${token}` },
         });
         const data = await res.json();
-        
-        if (data.success && data.data) {
-          setIsEnabled(data.data.twoFactorEnabled || false);
+        if (data.success) {
+          setIsEnabled(!!data.data?.enabled);
         }
       } catch (err) {
         console.error('Failed to check 2FA status:', err);
@@ -54,7 +54,7 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
     }
 
     try {
-      const res = await fetch('/api/auth/2fa/setup', {
+      const res = await fetch('/api/auth/2fa/enable', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -69,7 +69,7 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
       }
 
       setSecret(data.data.secret);
-      setQrCode(data.data.qrCode);
+      setQrCode(data.data.qrDataUrl);
       setSetupStep('scan');
     } catch (err: any) {
       setError(err.message);
@@ -90,7 +90,7 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
     }
 
     try {
-      const res = await fetch('/api/auth/2fa', {
+      const res = await fetch('/api/auth/2fa/enable', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -116,10 +116,6 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
   };
 
   const handleDisable = async () => {
-    if (!confirm('Are you sure you want to disable 2FA? This will make your account less secure.')) {
-      return;
-    }
-
     setLoading(true);
     setError(null);
 
@@ -131,13 +127,13 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
     }
 
     try {
-      const res = await fetch('/api/auth/2fa', {
-        method: 'DELETE',
+      const res = await fetch('/api/auth/2fa/disable', {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, password: disablePassword }),
       });
 
       const data = await res.json();
@@ -149,6 +145,7 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
       setIsEnabled(false);
       setSetupStep('init');
       setCode('');
+      setDisablePassword('');
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -170,6 +167,60 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
     );
   }
 
+  if (isEnabled && setupStep === 'disable') {
+    return (
+      <div className="bg-gray-900 rounded-lg p-6">
+        <h3 className="text-white font-semibold mb-4">Disable Two-Factor Authentication</h3>
+
+        <div className="mb-4">
+          <label className="block text-gray-400 text-sm mb-2">Account password</label>
+          <input
+            type="password"
+            value={disablePassword}
+            onChange={(e) => setDisablePassword(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 px-4 text-white"
+            placeholder="Enter your password"
+          />
+        </div>
+
+        <div className="mb-4">
+          <label className="block text-gray-400 text-sm mb-2">Authenticator code</label>
+          <input
+            type="text"
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            maxLength={6}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 px-4 text-white text-center text-2xl font-mono tracking-widest"
+            placeholder="000000"
+          />
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 text-red-500 text-sm bg-red-500/10 p-3 rounded-lg mb-4">
+            <AlertCircle className="w-4 h-4" />
+            {error}
+          </div>
+        )}
+
+        <div className="flex gap-3">
+          <button
+            onClick={() => { setSetupStep('init'); setError(null); }}
+            className="flex-1 bg-gray-700 hover:bg-gray-600 py-3 rounded-lg font-medium"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleDisable}
+            disabled={loading || code.length !== 6 || disablePassword.length === 0}
+            className="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-50 py-3 rounded-lg font-medium transition-colors"
+          >
+            {loading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Disable 2FA'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (isEnabled) {
     return (
       <div className="bg-gray-900 rounded-lg p-6">
@@ -182,11 +233,11 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
             </div>
           </div>
           <button
-            onClick={handleDisable}
+            onClick={() => setSetupStep('disable')}
             disabled={loading}
             className="bg-red-600 hover:bg-red-700 disabled:opacity-50 px-4 py-2 rounded-lg font-medium transition-colors"
           >
-            {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Disable'}
+            Disable
           </button>
         </div>
       </div>
@@ -250,8 +301,13 @@ export function TwoFactorAuth({ enabled = false }: TwoFactorAuthProps) {
 
         {/* QR Code */}
         <div className="flex justify-center mb-4">
-          <div className="w-48 h-48 bg-white rounded-lg flex items-center justify-center">
-            <span className="text-gray-400">QR Code</span>
+          <div className="w-48 h-48 bg-white rounded-lg flex items-center justify-center overflow-hidden">
+            {qrCode ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={qrCode} alt="2FA QR code" width={192} height={192} />
+            ) : (
+              <span className="text-gray-400">QR Code unavailable</span>
+            )}
           </div>
         </div>
 
