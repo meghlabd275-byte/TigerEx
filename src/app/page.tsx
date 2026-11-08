@@ -195,7 +195,7 @@ export default function HomePage() {
               <ul className="space-y-2 text-sm text-gray-400">
                 <li><Link href="/markets" className="hover:text-white">Markets</Link></li>
                 <li><Link href="/fees" className="hover:text-white">Fees</Link></li>
-                <li><Link href="/api" className="hover:text-white">API</Link></li>
+                <li><Link href="/api-docs" className="hover:text-white">API</Link></li>
               </ul>
             </div>
             
@@ -204,7 +204,7 @@ export default function HomePage() {
               <ul className="space-y-2 text-sm text-gray-400">
                 <li><Link href="/help" className="hover:text-white">Help Center</Link></li>
                 <li><Link href="/fees" className="hover:text-white">Trading Fees</Link></li>
-                <li><Link href="/verification" className="hover:text-white">Verification</Link></li>
+                <li><Link href="/kyc" className="hover:text-white">Verification</Link></li>
               </ul>
             </div>
             

@@ -15,14 +15,15 @@ const STATUSES = ['draft', 'published', 'archived'];
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
+  const { id: announcementId } = await params;
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
   const guard = enforceRequestGuards(request, 'admin.announcements.update');
   if (guard) return guard;
 
-  const id = params.id;
+  const id = announcementId;
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return fail('VALIDATION_FAILED', 'Invalid announcement id');
 
   const db = getDb();
@@ -75,14 +76,15 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
+  const { id: announcementId } = await params;
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
   const guard = enforceRequestGuards(request, 'admin.announcements.delete');
   if (guard) return guard;
 
-  const id = params.id;
+  const id = announcementId;
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return fail('VALIDATION_FAILED', 'Invalid announcement id');
 
   const result = getDb().prepare('DELETE FROM announcements WHERE announcement_id = ?').run(id);

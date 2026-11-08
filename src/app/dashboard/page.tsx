@@ -198,7 +198,7 @@ export default function DashboardPage() {
         <nav className="flex-1 py-4 px-3 space-y-1">
           <NavItem icon={<Wallet className="w-5 h-5" />} label="Overview" active href="/dashboard" open={sidebarOpen} />
           <NavItem icon={<Activity className="w-5 h-5" />} label="Trade" href="/trade/BTC-USDT" open={sidebarOpen} />
-          <NavItem icon={<ArrowRightLeft className="w-5 h-5" />} label="Exchange" href="/exchange" open={sidebarOpen} />
+          <NavItem icon={<ArrowRightLeft className="w-5 h-5" />} label="Convert" href="/convert" open={sidebarOpen} />
           <NavItem icon={<TrendingUp className="w-5 h-5" />} label="Futures" href="/futures" open={sidebarOpen} />
           <NavItem icon={<Wallet className="w-5 h-5" />} label="Wallet" href="/wallet" open={sidebarOpen} />
           <NavItem icon={<PieChart className="w-5 h-5" />} label="Earn" href="/earn" open={sidebarOpen} />
@@ -358,7 +358,7 @@ export default function DashboardPage() {
               title="Buy Crypto" 
               description="Purchase crypto with card or bank"
               icon={<CreditCard className="w-8 h-8 text-green-500" />}
-              href="/buy"
+              href="/fiat"
               color="green"
             />
             <QuickAction 

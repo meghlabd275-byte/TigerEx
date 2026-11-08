@@ -11,12 +11,13 @@ import { fail, NO_STORE, symbolParam } from '@/lib/api/route-guards';
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { symbol: string } },
+  { params }: { params: Promise<{ symbol: string }> },
 ) {
+  const { symbol: symbolParamRaw } = await params;
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
 
-  const symbol = symbolParam(decodeURIComponent(params.symbol));
+  const symbol = symbolParam(decodeURIComponent(symbolParamRaw));
   if (!symbol) return fail('VALIDATION_FAILED', 'Invalid market symbol');
 
   const db = getDb();

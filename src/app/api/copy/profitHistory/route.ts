@@ -1,58 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { profitHistory } from '@/lib/trading/copy-engine';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get copy trading profit history
+/**
+ * The caller's copy-trading profit history.
+ *
+ * The follower's profit on each of a leader's closed positions is the leader's
+ * realized P&L scaled by the follower's copy ratio (bounded by their maximum),
+ * and the profit share is taken only from positive profit.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const startTime = searchParams.get('startTime');
-    const endTime = searchParams.get('endTime');
-    const page = searchParams.get('page') || '1';
-    const limit = searchParams.get('limit') || '20';
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    let url = `${API_BASE_URL}/copy/profitHistory?page=${page}&limit=${limit}`;
-    if (startTime) url += `&startTime=${startTime}`;
-    if (endTime) url += `&endTime=${endTime}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch profit history' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Copy profit history API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  const limit = Number(request.nextUrl.searchParams.get('limit') ?? 50);
+  const history = profitHistory(auth.user.userId, Number.isFinite(limit) ? limit : 50);
+  return NextResponse.json({ success: true, history, data: history }, { headers: NO_STORE });
 }

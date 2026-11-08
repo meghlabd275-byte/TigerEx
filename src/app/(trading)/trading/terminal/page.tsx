@@ -125,8 +125,8 @@ const TradingChart = ({ symbol, theme = 'dark' }: { symbol?: string; theme?: 'li
         />
         <Tooltip
           contentStyle={{ backgroundColor: '#1F2937', border: 'none', borderRadius: '8px' }}
-          labelFormatter={(t) => new Date(t * 1000).toLocaleString()}
-          formatter={(v: number) => [v.toFixed(2), 'Price']}
+          labelFormatter={(t) => new Date(Number(t) * 1000).toLocaleString()}
+          formatter={(v) => [Number(v).toFixed(2), 'Price']}
         />
         <Area type="monotone" dataKey="close" stroke="#10B981" fillOpacity={1} fill="url(#colorClose)" />
       </AreaChart>

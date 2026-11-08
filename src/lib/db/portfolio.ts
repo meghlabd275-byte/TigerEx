@@ -116,16 +116,23 @@ export function portfolioSummary(userId: string): PortfolioSummary {
       .get(userId) as { n: number }
   ).n;
 
+  // Unrealized P&L on open derivative positions is the sum the futures mark
+  // path wrote to each position (`unrealized_pnl`, marked at the venue's own
+  // mark price). Spot lots carry no unrealized figure in this ledger, so the
+  // total is exactly the open-position mark.
+  const unrealized = (
+    db
+      .prepare("SELECT COALESCE(SUM(unrealized_pnl), 0) AS v FROM futures_positions WHERE user_id = ? AND status = 'open'")
+      .get(userId) as { v: number }
+  ).v;
+
   return {
     holdings,
     totalBalanceUSDT,
     unpricedAssets,
     realizedPnlUSDT: total,
     realizedPnl24hUSDT: last24h,
-    // Unrealized P&L needs a mark for every open derivative position and the
-    // entry price of each spot lot. Neither is in this ledger, so it is
-    // reported as zero rather than estimated.
-    unrealizedPnlUSDT: 0,
+    unrealizedPnlUSDT: Number(unrealized) || 0,
     openOrders,
   };
 }

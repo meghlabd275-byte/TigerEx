@@ -1,49 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { listSessions } from '@/lib/security/account';
+import { NO_STORE } from '@/lib/api/route-guards';
 
+function bearer(request: NextRequest): string | null {
+  const header = request.headers.get('authorization');
+  return header?.startsWith('Bearer ') ? header.slice(7).trim() : null;
+}
 
-// Get session devices
+/**
+ * The caller's signed-in devices.
+ *
+ * A device is a session with its user agent and IP; the same rows the session
+ * console revokes, so a device shown here can be signed out from there.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const devices = listSessions(auth.user.userId, bearer(request)).map((session) => ({
+    id: session.id,
+    deviceId: session.device_id,
+    userAgent: session.user_agent,
+    ipAddress: session.ip_address,
+    createdAt: session.created_at,
+    lastActiveAt: session.last_active_at,
+    expiresAt: session.expires_at,
+    trusted: session.trusted,
+    current: session.current,
+  }));
 
-    const response = await fetch(`${API_BASE_URL}/session/devices`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch session devices' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Session devices API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, devices, data: devices }, { headers: NO_STORE });
 }

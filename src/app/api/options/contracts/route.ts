@@ -29,34 +29,28 @@ export async function GET(request: NextRequest) {
     clauses.push('settlement_asset = ?');
     params.push(settlement);
   }
-  const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
+  clauses.push("status = 'active'");
 
   const rows = getDb()
-    .prepare(`SELECT * FROM options_markets${where} ORDER BY underlying, expiry_ns, strike_price`)
+    .prepare(`SELECT * FROM options_markets WHERE ${clauses.join(' AND ')} ORDER BY expiry_ns, strike_price LIMIT 2000`)
     .all(...params) as Array<Record<string, unknown>>;
 
-  return NextResponse.json(
-    {
-      success: true,
-      contracts: rows.map((row) => ({
-        marketId: row.market_id,
-        symbol: row.symbol,
-        underlying: row.underlying,
-        settlementAsset: row.settlement_asset,
-        optionType: row.option_type,
-        strikePrice: row.strike_price,
-        expiryNs: row.expiry_ns,
-        exerciseStyle: row.exercise_style,
-        contractSize: row.contract_size,
-        tickSize: row.tick_size,
-        minQuantity: row.min_quantity,
-        maxQuantity: row.max_quantity,
-        makerFeeBps: row.maker_fee_bps,
-        takerFeeBps: row.taker_fee_bps,
-        impliedVolatility: row.implied_volatility ?? null,
-        status: row.status,
-      })),
-    },
-    { headers: NO_STORE },
-  );
+  const contracts = rows.map((row) => ({
+    marketId: row.market_id,
+    symbol: row.symbol,
+    underlying: row.underlying,
+    settlementAsset: row.settlement_asset,
+    optionType: row.option_type,
+    strikePrice: row.strike_price,
+    expiryNs: row.expiry_ns,
+    exerciseStyle: row.exercise_style,
+    contractSize: row.contract_size,
+    tickSize: row.tick_size,
+    minQuantity: row.min_quantity,
+    maxQuantity: row.max_quantity,
+    impliedVolatility: row.implied_volatility ?? null,
+    status: row.status,
+  }));
+
+  return NextResponse.json({ success: true, contracts, data: contracts }, { headers: NO_STORE });
 }

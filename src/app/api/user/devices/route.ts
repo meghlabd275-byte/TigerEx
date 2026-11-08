@@ -1,104 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { listSessions, revokeSession, AccountError } from '@/lib/security/account';
+import { fail, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get user's devices
-export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/user/devices`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch devices' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('User devices API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+function bearer(request: NextRequest): string | null {
+  const header = request.headers.get('authorization');
+  return header?.startsWith('Bearer ') ? header.slice(7).trim() : null;
 }
 
-// Revoke device
+/**
+ * The caller's signed-in devices.
+ *
+ * DELETE signs a device out by revoking its session; the current session cannot
+ * revoke itself, so the console cannot lock the operator out of the page.
+ */
+export async function GET(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const devices = listSessions(auth.user.userId, bearer(request)).map((session) => ({
+    id: session.id,
+    deviceId: session.device_id,
+    userAgent: session.user_agent,
+    ipAddress: session.ip_address,
+    createdAt: session.created_at,
+    lastActiveAt: session.last_active_at,
+    expiresAt: session.expires_at,
+    trusted: session.trusted,
+    current: session.current,
+  }));
+
+  return NextResponse.json({ success: true, devices, data: devices }, { headers: NO_STORE });
+}
+
 export async function DELETE(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'user.devices.revoke');
+  if (guard) return guard;
+
+  const deviceId = request.nextUrl.searchParams.get('deviceId')?.trim();
+  if (!deviceId) return fail('VALIDATION_FAILED', 'A deviceId is required');
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const deviceId = searchParams.get('deviceId');
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    if (!deviceId) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameter: deviceId' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/user/devices?deviceId=${deviceId}`, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to revoke device' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('User devices API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    revokeSession(auth.user.userId, deviceId, bearer(request));
+    return NextResponse.json({ success: true, deviceId }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof AccountError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }

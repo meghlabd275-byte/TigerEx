@@ -126,8 +126,8 @@ export function TradingChart({
               border: '1px solid #374151',
               borderRadius: '8px'
             }}
-            labelFormatter={(time) => new Date(time * 1000).toLocaleString()}
-            formatter={(value: number) => [formatPrice(value), 'Price']}
+            labelFormatter={(time) => new Date(Number(time) * 1000).toLocaleString()}
+            formatter={(value) => [formatPrice(Number(value)), 'Price']}
           />
           <Area 
             type="monotone" 

@@ -1,49 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { portfolioSummary } from '@/lib/db/portfolio';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get P2P user balance
+/**
+ * The caller's balances available for P2P trading.
+ *
+ * A P2P trade settles from the spot wallet, so the tradable balance is the
+ * account's own available balance per asset, valued at the venue's price. An
+ * asset with no listed price is reported with a null value rather than an
+ * invented one.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const summary = portfolioSummary(auth.user.userId);
+  const balances = summary.holdings.map((holding) => ({
+    asset: holding.coin,
+    available: holding.available,
+    locked: holding.locked,
+    usdPrice: holding.usdPrice,
+    usdValue: holding.usdValue,
+  }));
 
-    const response = await fetch(`${API_BASE_URL}/p2p/user/balance`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
+  const data = {
+    balances,
+    totalAvailableUSDT: balances.reduce(
+      (sum, balance) => sum + (balance.usdPrice !== null ? balance.available * balance.usdPrice : 0),
+      0,
+    ),
+    unpricedAssets: summary.unpricedAssets,
+  };
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch P2P user balance' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('P2P user balance API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, ...data, data }, { headers: NO_STORE });
 }

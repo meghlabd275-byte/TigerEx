@@ -1,48 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { listCopyTraders, getCopyTrader } from '@/lib/trading/copy-engine';
+import { NO_STORE, fail } from '@/lib/api/route-guards';
 
-
-// Get copy traders list
+/**
+ * Copy-trading leaders.
+ *
+ * The board is the exchange's own approved leaders, with each leader's ROI,
+ * win rate and trade count recomputed live from their settled trades and closed
+ * positions. An empty result means no leader has been approved yet, not that a
+ * backend is missing.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const params = request.nextUrl.searchParams;
+  const traderId = params.get('traderId') ?? params.get('id');
+
+  if (traderId) {
+    const trader = getCopyTrader(traderId);
+    if (!trader) return fail('UNKNOWN_TRADER', 'No such copy trader', 404);
+    return NextResponse.json({ success: true, trader, data: trader }, { headers: NO_STORE });
   }
-  try {
-    const { searchParams } = new URL(request.url);
-    const page = searchParams.get('page') || '1';
-    const limit = searchParams.get('limit') || '20';
-    const sortBy = searchParams.get('sortBy') || 'profit';
-    const quoteAsset = searchParams.get('quoteAsset');
 
-    let url = `${API_BASE_URL}/copy/traders?page=${page}&limit=${limit}&sortBy=${sortBy}`;
-    if (quoteAsset) url += `&quoteAsset=${quoteAsset}`;
+  const limit = Number(params.get('limit') ?? 50);
+  const sortBy = params.get('sortBy') ?? 'profit';
+  const traders = listCopyTraders({ limit: Number.isFinite(limit) ? limit : 50, sortBy });
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch copy traders' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Copy traders API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, traders, data: traders }, { headers: NO_STORE });
 }

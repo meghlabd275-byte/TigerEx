@@ -1,49 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { listProducts } from '@/lib/earn/subscriptions';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get savings products
+/**
+ * Savings products.
+ *
+ * Reads the exchange's own `earn_products` table, so an empty result means no
+ * product has been created yet, not that a backend is missing.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const { searchParams } = new URL(request.url);
-    const asset = searchParams.get('asset');
-    const status = searchParams.get('status');
-    const page = searchParams.get('page') || '1';
-    const limit = searchParams.get('limit') || '20';
+  const params = request.nextUrl.searchParams;
+  const asset = params.get('asset')?.trim().toUpperCase();
+  const type = params.get('type') ?? params.get('productType') ?? undefined;
 
-    let url = `${API_BASE_URL}/savings/products?page=${page}&limit=${limit}`;
-    if (asset) url += `&asset=${asset}`;
-    if (status) url += `&status=${status}`;
+  let products = listProducts(type ?? undefined);
+  if (asset) products = products.filter((product) => product.asset.toUpperCase() === asset);
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch savings products' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Savings products API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, products, data: products }, { headers: NO_STORE });
 }

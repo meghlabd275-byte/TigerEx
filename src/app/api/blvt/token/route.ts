@@ -1,45 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { listEtfMarkets, getEtfMarket, quoteToken, EtfError } from '@/lib/trading/etf-engine';
+import { NO_STORE, fail } from '@/lib/api/route-guards';
 
-
-// Get BLVT token info
+/**
+ * Leveraged-token listings and their live NAV.
+ *
+ * The NAV is marked against the underlying's observable spot price and the
+ * accrued management fee, so a token's value reflects the real underlying move
+ * rather than a stored figure.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const { searchParams } = new URL(request.url);
-    const tokenName = searchParams.get('tokenName');
+  const tokenName = request.nextUrl.searchParams.get('tokenName')?.trim();
 
-    let url = `${API_BASE_URL}/blvt/token`;
-    if (tokenName) url += `?tokenName=${tokenName}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch BLVT token info' },
-        { status: response.status }
-      );
+  if (tokenName) {
+    const market = getEtfMarket(tokenName);
+    if (!market) return fail('UNKNOWN_TOKEN', `${tokenName.toUpperCase()} is not a listed token`, 404);
+    try {
+      const quote = quoteToken(market);
+      return NextResponse.json({ success: true, token: quote, data: quote }, { headers: NO_STORE });
+    } catch (error) {
+      if (error instanceof EtfError) return fail(error.code, error.message, error.status);
+      throw error;
     }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('BLVT token API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
   }
+
+  const tokens = listEtfMarkets().map((market) => {
+    try {
+      return quoteToken(market);
+    } catch {
+      return {
+        symbol: market.symbol,
+        nav: market.nav,
+        leverage: market.leverage,
+        underlying: market.underlying,
+        underlyingPrice: null,
+        settlementAsset: market.settlementAsset,
+      };
+    }
+  });
+
+  return NextResponse.json({ success: true, tokens, data: tokens }, { headers: NO_STORE });
 }

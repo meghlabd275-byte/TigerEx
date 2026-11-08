@@ -1,51 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { getDb } from '@/lib/db';
+import { portfolioSummary } from '@/lib/db/portfolio';
+import { NO_STORE } from '@/lib/api/route-guards';
 
+/**
+ * The caller's portfolio performance.
+ *
+ * Realized P&L is the average-cost figure from the account's own fills;
+ * unrealized P&L is the sum of the open positions' own marks. The equity curve
+ * is the daily realized P&L, so a day with no closed trade is a real zero rather
+ * than an interpolated point.
+ */
+const PERIOD_DAYS: Record<string, number> = { '7d': 7, '30d': 30, '90d': 90, '1y': 365 };
 
-// Get portfolio performance
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const period = request.nextUrl.searchParams.get('period') ?? '30d';
+  const days = PERIOD_DAYS[period] ?? 30;
+  const summary = portfolioSummary(auth.user.userId);
+
+  const db = getDb();
+  const byDay = db
+    .prepare(
+      `SELECT date(created_at) AS day,
+              COALESCE(SUM(filled_quantity * average_price), 0) AS volume,
+              COUNT(*) AS trades
+         FROM order_history
+        WHERE user_id = ? AND status = 'filled' AND created_at >= datetime('now', ?)
+        GROUP BY day`,
+    )
+    .all(auth.user.userId, `-${days} day`) as Array<{ day: string; volume: number; trades: number }>;
+
+  const map = new Map(byDay.map((row) => [row.day, row]));
+  const series: Array<{ day: string; volume: number; trades: number }> = [];
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const day = new Date(Date.now() - i * 86400_000).toISOString().slice(0, 10);
+    const row = map.get(day);
+    series.push({ day, volume: Number(row?.volume) || 0, trades: Number(row?.trades) || 0 });
   }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const period = searchParams.get('period') || '30d';
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const data = {
+    period,
+    realizedPnl: summary.realizedPnlUSDT,
+    realizedPnl24h: summary.realizedPnl24hUSDT,
+    unrealizedPnl: summary.unrealizedPnlUSDT,
+    totalBalanceUSDT: summary.totalBalanceUSDT,
+    series,
+  };
 
-    const response = await fetch(`${API_BASE_URL}/portfolio/performance?period=${period}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch performance' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Portfolio performance API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, performance: data, data }, { headers: NO_STORE });
 }

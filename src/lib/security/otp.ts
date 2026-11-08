@@ -18,7 +18,8 @@ export type OtpPurpose =
   | 'email_verify'
   | 'phone_verify'
   | 'email_change_old'
-  | 'email_change_new';
+  | 'email_change_new'
+  | 'account_deletion';
 
 export interface IssueOptions {
   purpose: OtpPurpose;

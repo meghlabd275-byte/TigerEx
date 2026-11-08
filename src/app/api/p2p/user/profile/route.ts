@@ -1,45 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { merchantProfile, P2pProfileError } from '@/lib/p2p/profile';
+import { NO_STORE, fail } from '@/lib/api/route-guards';
 
-
-// Get P2P user profile
+/**
+ * A P2P merchant's public profile.
+ *
+ * The completion rate and order count come from the merchant's own settled P2P
+ * orders, so an account with no trades shows a genuinely zero rate rather than
+ * a fabricated rating. The caller may view their own profile or another user's.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const requested = request.nextUrl.searchParams.get('userId')?.trim();
+  const userId = requested && requested.length > 0 ? requested : auth.user.userId;
+
   try {
-    const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId');
-
-    let url = `${API_BASE_URL}/p2p/user/profile`;
-    if (userId) url += `?userId=${userId}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch P2P user profile' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('P2P user profile API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    const profile = merchantProfile(userId);
+    return NextResponse.json({ success: true, profile, data: profile }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof P2pProfileError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }

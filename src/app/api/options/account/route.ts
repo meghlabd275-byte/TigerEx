@@ -1,49 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { listPositions } from '@/lib/options/options-engine';
+import { portfolioSummary } from '@/lib/db/portfolio';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get options account info
+/**
+ * The caller's options account summary.
+ *
+ * Position value and unrealized P&L are marked from the model premium; the
+ * settlement-asset balance is the real wallet balance, so the account summary
+ * reconciles with the portfolio view.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const positions = listPositions(auth.user.userId);
+  const positionValue = positions.reduce((sum, p) => sum + p.marketValue, 0);
+  const unrealizedPnl = positions.reduce((sum, p) => sum + p.unrealizedPnl, 0);
+  const realizedPnl = listPositions(auth.user.userId, { status: 'settled' })
+    .concat(listPositions(auth.user.userId, { status: 'closed' }))
+    .reduce((sum, p) => sum + p.realizedPnl, 0);
+  const portfolio = portfolioSummary(auth.user.userId);
 
-    const response = await fetch(`${API_BASE_URL}/options/account`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
+  const account = {
+    positionValue,
+    unrealizedPnl,
+    realizedPnl,
+    openPositions: positions.length,
+    totalBalanceUSDT: portfolio.totalBalanceUSDT,
+    positions,
+  };
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch options account' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Options account API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, account, data: account }, { headers: NO_STORE });
 }

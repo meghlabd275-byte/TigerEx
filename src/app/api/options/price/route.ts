@@ -1,59 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { listOptionsMarkets, getOptionsMarket, quoteContract, OptionsError } from '@/lib/options/options-engine';
+import { NO_STORE, fail } from '@/lib/api/route-guards';
 
-
-// Get options price
+/**
+ * Options pricing.
+ *
+ * The premium is the venue's Black-Scholes mark for the contract, computed from
+ * the underlying's observable spot price and the contract's listed implied
+ * volatility. A contract whose underlying has no price is refused rather than
+ * quoted at an invented figure.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const { searchParams } = new URL(request.url);
-    const underlying = searchParams.get('underlying');
-    const expirationDate = searchParams.get('expirationDate');
-    const strikePrice = searchParams.get('strikePrice');
-    const optionSide = searchParams.get('optionSide');
-    const period = searchParams.get('period');
+  const symbol = request.nextUrl.searchParams.get('symbol')?.trim();
 
-    if (!underlying) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameter: underlying' },
-        { status: 400 }
-      );
+  if (symbol) {
+    const market = getOptionsMarket(symbol);
+    if (!market) return fail('UNKNOWN_CONTRACT', `${symbol.toUpperCase()} is not a listed contract`, 404);
+    try {
+      const quote = quoteContract(market);
+      return NextResponse.json({ success: true, quote, data: quote }, { headers: NO_STORE });
+    } catch (error) {
+      if (error instanceof OptionsError) return fail(error.code, error.message, error.status);
+      throw error;
     }
-
-    let url = `${API_BASE_URL}/options/price?underlying=${underlying}`;
-    if (expirationDate) url += `&expirationDate=${expirationDate}`;
-    if (strikePrice) url += `&strikePrice=${strikePrice}`;
-    if (optionSide) url += `&optionSide=${optionSide}`;
-    if (period) url += `&period=${period}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch options price' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Options price API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
   }
+
+  const underlying = request.nextUrl.searchParams.get('underlying') ?? undefined;
+  const markets = listOptionsMarkets({ underlying });
+  const quotes = markets.map((market) => {
+    try {
+      return quoteContract(market);
+    } catch {
+      return null;
+    }
+  }).filter((quote): quote is NonNullable<typeof quote> => quote !== null);
+
+  return NextResponse.json({ success: true, quotes, data: quotes }, { headers: NO_STORE });
 }

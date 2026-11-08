@@ -1,111 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { userHoldings } from '@/lib/earn/holdings';
+import { listProducts } from '@/lib/earn/subscriptions';
+import { subscribe, SubscriptionError } from '@/lib/earn/subscriptions';
+import { LedgerError } from '@/lib/db/ledger';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get auto-invest portfolio
+/**
+ * Auto-invest portfolios.
+ *
+ * A portfolio is an `auto_invest` earn product; a position in it is an earn
+ * subscription, so the value and reward come from the same engine the savings
+ * view reads. POST subscribes the caller to a portfolio product.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const portfolios = listProducts('auto_invest');
+  const holdings = userHoldings(auth.user.userId);
 
-    const response = await fetch(`${API_BASE_URL}/autoInvest/portfolio`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
+  const data = {
+    portfolios,
+    holdings,
+    totalValue: holdings.reduce((sum, holding) => sum + holding.amount + holding.rewards, 0),
+  };
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch portfolio' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Auto-invest portfolio API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, ...data, data }, { headers: NO_STORE });
 }
 
-// Create auto-invest portfolio
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'autoInvest.subscribe', 30, 60_000);
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const productId = String(body.productId ?? body.portfolioId ?? body.id ?? '').trim();
+  const amount = Number(body.amount);
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const { name, targetAssets, investmentAmount, frequency } = body;
-
-    if (!name || !targetAssets || !investmentAmount) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: name, targetAssets, investmentAmount' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/autoInvest/portfolio`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        name,
-        targetAssets,
-        investmentAmount,
-        frequency,
-      }),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to create portfolio' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Auto-invest portfolio API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    const subscription = subscribe({ userId: auth.user.userId, productId, amount });
+    return NextResponse.json({ success: true, subscription, data: subscription }, { status: 201, headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof SubscriptionError) return fail(error.code, error.message, error.status);
+    if (error instanceof LedgerError) return fail(error.code, error.message, error.status);
+    throw error;
   }
 }

@@ -1,49 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { getDb } from '@/lib/db';
+import { NO_STORE, fail } from '@/lib/api/route-guards';
 
-
-// Get savings project
+/** One savings product, including its real total subscribed. */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const { searchParams } = new URL(request.url);
-    const projectId = searchParams.get('projectId');
+  const productId = (request.nextUrl.searchParams.get('productId') ?? request.nextUrl.searchParams.get('id') ?? '').trim();
+  if (!productId) return fail('VALIDATION_FAILED', 'A productId is required');
 
-    if (!projectId) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameter: projectId' },
-        { status: 400 }
-      );
-    }
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM earn_products WHERE product_id = ?').get(productId) as
+    | Record<string, unknown>
+    | undefined;
+  if (!row) return fail('UNKNOWN_PRODUCT', 'No such earn product', 404);
 
-    const response = await fetch(`${API_BASE_URL}/savings/project?projectId=${projectId}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+  const total = db
+    .prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM earn_subscriptions WHERE product_id = ? AND status = 'active'")
+    .get(productId) as { total: number } | undefined;
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch savings project' },
-        { status: response.status }
-      );
-    }
+  const project = {
+    productId: row.product_id,
+    id: row.product_id,
+    name: row.name,
+    productType: row.product_type,
+    asset: row.asset,
+    apy: row.apy,
+    durationDays: row.duration_days ?? null,
+    minAmount: row.min_amount,
+    maxAmount: row.max_amount ?? null,
+    cap: row.cap ?? null,
+    totalSubscribed: Number(total?.total) || 0,
+    status: row.status,
+  };
 
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Savings project API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, project, data: project }, { headers: NO_STORE });
 }

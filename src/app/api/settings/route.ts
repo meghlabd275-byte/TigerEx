@@ -1,97 +1,72 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { getDb } from '@/lib/db';
+import { requireSession } from '@/lib/db/session';
+import { securitySettings } from '@/lib/security/account';
+import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
+/**
+ * The caller's account settings.
+ *
+ * Notification and preference blobs are the exchange's own `user_settings`
+ * row; the security flags are read from the account's dedicated columns so a
+ * client sees the same values the security controls enforce.
+ */
+function readSettings(userId: string): { notifications: Record<string, unknown>; preferences: Record<string, unknown> } {
+  const row = getDb()
+    .prepare('SELECT notifications, preferences FROM user_settings WHERE user_id = ?')
+    .get(userId) as { notifications: string; preferences: string } | undefined;
 
-// Get user settings
-export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
+  const parse = (raw: string | undefined): Record<string, unknown> => {
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      return {};
     }
+  };
 
-    const response = await fetch(`${API_BASE_URL}/settings`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch settings' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Settings API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return { notifications: parse(row?.notifications), preferences: parse(row?.preferences) };
 }
 
-// Update user settings
+export async function GET(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+
+  const settings = { ...readSettings(auth.user.userId), security: securitySettings(auth.user.userId) };
+  return NextResponse.json({ success: true, settings, data: settings }, { headers: NO_STORE });
+}
+
 export async function PUT(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'settings.update');
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  const notifications = body.notifications;
+  const preferences = body.preferences;
+  if (notifications !== undefined && (typeof notifications !== 'object' || notifications === null || Array.isArray(notifications))) {
+    return fail('VALIDATION_FAILED', 'notifications must be an object');
   }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
-    
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/settings`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to update settings' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Update settings API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+  if (preferences !== undefined && (typeof preferences !== 'object' || preferences === null || Array.isArray(preferences))) {
+    return fail('VALIDATION_FAILED', 'preferences must be an object');
   }
+
+  const db = getDb();
+  const current = readSettings(auth.user.userId);
+  const nextNotifications = notifications === undefined ? current.notifications : { ...current.notifications, ...(notifications as Record<string, unknown>) };
+  const nextPreferences = preferences === undefined ? current.preferences : { ...current.preferences, ...(preferences as Record<string, unknown>) };
+
+  db.prepare(
+    `INSERT INTO user_settings (user_id, notifications, preferences, updated_at)
+     VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(user_id) DO UPDATE SET notifications = excluded.notifications,
+       preferences = excluded.preferences, updated_at = datetime('now')`,
+  ).run(auth.user.userId, JSON.stringify(nextNotifications), JSON.stringify(nextPreferences));
+
+  const settings = { notifications: nextNotifications, preferences: nextPreferences, security: securitySettings(auth.user.userId) };
+  return NextResponse.json({ success: true, settings, data: settings }, { headers: NO_STORE });
 }

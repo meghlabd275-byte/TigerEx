@@ -16,15 +16,16 @@ const ACTIONS = ['approve', 'reject'];
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { withdrawalId: string; action: string } },
+  { params }: { params: Promise<{ withdrawalId: string; action: string }> },
 ) {
+  const { withdrawalId: withdrawalIdParam, action: actionParam } = await params;
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
   const guard = enforceRequestGuards(request, 'admin.withdrawals.action');
   if (guard) return guard;
 
-  const withdrawalId = params.withdrawalId;
-  const action = params.action?.toLowerCase();
+  const withdrawalId = withdrawalIdParam;
+  const action = actionParam?.toLowerCase();
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(withdrawalId)) {
     return fail('VALIDATION_FAILED', 'Invalid withdrawal id');
   }

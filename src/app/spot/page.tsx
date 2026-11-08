@@ -41,9 +41,9 @@ function parseCandles(value: any): Candle[] {
   }).filter((row: Candle) => [row.open, row.high, row.low, row.close].every(Number.isFinite));
 }
 
-export default function SpotTradingPage() {
+export default function SpotTradingPage({ initialSymbol = "" }: { initialSymbol?: string } = {}) {
   const [markets, setMarkets] = useState<Market[]>([]);
-  const [symbol, setSymbol] = useState("");
+  const [symbol, setSymbol] = useState(initialSymbol);
   const [ticker, setTicker] = useState<Ticker | null>(null);
   const [bids, setBids] = useState<Level[]>([]);
   const [asks, setAsks] = useState<Level[]>([]);

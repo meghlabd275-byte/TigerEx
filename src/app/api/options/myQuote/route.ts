@@ -1,63 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { listPositions, getOptionsMarket, quoteContract, OptionsError } from '@/lib/options/options-engine';
+import { NO_STORE, fail } from '@/lib/api/route-guards';
 
-
-// Get options my quote
+/**
+ * A mark-to-market quote for each of the caller's open positions.
+ *
+ * The quote is the model premium for the position's contract, so the caller can
+ * see the value of what they hold without a second round trip.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const underlying = searchParams.get('underlying');
-    const expirationDate = searchParams.get('expirationDate');
-    const strikePrice = searchParams.get('strikePrice');
-    const optionSide = searchParams.get('optionSide');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const positions = listPositions(auth.user.userId);
+  const quotes = positions
+    .map((position) => {
+      const market = getOptionsMarket(position.symbol);
+      if (!market) return null;
+      try {
+        return { positionId: position.positionId, ...quoteContract(market) };
+      } catch (error) {
+        if (error instanceof OptionsError) return null;
+        throw error;
+      }
+    })
+    .filter((quote): quote is NonNullable<typeof quote> => quote !== null);
 
-    if (!underlying || !expirationDate || !strikePrice || !optionSide) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: underlying, expirationDate, strikePrice, optionSide' },
-        { status: 400 }
-      );
-    }
-
-    const url = `${API_BASE_URL}/options/myQuote?underlying=${underlying}&expirationDate=${expirationDate}&strikePrice=${strikePrice}&optionSide=${optionSide}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch my quote' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('My quote API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, quotes, data: quotes }, { headers: NO_STORE });
 }

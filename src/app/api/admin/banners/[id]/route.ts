@@ -25,14 +25,15 @@ function httpsUrl(value: unknown): string | null {
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
+  const { id: bannerId } = await params;
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
   const guard = enforceRequestGuards(request, 'admin.banners.update');
   if (guard) return guard;
 
-  const id = params.id;
+  const id = bannerId;
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return fail('VALIDATION_FAILED', 'Invalid banner id');
 
   const db = getDb();
@@ -85,14 +86,15 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
+  const { id: bannerId } = await params;
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
   const guard = enforceRequestGuards(request, 'admin.banners.delete');
   if (guard) return guard;
 
-  const id = params.id;
+  const id = bannerId;
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return fail('VALIDATION_FAILED', 'Invalid banner id');
 
   const db = getDb();

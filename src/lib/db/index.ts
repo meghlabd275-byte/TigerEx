@@ -652,6 +652,7 @@ function initializeSchema() {
       leverage INTEGER NOT NULL,
       direction TEXT NOT NULL,
       nav REAL NOT NULL,
+      reference_price REAL,
       last_rebalance_ns INTEGER,
       rebalance_threshold REAL NOT NULL DEFAULT 0.05,
       management_fee_apr REAL NOT NULL DEFAULT 0.02,
@@ -659,6 +660,76 @@ function initializeSchema() {
       created_at TEXT DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_etf_markets_underlying ON etf_markets(underlying);
+
+    -- A user's leveraged-token balance in one market. Tokens are minted on
+    -- subscription at the market NAV and burned on redemption.
+    CREATE TABLE IF NOT EXISTS etf_positions (
+      position_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      market_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      tokens REAL NOT NULL DEFAULT 0,
+      cost_basis REAL NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(user_id, market_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_etf_positions_user ON etf_positions(user_id);
+
+    -- Leveraged-token subscriptions and redemptions.
+    CREATE TABLE IF NOT EXISTS etf_trades (
+      trade_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      market_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      action TEXT NOT NULL,
+      tokens REAL NOT NULL,
+      nav REAL NOT NULL,
+      amount REAL NOT NULL,
+      fee REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_etf_trades_user ON etf_trades(user_id, created_at DESC);
+
+    -- A user's options position in one contract. Long is a bought option, short
+    -- is a written one; both are marked and settled against the contract's
+    -- Black-Scholes premium and intrinsic settlement value.
+    CREATE TABLE IF NOT EXISTS options_positions (
+      position_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      market_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      entry_price REAL NOT NULL,
+      mark_price REAL NOT NULL DEFAULT 0,
+      premium_paid REAL NOT NULL DEFAULT 0,
+      realized_pnl REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'open',
+      opened_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      settled_at TEXT,
+      settlement_price REAL,
+      settlement_value REAL,
+      UNIQUE(user_id, market_id, side)
+    );
+    CREATE INDEX IF NOT EXISTS idx_options_positions_user ON options_positions(user_id);
+
+    -- Options fills and settlements, one row per event the account can see.
+    CREATE TABLE IF NOT EXISTS options_trades (
+      trade_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      market_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      action TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      price REAL NOT NULL,
+      premium REAL NOT NULL DEFAULT 0,
+      fee REAL NOT NULL DEFAULT 0,
+      realized_pnl REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_options_trades_user ON options_trades(user_id, created_at DESC);
 
     -- TradFi instruments (stocks, FX, commodities, indices) traded 24/7.
     CREATE TABLE IF NOT EXISTS tradfi_markets (
@@ -1357,6 +1428,10 @@ function applyColumnMigrations(database: Database.Database) {
     // KYC identity details are PII, so they are held as one encrypted blob
     // rather than as searchable plaintext columns.
     { table: 'users', column: 'kyc_personal_encrypted', definition: 'TEXT' },
+    // Reference price at the last leveraged-token rebalance and the realized
+    // P&L on an options position, for databases created before the columns.
+    { table: 'etf_markets', column: 'reference_price', definition: 'REAL' },
+    { table: 'options_positions', column: 'realized_pnl', definition: 'REAL NOT NULL DEFAULT 0' },
   ];
 
   for (const { table, column, definition } of migrations) {

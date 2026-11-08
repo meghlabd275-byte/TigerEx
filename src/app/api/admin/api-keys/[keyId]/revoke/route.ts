@@ -12,14 +12,15 @@ import { fail, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { keyId: string } },
+  { params }: { params: Promise<{ keyId: string }> },
 ) {
+  const { keyId: targetKeyId } = await params;
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
   const guard = enforceRequestGuards(request, 'admin.api-keys.revoke');
   if (guard) return guard;
 
-  const keyId = params.keyId;
+  const keyId = targetKeyId;
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(keyId)) {
     return fail('VALIDATION_FAILED', 'Invalid key id');
   }

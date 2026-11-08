@@ -15,14 +15,15 @@ const MAX_LEVEL = 3;
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { userId: string } },
+  { params }: { params: Promise<{ userId: string }> },
 ) {
+  const { userId: targetUserId } = await params;
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
   const guard = enforceRequestGuards(request, 'admin.kyc.review');
   if (guard) return guard;
 
-  const userId = params.userId;
+  const userId = targetUserId;
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId)) {
     return fail('VALIDATION_FAILED', 'Invalid user id');
   }

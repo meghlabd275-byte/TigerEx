@@ -1,49 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { kycLimits, limitForLevel, withdrawalUsage } from '@/lib/wallet/withdrawals';
+import { usdPrice } from '@/lib/db/portfolio';
+import { NO_STORE } from '@/lib/api/route-guards';
 
-
-// Get account limits
+/**
+ * The caller's withdrawal limits and current usage.
+ *
+ * The tiers are the operator's configured `kyc_limit_level_<n>` settings, and
+ * the usage is measured from the account's own paid-out withdrawals, so the
+ * remaining quota a user sees is the quota the withdrawal path will enforce.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const user = auth.user;
+  const kycLevel = String((user as { kycLevel?: string; kyc_level?: string }).kycLevel ?? (user as { kyc_level?: string }).kyc_level ?? 'none');
+  const usage = withdrawalUsage(user.userId, kycLevel, usdPrice);
+  const tier = limitForLevel(kycLevel);
 
-    const response = await fetch(`${API_BASE_URL}/account/limits`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
+  const limits = {
+    kycLevel,
+    tier,
+    tiers: kycLimits(),
+    usage,
+  };
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch account limits' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Account limits API error:', error);
-    return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, limits, data: limits }, { headers: NO_STORE });
 }

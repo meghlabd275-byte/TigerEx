@@ -12,6 +12,26 @@ const nextConfig = {
     ],
   },
 
+  /**
+   * Canonical-route redirects.
+   *
+   * Several navigation entries and marketing links point at older path names.
+   * Rather than leave them 404ing, each is mapped onto the route that actually
+   * serves it. These are permanent so clients and search engines converge on the
+   * canonical path.
+   */
+  async redirects() {
+    return [
+      { source: '/exchange', destination: '/spot', permanent: true },
+      { source: '/buy', destination: '/fiat', permanent: true },
+      { source: '/api', destination: '/api-docs', permanent: true },
+      { source: '/verification', destination: '/kyc', permanent: true },
+      { source: '/support', destination: '/help', permanent: true },
+      { source: '/grid-trading', destination: '/bots', permanent: true },
+      { source: '/trade', destination: '/spot', permanent: true },
+    ];
+  },
+
   async headers() {
     const securityHeaders = [
       { key: 'X-Content-Type-Options', value: 'nosniff' },
