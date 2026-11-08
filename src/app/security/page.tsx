@@ -124,6 +124,10 @@ export default function SecurityPage() {
   const [newKeyName, setNewKeyName] = useState('');
   const [newKeySecret, setNewKeySecret] = useState<string | null>(null);
   const [newCidr, setNewCidr] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [totpCode, setTotpCode] = useState('');
 
   const enabled = (option: (typeof OPTION_DEFS)[number]): boolean =>
     settings ? Boolean(settings[option.key]) : false;
@@ -195,6 +199,26 @@ export default function SecurityPage() {
       await apiRequest(`/api/user/ipAllowlist?entryId=${encodeURIComponent(entryId)}`, { method: 'DELETE' });
       ipAllowlist.reload();
     }, 'IP address removed.');
+
+  const changePassword = () =>
+    run(async () => {
+      if (newPassword !== confirmPassword) {
+        throw new ApiError('The new password and confirmation do not match.', 400, 'MISMATCH');
+      }
+      await apiRequest('/api/auth/change-password', {
+        method: 'POST',
+        body: {
+          currentPassword,
+          newPassword,
+          ...(settings?.two_factor_enabled && totpCode.trim() ? { totpCode: totpCode.trim() } : {}),
+        },
+      });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTotpCode('');
+      security.reload();
+    }, 'Password changed. Other devices were signed out.');
 
   return (
     <div className="min-h-screen bg-[#0A0A0F] text-white p-4">
@@ -341,6 +365,59 @@ export default function SecurityPage() {
                 )}
               </div>
             ))}
+          </div>
+        </div>
+
+        {/* Change password */}
+        <div className="bg-[#14141A] rounded-xl p-6 mb-6">
+          <h2 className="text-lg font-semibold mb-1">Change Password</h2>
+          <p className="text-xs text-gray-500 mb-4">
+            {settings?.password_changed_at
+              ? `Last changed ${formatDate(settings.password_changed_at)}. Changing it signs out your other devices.`
+              : 'Changing your password signs out your other devices.'}
+          </p>
+          <div className="space-y-3">
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              placeholder="Current password"
+              className="w-full rounded bg-[#0A0A0F] px-3 py-2 text-sm text-white"
+            />
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              placeholder="New password"
+              className="w-full rounded bg-[#0A0A0F] px-3 py-2 text-sm text-white"
+            />
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              placeholder="Confirm new password"
+              className="w-full rounded bg-[#0A0A0F] px-3 py-2 text-sm text-white"
+            />
+            {settings?.two_factor_enabled && (
+              <input
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={totpCode}
+                onChange={(event) => setTotpCode(event.target.value)}
+                placeholder="Authenticator code"
+                className="w-full rounded bg-[#0A0A0F] px-3 py-2 text-sm text-white font-mono tracking-widest"
+              />
+            )}
+            <button
+              onClick={changePassword}
+              disabled={busy || !currentPassword || !newPassword || !confirmPassword}
+              className="rounded bg-[#FF6B35] px-4 py-2 text-sm text-white disabled:opacity-50"
+            >
+              Update password
+            </button>
           </div>
         </div>
 
