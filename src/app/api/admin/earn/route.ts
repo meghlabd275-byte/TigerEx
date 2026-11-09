@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, finite, positive, NO_STORE } from '@/lib/api/route-guards';
+import { fundEarnRewards, earnRewardFundBalance } from '@/lib/earn/subscriptions';
 
 /**
  * Earn product administration.
@@ -63,6 +64,25 @@ export async function POST(request: NextRequest) {
 
   const body = await readJson(request);
   if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+
+  // Fund the earn reward account for an asset. Rewards are paid only from what
+  // this account holds, so a product whose asset is never funded pays nothing.
+  if (body.action === 'fund') {
+    const fundAsset = String(body.asset ?? '').toUpperCase();
+    if (!ASSETS.includes(fundAsset)) return fail('VALIDATION_FAILED', `asset must be one of ${ASSETS.join(', ')}`);
+    const fundAmount = finite(body.amount);
+    if (fundAmount === null || fundAmount <= 0) return fail('VALIDATION_FAILED', 'amount must be a positive number');
+    fundEarnRewards(fundAsset, fundAmount);
+    recordAdminAction(request, auth.admin, 'earn.rewards.fund', {
+      type: 'earn_reward_fund',
+      id: fundAsset,
+      detail: { asset: fundAsset, amount: fundAmount, balance: earnRewardFundBalance(fundAsset) },
+    });
+    return NextResponse.json(
+      { success: true, asset: fundAsset, rewardFundBalance: earnRewardFundBalance(fundAsset) },
+      { headers: NO_STORE },
+    );
+  }
 
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (name.length === 0 || name.length > 120) {

@@ -399,6 +399,45 @@ test('a subscription without the balance is refused', () => {
   );
 });
 
+test('an unfunded earn product pays no reward instead of minting one', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 10000);
+  const productId = listEarnProduct('RUSD', 0.5, null, 10);
+
+  const subscription = subscriptions.subscribe({ userId: user, productId, amount: 1000 });
+  // Backdate the start a year so the accrual is large, then redeem with the
+  // reward account empty: the principal must come back and the reward must not.
+  db.prepare("UPDATE earn_subscriptions SET started_at = datetime('now', '-400 days') WHERE subscription_id = ?").run(
+    subscription.subscriptionId,
+  );
+  const before = availableBalance(user, 'RUSD');
+  const result = subscriptions.redeem(user, subscription.subscriptionId);
+
+  assert.ok(result.reward > 0, 'the subscription still reports the accrued reward');
+  // Only the principal returns; the reward is not minted.
+  assert.equal(availableBalance(user, 'RUSD'), before + 1000, 'an unfunded reward must not be minted');
+});
+
+test('a funded earn reward account pays up to its balance', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 10000);
+  const productId = listEarnProduct('RUSD', 0.5, null, 10);
+
+  const subscription = subscriptions.subscribe({ userId: user, productId, amount: 1000 });
+  db.prepare("UPDATE earn_subscriptions SET started_at = datetime('now', '-400 days') WHERE subscription_id = ?").run(
+    subscription.subscriptionId,
+  );
+  subscriptions.fundEarnRewards('RUSD', 100);
+  assert.equal(subscriptions.earnRewardFundBalance('RUSD'), 100);
+
+  const before = availableBalance(user, 'RUSD');
+  const result = subscriptions.redeem(user, subscription.subscriptionId);
+  assert.ok(result.reward > 100, 'the accrued reward exceeds the funded amount');
+  // The principal returns plus the funded 100; nothing beyond the fund is minted.
+  assert.equal(availableBalance(user, 'RUSD'), before + 1000 + 100);
+  assert.equal(subscriptions.earnRewardFundBalance('RUSD'), 0);
+});
+
 // ---------------------------------------------------------------------------
 // Account deletion
 // ---------------------------------------------------------------------------

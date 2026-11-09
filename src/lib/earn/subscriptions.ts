@@ -6,6 +6,12 @@
  * accrued at the product's APR over the real elapsed time; a locked product
  * cannot be redeemed before it matures.
  *
+ * A reward is paid from a funded reward account, not minted. The account for an
+ * asset is `earn_rewards`; fund it with `fundEarnRewards`. A product whose asset
+ * has no reward account pays zero rather than conjuring tokens into a redeemer's
+ * balance. The accrued reward is still recorded on the subscription, so the
+ * shortfall is visible and can be paid once the account is refilled.
+ *
  * The reward maths is the pure `@/lib/earn/products` engine, so the payout a
  * user receives is the same figure the holdings view projects.
  *
@@ -16,6 +22,7 @@ import { getDb, generateId } from '@/lib/db';
 import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { lockAvailable, unlockAvailable, creditAvailable, recordTransaction, LedgerError } from '@/lib/db/ledger';
 import { accrueSimple, lockedRedeemable } from '@/lib/earn/products';
+import { creditFund, fundBalance, debitFund } from '@/lib/dex/pool-service';
 
 export class SubscriptionError extends Error {
   constructor(
@@ -25,6 +32,24 @@ export class SubscriptionError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * Reward account for earn products.
+ *
+ * A reward is paid from this account rather than minted, so the payout is gated
+ * on funds the protocol actually set aside. Fund it with `fundEarnRewards`.
+ */
+const EARN_REWARD_FUND = 'earn_rewards';
+
+/** The balance of the earn reward account for one asset. */
+export function earnRewardFundBalance(asset: string): number {
+  return fundBalance(EARN_REWARD_FUND, asset);
+}
+
+/** Move an amount into the earn reward account, creating it on first use. */
+export function fundEarnRewards(asset: string, amount: number): void {
+  creditFund(EARN_REWARD_FUND, asset, amount);
 }
 
 export interface EarnProductRow {
@@ -185,9 +210,12 @@ export function redeem(userId: string, subscriptionId: string): RedeemResult {
 
   db.transaction(() => {
     unlockAvailable(userId, row.asset, principal);
-    if (reward > 0) {
-      creditAvailable(userId, row.asset, reward);
-      recordTransaction(userId, 'earn_reward', row.asset, reward, 0, 'completed', `Earn reward ${id}`);
+    // Pay only what the reward account holds; the rest is recorded, not minted.
+    const payable = Math.min(reward, fundBalance(EARN_REWARD_FUND, row.asset));
+    if (payable > 0) {
+      debitFund(EARN_REWARD_FUND, row.asset, payable);
+      creditAvailable(userId, row.asset, payable);
+      recordTransaction(userId, 'earn_reward', row.asset, payable, 0, 'completed', `Earn reward ${id}`);
     }
     db.prepare(
       "UPDATE earn_subscriptions SET status = 'redeemed', accrued_reward = ?, redeemed_at = datetime('now') WHERE subscription_id = ?",
