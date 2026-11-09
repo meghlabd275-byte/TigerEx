@@ -578,6 +578,34 @@ test('a borrow beyond the collateral LTV is refused', () => {
   );
 });
 
+test('a borrow cannot exceed the market liquidity the lenders supplied', () => {
+  const lender = seedUser();
+  const borrower = seedUser();
+  // A market of its own, so the assertion does not depend on liquidity other
+  // tests happen to have supplied to the shared RUSD market.
+  const asset = 'TLIQ';
+  credit(lender, asset, 1000);
+  credit(borrower, 'ETH', 10);
+  createLendingMarket(asset);
+  createLendingMarket('ETH', 0.7, 0.75);
+  listPair('ETH', 2000);
+  supply(lender, asset, 1000);
+
+  // The collateral would allow far more, but the market only holds 1000: crediting
+  // the borrower more would conjure tokens the lenders never put in.
+  assert.throws(
+    () => borrow(borrower, asset, 5000, 'ETH', 10),
+    (error) => error instanceof DexError && error.code === 'INSUFFICIENT_LIQUIDITY',
+  );
+  assert.equal(availableBalance(borrower, asset), 0, 'a refused borrow must not credit anything');
+
+  // Up to the free liquidity it succeeds. Stay below 100% utilisation so the
+  // market's interest accrual is not left in a degenerate state for later tests.
+  const ok = borrow(borrower, asset, 500, 'ETH', 10);
+  assert.equal(ok.borrowed, 500);
+  assert.equal(availableBalance(borrower, asset), 500);
+});
+
 test('a flash loan that cannot repay in the same transaction is rolled back', () => {
   const user = seedUser();
   createLendingMarket('RUSD');

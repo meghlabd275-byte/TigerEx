@@ -161,6 +161,13 @@ export function borrow(
   if (market.total_borrow + amount > market.borrow_cap) {
     throw new DexError('BORROW_CAP_REACHED', `${market.asset} borrow cap reached`, 409);
   }
+  // A borrow draws from the liquidity the lenders supplied. Without this the
+  // borrower would be credited tokens the market never received, and the supply
+  // side would be short when a lender withdrew.
+  const free = market.total_supply - market.total_borrow;
+  if (amount > free + 1e-9) {
+    throw new DexError('INSUFFICIENT_LIQUIDITY', `${market.asset} has only ${free} available to borrow`, 409);
+  }
   if (!covers(availableBalance(userId, collateral), collateralAmount)) {
     throw new DexError('INSUFFICIENT_BALANCE', `Insufficient ${collateral} collateral`, 400);
   }
