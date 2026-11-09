@@ -1,16 +1,27 @@
 /**
- * Resolve the bearer token for TigerEx API calls.
+ * Session token accessors for TigerEx API calls.
  *
- * The login flow stores trader sessions under `tigerex_access_token` and the
- * admin console stores its session under `tigerex_admin_token`. Several views
- * read `tigerex_token` or `token`, which nothing writes, so they sent no
- * credential and appeared empty. All of them read through here instead.
+ * The login flow writes trader sessions to `tigerex_access_token` and the admin
+ * console writes its session to `tigerex_admin_token`. Those are the only two
+ * keys anything writes: `tigerex_token`, `admin_token` and `token` are read by
+ * some views but written by none, so a reader that consulted them sent no
+ * credential and appeared empty. Everything reads through here instead.
  */
+
+/** The trader session token, or null when signed out. */
 export function readAuthToken(): string | null {
   if (typeof window === 'undefined') return null;
-  return (
-    localStorage.getItem('tigerex_admin_token') ||
-    localStorage.getItem('tigerex_access_token') ||
-    localStorage.getItem('admin_token')
-  );
+  return localStorage.getItem('tigerex_access_token');
+}
+
+/**
+ * The admin session token, or null when not signed in to the console.
+ *
+ * Admin routes authenticate against `admin_sessions`, which is a distinct
+ * privilege from a trader session, so an admin view must present this token and
+ * never the trader one.
+ */
+export function readAdminToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('tigerex_admin_token');
 }

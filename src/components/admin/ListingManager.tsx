@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCw, Plus, Pencil, Trash2, X } from 'lucide-react';
+import { readAdminToken } from '@/lib/auth/token';
 
 export interface ListingField {
   name: string;
@@ -41,7 +42,7 @@ type Row = Record<string, unknown>;
 
 function adminToken(): string | null {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('tigerex_admin_token') || localStorage.getItem('admin_token');
+  return readAdminToken();
 }
 
 function messageOf(payload: unknown, fallback: string): string {

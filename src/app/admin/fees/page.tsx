@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { RefreshCw, Save } from 'lucide-react';
 import { useApiResource, toArray } from '@/lib/useApiResource';
+import { readAdminToken } from '@/lib/auth/token';
 
 interface FeeConfig {
   id: string;
@@ -43,7 +44,7 @@ export default function AdminFeesPage() {
     try {
       const token =
         typeof window !== 'undefined'
-          ? localStorage.getItem('tigerex_admin_token') || localStorage.getItem('admin_token')
+          ? readAdminToken()
           : null;
       const response = await fetch('/api/admin/fees', {
         method: 'PUT',

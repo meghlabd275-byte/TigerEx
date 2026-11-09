@@ -130,7 +130,7 @@ export default function DashboardPage() {
     }
     localStorage.removeItem('tigerex_access_token');
     localStorage.removeItem('tigerex_refresh_token');
-    localStorage.removeItem('tigerex_token_expires');
+    localStorage.removeItem('tigerex_refresh_token');
     localStorage.removeItem('tigerex_user');
     router.push('/login');
   };

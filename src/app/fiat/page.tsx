@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useApiResource } from '@/lib/useApiResource';
+import { readAuthToken } from '@/lib/auth/token';
 
 interface FiatProvider {
   id?: string;
@@ -64,7 +65,7 @@ export default function FiatPage() {
     setResult(null);
     try {
       const token =
-        localStorage.getItem('tigerex_access_token') || localStorage.getItem('admin_token');
+        readAuthToken();
       const response = await fetch('/api/fiat/order', {
         method: 'POST',
         headers: {

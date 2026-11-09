@@ -1,19 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-
-/**
- * Resolve the bearer token for API calls. The admin console stores its session
- * under `tigerex_admin_token`; trader sessions use `tigerex_access_token`.
- */
-function readAuthToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  return (
-    localStorage.getItem('tigerex_admin_token') ||
-    localStorage.getItem('tigerex_access_token') ||
-    localStorage.getItem('admin_token')
-  );
-}
+import { readAdminToken, readAuthToken } from '@/lib/auth/token';
 
 export interface ResourceState<T> {
   data: T | null;

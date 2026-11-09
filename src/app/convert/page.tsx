@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useApiResource } from '@/lib/useApiResource';
+import { readAuthToken } from '@/lib/auth/token';
 
 const ASSETS = ['USDT', 'USDC', 'RUSD', 'BTC', 'ETH', 'BNB', 'TGR'];
 
@@ -101,7 +102,7 @@ export default function ConvertPage() {
     setResult(null);
     try {
       const token =
-        localStorage.getItem('tigerex_access_token') || localStorage.getItem('admin_token');
+        readAuthToken();
       const response = await fetch('/api/convert/trade', {
         method: 'POST',
         headers: {

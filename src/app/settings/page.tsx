@@ -25,6 +25,7 @@ import {
   Lock,
   LogOut
 } from 'lucide-react';
+import { readAuthToken } from '@/lib/auth/token';
 
 interface User {
   id: string;
@@ -88,7 +89,7 @@ export default function SettingsPage() {
   // Load the profile from the server rather than a cached localStorage copy.
   useEffect(() => {
     const token =
-      localStorage.getItem('tigerex_access_token') || localStorage.getItem('admin_token');
+      readAuthToken();
     if (!token) {
       router.push('/login');
       return;
@@ -148,7 +149,7 @@ export default function SettingsPage() {
   const authToken = () =>
     typeof window === 'undefined'
       ? ''
-      : localStorage.getItem('tigerex_access_token') || localStorage.getItem('admin_token') || '';
+      : readAuthToken() ?? '';
 
   // Handle profile update
   const handleProfileUpdate = async (e: React.FormEvent) => {
@@ -227,9 +228,9 @@ export default function SettingsPage() {
 
   // Handle logout
   const handleLogout = () => {
-    localStorage.removeItem('tigerex_token');
+    localStorage.removeItem('tigerex_access_token');
     localStorage.removeItem('tigerex_refresh_token');
-    localStorage.removeItem('tigerex_token_expires');
+    localStorage.removeItem('tigerex_refresh_token');
     localStorage.removeItem('tigerex_user');
     router.push('/login');
   };

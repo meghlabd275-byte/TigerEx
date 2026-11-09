@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { readAuthToken } from '@/lib/auth/token';
 
 const CHAINS = ['ETH', 'BSC', 'Polygon', 'SOL', 'ARBITRUM', 'OPTIMISM'];
 
@@ -17,7 +18,7 @@ export default function BridgePage() {
     setBridging(true);
     setResult(null);
     try {
-      const token = localStorage.getItem('tigerex_access_token') || localStorage.getItem('admin_token');
+      const token = readAuthToken();
       const response = await fetch('/api/crossChain/transfer', {
         method: 'POST',
         headers: {
