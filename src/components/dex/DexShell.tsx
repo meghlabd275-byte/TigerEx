@@ -24,6 +24,7 @@ const NAV: Array<{ name: string; href: string }> = [
   { name: 'Sniping', href: '/dex/sniping' },
   { name: 'Bots', href: '/dex/bots' },
   { name: 'Portfolio', href: '/dex/portfolio' },
+  { name: 'Traders', href: '/dex/traders' },
 ];
 
 /**

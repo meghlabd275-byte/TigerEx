@@ -480,6 +480,18 @@ async function main() {
     assert.ok(Array.isArray(riskList.json.controls), 'the risk view must list the controls');
     record('the risk view lists the controls', true);
 
+    // --- Trading intelligence --------------------------------------------
+    const intel = await request('GET', '/api/dex/intelligence', { token });
+    assert.equal(intel.status, 200, `intelligence failed: ${JSON.stringify(intel.json)}`);
+    assert.ok(Array.isArray(intel.json.leaderboard.traders), 'the leaderboard must be a list');
+    assert.ok(
+      intel.json.leaderboard.traders.some((t) => t.swaps > 0),
+      'the leaderboard must include a trader who settled a swap',
+    );
+    assert.ok(Array.isArray(intel.json.whales), 'the whale feed must be a list');
+    assert.ok(Array.isArray(intel.json.signals), 'the smart-money feed must be a list');
+    record('trading intelligence reads the settled swaps', true, `${intel.json.leaderboard.traders.length} traders`);
+
     // --- Security ---------------------------------------------------------
     for (const [method, url] of [
       ['GET', '/api/dex/vaults'],
@@ -494,6 +506,7 @@ async function main() {
       ['POST', '/api/dex/sniping'],
       ['GET', '/api/dex/bots'],
       ['POST', '/api/dex/bots'],
+      ['GET', '/api/dex/intelligence'],
     ]) {
       const response = await request(method, url, method === 'GET' ? {} : { body: {} });
       assert.equal(response.status, 401, `${method} ${url} must require auth, got ${response.status}`);
