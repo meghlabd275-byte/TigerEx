@@ -98,6 +98,25 @@ export function v2SpotPrice(reserves: V2Reserves): number {
   return rOut / rIn;
 }
 
+/**
+ * Price impact a constant-product swap of `amountIn` causes, as a fraction.
+ *
+ * It is the drop from the pool's spot price to the execution price the trade
+ * actually achieves, so it is the number a slippage check and a MEV scorer both
+ * want: a trade that moves the price 1% can be sandwiched for up to 1%. The fee
+ * is not included — impact is about the reserves the trade consumes, and the
+ * fee is accounted for separately.
+ */
+export function v2PriceImpact(amountIn: number, reserves: V2Reserves): number {
+  const amount = requirePositive(amountIn, 'amountIn');
+  const rIn = requirePositive(reserves.reserveIn, 'reserveIn');
+  const rOut = requirePositive(reserves.reserveOut, 'reserveOut');
+
+  const spotBefore = rOut / rIn;
+  const spotAfter = rOut / (rIn + amount);
+  return (spotBefore - spotAfter) / spotBefore;
+}
+
 /** The product invariant `k = x * y`, used to audit that a swap did not leak. */
 export function v2Invariant(reserves: V2Reserves): number {
   return requirePositive(reserves.reserveIn, 'reserveIn') * requirePositive(reserves.reserveOut, 'reserveOut');

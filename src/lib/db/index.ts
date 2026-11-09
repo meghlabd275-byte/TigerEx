@@ -1713,6 +1713,108 @@ function initializeSchema() {
     CREATE INDEX IF NOT EXISTS idx_dex_lending_pos_user ON dex_lending_positions(user_id);
     CREATE INDEX IF NOT EXISTS idx_dex_revenue_source ON dex_revenue_ledger(source, created_at DESC);
 
+    -- Auto-compounding vaults. total_assets and total_supply are the share
+    -- accounting inputs; a harvest raises total_assets without minting shares,
+    -- which is what lifts the share price.
+    CREATE TABLE IF NOT EXISTS dex_vaults (
+      vault_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL,
+      pool_id TEXT NOT NULL,
+      staked_token TEXT NOT NULL,
+      reward_token TEXT NOT NULL,
+      performance_fee_bps INTEGER NOT NULL DEFAULT 0,
+      min_harvest REAL NOT NULL DEFAULT 0,
+      total_assets REAL NOT NULL DEFAULT 0,
+      total_supply REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_vault_positions (
+      position_id TEXT PRIMARY KEY,
+      vault_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      shares REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(vault_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_vault_harvests (
+      harvest_id TEXT PRIMARY KEY,
+      vault_id TEXT NOT NULL,
+      reward_sold REAL NOT NULL,
+      assets_added REAL NOT NULL,
+      performance_fee REAL NOT NULL DEFAULT 0,
+      share_price REAL NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Liquid staking (stTGR). The exchange rate is derived from total_staked over
+    -- total_shares, so it is never stored and can never drift from the balances.
+    CREATE TABLE IF NOT EXISTS dex_liquid_staking (
+      stake_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      stake_token TEXT NOT NULL,
+      receipt_token TEXT NOT NULL,
+      redemption_fee_bps INTEGER NOT NULL DEFAULT 0,
+      total_staked REAL NOT NULL DEFAULT 0,
+      total_shares REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_liquid_positions (
+      position_id TEXT PRIMARY KEY,
+      stake_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      shares REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(stake_id, user_id)
+    );
+
+    -- Private order flow. A row is written when an order commits and updated
+    -- when the batch reveals; a searcher sees only the commitment until then.
+    CREATE TABLE IF NOT EXISTS dex_private_orders (
+      order_id TEXT PRIMARY KEY,
+      batch_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      token_in TEXT NOT NULL,
+      token_out TEXT NOT NULL,
+      amount_in REAL NOT NULL,
+      commitment TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      committed_at INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'committed',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dex_private_batch ON dex_private_orders(batch_id, sequence);
+
+    -- V4-style pool hooks. A hook row attaches behaviour to one pool: a dynamic
+    -- fee that widens with realised volatility, an on-chain limit order, a TWAMM
+    -- schedule, or an anti-MEV gate. The config is the hook's own parameters, so
+    -- adding a hook kind needs no schema change.
+    CREATE TABLE IF NOT EXISTS dex_pool_hooks (
+      hook_id TEXT PRIMARY KEY,
+      pool_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      config TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(pool_id, kind)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dex_pool_hooks_pool ON dex_pool_hooks(pool_id, status);
+    CREATE INDEX IF NOT EXISTS idx_dex_vault_pos_user ON dex_vault_positions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_dex_liquid_pos_user ON dex_liquid_positions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_dex_vault_harvest ON dex_vault_harvests(vault_id, created_at DESC);
+
     INSERT OR IGNORE INTO exchange_controls (scope, paused) VALUES
       ('dex', 0), ('dex_swaps', 0), ('dex_perps', 0), ('dex_margin', 0),
       ('dex_launchpad', 0), ('dex_bridge', 0);
@@ -1736,7 +1838,19 @@ function initializeSchema() {
       ('dex_mev_protection_enabled', 'true', 'dex'),
       ('dex_gasless_free_swaps_per_day', '3', 'dex'),
       ('dex_ve_lock_min_days', '7', 'dex'),
-      ('dex_ve_lock_max_days', '1460', 'dex');
+      ('dex_ve_lock_max_days', '1460', 'dex'),
+      ('dex_zap_enabled', 'true', 'dex'),
+      ('dex_vault_performance_fee_bps', '1000', 'dex'),
+      ('dex_vault_min_harvest', '0', 'dex'),
+      ('dex_liquid_staking_redemption_fee_bps', '0', 'dex'),
+      ('dex_mev_protect_threshold', '0.005', 'dex'),
+      ('dex_mev_anti_tolerance', '0.02', 'dex'),
+      ('dex_snipe_window_seconds', '300', 'dex'),
+      ('dex_snipe_max_impact', '0.1', 'dex'),
+      ('dex_snipe_min_liquidity', '1000', 'dex'),
+      ('dex_snipe_gas_multiplier', '2', 'dex'),
+      ('dex_v4_dynamic_fee_max_bps', '100', 'dex'),
+      ('dex_v4_volatility_ceiling', '0.05', 'dex');
 
     -- Create indexes
     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);

@@ -91,6 +91,18 @@ const MODULES = [
   'src/lib/dex/margin-service.ts',
   'src/lib/dex/launch-service.ts',
   'src/lib/dex/keeper.ts',
+  'src/lib/dex/zap.ts',
+  'src/lib/dex/vault.ts',
+  'src/lib/dex/liquid-staking.ts',
+  'src/lib/dex/mev.ts',
+  'src/lib/dex/hooks.ts',
+  'src/lib/dex/sniping.ts',
+  'src/lib/dex/zap-service.ts',
+  'src/lib/dex/vault-service.ts',
+  'src/lib/dex/liquid-staking-service.ts',
+  'src/lib/dex/mev-service.ts',
+  'src/lib/dex/hook-service.ts',
+  'src/lib/dex/sniping-service.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });

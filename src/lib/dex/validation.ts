@@ -428,3 +428,91 @@ export function validateFarmInput(body: Record<string, unknown>): Validation<Far
     },
   };
 }
+
+export interface VaultInput {
+  name: string;
+  kind: string;
+  poolId: string;
+  stakedToken: string;
+  rewardToken: string;
+  performanceFeeBps: number;
+  minHarvest: number;
+  status: string;
+}
+
+/**
+ * Validate an auto-compounding vault.
+ *
+ * The performance fee is a fraction of the gain, expressed in basis points, so
+ * it must be below 100% — a vault that takes the whole gain pays its depositors
+ * nothing and is a configuration error rather than a product. `minHarvest` may
+ * be zero, which means every harvest is worth executing.
+ */
+export function validateVaultInput(body: Record<string, unknown>): Validation<VaultInput> {
+  const name = String(body.name ?? '').trim();
+  if (name.length < 1 || name.length > 100) return { error: 'name must be between 1 and 100 characters' };
+
+  const poolId = String(body.poolId ?? '').trim();
+  if (!poolId) return { error: 'poolId is required' };
+
+  const kind = String(body.kind ?? 'lp').trim().toLowerCase();
+  if (!['lp', 'single', 'stable'].includes(kind)) return { error: 'kind must be one of lp, single, stable' };
+
+  const stakedToken = asset(body.stakedToken);
+  if (!stakedToken) return { error: 'stakedToken must be an asset symbol' };
+
+  const rewardToken = asset(body.rewardToken);
+  if (!rewardToken) return { error: 'rewardToken must be an asset symbol' };
+
+  const feeBps = Number(body.performanceFeeBps ?? 0);
+  if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps >= 10_000) {
+    return { error: 'performanceFeeBps must be an integer in [0, 10000)' };
+  }
+
+  const minHarvest = Number(body.minHarvest ?? 0);
+  if (!Number.isFinite(minHarvest) || minHarvest < 0) {
+    return { error: 'minHarvest must be a non-negative number' };
+  }
+
+  const status = String(body.status ?? 'active').trim().toLowerCase();
+  if (!['active', 'paused'].includes(status)) return { error: 'status must be one of active, paused' };
+
+  return { value: { name, kind, poolId, stakedToken, rewardToken, performanceFeeBps: feeBps, minHarvest, status } };
+}
+
+export interface LiquidStakingInput {
+  name: string;
+  stakeToken: string;
+  receiptToken: string;
+  redemptionFeeBps: number;
+  status: string;
+}
+
+/**
+ * Validate a liquid-staking pool.
+ *
+ * The receipt token must differ from the stake token: a receipt that is the
+ * same symbol as the underlying would make the exchange rate meaningless and
+ * let a staker redeem twice.
+ */
+export function validateLiquidStakingInput(body: Record<string, unknown>): Validation<LiquidStakingInput> {
+  const name = String(body.name ?? '').trim();
+  if (name.length < 1 || name.length > 100) return { error: 'name must be between 1 and 100 characters' };
+
+  const stakeToken = asset(body.stakeToken);
+  if (!stakeToken) return { error: 'stakeToken must be an asset symbol' };
+
+  const receiptToken = asset(body.receiptToken);
+  if (!receiptToken) return { error: 'receiptToken must be an asset symbol' };
+  if (receiptToken === stakeToken) return { error: 'receiptToken must differ from stakeToken' };
+
+  const feeBps = Number(body.redemptionFeeBps ?? 0);
+  if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps >= 10_000) {
+    return { error: 'redemptionFeeBps must be an integer in [0, 10000)' };
+  }
+
+  const status = String(body.status ?? 'active').trim().toLowerCase();
+  if (!['active', 'paused'].includes(status)) return { error: 'status must be one of active, paused' };
+
+  return { value: { name, stakeToken, receiptToken, redemptionFeeBps: feeBps, status } };
+}

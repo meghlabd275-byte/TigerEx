@@ -36,6 +36,7 @@ import {
   type DexPoolRow,
 } from '@/lib/dex/pool-service';
 import { applySchedule, DEFAULT_SWAP_SPLIT, type SplitSchedule } from '@/lib/dex/fee-engine';
+import { feeOverrides } from '@/lib/dex/hook-service';
 import { priceImpact as impactOf } from '@/lib/dex/amm';
 
 export interface QuoteRequest {
@@ -110,8 +111,32 @@ export function resolveSlippage(requested: unknown): number {
   return value;
 }
 
-function routerPools(): RouterPool[] {
-  return loadActivePools().map(({ row, definition }) => ({ poolId: row.pool_id, definition }));
+function routerPools(overrides?: Map<string, number>): RouterPool[] {
+  return loadActivePools().map(({ row, definition }) => {
+    const fee = overrides?.get(row.pool_id);
+    return { poolId: row.pool_id, definition: fee !== undefined ? withFee(definition, fee) : definition };
+  });
+}
+
+/**
+ * A pool definition with its fee replaced by a hook's effective fee.
+ *
+ * A V4 dynamic-fee hook changes what a swap costs, so the aggregator has to
+ * price against the hooked fee or the trader would be quoted one fee and charged
+ * another. Every pool shape carries its fee in a different place, so the clone
+ * is done per shape rather than by mutating the shared definition.
+ */
+function withFee(definition: RouterPool['definition'], fee: number): RouterPool['definition'] {
+  switch (definition.kind) {
+    case 'v2':
+      return { ...definition, fee };
+    case 'stable':
+      return { ...definition, fee };
+    case 'weighted':
+      return { ...definition, pool: { ...definition.pool, fee } };
+    case 'v3':
+      return { ...definition, state: { ...definition.state, fee } };
+  }
 }
 
 function poolRowById(poolId: string, rows: DexPoolRow[]): DexPoolRow | undefined {
@@ -142,7 +167,7 @@ export function quoteSwap(request: QuoteRequest): QuoteResult {
     { kind: 'token', value: tokenOut },
   ]);
 
-  const pools = routerPools();
+  const pools = routerPools(feeOverrides());
   if (pools.length === 0) throw new DexError('NO_POOLS', 'no TigerSwap pool is active', 409);
 
   let aggregated: AggregatedQuote;
@@ -250,7 +275,7 @@ export function executeSwap(request: SwapRequest): SwapResult {
   const settlementFeeBps = sponsored ? 0 : dexSetting('dex_settlement_fee_bps', 0);
 
   const swapId = generateId();
-  const pools = routerPools();
+  const pools = routerPools(feeOverrides());
 
   db.transaction(() => {
     const input = quote.amountIn;

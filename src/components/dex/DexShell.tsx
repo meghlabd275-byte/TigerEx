@@ -9,7 +9,10 @@ const NAV: Array<{ name: string; href: string }> = [
   { name: 'Overview', href: '/dex' },
   { name: 'Swap', href: '/dex/swap' },
   { name: 'Liquidity', href: '/dex/liquidity' },
+  { name: 'Zap', href: '/dex/zap' },
   { name: 'Farms', href: '/dex/farms' },
+  { name: 'Vaults', href: '/dex/vaults' },
+  { name: 'Liquid staking', href: '/dex/liquid-staking' },
   { name: 'veTGR', href: '/dex/veTGR' },
   { name: 'Perps', href: '/dex/perps' },
   { name: 'Margin', href: '/dex/margin' },
@@ -17,6 +20,8 @@ const NAV: Array<{ name: string; href: string }> = [
   { name: 'Launchpad', href: '/dex/launchpad' },
   { name: 'NFT', href: '/dex/nft' },
   { name: 'Bridge', href: '/dex/bridge' },
+  { name: 'MEV shield', href: '/dex/mev' },
+  { name: 'Sniping', href: '/dex/sniping' },
   { name: 'Portfolio', href: '/dex/portfolio' },
 ];
 

@@ -18,6 +18,7 @@
     "db:migrate": "node server/db/migrate.js",
     "db:seed": "node server/db/seed.js",
     "test:logic": "npm run build:logic && node --test scripts/test/*.test.cjs",
+    "test:e2e:dex": "node scripts/test/e2e-tigerswap-extra.cjs",
     "build:logic": "node scripts/build-logic-tests.cjs"
   },
   "dependencies": {
