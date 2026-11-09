@@ -435,6 +435,116 @@ export function createWithdrawal(input: CreateWithdrawalInput): CreateWithdrawal
   };
 }
 
+export interface SettleWithdrawalResult {
+  withdrawalId: string;
+  status: 'completed' | 'rejected';
+}
+
+/**
+ * Settle a pending withdrawal: approve it or reject it.
+ *
+ * Approval consumes the reserved amount, rejection returns it to the available
+ * balance. The funds were locked across every balance row that held the asset,
+ * so settlement reaches the same rows — a single wallet's row would be wrong
+ * when an asset sits in more than one row, and would strand or double-count the
+ * reservation. Both paths run in one transaction, so a failure cannot leave the
+ * ledger half-updated.
+ */
+export function settleWithdrawal(
+  withdrawalId: string,
+  action: 'approve' | 'reject',
+  options: { txHash?: string | null } = {},
+): SettleWithdrawalResult {
+  const db = getDb();
+  const withdrawal = db
+    .prepare('SELECT withdrawal_id, user_id, currency, amount, fee, wallet_id, status FROM withdrawals WHERE withdrawal_id = ?')
+    .get(withdrawalId) as
+    | { withdrawal_id: string; user_id: string; currency: string; amount: number; fee: number; wallet_id: string | null; status: string }
+    | undefined;
+  if (!withdrawal) throw new WithdrawalError('UNKNOWN_WITHDRAWAL', 'No such withdrawal', 404);
+  if (withdrawal.status !== 'pending') {
+    throw new WithdrawalError('ALREADY_PROCESSED', `This withdrawal is already ${withdrawal.status}`, 409);
+  }
+
+  const total = (Number(withdrawal.amount) || 0) + (Number(withdrawal.fee) || 0);
+  const now = new Date().toISOString();
+  const walletType = withdrawal.wallet_id
+    ? ((db.prepare('SELECT wallet_type FROM wallets WHERE wallet_id = ?').get(withdrawal.wallet_id) as
+        | { wallet_type: string }
+        | undefined)?.wallet_type ?? 'spot')
+    : 'spot';
+
+  db.transaction(() => {
+    const rows = db
+      .prepare(
+        `SELECT b.balance_id, b.available, b.locked
+           FROM balances b
+           JOIN wallets w ON w.wallet_id = b.wallet_id
+          WHERE w.user_id = ? AND w.wallet_type = ? AND b.currency = ?
+          ORDER BY b.locked DESC, b.available DESC, b.balance_id`,
+      )
+      .all(withdrawal.user_id, walletType, withdrawal.currency) as Array<{
+      balance_id: string;
+      available: number;
+      locked: number;
+    }>;
+
+    if (rows.length === 0) {
+      throw new WithdrawalError('NO_BALANCE', 'No balance row found for this withdrawal', 409);
+    }
+
+    if (action === 'approve') {
+      const lockedTotal = rows.reduce((sum, row) => sum + Number(row.locked), 0);
+      const availableTotal = rows.reduce((sum, row) => sum + Number(row.available), 0);
+      if (lockedTotal + availableTotal + 1e-9 < total) {
+        throw new WithdrawalError('INSUFFICIENT_FUNDS', 'The account does not hold enough to settle this withdrawal', 409);
+      }
+
+      let remaining = total;
+      for (const row of rows) {
+        if (remaining <= 1e-12) break;
+        const fromLocked = Math.min(Number(row.locked), remaining);
+        remaining -= fromLocked;
+        const fromAvailable = Math.min(Number(row.available), remaining);
+        remaining -= fromAvailable;
+        if (fromLocked > 0 || fromAvailable > 0) {
+          db.prepare(
+            `UPDATE balances
+                SET locked = locked - ?, available = available - ?, updated_at = datetime('now')
+              WHERE balance_id = ?`,
+          ).run(fromLocked, fromAvailable, row.balance_id);
+        }
+      }
+
+      db.prepare(
+        `UPDATE withdrawals SET status = 'completed', tx_hash = ?, processed_at = ? WHERE withdrawal_id = ?`,
+      ).run(options.txHash || null, now, withdrawalId);
+    } else {
+      // Rejection returns whatever was locked to the available balance.
+      let remaining = Math.min(total, rows.reduce((sum, row) => sum + Number(row.locked), 0));
+      for (const row of rows) {
+        if (remaining <= 1e-12) break;
+        const release = Math.min(Number(row.locked), remaining);
+        remaining -= release;
+        if (release > 0) {
+          db.prepare(
+            `UPDATE balances
+                SET locked = locked - ?, available = available + ?, updated_at = datetime('now')
+              WHERE balance_id = ?`,
+          ).run(release, release, row.balance_id);
+        }
+      }
+
+      db.prepare(`UPDATE withdrawals SET status = 'rejected', processed_at = ? WHERE withdrawal_id = ?`).run(
+        now,
+        withdrawalId,
+      );
+    }
+  })();
+
+  return { withdrawalId, status: action === 'approve' ? 'completed' : 'rejected' };
+}
+
 /** A user's withdrawal history, newest first. */
 export function userWithdrawals(
   userId: string,

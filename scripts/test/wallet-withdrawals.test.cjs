@@ -26,6 +26,7 @@ const {
   withdrawalUsage,
   limitForLevel,
   createWithdrawal,
+  settleWithdrawal,
   WithdrawalError,
 } = require('../../.test-build/withdrawals.js');
 
@@ -318,4 +319,104 @@ test('the KYC limit tiers rise with the level', () => {
   assert.equal(level0.level, 0);
   assert.equal(level3.level, 3);
   assert.ok(level3.dailyWithdrawalUsd > level0.dailyWithdrawalUsd);
+});
+
+// A withdrawal reserves the amount across every balance row that holds the
+// asset. Settlement must reach the same rows: a single wallet's row is wrong
+// when the funds span more than one, and would refuse a legitimate approval or
+// strand part of a rejection.
+function rowsFor(userId, asset) {
+  return db
+    .prepare(
+      `SELECT b.balance_id, b.available, b.locked
+         FROM balances b JOIN wallets w ON w.wallet_id = b.wallet_id
+        WHERE w.user_id = ? AND b.currency = ? ORDER BY b.balance_id`,
+    )
+    .all(userId, asset);
+}
+
+test('approval settles a withdrawal whose funds span two balance rows', () => {
+  setFees({ 'RUSD:ERC20': { fee: 0, minAmount: 1, enabled: true } });
+  const user = seedUser('3');
+  fund(user, 'RUSD', 500);
+  fund(user, 'RUSD', 500); // a second spot wallet, so the asset sits in two rows
+
+  const result = createWithdrawal({
+    userId: user,
+    kycLevel: '3',
+    asset: 'RUSD',
+    network: 'ERC20',
+    amount: 600,
+    fee: 0,
+    address: EVM_ADDRESS,
+    usdPrice: USD_PRICE,
+  });
+
+  const before = rowsFor(user, 'RUSD');
+  assert.equal(before.length, 2);
+  assert.equal(before[0].locked, 500);
+  assert.equal(before[1].locked, 100);
+
+  const settled = settleWithdrawal(result.withdrawalId, 'approve', { txHash: '0xabc' });
+  assert.equal(settled.status, 'completed');
+  assert.equal(availableBalance(user, 'RUSD'), 400);
+  assert.equal(lockedBalance(user, 'RUSD'), 0);
+
+  const after = rowsFor(user, 'RUSD');
+  assert.equal(after[0].available, 0);
+  assert.equal(after[0].locked, 0);
+  assert.equal(after[1].available, 400);
+  assert.equal(after[1].locked, 0);
+
+  const row = db.prepare('SELECT status, tx_hash FROM withdrawals WHERE withdrawal_id = ?').get(result.withdrawalId);
+  assert.equal(row.status, 'completed');
+  assert.equal(row.tx_hash, '0xabc');
+});
+
+test('rejection returns the reservation across every row, leaving nothing locked', () => {
+  setFees({ 'RUSD:ERC20': { fee: 0, minAmount: 1, enabled: true } });
+  const user = seedUser('3');
+  fund(user, 'RUSD', 500);
+  fund(user, 'RUSD', 500);
+
+  const result = createWithdrawal({
+    userId: user,
+    kycLevel: '3',
+    asset: 'RUSD',
+    network: 'ERC20',
+    amount: 600,
+    fee: 0,
+    address: EVM_ADDRESS,
+    usdPrice: USD_PRICE,
+  });
+  assert.equal(lockedBalance(user, 'RUSD'), 600);
+
+  const settled = settleWithdrawal(result.withdrawalId, 'reject');
+  assert.equal(settled.status, 'rejected');
+  assert.equal(availableBalance(user, 'RUSD'), 1000);
+  assert.equal(lockedBalance(user, 'RUSD'), 0);
+
+  for (const row of rowsFor(user, 'RUSD')) assert.equal(row.locked, 0);
+});
+
+test('a settled withdrawal cannot be settled twice', () => {
+  setFees({ 'RUSD:ERC20': { fee: 0, minAmount: 1, enabled: true } });
+  const user = seedUser('3');
+  fund(user, 'RUSD', 1000);
+
+  const result = createWithdrawal({
+    userId: user,
+    kycLevel: '3',
+    asset: 'RUSD',
+    network: 'ERC20',
+    amount: 100,
+    fee: 0,
+    address: EVM_ADDRESS,
+    usdPrice: USD_PRICE,
+  });
+  settleWithdrawal(result.withdrawalId, 'approve');
+  assert.throws(
+    () => settleWithdrawal(result.withdrawalId, 'approve'),
+    (error) => error instanceof WithdrawalError && error.code === 'ALREADY_PROCESSED',
+  );
 });

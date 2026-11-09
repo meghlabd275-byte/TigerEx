@@ -146,7 +146,7 @@ export function createCrudRoute<T extends Record<string, unknown>>(spec: CrudSpe
     const values = [generateId(), ...Object.values(row)];
     db.prepare(`INSERT INTO ${spec.table} (${columns.join(', ')}) VALUES (${placeholders})`).run(...values);
 
-    recordAdminAction(request, auth.admin, `${spec.auditPrefix}.list`, {
+    recordAdminAction(request, auth.admin, `${spec.auditPrefix}.create`, {
       type: spec.targetType,
       id: symbol,
       detail: record,
