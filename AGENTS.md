@@ -245,3 +245,45 @@ Conventions for these crates: return `Result` with a typed error enum, reject
 non-finite and non-positive amounts, fail closed on unknown keys/symbols, and
 add a `#[cfg(test)] mod tests` that asserts the failure cases the old code got
 wrong.
+
+## TigerSwap (the DEX)
+
+`src/lib/dex/*` is the DEX logic and `src/app/api/dex/**` + `src/app/dex/**`
+expose it; the admin side is `src/app/api/admin/dex/**` + `src/app/admin/dex/**`.
+It is self-contained: no Uniswap/Pancake/1inch/GMX/Hyperliquid SDK or API is
+consulted, the router is local, and an empty table yields an empty result rather
+than a placeholder.
+
+Pool kinds and their invariants:
+
+- `v2` — constant product over `reserves`.
+- `stable` — StableSwap, needs a positive `amplification`.
+- `weighted` — `weights` is a JSON **number** array that sums to 1, parsed with
+  `parseNumberArray`. Parsing it with `parseStringArray` rejected every weighted
+  pool and made `loadActivePools` throw, which took down the router for all pairs.
+- `v3` — concentrated. Active liquidity is derived from the seeded reserves at
+  creation, and a swap writes its new `sqrt_price` back. A pool created with
+  zero liquidity could never be quoted or traded, and skipping the price write
+  made every following quote price against the pre-trade price.
+
+`PUT /api/admin/dex/pools` is a partial update (`validatePoolUpdate`): it writes
+only the fields present, so a status or fee change never rewrites tokens or
+reserves. A PUT that must resend the whole row would silently zero a pool.
+
+## Next.js version (frontend)
+
+The frontend is on **Next.js 15.5**. Two things that bite:
+
+- A route handler's dynamic segment is a promise:
+  `context: { params: Promise<{ id: string }> }`, then `await context.params`.
+  The synchronous `{ params: { id } }` form fails the production build with
+  "invalid GET export".
+- Every route that reads the database or the clock must export
+  `dynamic = 'force-dynamic'`. Without it Next prerenders the handler once at
+  build time and serves that frozen body forever — `/api/dex/pools` returned an
+  empty list while the database held real pools, and `/api/stats` froze its
+  timestamp at build time.
+
+Frontend checks: `npx tsc --noEmit`, `npm run test:logic` (560 tests),
+`npm run build`. Clear `.next` before `tsc` after a dependency or route change,
+or stale generated types under `.next/types` produce phantom module errors.
