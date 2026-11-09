@@ -347,6 +347,13 @@ may credit a balance the venue did not take in. The rules the code must keep:
 - **A borrow draws only the liquidity the lenders supplied.** `borrow` caps the
   amount at `total_supply - total_borrow`, matching `withdrawSupply` and
   `flashLoan`; without it the borrower was credited tokens the market never held.
+- **A liquidation penalty is split against real value, never double-booked.**
+  `liquidatePosition` books the insurance share to the backed `dex_insurance`
+  account (which mirrors `insurance_funds`) and pays a named liquidator its
+  bounty; booking the whole penalty to the treasury *and* incrementing
+  `insurance_funds` separately made the insurance row an unbacked claim. With no
+  named liquidator (the keeper, or an admin force-liquidation) the whole penalty
+  goes to insurance, so the split always sums to the penalty exactly.
 - **A liquidation bonus is the liquidator's whole reward, not revenue.**
   `liquidateBorrow` credits the liquidator the seized collateral and must not
   also book the bonus through `recordDexRevenue`, which would credit the treasury

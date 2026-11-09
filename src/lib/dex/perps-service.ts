@@ -405,7 +405,7 @@ export interface LiquidationResult {
  * earns their share as a bounty and the rest tops up the insurance fund. The
  * position is marked closed with its realised loss.
  */
-export function liquidatePosition(positionId: string, mark?: number): LiquidationResult {
+export function liquidatePosition(positionId: string, mark?: number, liquidatorId?: string): LiquidationResult {
   const position = getDb()
     .prepare("SELECT * FROM dex_perp_positions WHERE position_id = ? AND status = 'open'")
     .get(positionId) as PositionRow | undefined;
@@ -434,21 +434,22 @@ export function liquidatePosition(positionId: string, mark?: number): Liquidatio
     recordTransaction(position.user_id, 'dex_perp_liquidation', market.settlement_asset, returned, penalty, 'completed', `liquidate ${position.market}`);
 
     if (penalty > 0) {
-      const parts = applySchedule(penalty, { lpBps: 0, vetgrBps: 0, treasuryBps: 10_000, insuranceBps: 0, burnBps: 0 });
+      // The penalty is the trader's seized margin. It is a real carve-out of
+      // the pool's take: the insurance share is booked to the backed
+      // `dex_insurance` account (which mirrors `insurance_funds`), and a
+      // liquidator that identified itself is paid its bounty. Booking the whole
+      // penalty to the treasury *and* incrementing `insurance_funds` separately
+      // left the insurance row as an unbacked claim.
+      const parts = { lp: 0, vetgr: 0, treasury: 0, insurance: liquidatorId ? insurance : penalty, burn: 0 };
       recordDexRevenue('dex_perp_liquidation', market.settlement_asset, penalty, parts, positionId);
+      if (liquidatorId && liquidator > 0) {
+        creditAvailable(liquidatorId, market.settlement_asset, liquidator);
+      }
     }
 
     getDb()
       .prepare("UPDATE dex_perp_positions SET status = 'liquidated', realized_pnl = ?, closed_at = datetime('now') WHERE position_id = ?")
       .run(equity - position.collateral, positionId);
-
-    getDb()
-      .prepare(
-        `INSERT INTO insurance_funds (contract, balance, target_balance, fee_share)
-         VALUES ('dex_perps', ?, ?, 0.1)
-         ON CONFLICT(contract) DO UPDATE SET balance = balance + ?, updated_at = datetime('now')`,
-      )
-      .run(insurance, dexSetting('dex_insurance_fund_target', 1_000_000), insurance);
 
     return { positionId, penalty, liquidator, insurance };
   })() as LiquidationResult;

@@ -107,6 +107,9 @@ export async function POST(request: NextRequest) {
     if (!position) return fail('NO_POSITION', 'no open position with that id', 404);
 
     const mark = markPrice(position.market);
+    // An admin force-liquidation has no trader liquidator to pay a bounty to, so
+    // the whole penalty is banked into the insurance fund (the same path the
+    // keeper takes when it liquidates without a named liquidator).
     const result = liquidatePosition(positionId, mark);
     recordAdminAction(request, auth.admin, 'dex.perp.liquidate', { type: 'dex_perp_position', id: positionId, detail: result });
     return NextResponse.json({ success: true, result });

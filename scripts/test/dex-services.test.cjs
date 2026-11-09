@@ -698,6 +698,36 @@ test('a liquidation banks the seized margin into the pool instead of destroying 
   );
 });
 
+test('a perp liquidation pays the liquidator bounty and backs the insurance row', () => {
+  const trader = seedUser();
+  credit(trader, 'RUSD', 100000);
+  const liquidator = seedUser();
+  const symbol = listPerp('BOUNTYX', 1000, 0.5);
+  const opened = openPosition({ userId: trader, symbol, side: 'long', size: 1, leverage: 2 });
+
+  const insBefore = Number(
+    db.prepare("SELECT balance FROM insurance_funds WHERE contract = 'dex'").get()?.balance ?? 0,
+  );
+  // Mark 600: equity 100, maintenance 300, so the position is liquidatable and
+  // the penalty is a positive fraction of the surviving equity.
+  const result = liquidatePosition(opened.positionId, 600, liquidator);
+  assert.ok(result.penalty > 0, 'a liquidatable position with positive equity owes a penalty');
+  assert.ok(Math.abs(result.liquidator - result.penalty * 0.6) < 1e-9);
+  assert.ok(
+    Math.abs(availableBalance(liquidator, 'RUSD') - result.liquidator) < 1e-9,
+    'the liquidator is paid its bounty',
+  );
+
+  const insAfter = Number(
+    db.prepare("SELECT balance FROM insurance_funds WHERE contract = 'dex'").get()?.balance ?? 0,
+  );
+  const backed = Number(
+    db.prepare("SELECT COALESCE(SUM(balance), 0) AS s FROM treasury_accounts WHERE account_type = 'dex_insurance'").get().s,
+  );
+  assert.ok(Math.abs(insAfter - insBefore - result.insurance) < 1e-6, 'the insurance share is booked once');
+  assert.ok(Math.abs(backed - insAfter) < 1e-6, 'the insurance row is backed by the treasury account, not a phantom claim');
+});
+
 // ---------------------------------------------------------------------------
 // Margin / lending
 // ---------------------------------------------------------------------------
