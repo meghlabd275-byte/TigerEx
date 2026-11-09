@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Settings, RefreshCw, BarChart3, Info } from 'lucide-react';
 import { useApiResource, toArray } from '@/lib/useApiResource';
+import { readAuthToken } from '@/lib/auth/token';
 
 interface FuturesContract {
   id: string;
@@ -18,6 +19,7 @@ interface FuturesContract {
 interface FuturesPosition {
   id: string;
   contract_symbol: string;
+  symbol: string;
   side: string;
   leverage: number;
   entry_price: number;
@@ -26,9 +28,42 @@ interface FuturesPosition {
   unrealized_pnl: number;
 }
 
+interface ConditionalOrder {
+  orderId: string;
+  symbol: string;
+  side: string;
+  type: string;
+  stopPrice: number | null;
+  callbackRate: number | null;
+  quantity: number;
+  status: string;
+  triggerPrice: number | null;
+}
+
 function formatNumber(value: number | undefined | null, digits = 4): string {
   if (value === undefined || value === null || Number.isNaN(value)) return '—';
   return value.toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+
+async function postJson(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const token = readAuthToken();
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      (payload && typeof payload === 'object' && 'error' in payload && String(payload.error)) ||
+      `Request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+  return payload ?? {};
 }
 
 export default function FuturesTrading() {
@@ -44,6 +79,14 @@ export default function FuturesTrading() {
   const [orderType, setOrderType] = useState('limit');
   const [price, setPrice] = useState('');
   const [amount, setAmount] = useState('');
+  const [reduceOnly, setReduceOnly] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const [conditional, setConditional] = useState<ConditionalOrder[]>([]);
+  const [condType, setCondType] = useState('stop_loss');
+  const [condTrigger, setCondTrigger] = useState('');
 
   const currentPair =
     contractList.find((c) => c.symbol === selectedSymbol) || contractList[0] || null;
@@ -54,6 +97,122 @@ export default function FuturesTrading() {
     if (!Number.isFinite(priceValue) || !Number.isFinite(amountValue)) return null;
     return (priceValue * amountValue) / leverage;
   }, [price, amount, leverage]);
+
+  const loadConditional = useCallback(async () => {
+    const token = readAuthToken();
+    if (!token) {
+      setConditional([]);
+      return;
+    }
+    try {
+      const response = await fetch(
+        `/api/futures/conditional${currentPair ? `?symbol=${encodeURIComponent(currentPair.symbol)}` : ''}`,
+        { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' },
+      );
+      const body = await response.json().catch(() => null);
+      setConditional(Array.isArray(body?.orders) ? (body.orders as ConditionalOrder[]) : []);
+    } catch {
+      setConditional([]);
+    }
+  }, [currentPair]);
+
+  useEffect(() => {
+    void loadConditional();
+  }, [loadConditional]);
+
+  const submitOrder = useCallback(async () => {
+    if (!currentPair) return;
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await postJson('/api/futures/order', {
+        symbol: currentPair.symbol,
+        side: side === 'long' ? 'buy' : 'sell',
+        positionSide: 'both',
+        type: orderType,
+        price: orderType === 'market' ? undefined : Number(price),
+        quantity: Number(amount),
+        leverage,
+        reduceOnly,
+      });
+      setMessage('Order placed.');
+      setAmount('');
+      positions.reload();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'The order could not be placed');
+    } finally {
+      setBusy(false);
+    }
+  }, [currentPair, orderType, side, price, amount, leverage, reduceOnly, positions]);
+
+  const closePosition = useCallback(
+    async (positionId: string) => {
+      setBusy(true);
+      setMessage(null);
+      setError(null);
+      try {
+        await postJson('/api/futures/position/close', { positionId });
+        setMessage('Position closed.');
+        positions.reload();
+        void loadConditional();
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'The position could not be closed');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [positions, loadConditional],
+  );
+
+  const submitConditional = useCallback(async () => {
+    if (!currentPair) return;
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const position = positionList.find((p) => p.symbol === currentPair.symbol);
+      if (!position) throw new Error('Open a position before placing a conditional order.');
+      const payload: Record<string, unknown> = {
+        symbol: currentPair.symbol,
+        positionSide: 'both',
+        type: condType,
+        quantity: Number(position.quantity),
+      };
+      if (condType === 'trailing_stop') payload.callbackRate = Number(condTrigger) / 100;
+      else payload.stopPrice = Number(condTrigger);
+      await postJson('/api/futures/conditional', payload);
+      setMessage('Conditional order placed.');
+      setCondTrigger('');
+      void loadConditional();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'The conditional order could not be placed');
+    } finally {
+      setBusy(false);
+    }
+  }, [currentPair, condType, condTrigger, positionList, loadConditional]);
+
+  const cancelConditional = useCallback(
+    async (orderId: string) => {
+      const token = readAuthToken();
+      setError(null);
+      try {
+        const response = await fetch(`/api/futures/conditional?orderId=${encodeURIComponent(orderId)}`, {
+          method: 'DELETE',
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          cache: 'no-store',
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          throw new Error(body?.error ?? `Request failed with status ${response.status}`);
+        }
+        void loadConditional();
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'The conditional order could not be cancelled');
+      }
+    },
+    [loadConditional],
+  );
 
   return (
     <div className="h-screen bg-[#0A0A0F] text-white flex">
@@ -146,8 +305,13 @@ export default function FuturesTrading() {
         </div>
 
         {/* Positions */}
-        <div className="h-48 border-t border-[rgba(255,255,255,0.1)] p-4 overflow-y-auto">
-          <h3 className="text-sm font-medium mb-3">Open Positions</h3>
+        <div className="h-56 border-t border-[rgba(255,255,255,0.1)] p-4 overflow-y-auto">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-medium">Open Positions</h3>
+            <button onClick={positions.reload} className="p-1 hover:bg-[#1E1E24] rounded">
+              <RefreshCw className="w-3 h-3" />
+            </button>
+          </div>
           {positions.loading && <p className="text-sm text-gray-500">Loading positions…</p>}
           {positions.error && (
             <p className="text-sm text-red-400">Could not load positions: {positions.error}</p>
@@ -158,9 +322,9 @@ export default function FuturesTrading() {
           {positionList.map((position) => (
             <div
               key={position.id}
-              className="grid grid-cols-6 gap-2 text-xs py-2 border-b border-[rgba(255,255,255,0.05)]"
+              className="grid grid-cols-7 gap-2 text-xs py-2 border-b border-[rgba(255,255,255,0.05)] items-center"
             >
-              <span className="font-medium">{position.contract_symbol}</span>
+              <span className="font-medium">{position.contract_symbol ?? position.symbol}</span>
               <span className={position.side === 'long' ? 'text-green-500' : 'text-red-500'}>
                 {position.side}
               </span>
@@ -170,13 +334,20 @@ export default function FuturesTrading() {
               <span className={position.unrealized_pnl >= 0 ? 'text-green-500' : 'text-red-500'}>
                 {formatNumber(position.unrealized_pnl, 2)}
               </span>
+              <button
+                disabled={busy}
+                onClick={() => void closePosition(position.id)}
+                className="text-[#FF6B35] hover:underline disabled:opacity-50 text-left"
+              >
+                Close
+              </button>
             </div>
           ))}
         </div>
       </div>
 
       {/* Right - Order Form */}
-      <div className="w-72 border-l border-[rgba(255,255,255,0.1)] p-4">
+      <div className="w-72 border-l border-[rgba(255,255,255,0.1)] p-4 overflow-y-auto">
         <div className="flex rounded-lg overflow-hidden mb-4">
           <button
             onClick={() => setSide('long')}
@@ -216,7 +387,7 @@ export default function FuturesTrading() {
         </div>
 
         <div className="flex gap-2 mb-4">
-          {['limit', 'market', 'stop_limit'].map((type) => (
+          {['limit', 'market'].map((type) => (
             <button
               key={type}
               onClick={() => setOrderType(type)}
@@ -224,7 +395,7 @@ export default function FuturesTrading() {
                 orderType === type ? 'bg-[#FF6B35]' : 'bg-[#14141A]'
               }`}
             >
-              {type === 'stop_limit' ? 'Stop' : type.charAt(0).toUpperCase() + type.slice(1)}
+              {type.charAt(0).toUpperCase() + type.slice(1)}
             </button>
           ))}
         </div>
@@ -252,19 +423,93 @@ export default function FuturesTrading() {
           />
         </div>
 
+        <label className="flex items-center gap-2 mb-3 text-xs text-gray-400">
+          <input type="checkbox" checked={reduceOnly} onChange={(e) => setReduceOnly(e.target.checked)} />
+          Reduce only
+        </label>
+
         <div className="flex justify-between text-sm mb-4">
           <span className="text-gray-500">Cost</span>
           <span>{cost === null ? '—' : cost.toFixed(2)}</span>
         </div>
 
         <button
-          disabled={!currentPair}
+          disabled={!currentPair || busy}
+          onClick={() => void submitOrder()}
           className={`w-full py-3 rounded-lg font-medium disabled:opacity-50 ${
             side === 'long' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'
           }`}
         >
-          {side === 'long' ? 'Long' : 'Short'} {currentPair?.symbol ?? ''}
+          {busy ? 'Placing…' : `${side === 'long' ? 'Long' : 'Short'} ${currentPair?.symbol ?? ''}`}
         </button>
+
+        {message && <p className="mt-3 text-xs text-green-400">{message}</p>}
+        {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
+
+        {/* Conditional orders */}
+        <div className="mt-6 pt-4 border-t border-[rgba(255,255,255,0.1)]">
+          <h3 className="text-sm font-medium mb-3">Conditional Orders</h3>
+          <div className="flex gap-1 mb-3">
+            {['stop_loss', 'take_profit', 'trailing_stop'].map((type) => (
+              <button
+                key={type}
+                onClick={() => setCondType(type)}
+                className={`flex-1 py-1.5 text-[11px] rounded-lg ${
+                  condType === type ? 'bg-[#FF6B35]' : 'bg-[#14141A]'
+                }`}
+              >
+                {type === 'stop_loss' ? 'SL' : type === 'take_profit' ? 'TP' : 'Trail'}
+              </button>
+            ))}
+          </div>
+          <div className="mb-3">
+            <label className="text-xs text-gray-500">
+              {condType === 'trailing_stop' ? 'Callback %' : 'Trigger Price'}
+            </label>
+            <input
+              type="number"
+              value={condTrigger}
+              onChange={(e) => setCondTrigger(e.target.value)}
+              className="w-full bg-[#14141A] rounded-lg py-2 px-3 text-sm"
+            />
+          </div>
+          <button
+            disabled={!currentPair || busy}
+            onClick={() => void submitConditional()}
+            className="w-full py-2 rounded-lg text-sm bg-[#1E1E24] hover:bg-[#2A2A32] disabled:opacity-50"
+          >
+            Place Conditional
+          </button>
+
+          <div className="mt-4">
+            {conditional.length === 0 && <p className="text-xs text-gray-500">No conditional orders.</p>}
+            {conditional.map((order) => (
+              <div
+                key={order.orderId}
+                className="flex items-center justify-between text-xs py-2 border-b border-[rgba(255,255,255,0.05)]"
+              >
+                <div>
+                  <p className="font-medium">
+                    {order.type} · {order.status}
+                  </p>
+                  <p className="text-gray-500">
+                    {order.stopPrice !== null
+                      ? `@ ${formatNumber(order.stopPrice)}`
+                      : `trail ${formatNumber((order.callbackRate ?? 0) * 100, 2)}%`}
+                  </p>
+                </div>
+                {order.status === 'pending' && (
+                  <button
+                    onClick={() => void cancelConditional(order.orderId)}
+                    className="text-[#FF6B35] hover:underline"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
 
         <div className="mt-4 flex items-start gap-2 text-xs text-gray-500">
           <Info className="w-3 h-3 mt-0.5 shrink-0" />

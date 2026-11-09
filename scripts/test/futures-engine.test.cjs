@@ -25,6 +25,10 @@ const {
   listPositions,
   markPriceFor,
   riskTiers,
+  placeConditionalOrder,
+  listConditionalOrders,
+  cancelConditionalOrder,
+  triggerConditionalOrders,
   FuturesError,
 } = require('../../.test-build/futures-engine.js');
 const { scanPositions, processQueue } = require('../../.test-build/risk-supervisor.js');
@@ -606,4 +610,132 @@ test('runArmedAdl only touches contracts with adl enabled', () => {
   db.prepare('UPDATE insurance_funds SET adl_enabled = 1 WHERE contract = ?').run(symbol);
   assert.equal(runArmedAdl().filter((result) => result.contract === symbol).length, 1);
   assert.equal(db.prepare('SELECT status FROM futures_positions WHERE user_id = ?').get(shortUser).status, 'adl');
+});
+
+
+test('a stop-loss closes a long when the mark falls to its trigger', () => {
+  const symbol = pricedContract('SLBTC', 50000);
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+
+  placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 0.1, leverage: 10 });
+
+  const order = placeConditionalOrder(user, {
+    symbol,
+    positionSide: 'both',
+    type: 'stop_loss',
+    stopPrice: 48000,
+    quantity: 0.1,
+  });
+  assert.equal(order.side, 'sell');
+  assert.equal(order.status, 'pending');
+
+  // The mark is still above the trigger: nothing fires.
+  setOraclePrice(symbol, 49000);
+  assert.equal(triggerConditionalOrders().triggered.length, 0);
+  assert.equal(listPositions(user, symbol).length, 1);
+
+  // The mark crosses the trigger: the position is closed and the order fired.
+  setOraclePrice(symbol, 47000);
+  const result = triggerConditionalOrders();
+  assert.equal(result.triggered.length, 1);
+  assert.equal(result.triggered[0].orderId, order.orderId);
+  assert.equal(result.triggered[0].price, 47000);
+
+  assert.equal(listPositions(user, symbol).length, 0);
+  assert.equal(listConditionalOrders(user, symbol)[0].status, 'triggered');
+  // The loss on 0.1 BTC from 50,000 to 47,000 is 300 plus a fee, so the locked
+  // margin (500) is returned less the loss and fee.
+  assert.equal(lockedBalance(user, 'RUSD'), 0);
+  assert.ok(availableBalance(user, 'RUSD') < 100000);
+  assert.ok(availableBalance(user, 'RUSD') > 99600);
+});
+
+test('a take-profit fires in the position favour, not against it', () => {
+  const symbol = pricedContract('TPBTC', 50000);
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+
+  placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 0.1, leverage: 10 });
+  placeConditionalOrder(user, {
+    symbol,
+    positionSide: 'both',
+    type: 'take_profit',
+    stopPrice: 55000,
+    quantity: 0.1,
+  });
+
+  // A fall below entry must not fire a take-profit.
+  setOraclePrice(symbol, 45000);
+  assert.equal(triggerConditionalOrders().triggered.length, 0);
+
+  setOraclePrice(symbol, 56000);
+  assert.equal(triggerConditionalOrders().triggered.length, 1);
+  assert.equal(listPositions(user, symbol).length, 0);
+});
+
+test('a trailing stop follows the peak and fires on the retrace', () => {
+  const symbol = pricedContract('TRBTC', 50000);
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+
+  placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 0.1, leverage: 10 });
+  const order = placeConditionalOrder(user, {
+    symbol,
+    positionSide: 'both',
+    type: 'trailing_stop',
+    callbackRate: 0.05,
+    quantity: 0.1,
+  });
+
+  // Price rises to 60,000: the peak moves up but the 5% retrace is not reached.
+  setOraclePrice(symbol, 60000);
+  assert.equal(triggerConditionalOrders().triggered.length, 0);
+  assert.equal(Number(listConditionalOrders(user, symbol)[0].triggerPrice), 60000);
+
+  // A fall to 56,000 is a 6.7% retrace from the 60,000 peak, so it fires even
+  // though the price is still above the entry.
+  setOraclePrice(symbol, 56000);
+  const result = triggerConditionalOrders();
+  assert.equal(result.triggered.length, 1);
+  assert.equal(result.triggered[0].orderId, order.orderId);
+  assert.equal(listPositions(user, symbol).length, 0);
+});
+
+test('a conditional order without an open position is refused', () => {
+  const symbol = pricedContract('NOPOS', 100);
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+
+  assert.throws(
+    () => placeConditionalOrder(user, { symbol, positionSide: 'both', type: 'stop_loss', stopPrice: 90, quantity: 1 }),
+    (error) => error instanceof FuturesError && error.code === 'NO_POSITION',
+  );
+});
+
+test('a conditional order cannot exceed the open position', () => {
+  const symbol = pricedContract('OVER', 100);
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 1, leverage: 10 });
+
+  assert.throws(
+    () => placeConditionalOrder(user, { symbol, positionSide: 'both', type: 'stop_loss', stopPrice: 90, quantity: 2 }),
+    (error) => error instanceof FuturesError && error.code === 'VALIDATION_FAILED',
+  );
+});
+
+test('cancelling a pending conditional order stops it from firing', () => {
+  const symbol = pricedContract('CANC', 100);
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 1, leverage: 10 });
+
+  const order = placeConditionalOrder(user, { symbol, positionSide: 'both', type: 'stop_loss', stopPrice: 90, quantity: 1 });
+  const cancelled = cancelConditionalOrder(user, order.orderId);
+  assert.equal(cancelled.status, 'cancelled');
+
+  setOraclePrice(symbol, 80);
+  assert.equal(triggerConditionalOrders().triggered.length, 0);
+  assert.equal(listPositions(user, symbol).length, 1);
 });

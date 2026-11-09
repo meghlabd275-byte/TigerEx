@@ -50,6 +50,8 @@ export async function POST(request: NextRequest) {
         adlClawedBack: report.adlClawedBack,
         marginLiquidated: report.marginLiquidated.length,
         marginLiquidationSkipped: report.marginLiquidationSkipped,
+        conditionalTriggered: report.conditionalTriggered.length,
+        conditionalSkipped: report.conditionalSkipped,
       },
     });
     return NextResponse.json({ success: true, report }, { headers: NO_STORE });

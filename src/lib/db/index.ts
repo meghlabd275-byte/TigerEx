@@ -1227,6 +1227,28 @@ function initializeSchema() {
     CREATE INDEX IF NOT EXISTS idx_futures_positions_user ON futures_positions(user_id);
     CREATE INDEX IF NOT EXISTS idx_futures_positions_symbol ON futures_positions(symbol);
 
+    -- Futures conditional orders: stop-loss, take-profit and trailing stops.
+    -- A row parks off the book until its trigger is crossed by the mark price,
+    -- at which point it is executed as a reduce-only order on the position.
+    CREATE TABLE IF NOT EXISTS futures_conditional_orders (
+      order_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      position_side TEXT NOT NULL,
+      side TEXT NOT NULL,
+      type TEXT NOT NULL,
+      stop_price REAL,
+      callback_rate REAL,
+      quantity REAL NOT NULL,
+      limit_price REAL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      trigger_price REAL,
+      created_at TEXT DEFAULT (datetime('now')),
+      triggered_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_futures_conditional_user ON futures_conditional_orders(user_id);
+    CREATE INDEX IF NOT EXISTS idx_futures_conditional_symbol ON futures_conditional_orders(symbol, status);
+
     -- Margin loans with accrued interest.
     CREATE TABLE IF NOT EXISTS margin_loans (
       loan_id TEXT PRIMARY KEY,

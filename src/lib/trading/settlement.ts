@@ -22,6 +22,7 @@ import { runDueBots, type BotTickResult } from '@/lib/bots/runner';
 import { runCopySweep, type CopyExecutionResult } from '@/lib/trading/copy-engine';
 import { runArmedAdl, type AdlResult } from '@/lib/trading/adl';
 import { runMarginLiquidationKeeper } from '@/lib/trading/margin-engine';
+import { triggerConditionalOrders } from '@/lib/trading/futures-engine';
 
 export interface FundingSettlement {
   symbol: string;
@@ -45,6 +46,8 @@ export interface SettlementReport {
   adlClawedBack: number;
   marginLiquidated: string[];
   marginLiquidationSkipped: number;
+  conditionalTriggered: string[];
+  conditionalSkipped: number;
 }
 
 const HOUR_NS = 60 * 60 * 1e9;
@@ -189,6 +192,16 @@ export function runSettlementCycle(nowMs: number = Date.now()): SettlementReport
     margin = { liquidated: [], skipped: [] };
   }
 
+  // Conditional orders (stop-loss, take-profit, trailing) are evaluated after
+  // funding and liquidation have moved the mark, so a trigger sees this cycle's
+  // prices rather than the previous cycle's.
+  let conditional = { triggered: [] as Array<{ orderId: string }>, skipped: [] as string[] };
+  try {
+    conditional = triggerConditionalOrders();
+  } catch {
+    conditional = { triggered: [], skipped: [] };
+  }
+
   return {
     fundingApplied: funding.applied,
     fundingSkipped: funding.skipped,
@@ -205,5 +218,7 @@ export function runSettlementCycle(nowMs: number = Date.now()): SettlementReport
     adlClawedBack: adl.reduce((sum, result) => sum + result.clawedBack, 0),
     marginLiquidated: margin.liquidated.map((row) => row.loanId),
     marginLiquidationSkipped: margin.skipped.length,
+    conditionalTriggered: conditional.triggered.map((row) => row.orderId),
+    conditionalSkipped: conditional.skipped.length,
   };
 }

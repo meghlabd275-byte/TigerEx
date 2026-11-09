@@ -773,3 +773,291 @@ function accrueFeeRevenue(db: ReturnType<typeof getDb>, market: MarketRow, fee: 
     market.symbol,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Conditional orders (stop-loss, take-profit, trailing stop)
+//
+// A conditional order parks off the book until the mark price crosses its
+// trigger, then closes the position it protects with a reduce-only market
+// order. Every check is fail-closed: an order whose trigger or mark cannot be
+// computed stays pending rather than firing on a guess.
+// ---------------------------------------------------------------------------
+
+export type ConditionalType = 'stop_loss' | 'take_profit' | 'trailing_stop';
+
+export interface ConditionalOrderInput {
+  symbol: string;
+  positionSide: 'long' | 'short' | 'both';
+  type: ConditionalType;
+  quantity: number;
+  /** Required for stop_loss and take_profit. */
+  stopPrice?: number;
+  /** Required for trailing_stop: the drawdown from the peak, as a fraction. */
+  callbackRate?: number;
+}
+
+export interface ConditionalOrderRow {
+  order_id: string;
+  user_id: string;
+  symbol: string;
+  position_side: string;
+  side: string;
+  type: string;
+  stop_price: number | null;
+  callback_rate: number | null;
+  quantity: number;
+  limit_price: number | null;
+  status: string;
+  trigger_price: number | null;
+  created_at: string;
+  triggered_at: string | null;
+}
+
+export interface ConditionalOrderView {
+  orderId: string;
+  symbol: string;
+  positionSide: string;
+  side: string;
+  type: string;
+  stopPrice: number | null;
+  callbackRate: number | null;
+  quantity: number;
+  status: string;
+  triggerPrice: number | null;
+  createdAt: string;
+  triggeredAt: string | null;
+}
+
+const CONDITIONAL_TYPES: ConditionalType[] = ['stop_loss', 'take_profit', 'trailing_stop'];
+
+function toConditional(row: ConditionalOrderRow): ConditionalOrderView {
+  return {
+    orderId: row.order_id,
+    symbol: row.symbol,
+    positionSide: row.position_side,
+    side: row.side,
+    type: row.type,
+    stopPrice: row.stop_price === null ? null : Number(row.stop_price),
+    callbackRate: row.callback_rate === null ? null : Number(row.callback_rate),
+    quantity: Number(row.quantity),
+    status: row.status,
+    triggerPrice: row.trigger_price === null ? null : Number(row.trigger_price),
+    createdAt: row.created_at,
+    triggeredAt: row.triggered_at,
+  };
+}
+
+/**
+ * The open position a conditional order protects.
+ *
+ * In hedge mode the order names its side; in one-way mode the position's own
+ * side is the only one that can exist. Returns undefined when there is no open
+ * position, which makes the order fail closed rather than fire against nothing.
+ */
+function positionForConditional(userId: string, symbol: string, positionSide: string): PositionRow | undefined {
+  const db = getDb();
+  if (positionSide === 'long' || positionSide === 'short') {
+    return db
+      .prepare(
+        `SELECT * FROM futures_positions
+          WHERE user_id = ? AND symbol = ? AND side = ? AND status = 'open'`,
+      )
+      .get(userId, symbol, positionSide) as PositionRow | undefined;
+  }
+  return db
+    .prepare("SELECT * FROM futures_positions WHERE user_id = ? AND symbol = ? AND status = 'open'")
+    .get(userId, symbol) as PositionRow | undefined;
+}
+
+/**
+ * Place a conditional order against an open position.
+ *
+ * The order closes the position it protects, so its side is the opposite of the
+ * position's: a long is protected by a sell, a short by a buy. The quantity is
+ * capped at the position size, because a reduce-only order can never flip the
+ * position to the other side.
+ */
+export function placeConditionalOrder(userId: string, input: ConditionalOrderInput): ConditionalOrderView {
+  const paused = pausedScope('futures');
+  if (paused) throw new FuturesError('TRADING_PAUSED', pauseMessage(paused), 409);
+
+  const market = loadMarket(input.symbol);
+  const type = CONDITIONAL_TYPES.includes(input.type) ? input.type : null;
+  if (type === null) {
+    throw new FuturesError('VALIDATION_FAILED', `type must be one of ${CONDITIONAL_TYPES.join(', ')}`);
+  }
+
+  const positionSide = input.positionSide === 'long' || input.positionSide === 'short' ? input.positionSide : 'both';
+  const position = positionForConditional(userId, market.symbol, positionSide);
+  if (!position) throw new FuturesError('NO_POSITION', `No open ${market.symbol} position to protect`);
+
+  const quantity = Number(input.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new FuturesError('VALIDATION_FAILED', 'quantity must be a positive number');
+  }
+  if (quantity > Number(position.quantity) + 1e-9) {
+    throw new FuturesError('VALIDATION_FAILED', 'quantity exceeds the open position');
+  }
+
+  let stopPrice: number | null = null;
+  let callbackRate: number | null = null;
+
+  if (type === 'trailing_stop') {
+    const rate = Number(input.callbackRate);
+    if (!Number.isFinite(rate) || rate <= 0 || rate >= 1) {
+      throw new FuturesError('VALIDATION_FAILED', 'callbackRate must be a fraction between 0 and 1');
+    }
+    callbackRate = rate;
+  } else {
+    const requested = Number(input.stopPrice);
+    if (!Number.isFinite(requested) || requested <= 0) {
+      throw new FuturesError('VALIDATION_FAILED', 'stopPrice must be a positive number');
+    }
+    const tick = Number(market.tick_size);
+    if (Number.isFinite(tick) && tick > 0) {
+      const steps = requested / tick;
+      if (Math.abs(steps - Math.round(steps)) > 1e-6) {
+        throw new FuturesError('INVALID_TICK', `Price must be a multiple of the tick size ${tick}`);
+      }
+    }
+    stopPrice = requested;
+  }
+
+  // A long is closed by a sell; a short by a buy.
+  const side = position.side === 'long' ? 'sell' : 'buy';
+  const orderId = generateId();
+  getDb()
+    .prepare(
+      `INSERT INTO futures_conditional_orders
+         (order_id, user_id, symbol, position_side, side, type, stop_price, callback_rate, quantity, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    )
+    .run(orderId, userId, market.symbol, position.side, side, type, stopPrice, callbackRate, quantity);
+
+  const row = getDb().prepare('SELECT * FROM futures_conditional_orders WHERE order_id = ?').get(orderId) as ConditionalOrderRow;
+  return toConditional(row);
+}
+
+/** A user's conditional orders, newest first. */
+export function listConditionalOrders(userId: string, symbol: string | null): ConditionalOrderView[] {
+  const params: string[] = [userId];
+  let where = 'user_id = ?';
+  if (symbol) {
+    where += ' AND symbol = ?';
+    params.push(symbol.trim().toUpperCase());
+  }
+  const rows = getDb()
+    .prepare(`SELECT * FROM futures_conditional_orders WHERE ${where} ORDER BY created_at DESC`)
+    .all(...params) as ConditionalOrderRow[];
+  return rows.map(toConditional);
+}
+
+/** Cancel a pending conditional order. */
+export function cancelConditionalOrder(userId: string, orderId: string): ConditionalOrderView {
+  const id = String(orderId ?? '').trim();
+  if (!id) throw new FuturesError('VALIDATION_FAILED', 'orderId is required');
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM futures_conditional_orders WHERE order_id = ?').get(id) as
+    | ConditionalOrderRow
+    | undefined;
+  if (!row) throw new FuturesError('UNKNOWN_ORDER', 'No such conditional order', 404);
+  if (row.user_id !== userId) throw new FuturesError('UNKNOWN_ORDER', 'No such conditional order', 404);
+  if (row.status !== 'pending') {
+    throw new FuturesError('TERMINAL_STATE', `This order is already ${row.status}`, 409);
+  }
+  db.prepare("UPDATE futures_conditional_orders SET status = 'cancelled' WHERE order_id = ?").run(id);
+  return toConditional({ ...row, status: 'cancelled' });
+}
+
+/**
+ * Trigger pending conditional orders whose condition the mark price has crossed.
+ *
+ * A stop-loss closes the position when the mark moves against it; a take-profit
+ * closes it when the mark reaches the target; a trailing stop arms on the
+ * position's best price and fires once the mark retraces the callback from that
+ * peak. Each triggered order closes its position at the mark, and a position
+ * that has already gone is skipped rather than opening an opposite one.
+ */
+export function triggerConditionalOrders(): {
+  triggered: Array<{ orderId: string; symbol: string; price: number; closed: boolean }>;
+  skipped: string[];
+} {
+  const db = getDb();
+  const pending = db
+    .prepare("SELECT * FROM futures_conditional_orders WHERE status = 'pending'")
+    .all() as ConditionalOrderRow[];
+
+  const triggered: Array<{ orderId: string; symbol: string; price: number; closed: boolean }> = [];
+  const skipped: string[] = [];
+
+  for (const order of pending) {
+    const mark = markPriceFor(order.symbol);
+    if (mark === null) {
+      skipped.push(order.order_id);
+      continue;
+    }
+
+    const position = positionForConditional(order.user_id, order.symbol, order.position_side);
+    if (!position) {
+      // The position it protected is gone, so the order has nothing to do.
+      db.prepare("UPDATE futures_conditional_orders SET status = 'cancelled' WHERE order_id = ?").run(order.order_id);
+      continue;
+    }
+
+    const entry = Number(position.entry_price);
+    let shouldTrigger = false;
+
+    if (order.type === 'stop_loss') {
+      shouldTrigger = position.side === 'long' ? mark <= Number(order.stop_price) : mark >= Number(order.stop_price);
+    } else if (order.type === 'take_profit') {
+      shouldTrigger = position.side === 'long' ? mark >= Number(order.stop_price) : mark <= Number(order.stop_price);
+    } else {
+      // Trailing: the peak (long) or trough (short) is the best price seen since
+      // the order was placed, so it is carried in `trigger_price` between cycles
+      // rather than recomputed from the current mark alone. It starts at the
+      // entry price and only ever moves in the position's favour.
+      const rate = Number(order.callback_rate);
+      const stored = order.trigger_price === null ? entry : Number(order.trigger_price);
+      if (position.side === 'long') {
+        const peak = Math.max(stored, mark);
+        db.prepare('UPDATE futures_conditional_orders SET trigger_price = ? WHERE order_id = ?').run(peak, order.order_id);
+        shouldTrigger = mark <= peak * (1 - rate);
+      } else {
+        const trough = Math.min(stored, mark);
+        db.prepare('UPDATE futures_conditional_orders SET trigger_price = ? WHERE order_id = ?').run(trough, order.order_id);
+        shouldTrigger = mark >= trough * (1 + rate);
+      }
+    }
+
+    if (!shouldTrigger) continue;
+
+    const quantity = Math.min(Number(order.quantity), Number(position.quantity));
+    if (quantity <= 0) {
+      db.prepare("UPDATE futures_conditional_orders SET status = 'cancelled' WHERE order_id = ?").run(order.order_id);
+      continue;
+    }
+
+    try {
+      // Reduce the position directly rather than re-entering placeFuturesOrder,
+      // so the close cannot nest a trigger check inside itself.
+      const market = loadMarket(order.symbol);
+      const rates = futuresRates(order.user_id);
+      const feeBps = rates.taker > 0 ? rates.taker * 10000 : Number(market.taker_fee_bps);
+      const notional = mark * quantity * (Number(market.contract_size) || 1);
+      const fee = (notional * feeBps) / 10000;
+
+      const run = db.transaction(() => {
+        reducePosition(db, market, position, quantity, mark, fee, mark);
+        db.prepare(
+          "UPDATE futures_conditional_orders SET status = 'triggered', trigger_price = ?, triggered_at = datetime('now') WHERE order_id = ?",
+        ).run(mark, order.order_id);
+      });
+      run();
+      triggered.push({ orderId: order.order_id, symbol: order.symbol, price: mark, closed: true });
+    } catch {
+      skipped.push(order.order_id);
+    }
+  }
+
+  return { triggered, skipped };
+}
