@@ -219,6 +219,14 @@ separate backend. `admin-system.js` is real but is not mounted by
   (`ORDER BY ... LIMIT 1`) drives the chosen row negative and strands funds on
   release. Use `debitAvailable`/`creditAvailable`/`lockAvailable`/`unlockAvailable`/
   `consumeLocked`, which spread a movement across every row that holds the asset.
+- A movement between accounts must be zero-sum: debit the payer, then credit the
+  receiver from exactly what was collected. Never credit a receiver with a fresh
+  balance while routing the payer's money elsewhere — that mints the asset.
+  `applyFunding` (`src/lib/trading/futures-engine.ts`) is the reference: payers'
+  funding pays the receivers pro rata; only an unsettleable payer's surplus goes
+  to the insurance fund, and a shortfall scales receivers down instead of being
+  conjured. Rewards likewise come from a funded account (`earn_rewards` in
+  `treasury_accounts`), never from nothing.
 - Read a zone-less DB timestamp in JS through `parseUtcTimestamp` in
   `src/lib/trading/candles.ts`, not `Date.parse`. `Date.parse` treats
   `YYYY-MM-DD HH:MM:SS` as local time, shifting it by the host offset; the
