@@ -304,16 +304,33 @@ export function executeSwap(request: SwapRequest): SwapResult {
       // would price against the pre-trade price and the pool would leak value.
       if (hop.sqrtPriceAfter !== undefined) v3Prices.set(hop.poolId, hop.sqrtPriceAfter);
     }
-    applyPoolDeltas(deltas);
+    const updatedReserves = applyPoolDeltas(deltas);
     for (const [poolId, sqrtPrice] of v3Prices) {
       updateV3State(poolId, sqrtPrice, liquidityOf(pools, poolId));
     }
 
-    // Split each hop's fee, recorded against the pool that earned it.
+    // Split each hop's fee, recorded against the pool that earned it. The whole
+    // fee stays in the pool, so the LP share is the only part already backed by
+    // reserves. The protocol's shares are a real carve-out: they are removed
+    // from the pool and credited to the treasury and insurance fund, so the
+    // pool's LP value is not double-counted with the protocol's claim.
     const split = swapFeeSplit();
     for (const hop of quote.hops) {
       const parts = applySchedule(hop.fee, split);
       recordDexRevenue('dex_swap', hop.tokenIn, hop.fee, parts, swapId);
+      const protocolShare = parts.treasury + parts.insurance;
+      if (protocolShare > 0) {
+        const reserves = updatedReserves.get(hop.poolId);
+        if (!reserves) throw new DexError('CORRUPT_POOL', `pool ${hop.poolId} was not updated`, 500);
+        if (reserves[hop.tokenIn] < protocolShare - 1e-9) {
+          throw new DexError('CORRUPT_POOL', `pool ${hop.poolId} cannot fund the protocol fee`, 500);
+        }
+        reserves[hop.tokenIn] -= protocolShare;
+        db.prepare("UPDATE dex_pools SET reserves = ?, updated_at = datetime('now') WHERE pool_id = ?").run(
+          JSON.stringify(reserves),
+          hop.poolId,
+        );
+      }
       refreshPoolStats(hop.poolId);
     }
 

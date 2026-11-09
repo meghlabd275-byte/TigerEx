@@ -230,8 +230,9 @@ export function poolDefinition(row: DexPoolRow): PoolDefinition {
  */
 export function applyPoolDeltas(
   deltas: Map<string, { tokenIn: string; tokenOut: string; amountIn: number; amountOut: number }[]>,
-): void {
+): Map<string, Record<string, number>> {
   const db = getDb();
+  const updated = new Map<string, Record<string, number>>();
   for (const [poolId, hops] of deltas) {
     const row = loadPool(poolId);
     const tokens = parseStringArray(row.tokens, 'tokens');
@@ -264,7 +265,9 @@ export function applyPoolDeltas(
     db.prepare(
       `UPDATE dex_pools SET reserves = ?, updated_at = datetime('now') WHERE pool_id = ?`,
     ).run(JSON.stringify(reserves), poolId);
+    updated.set(poolId, reserves);
   }
+  return updated;
 }
 
 /** Persist the new square-root price and active liquidity of a concentrated pool. */

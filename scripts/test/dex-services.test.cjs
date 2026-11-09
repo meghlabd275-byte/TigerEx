@@ -23,7 +23,8 @@ const { getDb, generateId, hashPassword } = require('../../.test-build/index.js'
 const { availableBalance, lockedBalance } = require('../../.test-build/ledger.js');
 const { DexError } = require('../../.test-build/pool-service.js');
 const { v3LiquidityForAmounts, v3AmountsForLiquidity } = require('../../.test-build/amm.js');
-const { executeSwap, quoteSwap, listPools, claimSponsoredSwap } = require('../../.test-build/swap-service.js');
+const { executeSwap, quoteSwap, listPools, claimSponsoredSwap, swapFeeSplit } = require('../../.test-build/swap-service.js');
+const { applySchedule } = require('../../.test-build/fee-engine.js');
 const { addLiquidity, removeLiquidity, userPositions } = require('../../.test-build/liquidity-service.js');
 const { stakeFarm, unstakeFarm, claimFarm, lockVetgr, vetgrStatus, voteGauge, submitBribe, claimBribe, currentEpoch, fundFarmRewards, rewardFundBalance, bribeEscrowAccount } =
   require('../../.test-build/farm-service.js');
@@ -129,8 +130,38 @@ test('a swap moves real balances and grows the input reserve', () => {
   assert.equal(availableBalance(user, 'TGR'), quote.amountOut);
 
   const reserves = reservesOf(poolId);
-  assert.equal(reserves.RUSD, 1001000);
+  // The pool keeps the LP share of the fee; the protocol's share (treasury and
+  // insurance) is carved out of the pool and credited to those accounts, so it
+  // is not left in the reserves as well.
+  const split = swapFeeSplit();
+  const parts = applySchedule(quote.fee, split);
+  assert.ok(Math.abs(reserves.RUSD - (1001000 - parts.treasury - parts.insurance)) < 1e-6);
   assert.ok(Math.abs(reserves.TGR - (1000000 - quote.amountOut)) < 1e-6);
+});
+
+test('a swap conserves total value: the protocol fee is carved out of the pool, not minted', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  const poolId = createPool('v2', ['RUSD', 'SOL'], { RUSD: 1000000, SOL: 50000 });
+
+  const totalValue = () => {
+    const r = reservesOf(poolId);
+    const treasury = Number(
+      db
+        .prepare("SELECT COALESCE(SUM(balance), 0) AS s FROM treasury_accounts WHERE asset IN ('RUSD','SOL')")
+        .get().s,
+    );
+    return availableBalance(user, 'RUSD') + availableBalance(user, 'SOL') + r.RUSD + r.SOL + treasury;
+  };
+
+  const before = totalValue();
+  executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'SOL', amountIn: 10000 });
+  const after = totalValue();
+
+  // A swap must move value, never create it. Before the carve-out fix the
+  // treasury share was credited while the whole fee stayed in the pool, so the
+  // total grew by exactly the protocol share.
+  assert.ok(Math.abs(after - before) < 1e-6, `value must be conserved, moved by ${after - before}`);
 });
 
 test('a settlement fee is taken from the output, not minted into the treasury', () => {
