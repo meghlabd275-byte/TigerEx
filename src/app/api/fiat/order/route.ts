@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb, generateId } from '@/lib/db';
 import { requireSession } from '@/lib/db/session';
 import { conversionRate } from '@/lib/db/convert';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 const DIRECTIONS = new Set(['buy', 'sell']);
 
@@ -15,6 +16,8 @@ const DIRECTIONS = new Set(['buy', 'sell']);
 export async function POST(request: NextRequest) {
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'fiat.order.post');
+  if (guard) return guard;
 
   let body: Record<string, unknown>;
   try {

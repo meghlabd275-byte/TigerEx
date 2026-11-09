@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { requireSession } from '@/lib/db/session';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 function parseJson(value: unknown): Record<string, unknown> {
   if (typeof value !== 'string' || !value) return {};
@@ -46,6 +47,8 @@ export async function GET(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'user.settings.put');
+  if (guard) return guard;
 
   let body: { notifications?: unknown; preferences?: unknown };
   try {

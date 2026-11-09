@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/db/session';
 import { deletionRequested } from '@/lib/security/account-deletion';
-import { fail, NO_STORE } from '@/lib/api/route-guards';
+import { fail, NO_STORE, enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Account deletion.
@@ -14,6 +14,8 @@ import { fail, NO_STORE } from '@/lib/api/route-guards';
 export async function POST(request: NextRequest) {
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'settings.delete-account.post');
+  if (guard) return guard;
 
   if (!deletionRequested(auth.user.userId)) {
     return fail(

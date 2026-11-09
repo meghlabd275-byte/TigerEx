@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, generateId } from '@/lib/db';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 const INQUIRY_TYPES = new Set(['custody', 'prime', 'otc', 'api', 'other']);
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -12,6 +13,9 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * unauthenticated but validates and bounds every field.
  */
 export async function POST(request: NextRequest) {
+  const guard = enforceRequestGuards(request, 'institution.inquiry', 10, 60_000);
+  if (guard) return guard;
+
   let body: Record<string, unknown>;
   try {
     body = await request.json();

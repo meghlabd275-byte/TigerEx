@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/db/session';
 import { ConvertError, executeConvert, listConvertHistory } from '@/lib/db/convert';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 const MAX_LIMIT = 100;
 
@@ -8,6 +9,8 @@ const MAX_LIMIT = 100;
 export async function POST(request: NextRequest) {
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'convert.trade.post');
+  if (guard) return guard;
 
   let body: { fromAsset?: unknown; toAsset?: unknown; amount?: unknown };
   try {

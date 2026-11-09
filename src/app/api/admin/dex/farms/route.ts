@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { validateFarmInput } from '@/lib/dex/validation';
@@ -28,6 +29,8 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.dex.farms.post');
+  if (guard) return guard;
 
   let body: Record<string, unknown>;
   try {
@@ -62,6 +65,8 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.dex.farms.put');
+  if (guard) return guard;
 
   let body: Record<string, unknown>;
   try {
@@ -106,6 +111,8 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.dex.farms.delete');
+  if (guard) return guard;
 
   const farmId = request.nextUrl.searchParams.get('farmId')?.trim();
   if (!farmId) return fail('VALIDATION_FAILED', 'farmId query parameter is required');

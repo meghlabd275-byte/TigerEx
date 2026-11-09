@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
-import { fail, readJson, NO_STORE } from '@/lib/api/route-guards';
+import { fail, readJson, NO_STORE, enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * DEX user administration.
@@ -56,6 +56,8 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.dex.users.post');
+  if (guard) return guard;
 
   const body = await readJson(request);
   if (!body) return fail('INVALID_BODY', 'A JSON object body is required');

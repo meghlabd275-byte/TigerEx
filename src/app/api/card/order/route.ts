@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/db/session';
 import { getDb, generateId } from '@/lib/db';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 const CARD_TYPES = new Set(['virtual', 'physical']);
 const CARD_CURRENCIES = new Set(['USDT', 'USD', 'EUR', 'GBP']);
@@ -15,6 +16,8 @@ const CARD_CURRENCIES = new Set(['USDT', 'USD', 'EUR', 'GBP']);
 export async function POST(request: NextRequest) {
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'card.order.post');
+  if (guard) return guard;
 
   let body: { cardType?: unknown; currency?: unknown };
   try {

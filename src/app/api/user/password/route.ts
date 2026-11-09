@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, hashPassword, verifyPassword } from '@/lib/db';
 import { requireSession } from '@/lib/db/session';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
  * Change the authenticated user's password.
@@ -11,6 +12,8 @@ import { requireSession } from '@/lib/db/session';
 export async function POST(request: NextRequest) {
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'user.password.post');
+  if (guard) return guard;
 
   let body: { currentPassword?: unknown; newPassword?: unknown };
   try {

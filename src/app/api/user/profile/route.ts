@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { requireSession } from '@/lib/db/session';
+import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /** Profile for the authenticated user. */
 export async function GET(request: NextRequest) {
@@ -62,6 +63,8 @@ export async function GET(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'user.profile.put');
+  if (guard) return guard;
 
   let body: Record<string, unknown>;
   try {
