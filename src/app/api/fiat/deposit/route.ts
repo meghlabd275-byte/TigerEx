@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error('Fiat deposit API error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
       { status: 500 }
     );
   }
@@ -100,7 +100,7 @@ export async function GET(request: NextRequest) {
   } catch (error: any) {
     console.error('Fiat deposit API error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
       { status: 500 }
     );
   }

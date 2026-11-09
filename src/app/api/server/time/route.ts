@@ -32,7 +32,7 @@ export async function GET() {
   } catch (error: any) {
     console.error('Server time API error:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Internal server error' },
+      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
       { status: 500 }
     );
   }
