@@ -648,44 +648,67 @@ export function applyFunding(
 
   const fundingId = generateId();
   const contractSize = Number(market.contract_size) || 1;
+  const settlement = market.settlement_asset;
 
   const run = db.transaction(() => {
-    for (const position of positions) {
+    // Funding is zero-sum between the two sides: what one side pays the other
+    // receives. A payer's money is routed to the receivers and only the surplus
+    // (a payer who cannot settle) goes to the insurance fund. A receiver is paid
+    // from that pot — never credited out of thin air — so the book cannot mint
+    // the settlement asset.
+    const payments = positions.map((position) => {
       const notional = Number(position.mark_price) * Number(position.quantity) * contractSize;
       // A negative payment is what the position owes; a positive one is what it
       // receives. `fundingPayment` already applies the long/short direction.
-      const payment = fundingPayment(notional, clamped, position.side === 'long' ? 'long' : 'short');
-      if (payment === 0) continue;
+      return fundingPayment(notional, clamped, position.side === 'long' ? 'long' : 'short');
+    });
 
-      const settlement = market.settlement_asset;
-      if (payment < 0) {
-        const owed = -payment;
-        if (availableBalance(position.user_id, settlement) + 1e-9 < owed) {
-          // The position cannot pay funding; the loss is booked against margin.
-          const payable = Math.min(owed, Number(position.margin));
-          consumeLocked(position.user_id, settlement, payable);
-          db.prepare('UPDATE futures_positions SET margin = margin - ? WHERE position_id = ?').run(
-            payable,
-            position.position_id,
-          );
-          addToInsuranceFund(market.symbol, payable);
-        } else {
-          debitAvailable(position.user_id, settlement, owed);
-          addToInsuranceFund(market.symbol, owed);
-        }
+    // Collect from each payer what it can actually settle, smallest debt first so
+    // a small balance is never skipped in favour of a larger one.
+    const payerEntries = payments
+      .map((payment, index) => ({ payment, index }))
+      .filter((entry) => entry.payment < 0)
+      .map((entry) => ({ index: entry.index, owed: -entry.payment }))
+      .sort((a, b) => a.owed - b.owed);
+
+    let pot = 0;
+    for (const { index, owed } of payerEntries) {
+      const payer = positions[index];
+      if (availableBalance(payer.user_id, settlement) + 1e-9 >= owed) {
+        debitAvailable(payer.user_id, settlement, owed);
+        pot += owed;
+        recordTransaction(payer.user_id, 'funding', settlement, owed, 0, 'completed', `Funding paid on ${market.symbol} at ${clamped}`);
       } else {
-        creditAvailable(position.user_id, settlement, payment);
+        // The position cannot pay funding; the loss is booked against margin and
+        // whatever it can pay is added to the pot.
+        const payable = Math.max(0, Math.min(owed, Number(payer.margin)));
+        if (payable > 0) {
+          consumeLocked(payer.user_id, settlement, payable);
+          db.prepare('UPDATE futures_positions SET margin = margin - ? WHERE position_id = ?').run(payable, payer.position_id);
+          pot += payable;
+        }
+        recordTransaction(payer.user_id, 'funding', settlement, owed, 0, 'completed', `Funding shortfall on ${market.symbol} at ${clamped}`);
       }
-      recordTransaction(
-        position.user_id,
-        'funding',
-        settlement,
-        Math.abs(payment),
-        0,
-        'completed',
-        `Funding ${payment < 0 ? 'paid' : 'received'} on ${market.symbol} at ${clamped}`,
-      );
     }
+
+    // Pay each receiver pro rata out of what was collected. When every payer
+    // settled in full the pot equals the total owed and each receiver is made
+    // whole; a shortfall scales every receiver down rather than minting.
+    const totalOwedToReceivers = payments.reduce((sum, payment) => (payment > 0 ? sum + payment : sum), 0);
+    const scale = totalOwedToReceivers > 0 ? Math.min(1, pot / totalOwedToReceivers) : 0;
+    let paid = 0;
+    for (let index = 0; index < positions.length; index += 1) {
+      const amount = payments[index] > 0 ? payments[index] * scale : 0;
+      if (amount <= 0) continue;
+      creditAvailable(positions[index].user_id, settlement, amount);
+      paid += amount;
+      recordTransaction(positions[index].user_id, 'funding', settlement, amount, 0, 'completed', `Funding received on ${market.symbol} at ${clamped}`);
+    }
+
+    // Only a shortfall surplus (payers who could not settle) remains; it is the
+    // insurance fund's, not the receivers'.
+    const surplus = pot - paid;
+    if (surplus > 1e-12) addToInsuranceFund(market.symbol, surplus);
 
     db.prepare(
       `INSERT INTO funding_rates

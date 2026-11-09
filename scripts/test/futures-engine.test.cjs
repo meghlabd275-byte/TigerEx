@@ -362,17 +362,59 @@ test('funding charges a long when the rate is positive and credits the insurance
   assert.equal(applyFunding(symbol, 5).rate, 0.01);
 });
 
-test('funding pays a short when the rate is positive', () => {
+test('funding moves value from the paying side to the receiving side and mints nothing', () => {
   const symbol = pricedContract('SETH', 3000);
-  const user = seedUser();
-  credit(user, 'RUSD', 100000);
+  const longUser = seedUser();
+  const shortUser = seedUser();
+  credit(longUser, 'RUSD', 100000);
+  credit(shortUser, 'RUSD', 100000);
 
-  placeFuturesOrder(user, { symbol, side: 'sell', type: 'market', quantity: 1, leverage: 10 });
-  const before = availableBalance(user, 'RUSD');
+  placeFuturesOrder(longUser, { symbol, side: 'buy', type: 'market', quantity: 1, leverage: 10 });
+  placeFuturesOrder(shortUser, { symbol, side: 'sell', type: 'market', quantity: 1, leverage: 10 });
+
+  const longBefore = availableBalance(longUser, 'RUSD');
+  const shortBefore = availableBalance(shortUser, 'RUSD');
 
   applyFunding(symbol, 0.001);
-  // 3,000 notional at 0.1% pays the short 3.
-  assert.ok(availableBalance(user, 'RUSD') > before + 2);
+  // 3,000 notional at 0.1% is 3: the long pays it, the short receives it, and
+  // the book cannot mint the difference.
+  const longDelta = availableBalance(longUser, 'RUSD') - longBefore;
+  const shortDelta = availableBalance(shortUser, 'RUSD') - shortBefore;
+  assert.ok(shortDelta > 2, `the short should receive about 3, got ${shortDelta}`);
+  assert.ok(longDelta < -2, `the long should pay about 3, got ${longDelta}`);
+  assert.ok(Math.abs(shortDelta + longDelta) < 1e-6, 'funding must be zero-sum between the two sides');
+
+  const fund = db.prepare('SELECT balance FROM insurance_funds WHERE contract = ?').get(symbol);
+  assert.ok(!fund || Number(fund.balance) < 1e-6, 'a fully-settled funding round must not feed the insurance fund');
+
+  // Retire the positions so the later global liquidation scan is unaffected.
+  db.prepare("UPDATE futures_positions SET status = 'closed' WHERE symbol = ?").run(symbol);
+});
+
+test('a funding shortfall scales the receiver down instead of minting', () => {
+  const symbol = pricedContract('SLTC', 3000);
+  const longUser = seedUser();
+  const shortUser = seedUser();
+  credit(longUser, 'RUSD', 100000);
+  credit(shortUser, 'RUSD', 100000);
+
+  placeFuturesOrder(longUser, { symbol, side: 'buy', type: 'market', quantity: 1, leverage: 10 });
+  placeFuturesOrder(shortUser, { symbol, side: 'sell', type: 'market', quantity: 1, leverage: 10 });
+
+  // Strip the long's ability to pay: no spendable balance and no margin.
+  db.prepare(
+    'UPDATE balances SET available = 0, locked = 0 WHERE wallet_id IN (SELECT wallet_id FROM wallets WHERE user_id = ?)',
+  ).run(longUser);
+  db.prepare('UPDATE futures_positions SET margin = 0 WHERE user_id = ?').run(longUser);
+
+  const shortBefore = availableBalance(shortUser, 'RUSD');
+  applyFunding(symbol, 0.001);
+  // The long cannot pay, so the short receives nothing: the missing funding is
+  // not conjured into the receiver's balance.
+  assert.equal(availableBalance(shortUser, 'RUSD'), shortBefore);
+
+  // Retire the positions so the later global liquidation scan is unaffected.
+  db.prepare("UPDATE futures_positions SET status = 'closed' WHERE symbol = ?").run(symbol);
 });
 
 test('a breached position is queued once and then liquidated at the mark', () => {
