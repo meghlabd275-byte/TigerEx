@@ -208,6 +208,16 @@ separate backend. `admin-system.js` is real but is not mounted by
   material must never be serialized into an HTTP response or written to logs.
 - Use parameterized SQL only. The schema uses UUID primary keys and `DECIMAL`
   amounts; pass amounts as strings.
+- Compare timestamps in SQL through `datetime()`, never lexically. Rows store
+  `created_at` as `datetime('now')` (`YYYY-MM-DD HH:MM:SS`), but a window bound
+  built with `Date.toISOString()` is `...THH:MM:SS.sssZ`. The literal `T` sorts
+  after the space, so `created_at >= ?` silently drops every row. Write
+  `datetime(created_at) >= datetime(?)` instead.
+- Read a zone-less DB timestamp in JS through `parseUtcTimestamp` in
+  `src/lib/trading/candles.ts`, not `Date.parse`. `Date.parse` treats
+  `YYYY-MM-DD HH:MM:SS` as local time, shifting it by the host offset; the
+  helper reads that shape as UTC and leaves a zone-carrying value to
+  `Date.parse`.
 - Write Go error paths so that a missing dependency (DB, Redis, RPC) surfaces as
   an error, not as a zero value.
 
