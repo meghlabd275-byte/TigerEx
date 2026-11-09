@@ -390,12 +390,19 @@ test('a perpetual opens, moves margin, and closes with realised PnL', () => {
   assert.equal(opened.entryPrice, 50000);
   assert.ok(opened.margin > 0);
   assert.equal(lockedBalance(trader, 'RUSD'), opened.margin);
+  assert.equal(availableBalance(trader, 'RUSD'), 100000 - opened.margin - opened.fee);
 
   const closed = closePosition(trader, opened.positionId);
   // Closing at the entry mark realises no price PnL, only the round-trip fees.
   const roundTripFees = (opened.margin * opened.leverage * 5) / 10_000 * 2;
   assert.ok(Math.abs(closed.pnl + roundTripFees) < 1e-6, `pnl ${closed.pnl} should be the negative of the fees`);
   assert.equal(lockedBalance(trader, 'RUSD'), 0);
+  // The margin is unlocked and only the two fees leave the account: a close
+  // must never credit the margin back a second time.
+  assert.ok(
+    Math.abs(availableBalance(trader, 'RUSD') - (100000 - roundTripFees)) < 1e-6,
+    `available ${availableBalance(trader, 'RUSD')} should be the opening balance less the round-trip fees`,
+  );
   assert.equal(perpPositions(trader).length, 0);
 });
 
@@ -410,6 +417,14 @@ test('a position below its maintenance margin is liquidated', () => {
   const row = db.prepare('SELECT status FROM dex_perp_positions WHERE position_id = ?').get(opened.positionId);
   assert.equal(row.status, 'liquidated');
   assert.equal(lockedBalance(trader, 'RUSD'), 0);
+  // Equity at 1000 is far below zero, so the whole margin is seized. The trader
+  // must end with the opening balance less the open fee and the lost margin: a
+  // liquidation must never credit the margin back.
+  const lost = opened.margin;
+  assert.ok(
+    Math.abs(availableBalance(trader, 'RUSD') - (100000 - opened.fee - lost)) < 1e-6,
+    `available ${availableBalance(trader, 'RUSD')} should be the opening balance less the fee and the margin`,
+  );
 });
 
 test('funding moves collateral between the two sides of a market', () => {
@@ -422,10 +437,26 @@ test('funding moves collateral between the two sides of a market', () => {
   const shortPos = openPosition({ userId: short, symbol, side: 'short', size: 10, leverage: 10 });
 
   const before = db.prepare('SELECT collateral FROM dex_perp_positions WHERE position_id = ?').get(longPos.positionId);
+  const longLockedBefore = lockedBalance(long, 'RUSD');
+  const shortLockedBefore = lockedBalance(short, 'RUSD');
   applyFunding(symbol, 0.001);
   const after = db.prepare('SELECT collateral FROM dex_perp_positions WHERE position_id = ?').get(longPos.positionId);
   assert.ok(after.collateral < before.collateral, 'a positive rate charges the long');
-  assert.ok(shortPos.positionId);
+
+  // The ledger must track the collateral exactly: the payer's reservation is
+  // reduced by the payment and the receiver's is increased by the same amount,
+  // so a receiver can still close and recover its margin plus funding.
+  const longLockedAfter = lockedBalance(long, 'RUSD');
+  const shortLockedAfter = lockedBalance(short, 'RUSD');
+  assert.ok(Math.abs(longLockedAfter - after.collateral) < 1e-9, 'the long reservation must equal its collateral');
+  assert.ok(longLockedAfter < longLockedBefore, 'the long pays funding out of its reservation');
+  assert.ok(shortLockedAfter > shortLockedBefore, 'the short is paid funding into its reservation');
+  const shortCollateral = db.prepare('SELECT collateral FROM dex_perp_positions WHERE position_id = ?').get(shortPos.positionId).collateral;
+  assert.ok(Math.abs(shortLockedAfter - shortCollateral) < 1e-9, 'the short reservation must equal its collateral');
+  // The receiver can close, which the old funding path made impossible.
+  const closed = closePosition(short, shortPos.positionId);
+  assert.equal(closed.positionId, shortPos.positionId);
+  assert.equal(lockedBalance(short, 'RUSD'), 0);
 });
 
 test('the keeper liquidates using the market own maintenance margin', () => {

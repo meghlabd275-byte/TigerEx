@@ -267,6 +267,22 @@ export function consumeLocked(userId: string, asset: string, amount: number, wal
   })();
 }
 
+/**
+ * Add to the locked amount without drawing on available.
+ *
+ * This is the receiving half of a zero-sum transfer between reservations, such
+ * as a perpetual that receives a funding payment: the payer's locked amount is
+ * reduced by the same total, so the two together conserve the balance. It must
+ * never be used to create value from nothing.
+ */
+export function creditLocked(userId: string, asset: string, amount: number, walletType = 'spot'): void {
+  assertAmount(amount);
+  const row = balanceRow(userId, asset, walletType);
+  getDb()
+    .prepare("UPDATE balances SET locked = locked + ?, updated_at = datetime('now') WHERE balance_id = ?")
+    .run(amount, row.balance_id);
+}
+
 /** Record a user-facing transaction row for a balance movement. */
 export function recordTransaction(
   userId: string,

@@ -10,7 +10,7 @@
  */
 
 import { getDb, generateId } from '@/lib/db';
-import { lockAvailable, unlockAvailable, creditAvailable, debitAvailable, covers, availableBalance, recordTransaction } from '@/lib/db/ledger';
+import { lockAvailable, unlockAvailable, creditAvailable, debitAvailable, covers, availableBalance, recordTransaction, consumeLocked, creditLocked } from '@/lib/db/ledger';
 import {
   DexError,
   dexSetting,
@@ -66,6 +66,7 @@ interface PositionRow {
   entry_price: number;
   leverage: number;
   margin_mode: string;
+  collateral_asset: string;
   collateral: number;
   liquidation_price: number;
   status: string;
@@ -230,19 +231,24 @@ export function closePosition(userId: string, positionId: string): ClosePosition
   const openFee = (notional * market.taker_fee_bps) / 10_000;
   const closeFee = (position.size * exitPrice * market.taker_fee_bps) / 10_000;
   const pnl = realizedPnl(side, position.size, position.entry_price, exitPrice, market.taker_fee_bps / 10_000, market.taker_fee_bps / 10_000);
-  const released = position.collateral + pnl;
-
   const settlement = market.settlement_asset;
+  // The margin is locked, so closing unlocks it. The price PnL and the close
+  // fee then move on top of the unlocked margin. The open fee was already
+  // charged when the position opened, so it is not charged again: the net
+  // change to the trader's total balance across open and close is `pnl`.
+  const settlementDelta = pnl + openFee;
+  const released = Math.max(0, position.collateral + settlementDelta);
+
   return getDb().transaction(() => {
     unlockAvailable(userId, settlement, position.collateral);
-    if (released > 0) {
-      creditAvailable(userId, settlement, released);
-    } else {
-      // A loss beyond the margin cannot make the balance negative: the position
-      // is capped at the margin it posted, which is the isolated-loss guarantee.
-      creditAvailable(userId, settlement, Math.max(0, released));
+    if (settlementDelta > 0) {
+      creditAvailable(userId, settlement, settlementDelta);
+    } else if (settlementDelta < 0) {
+      // A loss cannot push the account negative: it is capped at the margin the
+      // position posted, which is the isolated-loss guarantee.
+      debitAvailable(userId, settlement, Math.min(-settlementDelta, position.collateral));
     }
-    recordTransaction(userId, 'dex_perp_close', settlement, Math.max(released, 0), closeFee, 'completed', `close ${position.market}`);
+    recordTransaction(userId, 'dex_perp_close', settlement, released, Math.max(closeFee, 0), 'completed', `close ${position.market}`);
 
     const feeParts = applySchedule(Math.max(closeFee, 0), perpFeeSplit());
     recordDexRevenue('dex_perp_fee', settlement, Math.max(closeFee, 0), feeParts, positionId);
@@ -265,9 +271,12 @@ function loadPosition(userId: string, positionId: string): PositionRow {
 /**
  * Apply a funding payment to every open position of a market.
  *
- * Longs pay shorts when the rate is positive. The payer's collateral is reduced
- * and the receiver's increased, both in the settlement asset, and the movement
- * is recorded so the funding history is auditable.
+ * Longs pay shorts when the rate is positive. Funding is settled in two passes
+ * so the ledger stays in step with the position collateral: first every payer's
+ * margin is charged, then every receiver is credited. The two passes move the
+ * same total, so funding is zero-sum and the reservations still add up to the
+ * collateral on each position. A payer whose margin cannot cover its payment is
+ * liquidated rather than allowed to go negative.
  */
 export function applyFunding(symbol: string, rate: number): number {
   if (!Number.isFinite(rate)) throw new DexError('INVALID_RATE', 'funding rate must be finite', 400);
@@ -275,20 +284,39 @@ export function applyFunding(symbol: string, rate: number): number {
     .prepare("SELECT * FROM dex_perp_positions WHERE market = ? AND status = 'open'")
     .all(symbol.toUpperCase()) as PositionRow[];
   let total = 0;
+
+  // Work out each position's signed payment and the mark it was struck at.
+  const plan = positions.map((position) => {
+    const mark = markPrice(position.market);
+    const payment = fundingPayment(position.size, mark, rate);
+    const side = position.side as PerpSide;
+    // A positive rate means longs pay shorts.
+    const signed = side === 'long' ? -payment : payment;
+    return { position, mark, signed };
+  });
+
   getDb().transaction(() => {
-    for (const position of positions) {
-      const mark = markPrice(position.market);
-      const payment = fundingPayment(position.size, mark, rate);
-      const side = position.side as PerpSide;
-      // A positive rate means longs pay shorts.
-      const signed = side === 'long' ? -payment : payment;
-      const newMargin = position.collateral + signed;
-      if (newMargin <= 0) {
-        liquidatePosition(position.position_id, mark);
+    const payers = plan.filter((entry) => entry.signed < 0);
+    const receivers = plan.filter((entry) => entry.signed > 0);
+
+    for (const entry of payers) {
+      const charge = Math.min(-entry.signed, entry.position.collateral);
+      if (entry.position.collateral - charge <= 0) {
+        liquidatePosition(entry.position.position_id, entry.mark);
         continue;
       }
-      getDb().prepare('UPDATE dex_perp_positions SET collateral = ? WHERE position_id = ?').run(newMargin, position.position_id);
-      total += Math.abs(payment);
+      consumeLocked(entry.position.user_id, entry.position.collateral_asset, charge);
+      getDb()
+        .prepare('UPDATE dex_perp_positions SET collateral = collateral - ? WHERE position_id = ?')
+        .run(charge, entry.position.position_id);
+      total += charge;
+    }
+
+    for (const entry of receivers) {
+      creditLocked(entry.position.user_id, entry.position.collateral_asset, entry.signed);
+      getDb()
+        .prepare('UPDATE dex_perp_positions SET collateral = collateral + ? WHERE position_id = ?')
+        .run(entry.signed, entry.position.position_id);
     }
   })();
   return total;
@@ -323,10 +351,13 @@ export function liquidatePosition(positionId: string, mark?: number): Liquidatio
 
   return getDb().transaction(() => {
     unlockAvailable(position.user_id, market.settlement_asset, position.collateral);
-    // Only the collateral net of the penalty returns to the trader; a position
-    // that has lost more than its margin returns nothing.
+    // The trader keeps whatever equity is left after the penalty; that is the
+    // same as releasing the collateral and then removing the loss and penalty,
+    // so the net movement is `equity - penalty` on top of the unlocked margin.
     const returned = Math.max(0, equity - penalty);
+    const seized = position.collateral - returned;
     if (returned > 0) creditAvailable(position.user_id, market.settlement_asset, returned);
+    if (seized > 0) debitAvailable(position.user_id, market.settlement_asset, seized);
     recordTransaction(position.user_id, 'dex_perp_liquidation', market.settlement_asset, returned, penalty, 'completed', `liquidate ${position.market}`);
 
     if (penalty > 0) {
