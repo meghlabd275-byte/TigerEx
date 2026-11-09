@@ -1,4 +1,5 @@
 import { getDb, generateId } from '@/lib/db';
+import { availableBalance, debitAvailable, creditAvailable } from '@/lib/db/ledger';
 
 export const CONVERT_FEE_RATE = 0.001; // 0.1% conversion fee
 
@@ -78,63 +79,14 @@ export class ConvertError extends Error {
   }
 }
 
-function availableBalance(userId: string, asset: string): number {
-  const db = getDb();
-  const row = db
-    .prepare(
-      `SELECT COALESCE(SUM(b.available), 0) AS available
-         FROM balances b
-         JOIN wallets w ON w.wallet_id = b.wallet_id
-        WHERE w.user_id = ? AND b.currency = ?`,
-    )
-    .get(userId, asset) as { available: number };
-  return row?.available ?? 0;
-}
-
-function credit(userId: string, asset: string, amount: number): void {
-  const db = getDb();
-  const existing = db
-    .prepare(
-      `SELECT b.balance_id, b.available
-         FROM balances b
-         JOIN wallets w ON w.wallet_id = b.wallet_id
-        WHERE w.user_id = ? AND b.currency = ?
-        ORDER BY b.available DESC LIMIT 1`,
-    )
-    .get(userId, asset) as { balance_id: string; available: number } | undefined;
-
-  if (existing) {
-    db.prepare('UPDATE balances SET available = available + ?, updated_at = datetime(\'now\') WHERE balance_id = ?').run(
-      amount,
-      existing.balance_id,
-    );
-    return;
-  }
-
-  // No balance row for this asset yet: attach it to the user's spot wallet.
-  let wallet = db
-    .prepare(`SELECT wallet_id FROM wallets WHERE user_id = ? AND wallet_type = 'spot' LIMIT 1`)
-    .get(userId) as { wallet_id: string } | undefined;
-  if (!wallet) {
-    const walletId = generateId();
-    db.prepare(
-      `INSERT INTO wallets (wallet_id, user_id, wallet_type, currency, network, status)
-       VALUES (?, ?, 'spot', ?, 'TIGEREX', 'active')`,
-    ).run(walletId, userId, asset);
-    wallet = { wallet_id: walletId };
-  }
-  db.prepare(
-    `INSERT INTO balances (balance_id, wallet_id, currency, available, locked)
-     VALUES (?, ?, ?, ?, 0)`,
-  ).run(generateId(), wallet.wallet_id, asset, amount);
-}
-
 /**
  * Execute a conversion for the authenticated user.
  *
  * Debits the source asset, credits the destination asset at the quoted rate
  * and writes a transaction record. The whole operation runs in one SQLite
- * transaction so a failure cannot leave the two sides out of balance.
+ * transaction so a failure cannot leave the two sides out of balance, and the
+ * debit goes through the ledger, which spreads it across every balance row that
+ * holds the asset rather than trusting a single row.
  */
 export function executeConvert(userId: string, fromAsset: string, toAsset: string, amount: number): ConvertQuote {
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -149,13 +101,12 @@ export function executeConvert(userId: string, fromAsset: string, toAsset: strin
   const from = quote.fromAsset;
   const to = quote.toAsset;
 
-  if (availableBalance(userId, from) + 1e-9 < amount) {
-    throw new ConvertError('INSUFFICIENT_BALANCE', `Insufficient ${from} balance`, 400);
-  }
-
   const run = db.transaction(() => {
-    credit(userId, from, -amount);
-    credit(userId, to, quote.toAmount);
+    if (availableBalance(userId, from) + 1e-9 < amount) {
+      throw new ConvertError('INSUFFICIENT_BALANCE', `Insufficient ${from} balance`, 400);
+    }
+    debitAvailable(userId, from, amount);
+    creditAvailable(userId, to, quote.toAmount);
     db.prepare(
       `INSERT INTO transactions (transaction_id, user_id, type, currency, amount, fee, status, memo)
        VALUES (?, ?, 'convert', ?, ?, ?, 'completed', ?)`,
