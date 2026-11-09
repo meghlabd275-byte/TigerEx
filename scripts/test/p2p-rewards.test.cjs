@@ -26,6 +26,7 @@ const {
   closeAd,
   placeOrder,
   advanceOrder,
+  resolveDispute,
   userOrders,
   paymentMethods,
   P2pError,
@@ -221,6 +222,44 @@ test('a dispute keeps the escrow locked until an operator resolves it', () => {
   advanceOrder(seller, order.orderId, 'resolve', { splitToBuyer: 25, reason: 'partial' });
   assert.equal(availableBalance(buyer, 'USDT'), 25);
   assert.equal(lockedBalance(seller, 'USDT'), 60); // ad escrow only
+});
+
+test('an operator resolution releases the escrow without the caller being a party', () => {
+  const seller = seedUser();
+  const buyer = seedUser();
+  fund(seller, 'USDT', 100);
+  const created = ad(seller, 100);
+  const order = placeOrder({ buyerId: buyer, offerId: created.id, amount: 40, paymentMethod: 'PayPal' });
+  advanceOrder(buyer, order.orderId, 'pay');
+  advanceOrder(buyer, order.orderId, 'dispute', { reason: 'seller not responding' });
+
+  // The operator is neither the buyer nor the seller, so it must go through the
+  // operator resolver rather than `advanceOrder`.
+  const result = resolveDispute(order.orderId, 10, 'release_to_buyer');
+  assert.equal(result.status, 'released');
+  assert.equal(availableBalance(buyer, 'USDT'), 10);
+  assert.equal(availableBalance(seller, 'USDT'), 30); // 40 escrow - 10 to buyer
+  assert.equal(lockedBalance(seller, 'USDT'), 60); // remaining ad escrow
+
+  const row = db.prepare('SELECT status FROM p2p_orders WHERE order_id = ?').get(order.orderId);
+  assert.equal(row.status, 'released');
+  const dispute = db.prepare('SELECT status FROM p2p_disputes WHERE order_id = ?').get(order.orderId);
+  assert.equal(dispute.status, 'resolved');
+});
+
+test('an operator resolution refuses an amount larger than the escrow', () => {
+  const seller = seedUser();
+  const buyer = seedUser();
+  fund(seller, 'USDT', 100);
+  const created = ad(seller, 100);
+  const order = placeOrder({ buyerId: buyer, offerId: created.id, amount: 40, paymentMethod: 'PayPal' });
+  advanceOrder(buyer, order.orderId, 'pay');
+  advanceOrder(buyer, order.orderId, 'dispute', { reason: 'seller not responding' });
+
+  assert.throws(() => resolveDispute(order.orderId, 41, 'split'), /between 0 and the escrowed amount/);
+  // Nothing moved and the dispute is still open.
+  assert.equal(availableBalance(buyer, 'USDT'), 0);
+  assert.equal(db.prepare('SELECT status FROM p2p_disputes WHERE order_id = ?').get(order.orderId).status, 'open');
 });
 
 test('the caller sees the orders they are party to', () => {

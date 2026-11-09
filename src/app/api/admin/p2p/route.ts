@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
+import { resolveDispute, P2pError } from '@/lib/p2p/market';
 import { fail, readJson, enforceRequestGuards, parseJsonColumn, NO_STORE } from '@/lib/api/route-guards';
 
 /**
@@ -91,19 +92,50 @@ export async function PUT(request: NextRequest) {
   }
 
   const db = getDb();
-  const dispute = db.prepare('SELECT status FROM p2p_disputes WHERE dispute_id = ?').get(disputeId) as
-    | { status: string }
-    | undefined;
+  const dispute = db
+    .prepare('SELECT dispute_id, order_id, status FROM p2p_disputes WHERE dispute_id = ?')
+    .get(disputeId) as { dispute_id: string; order_id: string; status: string } | undefined;
   if (!dispute) return fail('UNKNOWN_DISPUTE', 'No such dispute', 404);
   if (dispute.status !== 'open') return fail('ALREADY_RESOLVED', `This dispute is already ${dispute.status}`, 409);
 
-  db.prepare("UPDATE p2p_disputes SET status = 'resolved', resolution = ? WHERE dispute_id = ?").run(resolution, disputeId);
+  // The decision has to move the escrow, not just record it: resolving a dispute
+  // releases the seller's locked asset to whichever side the operator chose.
+  // `release_to_buyer` pays the buyer in full, `refund_to_seller` returns it to
+  // the seller, and `split` takes a `buyerPercent` of the escrowed amount.
+  const order = db
+    .prepare('SELECT escrow_amount FROM p2p_orders WHERE order_id = ?')
+    .get(dispute.order_id) as { escrow_amount: number } | undefined;
+  if (!order) return fail('UNKNOWN_ORDER', 'The disputed order no longer exists', 404);
+  const escrow = Number(order.escrow_amount) || 0;
+
+  let splitToBuyer: number;
+  if (resolution === 'release_to_buyer') {
+    splitToBuyer = escrow;
+  } else if (resolution === 'refund_to_seller') {
+    splitToBuyer = 0;
+  } else {
+    const percent = Number(body.buyerPercent);
+    if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+      return fail('VALIDATION_FAILED', 'A split resolution requires buyerPercent between 0 and 100');
+    }
+    splitToBuyer = (escrow * percent) / 100;
+  }
+
+  try {
+    resolveDispute(dispute.order_id, splitToBuyer, resolution);
+  } catch (error) {
+    if (error instanceof P2pError) return fail(error.code, error.message, error.status);
+    throw error;
+  }
 
   recordAdminAction(request, auth.admin, 'p2p.dispute.resolve', {
     type: 'p2p_dispute',
     id: disputeId,
-    detail: { resolution },
+    detail: { resolution, escrow, toBuyer: splitToBuyer, toSeller: escrow - splitToBuyer },
   });
 
-  return NextResponse.json({ success: true, disputeId, resolution }, { headers: NO_STORE });
+  return NextResponse.json(
+    { success: true, disputeId, resolution, toBuyer: splitToBuyer, toSeller: escrow - splitToBuyer },
+    { headers: NO_STORE },
+  );
 }

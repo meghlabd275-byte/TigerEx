@@ -418,17 +418,7 @@ export function advanceOrder(
       if (!Number.isFinite(toBuyer) || toBuyer < 0 || toBuyer > amount) {
         throw new P2pError('VALIDATION_FAILED', 'splitToBuyer must be between 0 and the escrowed amount');
       }
-      consumeLocked(order.seller_id, order.asset, amount);
-      if (toBuyer > 0) creditAvailable(order.buyer_id, order.asset, toBuyer);
-      if (amount - toBuyer > 0) creditAvailable(order.seller_id, order.asset, amount - toBuyer);
-      db.prepare("UPDATE p2p_orders SET status = 'released', released_at = ? WHERE order_id = ?").run(
-        new Date().toISOString(),
-        orderId,
-      );
-      db.prepare("UPDATE p2p_disputes SET status = 'resolved', resolution = ? WHERE order_id = ? AND status = 'open'").run(
-        options.reason ?? 'resolved by operator',
-        orderId,
-      );
+      applyResolve(order, toBuyer, options.reason ?? 'resolved by operator');
       return;
     }
 
@@ -442,6 +432,57 @@ export function advanceOrder(
   })();
 
   return { status: event === 'resolve' || event === 'release' ? 'released' : next.status };
+}
+
+/**
+ * Resolve a disputed order as an operator.
+ *
+ * The escrow split is the operator's decision, so this is the one path that may
+ * move a disputed order's funds without the caller being a party to it. It runs
+ * the same escrow movement as `advanceOrder`'s `resolve` event, so the state
+ * machine and the balance movements stay identical.
+ */
+export function resolveDispute(orderId: string, splitToBuyer: number, reason: string): { status: string } {
+  const db = getDb();
+  const order = loadOrder(orderId);
+  const next = transition(order.status as P2pStatus, 'resolve');
+  if ('error' in next) throw new P2pError('ILLEGAL_TRANSITION', next.error);
+
+  const amount = Number(order.escrow_amount) || 0;
+  const toBuyer = Number(splitToBuyer);
+  if (!Number.isFinite(toBuyer) || toBuyer < 0 || toBuyer > amount + 1e-9) {
+    throw new P2pError('VALIDATION_FAILED', 'splitToBuyer must be between 0 and the escrowed amount');
+  }
+
+  db.transaction(() => applyResolve(order, toBuyer, String(reason ?? 'resolved by operator').slice(0, 500)))();
+  return { status: 'released' };
+}
+
+/**
+ * Move a disputed order's escrow to the two parties and close the order.
+ *
+ * Assumes it runs inside a transaction. The escrowed asset leaves the seller's
+ * locked balance, the buyer receives `toBuyer`, and the seller keeps the
+ * remainder; the dispute row records the operator's decision.
+ */
+function applyResolve(
+  order: ReturnType<typeof loadOrder>,
+  toBuyer: number,
+  reason: string,
+): void {
+  const db = getDb();
+  const amount = Number(order.escrow_amount) || 0;
+  consumeLocked(order.seller_id, order.asset, amount);
+  if (toBuyer > 0) creditAvailable(order.buyer_id, order.asset, toBuyer);
+  if (amount - toBuyer > 0) creditAvailable(order.seller_id, order.asset, amount - toBuyer);
+  db.prepare("UPDATE p2p_orders SET status = 'released', released_at = ? WHERE order_id = ?").run(
+    new Date().toISOString(),
+    order.order_id,
+  );
+  db.prepare("UPDATE p2p_disputes SET status = 'resolved', resolution = ? WHERE order_id = ? AND status = 'open'").run(
+    reason,
+    order.order_id,
+  );
 }
 
 /** The caller's P2P orders, newest first. */
