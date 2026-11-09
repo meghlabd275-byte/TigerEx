@@ -274,6 +274,33 @@ test('an expired option contract cannot be opened', () => {
   );
 });
 
+test('a written option returns its collateral at settlement when it expires out of the money', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  setPrice('BTCUSDT', 50000);
+  const expiryNs = Date.now() * 1e6 + 30 * 86400e9;
+  listOption('BTC-60000-C-W', 'BTC', 'call', 60000, expiryNs);
+
+  const before = availableBalance(user, 'RUSD');
+  const position = optionsEngine.openPosition({ userId: user, symbol: 'BTC-60000-C-W', side: 'short', quantity: 1 });
+  const afterOpen = availableBalance(user, 'RUSD');
+  assert.ok(afterOpen < before, 'the writer posts the premium as collateral');
+
+  // Expire out of the money: the intrinsic is zero, so the writer keeps the
+  // collateral and loses only the taker fee charged when the position opened.
+  const market = optionsEngine.getOptionsMarket('BTC-60000-C-W');
+  const result = optionsEngine.settleExpired(market, expiryNs / 1e6 + 1000);
+  assert.equal(result.settled, 1);
+  const afterSettle = availableBalance(user, 'RUSD');
+
+  // The posted collateral (the premium) comes back; the old path left it with
+  // the venue and destroyed it.
+  assert.ok(
+    Math.abs(afterSettle - afterOpen - position.entryPrice) < 1e-6,
+    `collateral returned: recovered ${afterSettle - afterOpen}, premium ${position.entryPrice}`,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Leveraged tokens (ETF)
 // ---------------------------------------------------------------------------

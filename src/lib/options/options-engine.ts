@@ -12,7 +12,7 @@
  */
 
 import { getDb, generateId } from '@/lib/db';
-import { debitAvailable, creditAvailable, recordTransaction, LedgerError } from '@/lib/db/ledger';
+import { debitAvailable, creditAvailable, recordTransaction } from '@/lib/db/ledger';
 import { usdPrice } from '@/lib/db/portfolio';
 import { blackScholes, settlementValue, impliedVolatility, type OptionGreeks } from '@/lib/options/pricing';
 
@@ -486,19 +486,20 @@ export function settleExpired(market: OptionsMarket, nowMs: number = Date.now())
       const value = intrinsicPerContract * quantity;
       const realizedPnl = value - entry * quantity * (side === 'long' ? 1 : -1);
 
-      if (value > 0) {
-        creditAvailable(String(position.user_id), market.settlementAsset, value);
-      } else if (value < 0) {
-        // A short that settled in the money pays out; the collateral was
-        // debited at open, so this only claws back the intrinsic.
-        try {
-          debitAvailable(String(position.user_id), market.settlementAsset, -value);
-        } catch (error) {
-          if (!(error instanceof LedgerError)) throw error;
-          // A writer that cannot pay is recorded as settled with a zero payout
-          // rather than leaving the position open; the shortfall is the
-          // exchange's credit risk and is surfaced in the position row.
+      // A writer posted the premium as collateral at open, so settlement first
+      // returns that collateral and then settles the intrinsic. An out-of-the-
+      // money writer keeps the collateral in full (only the open fee is lost);
+      // an in-the-money writer keeps the remainder after paying the intrinsic.
+      // A writer that cannot cover the intrinsic forfeits the collateral and is
+      // recorded as settled with the debt, rather than leaving the position
+      // open — that shortfall is the venue's credit risk.
+      const returnedCollateral = side === 'short' ? Math.max(0, entry * quantity - Math.max(-value, 0)) : 0;
+      if (side === 'short') {
+        if (returnedCollateral > 0) {
+          creditAvailable(String(position.user_id), market.settlementAsset, returnedCollateral);
         }
+      } else if (value > 0) {
+        creditAvailable(String(position.user_id), market.settlementAsset, value);
       }
 
       db.prepare(
