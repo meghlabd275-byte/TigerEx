@@ -33,6 +33,7 @@ const { openPosition, closePosition, applyFunding, liquidatePosition, perpPositi
 const { supply, borrow, repay, withdrawSupply, flashLoan, listLendingMarkets, accrueInterest, liquidateBorrow } = require('../../.test-build/margin-service.js');
 const { contribute, claimRaise, launchEscrowAccount, listNft, buyNft, initiateBridge, releaseBridge } = require('../../.test-build/launch-service.js');
 const { settleDueLimitOrders, runDueDcaPlans, runDueTwapPlans, runPerpCycle, runKeeperCycle } = require('../../.test-build/keeper.js');
+const { scanCopySwaps, mirrorCopySwaps, copyMirrors } = require('../../.test-build/copy-service.js');
 
 const db = getDb();
 
@@ -221,6 +222,74 @@ test('a sponsored swap allowance counts only sponsored swaps, not paid ones', ()
   }
   assert.deepEqual(sponsored, [true, true, true, false]);
   assert.equal(claimSponsoredSwap(user), false);
+});
+
+test('DEX copy trading mirrors a leader swap once, sized by the follower config', () => {
+  const leader = seedUser();
+  const follower = seedUser();
+  credit(leader, 'RUSD', 1_000_000);
+  credit(follower, 'RUSD', 10_000_000);
+  createPool('v2', ['RUSD', 'TGR'], { RUSD: 10000000, TGR: 10000000 });
+
+  // A leader makes a real swap on TigerSwap.
+  const leaderSwap = executeSwap({ userId: leader, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000 });
+
+  const traderId = generateId();
+  db.prepare(
+    `INSERT INTO copy_traders (trader_id, user_id, display_name, status, max_followers, profit_share)
+     VALUES (?, ?, 'Leader', 'approved', 100, 0.1)`,
+  ).run(traderId, leader);
+  // The follow must predate the leader's swap for it to be copied.
+  db.prepare(
+    `INSERT INTO copy_follows (follow_id, follower_id, trader_id, copy_mode, ratio, max_position, status, created_at)
+     VALUES (?, ?, ?, 'ratio', 1, NULL, 'active', datetime('now', '-1 hour'))`,
+  ).run(generateId(), follower, traderId);
+
+  const pending = scanCopySwaps(follower);
+  assert.equal(pending.length, 1, 'the leader swap is offered exactly once');
+  assert.equal(pending[0].leaderSwapId, leaderSwap.swapId);
+  assert.ok(pending[0].amountIn > 0, 'the mirror is sized to a positive amount');
+
+  const results = mirrorCopySwaps(follower);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, 'mirrored');
+  assert.ok(results[0].amountOut > 0);
+
+  // The follower's balance moved for real, and the mirror is recorded once.
+  assert.ok(availableBalance(follower, 'TGR') > 0, 'the follower received the copied output');
+  assert.ok(availableBalance(follower, 'RUSD') < 10_000_000, 'the follower paid for the copied input');
+  assert.equal(copyMirrors(follower).length, 1);
+
+  // A second run has nothing left to mirror: a leader swap is copied once.
+  assert.equal(scanCopySwaps(follower).length, 0);
+  assert.equal(mirrorCopySwaps(follower).length, 0);
+});
+
+test('DEX copy trading skips a mirror the follower cannot fund without aborting', () => {
+  const leader = seedUser();
+  const follower = seedUser();
+  credit(leader, 'RUSD', 1_000_000);
+  credit(follower, 'RUSD', 1); // far too little for the copied size
+  createPool('v2', ['RUSD', 'TGR'], { RUSD: 10000000, TGR: 10000000 });
+  executeSwap({ userId: leader, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000 });
+
+  const traderId = generateId();
+  db.prepare(
+    `INSERT INTO copy_traders (trader_id, user_id, display_name, status, max_followers, profit_share)
+     VALUES (?, ?, 'Leader', 'approved', 100, 0.1)`,
+  ).run(traderId, leader);
+  // A fixed-size follow of 5000 RUSD is more than the follower holds.
+  db.prepare(
+    `INSERT INTO copy_follows (follow_id, follower_id, trader_id, copy_mode, fixed_amount, status, created_at)
+     VALUES (?, ?, ?, 'fixed', 5000, 'active', datetime('now', '-1 hour'))`,
+  ).run(generateId(), follower, traderId);
+
+  const results = mirrorCopySwaps(follower);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, 'skipped');
+  assert.equal(results[0].reason, 'INSUFFICIENT_BALANCE');
+  // A skipped mirror is not recorded, so it can be retried once funded.
+  assert.equal(copyMirrors(follower).length, 0);
 });
 
 test('a swap without the input balance is refused and moves nothing', () => {

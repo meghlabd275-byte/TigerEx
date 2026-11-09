@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { RefreshCw, TrendingUp } from 'lucide-react';
+import { RefreshCw, TrendingUp, Zap } from 'lucide-react';
 import { useApiResource, toArray } from '@/lib/useApiResource';
 import { readAuthToken } from '@/lib/auth/token';
 
@@ -35,6 +35,29 @@ interface CopyFollow {
   createdAt: string;
 }
 
+interface DexMirroredSwap {
+  followId: string;
+  traderId: string;
+  leaderSwapId: string;
+  tokenIn: string;
+  tokenOut: string;
+  amountIn: number;
+  leaderAmountIn: number;
+  leaderCreatedAt: string;
+}
+
+interface DexCopyMirror {
+  mirror_id: string;
+  follow_id: string;
+  leader_swap_id: string;
+  swap_id: string;
+  amount_in: number;
+  amount_out: number;
+  token_in: string | null;
+  token_out: string | null;
+  created_at: string;
+}
+
 function pct(value: number | undefined | null): string {
   if (value === undefined || value === null || !Number.isFinite(value)) return '—';
   return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)}%`;
@@ -47,7 +70,10 @@ function num(value: number | undefined | null, digits = 2): string {
 
 export default function CopyTradingPage() {
   const traders = useApiResource<unknown>('/api/copy/traders?sortBy=profit&limit=100');
+  const dexCopy = useApiResource<{ pending: DexMirroredSwap[]; mirrors: DexCopyMirror[] }>('/api/dex/copy');
   const [following, setFollowing] = useState<CopyFollow[] | null>(null);
+  const [mirrorNotice, setMirrorNotice] = useState<string | null>(null);
+  const [mirrorBusy, setMirrorBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -131,6 +157,37 @@ export default function CopyTradingPage() {
     }
   }
 
+  async function mirrorDexSwaps() {
+    const token = readAuthToken();
+    if (!token) {
+      setMirrorNotice('Sign in to copy a leader\u2019s swaps.');
+      return;
+    }
+    setMirrorBusy(true);
+    setMirrorNotice(null);
+    try {
+      const response = await fetch('/api/dex/copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ limit: 25 }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(body?.error?.message ?? `Request failed with status ${response.status}`);
+      const mirrored = Number(body?.mirrored) || 0;
+      const skipped = Number(body?.skipped) || 0;
+      setMirrorNotice(
+        mirrored === 0 && skipped === 0
+          ? 'No new leader swaps to mirror.'
+          : `Mirrored ${mirrored} swap${mirrored === 1 ? '' : 's'}${skipped > 0 ? `, skipped ${skipped}` : ''}.`,
+      );
+      dexCopy.reload();
+    } catch (err: unknown) {
+      setMirrorNotice(err instanceof Error ? err.message : 'The mirror could not be settled');
+    } finally {
+      setMirrorBusy(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#0A0A0F] p-4 text-white">
       <div className="mx-auto max-w-5xl">
@@ -178,6 +235,62 @@ export default function CopyTradingPage() {
             </div>
           </section>
         )}
+
+        <section className="mb-6">
+          <h2 className="mb-3 flex items-center justify-between text-lg font-semibold">
+            <span className="flex items-center gap-2">
+              <Zap className="h-5 w-5 text-[#FF6B35]" /> TigerSwap copy
+            </span>
+            <button
+              disabled={mirrorBusy}
+              onClick={mirrorDexSwaps}
+              className="rounded-lg bg-[#FF6B35] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+            >
+              {mirrorBusy ? 'Mirroring…' : 'Mirror new swaps'}
+            </button>
+          </h2>
+          <p className="mb-3 text-xs text-gray-500">
+            Copies your leaders&apos; TigerSwap swaps into your own wallet, sized by each follow&apos;s config. Each
+            leader swap is copied at most once.
+          </p>
+          {mirrorNotice && (
+            <div className="mb-3 rounded-lg bg-[#FF6B35]/10 px-4 py-2 text-sm text-[#FF6B35]">{mirrorNotice}</div>
+          )}
+          {dexCopy.error && <p className="text-sm text-red-400">Could not load DEX copies: {dexCopy.error}</p>}
+          <p className="mb-2 text-sm text-gray-400">
+            {(dexCopy.data?.pending?.length ?? 0) > 0
+              ? `${dexCopy.data?.pending.length} leader swap(s) ready to mirror.`
+              : 'No leader swaps are waiting to be mirrored.'}
+          </p>
+          {(dexCopy.data?.mirrors?.length ?? 0) > 0 && (
+            <div className="overflow-x-auto rounded-xl bg-[#14141A] p-4">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500">
+                    <th className="pb-2">Pair</th>
+                    <th className="pb-2 text-right">Paid</th>
+                    <th className="pb-2 text-right">Received</th>
+                    <th className="pb-2 text-right">When</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dexCopy.data?.mirrors.map((mirror) => (
+                    <tr key={mirror.mirror_id} className="border-t border-white/5">
+                      <td className="py-2">
+                        {mirror.token_in ?? '—'}/{mirror.token_out ?? '—'}
+                      </td>
+                      <td className="py-2 text-right">{num(mirror.amount_in)}</td>
+                      <td className="py-2 text-right">{num(mirror.amount_out)}</td>
+                      <td className="py-2 text-right text-xs text-gray-400">
+                        {mirror.created_at ? new Date(mirror.created_at.replace(' ', 'T') + 'Z').toLocaleString() : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
         <section>
           <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold">

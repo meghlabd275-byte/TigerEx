@@ -321,6 +321,14 @@ may credit a balance the venue did not take in. The rules the code must keep:
   swap is recorded with `dex_swaps.sponsored = 1`, and `claimSponsoredSwap` counts
   only those rows for the day. Counting all of a trader's swaps let a busy trader
   exhaust the free allowance with swaps they paid for.
+- **Copy trading has two settlement paths.** `copy-engine.ts` mirrors a leader's
+  CEX fills; `dex/copy-service.ts` mirrors a leader's TigerSwap swaps. The DEX
+  path records each mirror in `dex_copy_mirrors`, whose unique index on
+  `(follow_id, leader_swap_id)` guarantees a leader swap is copied at most once,
+  and the mirror row is written in the same step as the swap so a crash cannot
+  double-copy. `POST /api/dex/copy` settles pending mirrors from the follower's
+  own balance; a mirror the follower cannot fund is skipped and reported rather
+  than aborting the batch.
 - **An OTC block settles against desk inventory, never the book.** `requestQuote`
   prices from the venue's own order book, and `executeQuote` then settles the
   block bilaterally against `dex_otc_desk:<ASSET>` (funded with `fundOtcDesk`) at

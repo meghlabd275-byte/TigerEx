@@ -1486,6 +1486,18 @@ function initializeSchema() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS dex_copy_mirrors (
+      mirror_id TEXT PRIMARY KEY,
+      follower_id TEXT NOT NULL,
+      follow_id TEXT NOT NULL,
+      leader_swap_id TEXT NOT NULL,
+      swap_id TEXT NOT NULL,
+      amount_in REAL NOT NULL,
+      amount_out REAL NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(follow_id, leader_swap_id)
+    );
+
     CREATE TABLE IF NOT EXISTS dex_farms (
       farm_id TEXT PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,

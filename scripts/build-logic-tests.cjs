@@ -113,6 +113,7 @@ const MODULES = [
   'src/lib/dex/hook-service.ts',
   'src/lib/dex/sniping-service.ts',
   'src/lib/dex/bot-service.ts',
+  'src/lib/dex/copy-service.ts',
   'src/lib/dex/intelligence.ts',
 ];
 
