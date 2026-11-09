@@ -302,9 +302,16 @@ may credit a balance the venue did not take in. The rules the code must keep:
 - **A locked reservation equals the position it backs.** A perpetual locks its
   margin on open, so close must `unlockAvailable` and then move only the *net*
   (realised PnL, which already carries both fees) — never credit the margin back
-  on top of the unlock. The same shape applies to a liquidation: unlock, then
-  credit `equity - penalty`. Getting this wrong let a trader mint settlement
-  asset by opening and closing a position.
+  on top of the unlock. The same shape applies to a liquidation: the unlock
+  already returns the margin, so move only the seized part (`debitAvailable` of
+  `collateral - max(0, equity - penalty)`), never credit the surviving equity on
+  top of it. Crediting either back let a trader mint settlement asset by opening
+  and closing, or by being liquidated.
+- **A seizure consumes the locked collateral, it does not unlock it.**
+  `liquidateBorrow` credits the liquidator the seized collateral, so the
+  borrower's copy must leave entirely: `consumeLocked`, never `unlockAvailable`.
+  Unlocking moved the collateral into the borrower's *available* balance while
+  the liquidator was also credited it, minting a second copy.
 - **Funding is a zero-sum transfer between reservations.** It moves locked
   balance from payers to receivers (`consumeLocked` / `creditLocked`), never from
   available, so the reservations still add up to the collateral afterwards. It
@@ -329,6 +336,11 @@ may credit a balance the venue did not take in. The rules the code must keep:
   `liquidateBorrow` credits the liquidator the seized collateral and must not
   also book the bonus through `recordDexRevenue`, which would credit the treasury
   the same value a second time.
+- **A bribe and a launch raise are escrowed transfers, not records.** A bribe
+  debits the sponsor into a per-bribe account (`dex_bribe_escrow:<id>`) that
+  `claimBribe` pays voters from; a launch contribution escrows the quote in
+  `dex_launch_escrow:<projectId>` that `claimRaise` pays the project. Recording
+  either without moving the funds left the venue owing tokens it never received.
 
 When adding a settlement path, ask which of these it is and make the ledger
 match the position row; then assert the *resulting balances* in a test, not just
