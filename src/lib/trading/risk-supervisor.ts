@@ -274,31 +274,3 @@ export function processQueue(limit = 50): ProcessResult {
 
   return result;
 }
-
-/**
- * Fund a contract's insurance fund from accrued trading fees.
- *
- * The share is the contract's own `fee_share`; the transfer is written to the
- * ledger so the fund's balance and the fee revenue reconcile. This is the
- * standalone form used by callers outside a settlement transaction; the futures
- * engine accrues its own share inline so a fill's fee and its fund contribution
- * commit together.
- */
-export function accrueInsuranceFee(symbol: string, feeAmount: number): number {
-  if (!Number.isFinite(feeAmount) || feeAmount <= 0) return 0;
-  const db = getDb();
-  const row = db.prepare('SELECT balance, fee_share FROM insurance_funds WHERE contract = ?').get(symbol) as
-    | { balance: number; fee_share: number }
-    | undefined;
-  if (!row) return 0;
-
-  const share = Number(row.fee_share);
-  if (!Number.isFinite(share) || share <= 0) return 0;
-
-  const contribution = feeAmount * Math.min(share, 1);
-  db.prepare("UPDATE insurance_funds SET balance = balance + ?, updated_at = datetime('now') WHERE contract = ?").run(
-    contribution,
-    symbol,
-  );
-  return contribution;
-}

@@ -3,6 +3,7 @@ import { getDb } from '@/lib/db';
 import { requireAdmin } from '@/lib/auth/admin';
 import { NO_STORE } from '@/lib/api/route-guards';
 import { insuranceFundStatus, positionRisk } from '@/lib/risk/engine';
+import { allMarginLoanHealth, liquidatableLoans } from '@/lib/trading/margin-engine';
 
 /**
  * Risk dashboard.
@@ -124,6 +125,11 @@ export async function GET(request: NextRequest) {
     )
     .all() as Array<Record<string, unknown>>;
 
+  // Real health per loan: LTV, liquidation threshold and the liquidatable flag,
+  // all valued at the venue's current prices rather than the stored snapshot.
+  const marginHealth = allMarginLoanHealth();
+  const marginLiquidatable = liquidatableLoans().length;
+
   return NextResponse.json(
     {
       success: true,
@@ -140,6 +146,8 @@ export async function GET(request: NextRequest) {
           fundingTimeNs: row.funding_time_ns,
         })),
         marginLoans,
+        marginHealth,
+        marginLiquidatable,
       },
     },
     { headers: NO_STORE },

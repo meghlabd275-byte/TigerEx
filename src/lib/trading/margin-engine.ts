@@ -530,6 +530,25 @@ export function liquidate(
   return { liquidatorProfit: result.seized, asset: result.asset, seized: result.seized };
 }
 
+/**
+ * Health of every open margin loan, valued at the venue's current prices.
+ *
+ * A loan whose collateral or debt cannot be priced is omitted rather than
+ * reported with a guessed health, so the risk dashboard never shows a figure
+ * the engine did not actually compute.
+ */
+export function allMarginLoanHealth(now: number = Date.now()): MarginLoanView[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM margin_loans WHERE status = 'open'")
+    .all() as LoanRow[];
+  const result: MarginLoanView[] = [];
+  for (const row of rows) {
+    const view = valueLoan(row, now);
+    if (view) result.push(view);
+  }
+  return result;
+}
+
 export interface LiquidatableLoan {
   loanId: string;
   userId: string;

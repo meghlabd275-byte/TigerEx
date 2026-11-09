@@ -4,6 +4,7 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 import { scanPositions, processQueue } from '@/lib/trading/risk-supervisor';
 import { runAdl, runArmedAdl, AdlError } from '@/lib/trading/adl';
+import { liquidatableLoans, runMarginLiquidationKeeper } from '@/lib/trading/margin-engine';
 
 /**
  * The liquidation work queue.
@@ -100,8 +101,24 @@ export async function POST(request: NextRequest) {
 
   const body = await readJson(request);
   const action = String(body?.action ?? 'scan').toLowerCase();
-  if (!['scan', 'execute', 'adl'].includes(action)) {
-    return fail('VALIDATION_FAILED', "action must be 'scan', 'execute' or 'adl'");
+  if (!['scan', 'execute', 'adl', 'margin'].includes(action)) {
+    return fail('VALIDATION_FAILED', "action must be 'scan', 'execute', 'adl' or 'margin'");
+  }
+
+  if (action === 'margin') {
+    // Spot margin enforcement: list the underwater loans, and with `execute`
+    // force-close them. The scheduled settlement cycle runs the same keeper, so
+    // this is the operator's on-demand view and trigger.
+    const candidates = liquidatableLoans();
+    if (body?.execute !== true) {
+      return NextResponse.json({ success: true, action, candidates }, { headers: NO_STORE });
+    }
+    const report = runMarginLiquidationKeeper();
+    recordAdminAction(request, auth.admin, 'liquidation.margin', {
+      type: 'liquidation_cycle',
+      detail: { liquidated: report.liquidated.length, skipped: report.skipped.length },
+    });
+    return NextResponse.json({ success: true, action, ...report }, { headers: NO_STORE });
   }
 
   if (action === 'scan') {

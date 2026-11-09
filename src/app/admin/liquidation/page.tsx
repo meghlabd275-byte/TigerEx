@@ -19,6 +19,16 @@ const spec: ResourceSpec = {
       ],
       body: (values) => ({ entryId: values.entryId, status: values.status }),
     },
+    {
+      label: 'List underwater margin loans',
+      method: 'POST',
+      body: () => ({ action: 'margin' }),
+    },
+    {
+      label: 'Enforce margin liquidations',
+      method: 'POST',
+      body: () => ({ action: 'margin', execute: true }),
+    },
   ],
 };
 
