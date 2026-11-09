@@ -536,6 +536,60 @@ async function main() {
     assert.ok(Array.isArray(intel.json.signals), 'the smart-money feed must be a list');
     record('trading intelligence reads the settled swaps', true, `${intel.json.leaderboard.traders.length} traders`);
 
+    // --- DEX copy trading -------------------------------------------------
+    const leader = seedTrader(`leader-${Date.now()}@example.com`);
+    creditBalance(leader.userId, 'RUSD', 500_000);
+    const leaderSwap = await request('POST', '/api/dex/swap', {
+      token: leader.token,
+      body: { tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 500 },
+    });
+    assert.equal(leaderSwap.status, 201, `leader swap failed: ${JSON.stringify(leaderSwap.json)}`);
+
+    const apply = await request('POST', '/api/copy/user', {
+      token: leader.token,
+      body: { displayName: 'E2E Leader', markets: ['RUSD/TGR'] },
+    });
+    assert.equal(apply.status, 201, `leader application failed: ${JSON.stringify(apply.json)}`);
+    const traderId = apply.json.leader.traderId;
+
+    const approve = await request('PUT', '/api/admin/copy', {
+      token: adminToken,
+      body: { traderId, status: 'approved', maxFollowers: 100, profitShare: 0.1 },
+    });
+    assert.equal(approve.status, 200, `leader approval failed: ${JSON.stringify(approve.json)}`);
+
+    const follow = await request('POST', '/api/copy/follow', {
+      token,
+      body: { traderId, mode: 'fixed', amount: 200 },
+    });
+    assert.equal(follow.status, 201, `follow failed: ${JSON.stringify(follow.json)}`);
+
+    const dexCopy = await request('GET', '/api/dex/copy', { token });
+    assert.equal(dexCopy.status, 200, `dex copy list failed: ${JSON.stringify(dexCopy.json)}`);
+    assert.ok(Array.isArray(dexCopy.json.pending), 'the pending mirrors must be a list');
+    assert.equal(dexCopy.json.pending.length, 1, 'the leader swap must be offered for mirroring');
+
+    // The follower holds only RUSD before the mirror, and holds TGR after it.
+    const balanceOf = async (asset) => {
+      const res = await request('GET', '/api/wallet/balance', { token });
+      const entry = (res.json?.balances ?? []).find((b) => b.coin === asset);
+      return Number(entry?.free ?? 0);
+    };
+    const tgrBefore = await balanceOf('TGR');
+    const mirror = await request('POST', '/api/dex/copy', { token, body: { limit: 25 } });
+    assert.equal(mirror.status, 200, `mirror failed: ${JSON.stringify(mirror.json)}`);
+    assert.equal(mirror.json.mirrored, 1, 'the leader swap must be mirrored once');
+    assert.equal(mirror.json.results[0].status, 'mirrored');
+    const tgrAfter = await balanceOf('TGR');
+    assert.ok(tgrAfter > tgrBefore, 'the mirror must credit the follower with the copied output');
+
+    const afterMirror = await request('GET', '/api/dex/copy', { token });
+    assert.equal(afterMirror.json.mirrors.length, 1, 'the mirror must be recorded');
+    assert.equal(afterMirror.json.pending.length, 0, 'a leader swap is mirrored at most once');
+    const secondMirror = await request('POST', '/api/dex/copy', { token, body: { limit: 25 } });
+    assert.equal(secondMirror.json.mirrored, 0, 'a second run must not mirror the same swap again');
+    record('DEX copy trading mirrors a leader swap exactly once', true, `TGR ${tgrBefore} -> ${tgrAfter}`);
+
     // --- Security ---------------------------------------------------------
     for (const [method, url] of [
       ['GET', '/api/dex/vaults'],
@@ -551,6 +605,8 @@ async function main() {
       ['GET', '/api/dex/bots'],
       ['POST', '/api/dex/bots'],
       ['GET', '/api/dex/intelligence'],
+      ['GET', '/api/dex/copy'],
+      ['POST', '/api/dex/copy'],
     ]) {
       const response = await request(method, url, method === 'GET' ? {} : { body: {} });
       assert.equal(response.status, 401, `${method} ${url} must require auth, got ${response.status}`);
