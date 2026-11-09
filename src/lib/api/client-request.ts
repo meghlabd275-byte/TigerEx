@@ -8,7 +8,7 @@
  * generic failure. An error is thrown, so a caller must handle it.
  */
 
-import { readAuthToken } from '@/lib/auth/token';
+import { tokenForPath } from '@/lib/auth/token';
 
 export class ApiError extends Error {
   code: string | null;
@@ -43,7 +43,7 @@ export async function apiRequest<T>(
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (init.body !== undefined) headers['Content-Type'] = 'application/json';
-  const token = readAuthToken();
+  const token = tokenForPath(path);
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const response = await fetch(path, {

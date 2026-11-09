@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { readAdminToken, readAuthToken } from '@/lib/auth/token';
+import { tokenForPath } from '@/lib/auth/token';
 
 export interface ResourceState<T> {
   data: T | null;
@@ -47,7 +47,7 @@ export function useApiResource<T>(path: string | null): ResourceState<T> {
 
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (typeof window !== 'undefined') {
-      const token = readAuthToken();
+      const token = tokenForPath(path);
       if (token) headers.Authorization = `Bearer ${token}`;
     }
 
@@ -116,14 +116,17 @@ export function useMergedResource<T>(paths: string[]): ResourceState<T[]> {
     setLoading(true);
     setError(null);
 
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    if (typeof window !== 'undefined') {
-      const token = readAuthToken();
-      if (token) headers.Authorization = `Bearer ${token}`;
-    }
+    const baseHeaders: Record<string, string> = { Accept: 'application/json' };
 
     Promise.all(
       paths.map(async (path) => {
+        // Each source may be an admin or a trader route, so the credential is
+        // chosen per path rather than once for the whole batch.
+        const headers = { ...baseHeaders };
+        if (typeof window !== 'undefined') {
+          const token = tokenForPath(path);
+          if (token) headers.Authorization = `Bearer ${token}`;
+        }
         const response = await fetch(path, { signal: controller.signal, headers });
         const body = await response.json().catch(() => null);
         if (!response.ok) {
