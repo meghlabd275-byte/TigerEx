@@ -1357,6 +1357,387 @@ function initializeSchema() {
       ('p2p_enabled', 'true', 'operations'),
       ('kyc_required_for_withdrawal', 'true', 'compliance');
 
+    -- ======================================================================
+    -- TigerSwap DEX. Every table below backs a real, self-contained DEX path:
+    -- pools hold live reserves, farms hold real stakes, perp positions hold real
+    -- margin, and the revenue ledger records where each fee went. No row is
+    -- seeded with fabricated market data; pools and markets are created by an
+    -- administrator through the admin API.
+    -- ======================================================================
+    CREATE TABLE IF NOT EXISTS dex_tokens (
+      token_id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      decimals INTEGER NOT NULL DEFAULT 18,
+      chain TEXT NOT NULL DEFAULT 'tigerex',
+      contract_address TEXT,
+      logo_url TEXT,
+      coingecko_id TEXT,
+      price_feed TEXT,
+      tags TEXT,
+      verified INTEGER NOT NULL DEFAULT 0,
+      spam INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_pools (
+      pool_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      address TEXT NOT NULL UNIQUE,
+      tokens TEXT NOT NULL,
+      fee REAL NOT NULL,
+      amplification REAL,
+      weights TEXT,
+      tick_spacing INTEGER,
+      sqrt_price REAL,
+      liquidity REAL,
+      sqrt_price_lower REAL,
+      sqrt_price_upper REAL,
+      reserves TEXT NOT NULL,
+      total_supply REAL NOT NULL DEFAULT 0,
+      tvl_usd REAL NOT NULL DEFAULT 0,
+      volume_24h_usd REAL NOT NULL DEFAULT 0,
+      fee_24h_usd REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_lp_positions (
+      position_id TEXT PRIMARY KEY,
+      pool_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      liquidity REAL NOT NULL DEFAULT 0,
+      token0 TEXT NOT NULL,
+      token1 TEXT NOT NULL,
+      amount0 REAL NOT NULL DEFAULT 0,
+      amount1 REAL NOT NULL DEFAULT 0,
+      fees_earned0 REAL NOT NULL DEFAULT 0,
+      fees_earned1 REAL NOT NULL DEFAULT 0,
+      locked_until TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(pool_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_swaps (
+      swap_id TEXT PRIMARY KEY,
+      pool_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      token_in TEXT NOT NULL,
+      token_out TEXT NOT NULL,
+      amount_in REAL NOT NULL,
+      amount_out REAL NOT NULL,
+      fee REAL NOT NULL DEFAULT 0,
+      price_impact REAL NOT NULL DEFAULT 0,
+      route TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_farms (
+      farm_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      pool_id TEXT NOT NULL,
+      reward_token TEXT NOT NULL,
+      reward_rate REAL NOT NULL,
+      apr REAL NOT NULL DEFAULT 0,
+      total_staked REAL NOT NULL DEFAULT 0,
+      boost_multiplier REAL NOT NULL DEFAULT 1,
+      start_at TEXT,
+      end_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_farm_meta (
+      farm_id TEXT PRIMARY KEY,
+      acc_reward_per_share REAL NOT NULL DEFAULT 0,
+      last_update INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_farm_stakes (
+      stake_id TEXT PRIMARY KEY,
+      farm_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      amount REAL NOT NULL DEFAULT 0,
+      reward_debt REAL NOT NULL DEFAULT 0,
+      pending_rewards REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(farm_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_ve_locks (
+      lock_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL UNIQUE,
+      amount REAL NOT NULL DEFAULT 0,
+      unlock_at TEXT NOT NULL,
+      voting_power REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_gauges (
+      gauge_id TEXT PRIMARY KEY,
+      pool_id TEXT NOT NULL UNIQUE,
+      weight REAL NOT NULL DEFAULT 0,
+      emission_bps INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_gauge_votes (
+      vote_id TEXT PRIMARY KEY,
+      gauge_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      weight REAL NOT NULL DEFAULT 0,
+      epoch INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(gauge_id, user_id, epoch)
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_bribes (
+      bribe_id TEXT PRIMARY KEY,
+      gauge_id TEXT NOT NULL,
+      token TEXT NOT NULL,
+      amount REAL NOT NULL,
+      sponsor TEXT NOT NULL,
+      epoch INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_limit_orders (
+      order_id TEXT PRIMARY KEY,
+      pool_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      side TEXT NOT NULL,
+      token_in TEXT NOT NULL,
+      token_out TEXT NOT NULL,
+      amount_in REAL NOT NULL,
+      limit_price REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      filled_amount_out REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_dca_plans (
+      plan_id TEXT PRIMARY KEY,
+      pool_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      token_in TEXT NOT NULL,
+      token_out TEXT NOT NULL,
+      amount_per_slice REAL NOT NULL,
+      frequency TEXT NOT NULL,
+      total_slices INTEGER NOT NULL DEFAULT 0,
+      executed_slices INTEGER NOT NULL DEFAULT 0,
+      start_at TEXT NOT NULL,
+      last_run_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_twap_plans (
+      plan_id TEXT PRIMARY KEY,
+      pool_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      token_in TEXT NOT NULL,
+      token_out TEXT NOT NULL,
+      total_amount_in REAL NOT NULL,
+      slices INTEGER NOT NULL,
+      interval_ms INTEGER NOT NULL,
+      executed_slices INTEGER NOT NULL DEFAULT 0,
+      start_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_launch_projects (
+      project_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      total_supply REAL NOT NULL,
+      price REAL NOT NULL,
+      raise_target REAL NOT NULL,
+      raised REAL NOT NULL DEFAULT 0,
+      curve_k REAL,
+      soft_cap REAL,
+      hard_cap REAL,
+      start_at TEXT,
+      end_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_launch_contributions (
+      contribution_id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      amount REAL NOT NULL,
+      tokens REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_nft_listings (
+      listing_id TEXT PRIMARY KEY,
+      collection TEXT NOT NULL,
+      token_id TEXT NOT NULL,
+      seller_id TEXT NOT NULL,
+      buyer_id TEXT,
+      price REAL NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'RUSD',
+      status TEXT NOT NULL DEFAULT 'listed',
+      created_at TEXT DEFAULT (datetime('now')),
+      sold_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_bridge_transfers (
+      transfer_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      from_chain TEXT NOT NULL,
+      to_chain TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      amount REAL NOT NULL,
+      bridge_fee REAL NOT NULL DEFAULT 0,
+      deposit_tx TEXT,
+      release_tx TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_revenue_ledger (
+      entry_id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      amount REAL NOT NULL,
+      lp_share REAL NOT NULL DEFAULT 0,
+      vetgr_share REAL NOT NULL DEFAULT 0,
+      treasury_share REAL NOT NULL DEFAULT 0,
+      insurance_share REAL NOT NULL DEFAULT 0,
+      burn_share REAL NOT NULL DEFAULT 0,
+      reference_id TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_bot_instances (
+      instance_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      bot_type TEXT NOT NULL,
+      pool_id TEXT,
+      params TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_perp_positions (
+      position_id TEXT PRIMARY KEY,
+      market TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      side TEXT NOT NULL,
+      margin_mode TEXT NOT NULL DEFAULT 'cross',
+      collateral_asset TEXT NOT NULL,
+      collateral REAL NOT NULL,
+      size REAL NOT NULL,
+      entry_price REAL NOT NULL,
+      leverage REAL NOT NULL,
+      liquidation_price REAL NOT NULL,
+      realized_pnl REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'open',
+      opened_at TEXT DEFAULT (datetime('now')),
+      closed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_lending_markets (
+      market_id TEXT PRIMARY KEY,
+      asset TEXT NOT NULL UNIQUE,
+      ltv REAL NOT NULL,
+      liquidation_threshold REAL NOT NULL,
+      liquidation_bonus REAL NOT NULL,
+      base_rate REAL NOT NULL,
+      kink REAL NOT NULL,
+      jump_multiplier REAL NOT NULL,
+      total_supply REAL NOT NULL DEFAULT 0,
+      total_borrow REAL NOT NULL DEFAULT 0,
+      supply_cap REAL NOT NULL,
+      borrow_cap REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_lending_positions (
+      position_id TEXT PRIMARY KEY,
+      market_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      supplied REAL NOT NULL DEFAULT 0,
+      borrowed REAL NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(market_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_blacklist (
+      entry_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      value TEXT NOT NULL,
+      reason TEXT,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(kind, value)
+    );
+
+    CREATE TABLE IF NOT EXISTS dex_flash_loans (
+      loan_id TEXT PRIMARY KEY,
+      market_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      amount REAL NOT NULL,
+      fee REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'repaid',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dex_pools_kind ON dex_pools(kind, status);
+    CREATE INDEX IF NOT EXISTS idx_dex_swaps_pool ON dex_swaps(pool_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_dex_swaps_user ON dex_swaps(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_dex_lp_user ON dex_lp_positions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_dex_farm_stakes_user ON dex_farm_stakes(user_id);
+    CREATE INDEX IF NOT EXISTS idx_dex_perp_user ON dex_perp_positions(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_dex_lending_pos_user ON dex_lending_positions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_dex_revenue_source ON dex_revenue_ledger(source, created_at DESC);
+
+    INSERT OR IGNORE INTO exchange_controls (scope, paused) VALUES
+      ('dex', 0), ('dex_swaps', 0), ('dex_perps', 0), ('dex_margin', 0),
+      ('dex_launchpad', 0), ('dex_bridge', 0);
+
+    -- TigerSwap protocol parameters. These are operator settings, not market
+    -- data: each has a documented default that the fee, treasury and risk
+    -- engines read instead of hard-coding a constant.
+    INSERT OR IGNORE INTO system_settings (key, value, category) VALUES
+      ('dex_swap_fee_split_lp_bps', '7000', 'dex'),
+      ('dex_swap_fee_split_vetgr_bps', '2000', 'dex'),
+      ('dex_swap_fee_split_treasury_bps', '1000', 'dex'),
+      ('dex_perp_fee_split_insurance_bps', '4000', 'dex'),
+      ('dex_perp_fee_split_vetgr_bps', '4000', 'dex'),
+      ('dex_perp_fee_split_treasury_bps', '2000', 'dex'),
+      ('dex_buyback_burn_bps', '5000', 'dex'),
+      ('dex_insurance_fund_target', '1000000', 'dex'),
+      ('dex_max_price_impact', '0.15', 'dex'),
+      ('dex_default_slippage', '0.005', 'dex'),
+      ('dex_max_slippage', '0.05', 'dex'),
+      ('dex_treasury_address', '', 'dex'),
+      ('dex_mev_protection_enabled', 'true', 'dex'),
+      ('dex_gasless_free_swaps_per_day', '3', 'dex'),
+      ('dex_ve_lock_min_days', '7', 'dex'),
+      ('dex_ve_lock_max_days', '1460', 'dex');
+
     -- Create indexes
     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
     CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
@@ -1432,6 +1813,9 @@ function applyColumnMigrations(database: Database.Database) {
     // P&L on an options position, for databases created before the columns.
     { table: 'etf_markets', column: 'reference_price', definition: 'REAL' },
     { table: 'options_positions', column: 'realized_pnl', definition: 'REAL NOT NULL DEFAULT 0' },
+    // dex_farms gained an updated_at column after the table shipped, so a
+    // database created before it must be altered rather than recreated.
+    { table: 'dex_farms', column: 'updated_at', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {

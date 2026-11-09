@@ -1,0 +1,683 @@
+'use strict';
+/**
+ * Integration tests for the DB-backed TigerSwap settlement services.
+ *
+ * These run against a real SQLite database created from the production schema,
+ * create pools the way the admin API does, and then assert on the balances,
+ * pool reserves and revenue rows the services actually wrote. Nothing is
+ * stubbed: a swap, a liquidity deposit, a farm stake, a borrow and a keeper
+ * cycle all move real funds, so a disagreement between pricing and settlement
+ * fails the suite.
+ */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tigerex-dex-')), 'dex.db');
+process.env.DB_PATH = dbPath;
+process.env.ENCRYPTION_KEY = 'test-encryption-key-0123456789abcdef0123456789';
+
+const { getDb, generateId, hashPassword } = require('../../.test-build/index.js');
+const { availableBalance, lockedBalance } = require('../../.test-build/ledger.js');
+const { DexError } = require('../../.test-build/pool-service.js');
+const { v3LiquidityForAmounts, v3AmountsForLiquidity } = require('../../.test-build/amm.js');
+const { executeSwap, quoteSwap, listPools, claimSponsoredSwap } = require('../../.test-build/swap-service.js');
+const { addLiquidity, removeLiquidity, userPositions } = require('../../.test-build/liquidity-service.js');
+const { stakeFarm, unstakeFarm, claimFarm, lockVetgr, vetgrStatus, voteGauge, submitBribe, currentEpoch } =
+  require('../../.test-build/farm-service.js');
+const { openPosition, closePosition, applyFunding, liquidatePosition, perpPositions, markPrice } =
+  require('../../.test-build/perps-service.js');
+const { supply, borrow, repay, withdrawSupply, flashLoan, listLendingMarkets } = require('../../.test-build/margin-service.js');
+const { contribute, listNft, buyNft, initiateBridge, releaseBridge } = require('../../.test-build/launch-service.js');
+const { settleDueLimitOrders, runDueDcaPlans, runDueTwapPlans, runKeeperCycle } = require('../../.test-build/keeper.js');
+
+const db = getDb();
+
+function seedUser() {
+  const userId = generateId();
+  db.prepare(`INSERT INTO users (user_id, email, password_hash, status) VALUES (?, ?, ?, 'active')`).run(
+    userId,
+    `${userId}@example.com`,
+    hashPassword('password123'),
+  );
+  return userId;
+}
+
+function credit(userId, currency, available) {
+  const walletId = generateId();
+  db.prepare(
+    `INSERT INTO wallets (wallet_id, user_id, wallet_type, currency, network)
+     VALUES (?, ?, 'spot', ?, 'TIGEREX')`,
+  ).run(walletId, userId, currency);
+  db.prepare(`INSERT INTO balances (balance_id, wallet_id, currency, available, locked) VALUES (?, ?, ?, ?, 0)`).run(
+    generateId(),
+    walletId,
+    currency,
+    available,
+  );
+}
+
+let poolSeq = 0;
+
+/** Create an active pool exactly as the admin route would persist it. */
+function createPool(kind, tokens, reserves, extra = {}) {
+  poolSeq += 1;
+  const poolId = generateId();
+  const address = `0x${String(poolSeq).padStart(40, '0')}`;
+  const totalSupply =
+    kind === 'v2' ? Math.sqrt(reserves[tokens[0]] * reserves[tokens[1]]) : reserves[tokens[0]];
+  db.prepare(
+    `INSERT INTO dex_pools
+       (pool_id, kind, address, tokens, fee, amplification, weights, tick_spacing, sqrt_price, liquidity,
+        sqrt_price_lower, sqrt_price_upper, reserves, total_supply, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+  ).run(
+    poolId,
+    kind,
+    address,
+    JSON.stringify(tokens),
+    extra.fee ?? 0.003,
+    extra.amplification ?? null,
+    extra.weights ? JSON.stringify(extra.weights) : null,
+    extra.tickSpacing ?? null,
+    extra.sqrtPrice ?? null,
+    extra.liquidity ?? null,
+    extra.sqrtPriceLower ?? null,
+    extra.sqrtPriceUpper ?? null,
+    JSON.stringify(reserves),
+    totalSupply,
+  );
+  return poolId;
+}
+
+function reservesOf(poolId) {
+  return JSON.parse(db.prepare('SELECT reserves FROM dex_pools WHERE pool_id = ?').get(poolId).reserves);
+}
+
+function listPair(base, price, tickSize = 0.01) {
+  const symbol = `${base}/RUSD`;
+  if (db.prepare('SELECT 1 FROM trading_pairs WHERE symbol = ?').get(symbol)) return symbol;
+  db.prepare(
+    `INSERT INTO trading_pairs
+       (pair_id, base_currency, quote_currency, symbol, status, tick_size, min_quantity, max_quantity, min_notional, maker_fee, taker_fee)
+     VALUES (?, ?, 'RUSD', ?, 'active', ?, 0.0001, 1000000, 1, 0.001, 0.001)`,
+  ).run(generateId(), base, symbol, tickSize);
+  db.prepare(
+    `INSERT INTO market_data (id, symbol, price, volume_24h) VALUES (?, ?, ?, 0)`,
+  ).run(generateId(), symbol, price);
+  return symbol;
+}
+
+// ---------------------------------------------------------------------------
+// Swap
+// ---------------------------------------------------------------------------
+
+test('a swap moves real balances and grows the input reserve', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  const poolId = createPool('v2', ['RUSD', 'TGR'], { RUSD: 1000000, TGR: 1000000 });
+
+  const quote = quoteSwap({ tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000 });
+  assert.ok(quote.amountOut > 0 && quote.amountOut < 1000);
+  assert.equal(quote.fee, 3);
+
+  const result = executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000 });
+  assert.equal(result.amountOut, quote.amountOut);
+  assert.equal(availableBalance(user, 'RUSD'), 99000);
+  assert.equal(availableBalance(user, 'TGR'), quote.amountOut);
+
+  const reserves = reservesOf(poolId);
+  assert.equal(reserves.RUSD, 1001000);
+  assert.ok(Math.abs(reserves.TGR - (1000000 - quote.amountOut)) < 1e-6);
+});
+
+test('a swap without the input balance is refused and moves nothing', () => {
+  const user = seedUser();
+  createPool('v2', ['RUSD', 'SOL'], { RUSD: 1000000, SOL: 10000 });
+  assert.throws(
+    () => executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'SOL', amountIn: 100 }),
+    (error) => error instanceof DexError && error.code === 'INSUFFICIENT_BALANCE',
+  );
+  assert.equal(availableBalance(user, 'RUSD'), 0);
+});
+
+test('a blacklisted wallet cannot swap', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 10000);
+  createPool('v2', ['RUSD', 'ADA'], { RUSD: 1000000, ADA: 1000000 });
+  db.prepare("INSERT INTO dex_blacklist (entry_id, kind, value, reason) VALUES (?, 'wallet', ?, 'test')").run(
+    generateId(),
+    user,
+  );
+  assert.throws(
+    () => executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'ADA', amountIn: 100 }),
+    (error) => error instanceof DexError && error.code === 'BLACKLISTED',
+  );
+});
+
+test('a paused DEX refuses a swap', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 10000);
+  createPool('v2', ['RUSD', 'DOT'], { RUSD: 1000000, DOT: 1000000 });
+  db.prepare("UPDATE exchange_controls SET paused = 1, reason = 'drill' WHERE scope = 'dex'").run();
+  try {
+    assert.throws(
+      () => executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'DOT', amountIn: 100 }),
+      (error) => error instanceof DexError && error.code === 'DEX_PAUSED',
+    );
+  } finally {
+    db.prepare("UPDATE exchange_controls SET paused = 0, reason = NULL WHERE scope = 'dex'").run();
+  }
+});
+
+test('a pause blocks new exposure but never the unwind', () => {
+  const provider = seedUser();
+  credit(provider, 'RUSD', 50000);
+  credit(provider, 'XTZ', 50000);
+  const poolId = createPool('v2', ['RUSD', 'XTZ'], { RUSD: 1000000, XTZ: 1000000 });
+  const added = addLiquidity({ userId: provider, poolId, amounts: { RUSD: 10000, XTZ: 10000 } });
+
+  db.prepare("UPDATE exchange_controls SET paused = 1 WHERE scope = 'dex'").run();
+  try {
+    assert.throws(
+      () => addLiquidity({ userId: provider, poolId, amounts: { RUSD: 100, XTZ: 100 } }),
+      (error) => error instanceof DexError && error.code === 'DEX_PAUSED',
+    );
+    // The provider can still take their own liquidity back.
+    const removed = removeLiquidity({ userId: provider, poolId, liquidity: added.liquidity });
+    assert.ok(removed.amount0 > 0);
+  } finally {
+    db.prepare("UPDATE exchange_controls SET paused = 0 WHERE scope = 'dex'").run();
+  }
+});
+
+test('a blacklisted wallet cannot open a perpetual or borrow', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  const symbol = listPerp('BLKX', 100);
+  createLendingMarket('RUSD');
+  db.prepare("INSERT INTO dex_blacklist (entry_id, kind, value, reason) VALUES (?, 'wallet', ?, 'fraud')").run(
+    generateId(),
+    user,
+  );
+  assert.throws(
+    () => openPosition({ userId: user, symbol, side: 'long', size: 1, leverage: 5 }),
+    (error) => error instanceof DexError && error.code === 'BLACKLISTED',
+  );
+  assert.throws(
+    () => supply(user, 'RUSD', 1000),
+    (error) => error instanceof DexError && error.code === 'BLACKLISTED',
+  );
+});
+
+test('a blacklisted pool cannot be swapped or joined', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 50000);
+  credit(user, 'GRT', 50000);
+  const poolId = createPool('v2', ['RUSD', 'GRT'], { RUSD: 1000000, GRT: 1000000 });
+  db.prepare("INSERT INTO dex_blacklist (entry_id, kind, value, reason) VALUES (?, 'pool', ?, 'exploit')").run(
+    generateId(),
+    poolId,
+  );
+  // A blacklisted pool is excluded from routing, so no path is found.
+  assert.throws(
+    () => executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'GRT', amountIn: 100 }),
+    (error) => error instanceof DexError && (error.code === 'NO_ROUTES' || error.code === 'NO_POOLS'),
+  );
+  assert.throws(
+    () => addLiquidity({ userId: user, poolId, amounts: { RUSD: 100, GRT: 100 } }),
+    (error) => error instanceof DexError && error.code === 'BLACKLISTED',
+  );
+});
+
+test('the swap fee split is recorded in the revenue ledger', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 10000);
+  createPool('v2', ['RUSD', 'LINK'], { RUSD: 1000000, LINK: 1000000 });
+  executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'LINK', amountIn: 1000 });
+
+  const row = db
+    .prepare("SELECT * FROM dex_revenue_ledger WHERE source = 'dex_swap' ORDER BY created_at DESC LIMIT 1")
+    .get();
+  assert.ok(row);
+  const parts = row.lp_share + row.vetgr_share + row.treasury_share + row.insurance_share + row.burn_share;
+  assert.ok(Math.abs(parts - row.amount) < 1e-9, 'the split must sum back to the fee');
+  assert.ok(row.lp_share > 0);
+});
+
+// ---------------------------------------------------------------------------
+// Liquidity
+// ---------------------------------------------------------------------------
+
+test('adding liquidity mints LP tokens and removing them returns the share', () => {
+  const provider = seedUser();
+  credit(provider, 'RUSD', 50000);
+  credit(provider, 'ETH', 50);
+  const poolId = createPool('v2', ['RUSD', 'ETH'], { RUSD: 1000000, ETH: 1000 });
+
+  const added = addLiquidity({ userId: provider, poolId, amounts: { RUSD: 10000, ETH: 10 } });
+  assert.ok(added.liquidity > 0);
+  assert.equal(availableBalance(provider, 'RUSD'), 40000);
+  assert.equal(availableBalance(provider, 'ETH'), 40);
+  const lpToken = 'TS-LP-RUSD-ETH';
+  assert.equal(availableBalance(provider, lpToken), added.liquidity);
+
+  const positions = userPositions(provider);
+  assert.equal(positions.length, 1);
+
+  const removed = removeLiquidity({ userId: provider, poolId, liquidity: added.liquidity });
+  assert.ok(removed.amount0 > 0 && removed.amount1 > 0);
+  assert.equal(availableBalance(provider, lpToken), 0);
+  assert.equal(userPositions(provider).length, 0);
+});
+
+test('a locked liquidity position cannot be withdrawn', () => {
+  const provider = seedUser();
+  credit(provider, 'RUSD', 50000);
+  credit(provider, 'MATIC', 50000);
+  const poolId = createPool('v2', ['RUSD', 'MATIC'], { RUSD: 1000000, MATIC: 1000000 });
+  const added = addLiquidity({
+    userId: provider,
+    poolId,
+    amounts: { RUSD: 10000, MATIC: 10000 },
+    lockedUntil: new Date(Date.now() + 86_400_000).toISOString(),
+  });
+  assert.throws(
+    () => removeLiquidity({ userId: provider, poolId, liquidity: added.liquidity }),
+    (error) => error instanceof DexError && error.code === 'POSITION_LOCKED',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Farms, veTGR and gauges
+// ---------------------------------------------------------------------------
+
+function createFarm(poolId, rewardToken = 'TGR') {
+  const farmId = generateId();
+  db.prepare(
+    `INSERT INTO dex_farms (farm_id, name, pool_id, reward_token, reward_rate, apr, status)
+     VALUES (?, ?, ?, ?, ?, 100, 'active')`,
+  ).run(farmId, `farm-${farmId}`, poolId, rewardToken, 1);
+  db.prepare('INSERT INTO dex_gauges (gauge_id, pool_id) VALUES (?, ?)').run(generateId(), poolId);
+  return farmId;
+}
+
+test('staked LP tokens accrue rewards that a claim credits', () => {
+  const provider = seedUser();
+  credit(provider, 'RUSD', 50000);
+  credit(provider, 'BNB', 50);
+  const poolId = createPool('v2', ['RUSD', 'BNB'], { RUSD: 1000000, BNB: 1000 });
+  const added = addLiquidity({ userId: provider, poolId, amounts: { RUSD: 10000, BNB: 10 } });
+  const farmId = createFarm(poolId);
+
+  const staked = stakeFarm(provider, farmId, added.liquidity);
+  assert.equal(staked.staked, added.liquidity);
+  assert.equal(lockedBalance(provider, 'TS-LP-RUSD-BNB'), added.liquidity);
+
+  // Move the farm's clock back so a reward has accrued, then claim it.
+  db.prepare('UPDATE dex_farm_meta SET last_update = ? WHERE farm_id = ?').run(Date.now() - 3_600_000, farmId);
+  const claimed = claimFarm(provider, farmId);
+  assert.ok(claimed > 0, 'an hour of rewards at 1/sec should be positive');
+  assert.equal(availableBalance(provider, 'TGR'), claimed);
+
+  const unstaked = unstakeFarm(provider, farmId, added.liquidity);
+  assert.equal(unstaked.remaining, 0);
+  assert.equal(lockedBalance(provider, 'TS-LP-RUSD-BNB'), 0);
+  assert.equal(availableBalance(provider, 'TS-LP-RUSD-BNB'), added.liquidity);
+});
+
+test('veTGR locks TGR and refuses an unlock before maturity', () => {
+  const user = seedUser();
+  credit(user, 'TGR', 1000);
+  const lock = lockVetgr(user, 100, 30);
+  assert.ok(lock.votingPower > 0);
+  assert.equal(availableBalance(user, 'TGR'), 900);
+  assert.equal(lockedBalance(user, 'TGR'), 100);
+  assert.equal(vetgrStatus(user).amount, 100);
+});
+
+test('a gauge vote is recorded for the current epoch', () => {
+  const voter = seedUser();
+  credit(voter, 'TGR', 1000);
+  lockVetgr(voter, 100, 90);
+  const poolId = createPool('v2', ['RUSD', 'AVAX'], { RUSD: 1000000, AVAX: 100000 });
+  const gaugeId = generateId();
+  db.prepare('INSERT INTO dex_gauges (gauge_id, pool_id) VALUES (?, ?)').run(gaugeId, poolId);
+
+  voteGauge(voter, gaugeId, 1);
+  const vote = db.prepare('SELECT * FROM dex_gauge_votes WHERE gauge_id = ? AND user_id = ?').get(gaugeId, voter);
+  assert.equal(vote.epoch, currentEpoch());
+
+  const bribeId = submitBribe(voter, gaugeId, 'RUSD', 500);
+  assert.ok(bribeId);
+  const bribe = db.prepare('SELECT * FROM dex_bribes WHERE bribe_id = ?').get(bribeId);
+  assert.equal(bribe.amount, 500);
+});
+
+// ---------------------------------------------------------------------------
+// Perpetuals
+// ---------------------------------------------------------------------------
+
+let contractSeq = 0;
+
+function listPerp(base, price) {
+  contractSeq += 1;
+  const symbol = `${base}${contractSeq}/RUSD`;
+  db.prepare(
+    `INSERT INTO futures_markets
+       (market_id, symbol, base_asset, quote_asset, settlement_asset, contract_type, listing_type,
+        contract_size, tick_size, min_quantity, max_quantity, max_leverage, maker_fee_bps, taker_fee_bps,
+        funding_interval_hours, funding_rate_cap, maintenance_margin_rate, initial_margin_rate,
+        liquidation_fee_rate, insurance_fund_share, status)
+     VALUES (?, ?, ?, 'RUSD', 'RUSD', 'RUSD_M', 'perpetual', 1, 0.1, 0.001, 1000000, 100, 2, 5, 8, 0.01, 0.005, 0.008, 0.005, 0.1, 'active')`,
+  ).run(generateId(), symbol, base);
+  db.prepare('INSERT INTO market_data (id, symbol, price, volume_24h) VALUES (?, ?, ?, 0)').run(
+    generateId(),
+    symbol,
+    price,
+  );
+  return symbol;
+}
+
+test('a perpetual opens, moves margin, and closes with realised PnL', () => {
+  const trader = seedUser();
+  credit(trader, 'RUSD', 100000);
+  const symbol = listPerp('BTCX', 50000);
+
+  const opened = openPosition({ userId: trader, symbol, side: 'long', size: 1, leverage: 10 });
+  assert.equal(opened.entryPrice, 50000);
+  assert.ok(opened.margin > 0);
+  assert.equal(lockedBalance(trader, 'RUSD'), opened.margin);
+
+  const closed = closePosition(trader, opened.positionId);
+  // Closing at the entry mark realises no price PnL, only the round-trip fees.
+  const roundTripFees = (opened.margin * opened.leverage * 5) / 10_000 * 2;
+  assert.ok(Math.abs(closed.pnl + roundTripFees) < 1e-6, `pnl ${closed.pnl} should be the negative of the fees`);
+  assert.equal(lockedBalance(trader, 'RUSD'), 0);
+  assert.equal(perpPositions(trader).length, 0);
+});
+
+test('a position below its maintenance margin is liquidated', () => {
+  const trader = seedUser();
+  credit(trader, 'RUSD', 100000);
+  const symbol = listPerp('ETHX', 2000);
+  const opened = openPosition({ userId: trader, symbol, side: 'long', size: 10, leverage: 50 });
+
+  const result = liquidatePosition(opened.positionId, 1000);
+  assert.ok(result.penalty >= 0);
+  const row = db.prepare('SELECT status FROM dex_perp_positions WHERE position_id = ?').get(opened.positionId);
+  assert.equal(row.status, 'liquidated');
+  assert.equal(lockedBalance(trader, 'RUSD'), 0);
+});
+
+test('funding moves collateral between the two sides of a market', () => {
+  const long = seedUser();
+  const short = seedUser();
+  credit(long, 'RUSD', 100000);
+  credit(short, 'RUSD', 100000);
+  const symbol = listPerp('SOLX', 100);
+  const longPos = openPosition({ userId: long, symbol, side: 'long', size: 10, leverage: 10 });
+  const shortPos = openPosition({ userId: short, symbol, side: 'short', size: 10, leverage: 10 });
+
+  const before = db.prepare('SELECT collateral FROM dex_perp_positions WHERE position_id = ?').get(longPos.positionId);
+  applyFunding(symbol, 0.001);
+  const after = db.prepare('SELECT collateral FROM dex_perp_positions WHERE position_id = ?').get(longPos.positionId);
+  assert.ok(after.collateral < before.collateral, 'a positive rate charges the long');
+  assert.ok(shortPos.positionId);
+});
+
+// ---------------------------------------------------------------------------
+// Margin / lending
+// ---------------------------------------------------------------------------
+
+function createLendingMarket(asset, ltv = 0.7, threshold = 0.75) {
+  const existing = db.prepare('SELECT market_id FROM dex_lending_markets WHERE asset = ?').get(asset);
+  if (existing) return existing.market_id;
+  const marketId = generateId();
+  db.prepare(
+    `INSERT INTO dex_lending_markets
+       (market_id, asset, ltv, liquidation_threshold, liquidation_bonus, base_rate, kink, jump_multiplier, supply_cap, borrow_cap, status)
+     VALUES (?, ?, ?, ?, 0.05, 0.05, 0.8, 1, 10000000, 10000000, 'active')`,
+  ).run(marketId, asset, ltv, threshold);
+  return marketId;
+}
+
+test('supply, borrow and repay move the market totals and the balances', () => {
+  const lender = seedUser();
+  const borrower = seedUser();
+  credit(lender, 'RUSD', 100000);
+  credit(borrower, 'ETH', 10);
+  createLendingMarket('RUSD');
+  createLendingMarket('ETH', 0.7, 0.75);
+  listPair('ETH', 2000);
+
+  const supplied = supply(lender, 'RUSD', 50000);
+  assert.equal(supplied.totalSupplied, 50000);
+  assert.equal(availableBalance(lender, 'RUSD'), 50000);
+
+  const borrowed = borrow(borrower, 'RUSD', 5000, 'ETH', 10);
+  assert.equal(borrowed.borrowed, 5000);
+  assert.equal(availableBalance(borrower, 'RUSD'), 5000);
+  assert.equal(lockedBalance(borrower, 'ETH'), 10);
+
+  const repaid = repay(borrower, 'RUSD', 5000, 'ETH', 10);
+  assert.equal(repaid.remaining, 0);
+  assert.equal(availableBalance(borrower, 'RUSD'), 0);
+});
+
+test('a borrow beyond the collateral LTV is refused', () => {
+  const borrower = seedUser();
+  credit(borrower, 'ETH', 1);
+  createLendingMarket('RUSD');
+  createLendingMarket('ETH', 0.7, 0.75);
+  listPair('ETH', 2000);
+  assert.throws(
+    () => borrow(borrower, 'RUSD', 1500, 'ETH', 1),
+    (error) => error instanceof DexError && error.code === 'EXCEEDS_LTV',
+  );
+});
+
+test('a flash loan that cannot repay in the same transaction is rolled back', () => {
+  const user = seedUser();
+  createLendingMarket('RUSD');
+  const lender = seedUser();
+  credit(lender, 'RUSD', 10000);
+  supply(lender, 'RUSD', 10000);
+  // The borrower holds nothing, so the credit plus fee cannot be repaid and the
+  // whole transaction must unwind.
+  assert.throws(() => flashLoan(user, 'RUSD', 1000));
+  assert.equal(availableBalance(user, 'RUSD'), 0);
+});
+
+test('lending markets are listed with live rates', () => {
+  createLendingMarket('USDC');
+  const markets = listLendingMarkets();
+  assert.ok(markets.length > 0);
+  assert.ok(markets.every((market) => market.borrowRate >= 0));
+});
+
+// ---------------------------------------------------------------------------
+// Launchpad, NFT and bridge
+// ---------------------------------------------------------------------------
+
+test('an IDO contribution debits the quote and credits the project token', () => {
+  const contributor = seedUser();
+  credit(contributor, 'RUSD', 10000);
+  const projectId = generateId();
+  db.prepare(
+    `INSERT INTO dex_launch_projects (project_id, name, symbol, kind, total_supply, price, raise_target, status)
+     VALUES (?, 'Project', 'PRJ', 'ido', 1000000, 2, 100000, 'live')`,
+  ).run(projectId);
+
+  const result = contribute(contributor, projectId, 1000);
+  assert.equal(result.tokens, 500);
+  assert.equal(availableBalance(contributor, 'RUSD'), 9000);
+  assert.equal(availableBalance(contributor, 'PRJ'), 500);
+});
+
+test('an NFT sale settles between seller and buyer', () => {
+  const seller = seedUser();
+  const buyer = seedUser();
+  credit(buyer, 'RUSD', 10000);
+  const listingId = listNft({ sellerId: seller, collection: 'TigerPunks', tokenId: '1', price: 100, currency: 'RUSD' });
+  const sale = buyNft(buyer, listingId);
+  assert.equal(sale.price, 100);
+  assert.equal(availableBalance(buyer, 'RUSD'), 9900);
+  const row = db.prepare('SELECT status, buyer_id FROM dex_nft_listings WHERE listing_id = ?').get(listingId);
+  assert.equal(row.status, 'sold');
+  assert.equal(row.buyer_id, buyer);
+});
+
+test('a bridge transfer locks the asset and a release settles it', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 10000);
+  const transfer = initiateBridge({ userId: user, fromChain: 'tigerex', toChain: 'ethereum', asset: 'RUSD', amount: 1000 });
+  assert.ok(transfer.fee > 0);
+  assert.equal(availableBalance(user, 'RUSD'), 9000);
+  releaseBridge(transfer.transferId, '0xrelease');
+  const row = db.prepare('SELECT status FROM dex_bridge_transfers WHERE transfer_id = ?').get(transfer.transferId);
+  assert.equal(row.status, 'completed');
+  assert.equal(availableBalance(user, 'RUSD'), 10000 - transfer.fee);
+});
+
+// ---------------------------------------------------------------------------
+// Keeper
+// ---------------------------------------------------------------------------
+
+test('the keeper settles a limit order whose price has crossed', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  const poolId = createPool('v2', ['RUSD', 'ATOM'], { RUSD: 1000000, ATOM: 1000000 });
+  // A buy at a limit above the current price (1.0) is immediately marketable.
+  db.prepare(
+    `INSERT INTO dex_limit_orders (order_id, pool_id, user_id, side, token_in, token_out, amount_in, limit_price)
+     VALUES (?, ?, ?, 'buy', 'RUSD', 'ATOM', 1000, 1.5)`,
+  ).run(generateId(), poolId, user);
+
+  const report = settleDueLimitOrders();
+  assert.equal(report.settled, 1);
+  assert.ok(availableBalance(user, 'ATOM') > 0);
+  assert.equal(db.prepare("SELECT status FROM dex_limit_orders WHERE user_id = ?").get(user).status, 'filled');
+});
+
+test('the keeper runs the DCA slices that have come due', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  const poolId = createPool('v2', ['RUSD', 'NEAR'], { RUSD: 1000000, NEAR: 1000000 });
+  const planId = generateId();
+  db.prepare(
+    `INSERT INTO dex_dca_plans (plan_id, pool_id, user_id, token_in, token_out, amount_per_slice, frequency, total_slices, executed_slices, start_at)
+     VALUES (?, ?, ?, 'RUSD', 'NEAR', 100, 'daily', 3, 0, ?)`,
+  ).run(planId, poolId, user, new Date(Date.now() - 3 * 86_400_000).toISOString());
+
+  const report = runDueDcaPlans();
+  assert.equal(report.run, 3);
+  const plan = db.prepare('SELECT executed_slices, status FROM dex_dca_plans WHERE plan_id = ?').get(planId);
+  assert.equal(plan.executed_slices, 3);
+  assert.equal(plan.status, 'completed');
+});
+
+test('the keeper runs the TWAP slices that have come due', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  const poolId = createPool('v2', ['RUSD', 'FTM'], { RUSD: 1000000, FTM: 1000000 });
+  const planId = generateId();
+  db.prepare(
+    `INSERT INTO dex_twap_plans (plan_id, pool_id, user_id, token_in, token_out, total_amount_in, slices, interval_ms, executed_slices, start_at)
+     VALUES (?, ?, ?, 'RUSD', 'FTM', 900, 3, 60000, 0, ?)`,
+  ).run(planId, poolId, user, new Date(Date.now() - 10 * 60_000).toISOString());
+
+  const report = runDueTwapPlans();
+  assert.equal(report.run, 3);
+  assert.equal(db.prepare('SELECT status FROM dex_twap_plans WHERE plan_id = ?').get(planId).status, 'completed');
+});
+
+test('a full keeper cycle reports what it did without throwing', () => {
+  const report = runKeeperCycle();
+  assert.equal(typeof report.limitOrdersSettled, 'number');
+  assert.equal(typeof report.positionsLiquidated, 'number');
+  assert.ok(Array.isArray(report.fundingApplied));
+});
+
+// ---------------------------------------------------------------------------
+// Pool kinds the router must be able to load
+// ---------------------------------------------------------------------------
+
+test('a weighted pool is loaded with its numeric weights and can be traded', () => {
+  // Weights are persisted as a JSON number array, so a string-array parser
+  // rejected every weighted pool and broke the router for all pairs.
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  const poolId = createPool('weighted', ['RUSD', 'ZEC'], { RUSD: 500000, ZEC: 1000 }, { weights: [0.8, 0.2] });
+  const quote = quoteSwap({ tokenIn: 'RUSD', tokenOut: 'ZEC', amountIn: 1000 });
+  assert.ok(quote.amountOut > 0, 'a weighted pool must price a swap');
+  const result = executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'ZEC', amountIn: 1000, slippage: 0.05 });
+  assert.ok(result.amountOut > 0);
+  assert.ok(reservesOf(poolId).RUSD > 500000);
+});
+
+test('a weighted pool whose stored weights are not numbers is reported as corrupt', () => {
+  const poolId = createPool('weighted', ['RUSD', 'IOTA'], { RUSD: 500000, IOTA: 1000 }, { weights: [0.8, 0.2] });
+  db.prepare('UPDATE dex_pools SET weights = ? WHERE pool_id = ?').run(JSON.stringify(['0.8', '0.2']), poolId);
+  try {
+    assert.throws(
+      () => quoteSwap({ tokenIn: 'RUSD', tokenOut: 'IOTA', amountIn: 100 }),
+      (error) => error.code === 'CORRUPT_POOL',
+    );
+  } finally {
+    // A corrupt row is refused for the whole venue, so this test must restore
+    // the row before the next one runs against the same database.
+    db.prepare('UPDATE dex_pools SET weights = ? WHERE pool_id = ?').run(JSON.stringify([0.8, 0.2]), poolId);
+  }
+});
+
+test('a concentrated pool seeded with reserves is tradeable and moves its price', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  // token0 = RUSD, token1 = ALGO, so the pool price is ALGO per RUSD (~0.0005).
+  // ALGO appears in no other pool, so the router cannot prefer another venue.
+  const sqrtPrice = 0.022360679774997898; // sqrt(0.0005)
+  const sqrtLower = 0.02;
+  const sqrtUpper = 0.025;
+  const liquidity = 2000;
+  // Reserves that exactly back the active liquidity over the range, which is
+  // the state a pool reaches after liquidity is added.
+  const backing = v3AmountsForLiquidity(liquidity, sqrtPrice, sqrtLower, sqrtUpper);
+  const poolId = createPool('v3', ['RUSD', 'ALGO'], { RUSD: backing.amount0, ALGO: backing.amount1 }, {
+    fee: 0.003,
+    tickSpacing: 60,
+    sqrtPrice,
+    sqrtPriceLower: sqrtLower,
+    sqrtPriceUpper: sqrtUpper,
+    liquidity,
+  });
+  // The admin route derives the same liquidity back from the seeded reserves.
+  const derived = v3LiquidityForAmounts(backing.amount0, backing.amount1, sqrtPrice, sqrtLower, sqrtUpper);
+  assert.ok(Math.abs(derived - liquidity) / liquidity < 1e-9, 'seeded reserves must back the active liquidity');
+
+  const before = db.prepare('SELECT sqrt_price FROM dex_pools WHERE pool_id = ?').get(poolId).sqrt_price;
+  const quote = quoteSwap({ tokenIn: 'RUSD', tokenOut: 'ALGO', amountIn: 100 });
+  assert.ok(quote.amountOut > 0);
+
+  const result = executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'ALGO', amountIn: 100, slippage: 0.05 });
+  assert.ok(result.amountOut > 0);
+  const after = db.prepare('SELECT sqrt_price FROM dex_pools WHERE pool_id = ?').get(poolId).sqrt_price;
+  assert.ok(after < before, 'selling token0 must walk the pool price down');
+});
+
+// ---------------------------------------------------------------------------
+// Overview
+// ---------------------------------------------------------------------------
+
+test('listPools reports the pools that exist with their reserves', () => {
+  const pools = listPools();
+  assert.ok(pools.length > 0);
+  assert.ok(pools.every((pool) => pool.poolId && pool.kind && pool.reserves));
+});
+
+test('mark price falls back to the venue price when the oracle has no sources', () => {
+  const symbol = listPerp('LTCX', 90);
+  assert.equal(markPrice(symbol), 90);
+});

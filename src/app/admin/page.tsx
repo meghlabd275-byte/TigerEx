@@ -49,6 +49,21 @@ const SECTIONS: Array<{ group: string; items: Array<{ href: string; label: strin
     ],
   },
   {
+    group: 'TigerSwap (DEX)',
+    items: [
+      { href: '/admin/dex', label: 'DEX Overview', description: 'Pools, farms, gauges and revenue at a glance', icon: Gauge },
+      { href: '/admin/dex/tokens', label: 'DEX Tokens', description: 'List, verify and delist traded tokens', icon: Coins },
+      { href: '/admin/dex/pools', label: 'DEX Pools', description: 'Create and manage V2, V3, stable and weighted pools', icon: Layers },
+      { href: '/admin/dex/farms', label: 'DEX Farms', description: 'Farms, gauge emissions and bribes', icon: Gift },
+      { href: '/admin/dex/perps', label: 'DEX Perps Risk', description: 'Funding overrides and force-liquidation', icon: Activity },
+      { href: '/admin/dex/margin', label: 'DEX Margin', description: 'Lending markets, LTV and interest models', icon: Percent },
+      { href: '/admin/dex/fees', label: 'DEX Fees', description: 'Swap fees, revenue splits and protocol limits', icon: DollarSign },
+      { href: '/admin/dex/users', label: 'DEX Users', description: 'TigerSwap users and wallet blacklist', icon: Users },
+      { href: '/admin/dex/revenue', label: 'DEX Revenue', description: 'Revenue ledger, treasury and insurance', icon: BarChart3 },
+      { href: '/admin/dex/audit', label: 'DEX Audit', description: 'Append-only trail of DEX admin actions', icon: FileText },
+    ],
+  },
+  {
     group: 'Accounts',
     items: [
       { href: '/admin/users', label: 'Users', description: 'Accounts, balances, sessions and freezes', icon: Users },
