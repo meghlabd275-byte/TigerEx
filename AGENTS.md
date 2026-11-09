@@ -280,6 +280,35 @@ Pool kinds and their invariants:
 only the fields present, so a status or fee change never rewrites tokens or
 reserves. A PUT that must resend the whole row would silently zero a pool.
 
+### DEX ledger invariants (the ones that guard funds)
+
+Every DEX settlement moves real balances through `src/lib/db/ledger.ts`; nothing
+may credit a balance the venue did not take in. The rules the code must keep:
+
+- **A locked reservation equals the position it backs.** A perpetual locks its
+  margin on open, so close must `unlockAvailable` and then move only the *net*
+  (realised PnL, which already carries both fees) — never credit the margin back
+  on top of the unlock. The same shape applies to a liquidation: unlock, then
+  credit `equity - penalty`. Getting this wrong let a trader mint settlement
+  asset by opening and closing a position.
+- **Funding is a zero-sum transfer between reservations.** It moves locked
+  balance from payers to receivers (`consumeLocked` / `creditLocked`), never from
+  available, so the reservations still add up to the collateral afterwards. It
+  previously changed only `dex_perp_positions.collateral`, which left a receiver
+  unable to close ("insufficient locked balance").
+- **Rewards are paid from a funded account, not minted.** Farms settle against
+  `dex_farm_rewards` in `treasury_accounts` (`fundFarmRewards`); a shortfall stays
+  pending and is paid after a top-up rather than conjured. A farm with no funding
+  pays zero.
+- **Lending interest is a debt/supply adjustment, not a balance credit.**
+  `accrueInterest` raises the borrower's debt and the market's `total_supply` (the
+  supply position's claim), keeping a reserve cut; no user balance moves, so it
+  cannot mint spendable funds. The market's `last_accrued_at` bounds the interval.
+
+When adding a settlement path, ask which of these it is and make the ledger
+match the position row; then assert the *resulting balances* in a test, not just
+the status column.
+
 ## Next.js version (frontend)
 
 The frontend is on **Next.js 15.5**. Two things that bite:
@@ -294,6 +323,7 @@ The frontend is on **Next.js 15.5**. Two things that bite:
   empty list while the database held real pools, and `/api/stats` froze its
   timestamp at build time.
 
-Frontend checks: `npx tsc --noEmit`, `npm run test:logic` (560 tests),
-`npm run build`. Clear `.next` before `tsc` after a dependency or route change,
-or stale generated types under `.next/types` produce phantom module errors.
+Frontend checks: `npx tsc --noEmit`, `npm run test:logic` (701 tests),
+`npm run build`, `npm run test:e2e:dex` (44 checks). Clear `.next` before `tsc`
+after a dependency or route change, or stale generated types under `.next/types`
+produce phantom module errors.
