@@ -16,6 +16,7 @@ import { debitAvailable, creditAvailable, recordTransaction } from '@/lib/db/led
 import { usdPrice } from '@/lib/db/portfolio';
 import { blackScholes, settlementValue, impliedVolatility, type OptionGreeks } from '@/lib/options/pricing';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
+import { recordRevenue } from '@/lib/trading/revenue';
 
 export class OptionsError extends Error {
   constructor(
@@ -357,6 +358,8 @@ export function openPosition(input: OpenPositionInput): OptionsPositionView {
       `INSERT INTO options_trades (trade_id, user_id, market_id, symbol, side, action, quantity, price, premium, fee)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(generateId(), input.userId, market.marketId, market.symbol, side, 'open', quantity, premiumPerContract, totalPremium, fee);
+
+    recordRevenue('options_fee', market.settlementAsset, fee, input.userId, market.symbol);
   })();
 
   const view = listPositions(input.userId).find((p) => p.symbol === market.symbol && p.side === side);
@@ -441,6 +444,8 @@ export function closePosition(input: ClosePositionInput): { closed: number; real
       `INSERT INTO options_trades (trade_id, user_id, market_id, symbol, side, action, quantity, price, premium, fee, realized_pnl)
        VALUES (?, ?, ?, ?, ?, 'close', ?, ?, ?, ?, ?)`,
     ).run(generateId(), input.userId, market.marketId, market.symbol, side, requested, markPerContract, markPerContract * requested, fee, realizedPnl);
+
+    recordRevenue('options_fee', market.settlementAsset, fee, input.userId, market.symbol);
   })();
 
   return { closed: requested, realizedPnl, proceeds };

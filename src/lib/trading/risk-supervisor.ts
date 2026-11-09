@@ -279,7 +279,10 @@ export function processQueue(limit = 50): ProcessResult {
  * Fund a contract's insurance fund from accrued trading fees.
  *
  * The share is the contract's own `fee_share`; the transfer is written to the
- * ledger so the fund's balance and the fee revenue reconcile.
+ * ledger so the fund's balance and the fee revenue reconcile. This is the
+ * standalone form used by callers outside a settlement transaction; the futures
+ * engine accrues its own share inline so a fill's fee and its fund contribution
+ * commit together.
  */
 export function accrueInsuranceFee(symbol: string, feeAmount: number): number {
   if (!Number.isFinite(feeAmount) || feeAmount <= 0) return 0;

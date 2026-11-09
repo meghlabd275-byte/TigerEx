@@ -374,6 +374,11 @@ test('funding moves value from the paying side to the receiving side and mints n
 
   const longBefore = availableBalance(longUser, 'RUSD');
   const shortBefore = availableBalance(shortUser, 'RUSD');
+  // The fund already holds each fill's insurance share; measure funding's own
+  // contribution rather than the absolute balance.
+  const fundBefore = Number(
+    db.prepare('SELECT balance FROM insurance_funds WHERE contract = ?').get(symbol)?.balance ?? 0,
+  );
 
   applyFunding(symbol, 0.001);
   // 3,000 notional at 0.1% is 3: the long pays it, the short receives it, and
@@ -385,7 +390,8 @@ test('funding moves value from the paying side to the receiving side and mints n
   assert.ok(Math.abs(shortDelta + longDelta) < 1e-6, 'funding must be zero-sum between the two sides');
 
   const fund = db.prepare('SELECT balance FROM insurance_funds WHERE contract = ?').get(symbol);
-  assert.ok(!fund || Number(fund.balance) < 1e-6, 'a fully-settled funding round must not feed the insurance fund');
+  const fundDelta = Number(fund?.balance ?? 0) - fundBefore;
+  assert.ok(fundDelta < 1e-6, 'a fully-settled funding round must not feed the insurance fund');
 
   // Retire the positions so the later global liquidation scan is unaffected.
   db.prepare("UPDATE futures_positions SET status = 'closed' WHERE symbol = ?").run(symbol);
@@ -414,6 +420,26 @@ test('a funding shortfall scales the receiver down instead of minting', () => {
   assert.equal(availableBalance(shortUser, 'RUSD'), shortBefore);
 
   // Retire the positions so the later global liquidation scan is unaffected.
+  db.prepare("UPDATE futures_positions SET status = 'closed' WHERE symbol = ?").run(symbol);
+});
+
+test('a futures fee is booked as revenue and funds the contract insurance fund', () => {
+  const symbol = pricedContract('SFEEREV', 100, { tickSize: 0.0001, minQuantity: 1 });
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+
+  placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 1, leverage: 10 });
+
+  // Taker fee is 5 bps of the 100 notional: 0.05 RUSD, of which the contract's
+  // 10% insurance share is 0.005.
+  const revenue = db
+    .prepare("SELECT COALESCE(SUM(amount), 0) AS n FROM revenue_ledger WHERE category = 'futures_fee' AND asset = 'RUSD'")
+    .get();
+  assert.ok(Number(revenue.n) >= 0.05 - 1e-9, `the fee must be booked as futures revenue, got ${revenue.n}`);
+
+  const fund = db.prepare('SELECT balance FROM insurance_funds WHERE contract = ?').get(symbol);
+  assert.ok(Math.abs(Number(fund.balance) - 0.005) < 1e-9, `insurance share should be 0.005, got ${fund.balance}`);
+
   db.prepare("UPDATE futures_positions SET status = 'closed' WHERE symbol = ?").run(symbol);
 });
 

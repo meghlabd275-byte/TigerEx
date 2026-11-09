@@ -30,6 +30,7 @@ import { futuresRates } from '@/lib/trading/spot-engine';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
 import { markPriceForContract, indexPriceFor } from '@/lib/trading/mark-price';
 import { fundingPayment } from '@/lib/oracle/aggregator';
+import { recordRevenue } from '@/lib/trading/revenue';
 
 export class FuturesError extends Error {
   constructor(
@@ -398,6 +399,7 @@ function openOrIncrease(
         'completed',
         `${action === 'opened' ? 'Open' : 'Increase'} ${side} ${quantity} ${market.symbol} @ ${price}`,
       );
+      accrueFeeRevenue(db, market, fee, userId);
     });
     run();
   } catch (error) {
@@ -469,6 +471,7 @@ function reducePosition(
         'completed',
         `${closing ? 'Close' : 'Reduce'} ${existing.side} ${closeQuantity} ${market.symbol} @ ${price}`,
       );
+      accrueFeeRevenue(db, market, fee, userId);
     });
     run();
   } catch (error) {
@@ -740,5 +743,33 @@ function addToInsuranceFund(symbol: string, amount: number): void {
   db.prepare("UPDATE insurance_funds SET balance = balance + ?, updated_at = datetime('now') WHERE contract = ?").run(
     amount,
     symbol,
+  );
+}
+
+/**
+ * Book a charged futures fee as revenue and set aside the contract's insurance
+ * share.
+ *
+ * The whole fee is the exchange's income and is recorded in the settlement
+ * asset; the contract's `insurance_fund_share` of it is moved into the fund so a
+ * bankruptcy that outruns a position's margin has a reserve to draw on. Both
+ * writes run inside the caller's transaction, so revenue and the fund move
+ * together or not at all.
+ */
+function accrueFeeRevenue(db: ReturnType<typeof getDb>, market: MarketRow, fee: number, userId: string): void {
+  if (!Number.isFinite(fee) || fee <= 0) return;
+  recordRevenue('futures_fee', market.settlement_asset, fee, userId, market.symbol);
+
+  const share = Number(market.insurance_fund_share);
+  if (!Number.isFinite(share) || share <= 0) return;
+  const contribution = fee * Math.min(share, 1);
+  if (contribution <= 0) return;
+  const existing = db.prepare('SELECT 1 FROM insurance_funds WHERE contract = ?').get(market.symbol);
+  if (!existing) {
+    db.prepare('INSERT INTO insurance_funds (contract, balance) VALUES (?, 0)').run(market.symbol);
+  }
+  db.prepare("UPDATE insurance_funds SET balance = balance + ?, updated_at = datetime('now') WHERE contract = ?").run(
+    contribution,
+    market.symbol,
   );
 }

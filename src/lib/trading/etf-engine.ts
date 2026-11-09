@@ -25,6 +25,7 @@ import {
   type EtfConfig,
 } from '@/lib/trading/etf';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
+import { recordRevenue } from '@/lib/trading/revenue';
 
 export class EtfError extends Error {
   constructor(
@@ -308,6 +309,8 @@ export function redeem(input: RedeemInput): { redeemed: number; proceeds: number
       `INSERT INTO etf_trades (trade_id, user_id, market_id, symbol, action, tokens, nav, amount, fee)
        VALUES (?, ?, ?, ?, 'redeem', ?, ?, ?, ?)`,
     ).run(generateId(), input.userId, market.marketId, market.symbol, tokens, quote.nav, proceeds, fee);
+
+    recordRevenue('etf_fee', market.settlementAsset, fee, input.userId, market.symbol);
   })();
 
   return { redeemed: tokens, proceeds, nav: quote.nav };

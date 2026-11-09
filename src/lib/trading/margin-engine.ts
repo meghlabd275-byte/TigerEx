@@ -28,6 +28,7 @@ import {
 import { priceInQuote, valueInQuote } from '@/lib/trading/valuation';
 import { borrowInterest } from '@/lib/trading/fees';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
+import { recordRevenue } from '@/lib/trading/revenue';
 
 export class MarginError extends Error {
   constructor(
@@ -428,6 +429,7 @@ export function repay(userId: string, loanId: string, amount: number): MarginLoa
         'completed',
         `Repay ${principalPaid} ${row.asset} principal and ${interestPaid} ${row.asset} interest`,
       );
+      recordRevenue('margin_interest', row.asset, interestPaid, userId, row.symbol);
     });
     run();
   } catch (error) {
@@ -503,6 +505,9 @@ export function liquidate(
       'completed',
       `Liquidated loan ${loanId} (${row.symbol})`,
     );
+    // The borrower's unpaid interest is real income the exchange earned before
+    // the position was seized, so it is booked rather than silently dropped.
+    recordRevenue('margin_interest', row.asset, view.interestAccrued, row.user_id, row.symbol);
   });
   run();
 

@@ -30,6 +30,8 @@ const MODULES = [
   'src/lib/trading/exchange-stats.ts',
   'src/lib/trading/candles.ts',
   'src/lib/db/ledger.ts',
+  'src/lib/trading/controls.ts',
+  'src/lib/trading/revenue.ts',
   'src/lib/db/referral.ts',
   'src/lib/trading/etf.ts',
   'src/lib/trading/copy.ts',
