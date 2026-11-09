@@ -405,6 +405,29 @@ async function main() {
     assert.ok(botRun.json.result.action, 'a run must report an action');
     record('a bot instance runs one step', true, botRun.json.result.action);
 
+    // A TWAP instance settles one slice per step, so the CEX-bot parity holds
+    // for the DEX too: the parent order is worked over time, not in one trade.
+    const twapCreate = await request('POST', '/api/dex/bots', {
+      token,
+      body: {
+        action: 'create',
+        botType: 'twap',
+        poolId,
+        params: { totalQuantity: 30, slices: 3, intervalSeconds: 60, tokenIn: 'RUSD', tokenOut: 'TGR' },
+      },
+    });
+    assert.equal(twapCreate.status, 201, `twap create failed: ${JSON.stringify(twapCreate.json)}`);
+    const twapId = twapCreate.json.instance.instanceId;
+    const twapRun = await request('POST', '/api/dex/bots', {
+      token,
+      body: { action: 'run', instanceId: twapId },
+    });
+    assert.equal(twapRun.status, 201, `twap run failed: ${JSON.stringify(twapRun.json)}`);
+    assert.equal(twapRun.json.result.action, 'twap', 'a TWAP step must work one slice');
+    assert.equal(twapRun.json.result.executed, true, 'a TWAP slice must settle a real swap');
+    assert.ok(twapRun.json.result.swapId, 'a TWAP slice is a real swap');
+    record('a TWAP bot works one slice per step', true, `slice size ${twapRun.json.result.amountIn}`);
+
     const adminBots = await request('GET', '/api/admin/dex/bots', { token: adminToken });
     assert.equal(adminBots.status, 200, `admin bots failed: ${JSON.stringify(adminBots.json)}`);
     assert.ok(adminBots.json.instances.some((i) => i.instanceId === botInstanceId), 'the admin view must see the bot');

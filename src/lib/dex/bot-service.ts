@@ -28,6 +28,9 @@ import {
   needsRebalance,
   gridLevels,
   gridAction,
+  twapSlices,
+  martingaleAmount,
+  infinityGridLevels,
   dcaShouldBuy,
   type ArbOpportunity,
   type MarketMakerConfig,
@@ -35,9 +38,28 @@ import {
   type LiquidationCandidate,
 } from '@/lib/dex/bots';
 
-export type BotType = 'arbitrage' | 'market_maker' | 'grid' | 'dca' | 'rebalance' | 'liquidation';
+export type BotType =
+  | 'arbitrage'
+  | 'market_maker'
+  | 'grid'
+  | 'infinity_grid'
+  | 'dca'
+  | 'martingale'
+  | 'twap'
+  | 'rebalance'
+  | 'liquidation';
 
-const BOT_TYPES: readonly BotType[] = ['arbitrage', 'market_maker', 'grid', 'dca', 'rebalance', 'liquidation'];
+const BOT_TYPES: readonly BotType[] = [
+  'arbitrage',
+  'market_maker',
+  'grid',
+  'infinity_grid',
+  'dca',
+  'martingale',
+  'twap',
+  'rebalance',
+  'liquidation',
+];
 
 export interface BotInstanceRow {
   instance_id: string;
@@ -72,6 +94,13 @@ function asNumber(value: unknown, name: string): number {
   return n;
 }
 
+/** A trading bot must name the two assets it trades. */
+function requirePair(params: Record<string, unknown>): void {
+  if (!String(params.tokenIn ?? '').trim() || !String(params.tokenOut ?? '').trim()) {
+    throw new DexError('INVALID_PARAMS', 'tokenIn and tokenOut are required', 400);
+  }
+}
+
 /**
  * Validate a bot's parameters by running the planner that will consume them.
  *
@@ -88,6 +117,18 @@ export function validateBotParams(botType: BotType, params: Record<string, unkno
         orderSize: asNumber(params.orderSize, 'orderSize'),
         spacing: params.spacing === 'geometric' ? 'geometric' : 'arithmetic',
       });
+      requirePair(params);
+      return;
+    case 'infinity_grid':
+      infinityGridLevels(
+        {
+          ratio: asNumber(params.ratio, 'ratio'),
+          budget: asNumber(params.budget, 'budget'),
+          depth: asNumber(params.depth, 'depth'),
+        },
+        1,
+      );
+      requirePair(params);
       return;
     case 'dca':
       if (!Number.isInteger(Number(params.lookback)) || Number(params.lookback) < 1) {
@@ -96,9 +137,26 @@ export function validateBotParams(botType: BotType, params: Record<string, unkno
       if (asNumber(params.amountIn, 'amountIn') <= 0) {
         throw new DexError('INVALID_PARAMS', 'amountIn must be positive', 400);
       }
-      if (!String(params.tokenIn ?? '').trim() || !String(params.tokenOut ?? '').trim()) {
-        throw new DexError('INVALID_PARAMS', 'tokenIn and tokenOut are required', 400);
-      }
+      requirePair(params);
+      return;
+    case 'martingale':
+      martingaleAmount(
+        {
+          baseAmount: asNumber(params.baseAmount, 'baseAmount'),
+          multiplier: asNumber(params.multiplier, 'multiplier'),
+          maxAmount: asNumber(params.maxAmount, 'maxAmount'),
+        },
+        0,
+      );
+      requirePair(params);
+      return;
+    case 'twap':
+      twapSlices({
+        totalQuantity: asNumber(params.totalQuantity, 'totalQuantity'),
+        slices: asNumber(params.slices, 'slices'),
+        intervalSeconds: asNumber(params.intervalSeconds, 'intervalSeconds'),
+      });
+      requirePair(params);
       return;
     case 'market_maker':
       marketMakerQuote(1, 0, 1, {
@@ -477,6 +535,55 @@ export function evaluateBotInstance(instance: Record<string, unknown>): BotDecis
       const decision = gridAction(config, previous, price);
       return { botType, action: decision.action, detail: { price, previousPrice: previous, decision } };
     }
+    case 'infinity_grid': {
+      const price = poolPrice(poolId, params);
+      const config = {
+        ratio: asNumber(params.ratio, 'ratio'),
+        budget: asNumber(params.budget, 'budget'),
+        depth: asNumber(params.depth, 'depth'),
+      };
+      const state = asRecord(instance.state ?? {});
+      const previous = Number(state.lastPrice);
+      const ladder = infinityGridLevels(config, price);
+      if (!Number.isFinite(previous) || previous <= 0) {
+        return { botType, action: 'prime', detail: { price, ladder } };
+      }
+      if (price === previous) return { botType, action: 'hold', detail: { price, ladder } };
+      // A fall through a level buys the nearest buy level at or below the price;
+      // a rise sells the nearest sell level at or above it.
+      const action = price < previous ? 'buy' : 'sell';
+      const side = ladder.filter((l) => l.side === action);
+      const order =
+        action === 'buy'
+          ? side.filter((l) => l.price <= price).sort((a, b) => b.price - a.price)[0] ?? side[side.length - 1]
+          : side.filter((l) => l.price >= price).sort((a, b) => a.price - b.price)[0] ?? side[0];
+      return { botType, action, detail: { price, previousPrice: previous, order } };
+    }
+    case 'martingale': {
+      const price = poolPrice(poolId, params);
+      const config = {
+        baseAmount: asNumber(params.baseAmount, 'baseAmount'),
+        multiplier: asNumber(params.multiplier, 'multiplier'),
+        maxAmount: asNumber(params.maxAmount, 'maxAmount'),
+      };
+      const step = Number(asRecord(instance.state ?? {}).step ?? 0);
+      const amount = martingaleAmount(config, Number.isInteger(step) && step >= 0 ? step : 0);
+      return { botType, action: 'buy', detail: { price, step, amount } };
+    }
+    case 'twap': {
+      const price = poolPrice(poolId, params);
+      const config = {
+        totalQuantity: asNumber(params.totalQuantity, 'totalQuantity'),
+        slices: asNumber(params.slices, 'slices'),
+        intervalSeconds: asNumber(params.intervalSeconds, 'intervalSeconds'),
+      };
+      const slices = twapSlices(config);
+      const next = Number(asRecord(instance.state ?? {}).nextSlice ?? 0);
+      if (!Number.isInteger(next) || next < 0 || next >= slices.length) {
+        return { botType, action: 'complete', detail: { price, slices: slices.length } };
+      }
+      return { botType, action: 'twap', detail: { price, nextSlice: next, sliceSize: slices[next], remaining: slices.length - next } };
+    }
     case 'dca': {
       const price = poolPrice(poolId, params);
       const lookback = Number(params.lookback);
@@ -620,20 +727,26 @@ export function runBotInstance(userId: string, instanceId: string): BotRunResult
     };
   };
 
-  if (botType === 'grid') {
+  if (botType === 'grid' || botType === 'infinity_grid') {
     const price = poolPrice(row.pool_id, params);
     if (decision.action === 'prime') {
       saveState(row.instance_id, { ...instance.state, lastPrice: price });
       return { botType, action: 'prime', executed: false };
     }
-    const orderSize = asNumber(params.orderSize, 'orderSize');
     const tokenIn = String(params.tokenIn ?? '').toUpperCase();
     const tokenOut = String(params.tokenOut ?? '').toUpperCase();
     let result: BotRunResult = { botType, action: decision.action, executed: false };
-    if (decision.action === 'buy') {
-      result = settle(tokenIn, tokenOut, orderSize);
-    } else if (decision.action === 'sell') {
-      result = settle(tokenOut, tokenIn, orderSize);
+    if (botType === 'grid') {
+      const orderSize = asNumber(params.orderSize, 'orderSize');
+      if (decision.action === 'buy') result = settle(tokenIn, tokenOut, orderSize);
+      else if (decision.action === 'sell') result = settle(tokenOut, tokenIn, orderSize);
+    } else {
+      const order = asRecord(decision.detail.order ?? {});
+      const size = Number(order.size);
+      if (Number.isFinite(size) && size > 0) {
+        if (decision.action === 'buy') result = settle(tokenIn, tokenOut, size);
+        else if (decision.action === 'sell') result = settle(tokenOut, tokenIn, size);
+      }
     }
     // The grid compares each step against the price it last acted on.
     saveState(row.instance_id, { ...instance.state, lastPrice: price });
@@ -646,6 +759,27 @@ export function runBotInstance(userId: string, instanceId: string): BotRunResult
     const tokenIn = String(params.tokenIn ?? '').toUpperCase();
     const tokenOut = String(params.tokenOut ?? '').toUpperCase();
     return settle(tokenIn, tokenOut, amountIn);
+  }
+
+  if (botType === 'martingale') {
+    const step = Number(asRecord(instance.state ?? {}).step ?? 0);
+    const amount = asNumber(decision.detail.amount, 'amount');
+    const tokenIn = String(params.tokenIn ?? '').toUpperCase();
+    const tokenOut = String(params.tokenOut ?? '').toUpperCase();
+    const result = settle(tokenIn, tokenOut, amount);
+    saveState(row.instance_id, { ...instance.state, step: (Number.isInteger(step) ? step : 0) + 1 });
+    return result;
+  }
+
+  if (botType === 'twap') {
+    if (decision.action !== 'twap') return { botType, action: decision.action, executed: false };
+    const next = Number(asRecord(instance.state ?? {}).nextSlice ?? 0);
+    const size = asNumber(decision.detail.sliceSize, 'sliceSize');
+    const tokenIn = String(params.tokenIn ?? '').toUpperCase();
+    const tokenOut = String(params.tokenOut ?? '').toUpperCase();
+    const result = settle(tokenIn, tokenOut, size);
+    saveState(row.instance_id, { ...instance.state, nextSlice: (Number.isInteger(next) ? next : 0) + 1 });
+    return result;
   }
 
   return { botType, action: decision.action, executed: false };

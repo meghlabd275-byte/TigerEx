@@ -363,3 +363,122 @@ export function dcaShouldBuy(history: number[], lookback: number, price: number)
   const average = window.reduce((acc, s) => acc + s, 0) / window.length;
   return price <= average;
 }
+
+// ============================================================================
+// TWAP bot
+// ============================================================================
+
+export interface TwapConfig {
+  /** Total input quantity to work over the whole schedule. */
+  totalQuantity: number;
+  /** Number of equal child orders. */
+  slices: number;
+  /** Minimum gap between slices in seconds. */
+  intervalSeconds: number;
+}
+
+/**
+ * Split a TWAP parent order into its child sizes.
+ *
+ * The slices are equal and the final slice absorbs the rounding remainder, so
+ * the child sizes always sum to exactly the parent quantity. Spreading a large
+ * order this way keeps any single trade's price impact small.
+ */
+export function twapSlices(config: TwapConfig): number[] {
+  if (!Number.isFinite(config.totalQuantity) || config.totalQuantity <= 0) {
+    throw new AmmError('INVALID_SIZE', 'totalQuantity must be positive');
+  }
+  if (!Number.isInteger(config.slices) || config.slices < 2) {
+    throw new AmmError('INVALID_SLICES', 'slices must be an integer of at least 2');
+  }
+  if (!Number.isFinite(config.intervalSeconds) || config.intervalSeconds <= 0) {
+    throw new AmmError('INVALID_INTERVAL', 'intervalSeconds must be positive');
+  }
+  const each = config.totalQuantity / config.slices;
+  const slices = new Array<number>(config.slices).fill(each);
+  slices[slices.length - 1] = config.totalQuantity - each * (config.slices - 1);
+  return slices;
+}
+
+// ============================================================================
+// Martingale bot
+// ============================================================================
+
+export interface MartingaleConfig {
+  /** Quote amount of the first buy. */
+  baseAmount: number;
+  /** Multiplier applied after each losing step. */
+  multiplier: number;
+  /** Ceiling on a single buy, so the sequence cannot run away. */
+  maxAmount: number;
+}
+
+/**
+ * The quote amount for the buy at a given step of a martingale sequence.
+ *
+ * The amount grows by `multiplier` per step but is capped at `maxAmount`, so a
+ * long losing run cannot commit unbounded capital. A multiplier below one would
+ * shrink the position, which is not a martingale, so it is refused.
+ */
+export function martingaleAmount(config: MartingaleConfig, step: number): number {
+  if (!Number.isFinite(config.baseAmount) || config.baseAmount <= 0) {
+    throw new AmmError('INVALID_SIZE', 'baseAmount must be positive');
+  }
+  if (!Number.isFinite(config.multiplier) || config.multiplier < 1) {
+    throw new AmmError('INVALID_MULTIPLIER', 'multiplier must be at least 1');
+  }
+  if (!Number.isFinite(config.maxAmount) || config.maxAmount < config.baseAmount) {
+    throw new AmmError('INVALID_CAP', 'maxAmount must be at least baseAmount');
+  }
+  if (!Number.isInteger(step) || step < 0) throw new AmmError('INVALID_STEP', 'step must be a non-negative integer');
+  return Math.min(config.baseAmount * Math.pow(config.multiplier, step), config.maxAmount);
+}
+
+// ============================================================================
+// Infinity grid bot
+// ============================================================================
+
+export interface InfinityGridConfig {
+  /** Geometric ratio between adjacent levels; greater than one. */
+  ratio: number;
+  /** Total quote amount available to the ladder. */
+  budget: number;
+  /** How many levels to materialise on each side of the anchor. */
+  depth: number;
+}
+
+export interface InfinityGridLevel {
+  level: number;
+  price: number;
+  side: 'buy' | 'sell';
+  /** Quote amount placed at the level. */
+  size: number;
+}
+
+/**
+ * Build a geometric, unbounded-by-range ladder around an anchor price.
+ *
+ * Unlike a bounded grid, an infinity grid keeps generating levels as the price
+ * runs, so each level sits `ratio` away from the last and the order at each
+ * level shrinks so the quote committed per level stays constant as the price
+ * rises. Levels below the anchor are buys and levels above are sells; the
+ * anchor itself carries no order.
+ */
+export function infinityGridLevels(config: InfinityGridConfig, anchorPrice: number): InfinityGridLevel[] {
+  if (!Number.isFinite(anchorPrice) || anchorPrice <= 0) throw new AmmError('INVALID_PRICE', 'anchorPrice must be positive');
+  if (!Number.isFinite(config.ratio) || config.ratio <= 1) throw new AmmError('INVALID_RATIO', 'ratio must be greater than 1');
+  if (!Number.isFinite(config.budget) || config.budget <= 0) throw new AmmError('INVALID_BUDGET', 'budget must be positive');
+  if (!Number.isInteger(config.depth) || config.depth < 1) throw new AmmError('INVALID_DEPTH', 'depth must be a positive integer');
+
+  // A geometric ladder is scale-free, so a fixed quote amount per level is
+  // affordable however far the price runs.
+  const size = config.budget / (2 * config.depth);
+  const levels: InfinityGridLevel[] = [];
+  for (let i = config.depth; i >= 1; i -= 1) {
+    levels.push({ level: -i, price: anchorPrice / Math.pow(config.ratio, i), side: 'buy', size });
+  }
+  for (let i = 1; i <= config.depth; i += 1) {
+    levels.push({ level: i, price: anchorPrice * Math.pow(config.ratio, i), side: 'sell', size });
+  }
+  return levels;
+}

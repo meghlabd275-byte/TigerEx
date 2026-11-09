@@ -31,6 +31,9 @@ const {
   planRebalance,
   liquidationCandidates,
   dcaShouldBuy,
+  twapSlices,
+  martingaleAmount,
+  infinityGridLevels,
 } = require('../../.test-build/bots.js');
 const { marginPositions } = require('../../.test-build/margin-service.js');
 const { v2GetAmountOut } = require('../../.test-build/amm.js');
@@ -270,16 +273,22 @@ test('a bot instance is stored and its parameters are validated by its planner',
   const userId = seedUserAndFund({ RUSD: 1000 });
   const created = createBotInstance(userId, {
     botType: 'grid',
-    params: { lowerPrice: 100, upperPrice: 200, levels: 5, orderSize: 10 },
+    params: { lowerPrice: 100, upperPrice: 200, levels: 5, orderSize: 10, tokenIn: 'RUSD', tokenOut: 'ETH' },
   });
   assert.equal(created.botType, 'grid');
   const listed = listBotInstances(userId);
   assert.equal(listed.length, 1);
   assert.equal(listed[0].status, 'active');
 
+  // A grid that cannot name the pair it trades is refused, since it could never run.
+  assert.throws(
+    () => createBotInstance(userId, { botType: 'grid', params: { lowerPrice: 100, upperPrice: 200, levels: 5, orderSize: 10 } }),
+    /tokenIn and tokenOut/,
+  );
+
   // An inverted grid range is refused at creation.
   assert.throws(
-    () => createBotInstance(userId, { botType: 'grid', params: { lowerPrice: 200, upperPrice: 100, levels: 5, orderSize: 10 } }),
+    () => createBotInstance(userId, { botType: 'grid', params: { lowerPrice: 200, upperPrice: 100, levels: 5, orderSize: 10, tokenIn: 'RUSD', tokenOut: 'ETH' } }),
     /upperPrice/,
   );
   assert.throws(() => createBotInstance(userId, { botType: 'nonsense', params: {} }), /botType/);
@@ -450,6 +459,137 @@ test('a paused bot refuses to run', () => {
   });
   setBotInstanceStatus(userId, created.instanceId, 'paused');
   assert.throws(() => runBotInstance(userId, created.instanceId), /paused/);
+});
+
+// ---------------------------------------------------------------------------
+// TWAP, martingale and infinity grid
+// ---------------------------------------------------------------------------
+
+test('TWAP slices sum to the parent and the last slice absorbs the remainder', () => {
+  const slices = twapSlices({ totalQuantity: 10, slices: 3, intervalSeconds: 60 });
+  assert.equal(slices.length, 3);
+  assert.ok(Math.abs(slices.reduce((a, b) => a + b, 0) - 10) < 1e-9, 'the slices must sum to the parent');
+  assert.ok(slices[0] === slices[1], 'all but the last slice are equal');
+  assert.ok(slices[2] > 0);
+  assert.throws(() => twapSlices({ totalQuantity: 0, slices: 3, intervalSeconds: 60 }), /totalQuantity/);
+  assert.throws(() => twapSlices({ totalQuantity: 10, slices: 1, intervalSeconds: 60 }), /slices/);
+  assert.throws(() => twapSlices({ totalQuantity: 10, slices: 3, intervalSeconds: 0 }), /intervalSeconds/);
+});
+
+test('a martingale amount grows by the multiplier and is capped', () => {
+  const config = { baseAmount: 100, multiplier: 2, maxAmount: 350 };
+  assert.equal(martingaleAmount(config, 0), 100);
+  assert.equal(martingaleAmount(config, 1), 200);
+  // 100 * 2^2 = 400 exceeds the 350 cap.
+  assert.equal(martingaleAmount(config, 2), 350);
+  assert.throws(() => martingaleAmount({ baseAmount: 0, multiplier: 2, maxAmount: 100 }, 0), /baseAmount/);
+  assert.throws(() => martingaleAmount({ baseAmount: 100, multiplier: 0.5, maxAmount: 100 }, 0), /multiplier/);
+  assert.throws(() => martingaleAmount({ baseAmount: 100, multiplier: 2, maxAmount: 50 }, 0), /maxAmount/);
+  assert.throws(() => martingaleAmount(config, -1), /step/);
+});
+
+test('an infinity grid ladders geometrically with buys below and sells above', () => {
+  const levels = infinityGridLevels({ ratio: 2, budget: 400, depth: 2 }, 100);
+  assert.equal(levels.length, 4);
+  const buys = levels.filter((l) => l.side === 'buy');
+  const sells = levels.filter((l) => l.side === 'sell');
+  assert.equal(buys.length, 2);
+  assert.equal(sells.length, 2);
+  assert.ok(buys.every((l) => l.price < 100), 'buy levels sit below the anchor');
+  assert.ok(sells.every((l) => l.price > 100), 'sell levels sit above the anchor');
+  assert.ok(Math.abs(buys[buys.length - 1].price - 50) < 1e-9);
+  assert.ok(Math.abs(sells[0].price - 200) < 1e-9);
+  assert.throws(() => infinityGridLevels({ ratio: 1, budget: 400, depth: 2 }, 100), /ratio/);
+  assert.throws(() => infinityGridLevels({ ratio: 2, budget: 0, depth: 2 }, 100), /budget/);
+  assert.throws(() => infinityGridLevels({ ratio: 2, budget: 400, depth: 0 }, 100), /depth/);
+  assert.throws(() => infinityGridLevels({ ratio: 2, budget: 400, depth: 2 }, 0), /anchorPrice/);
+});
+
+test('a TWAP bot step settles one slice per run and stops when the schedule is done', () => {
+  const userId = seedUserAndFund({ RUSD: 1_000_000, ETH: 100 });
+  const poolId = seedPool(['RUSD', 'ETH'], { RUSD: 2_000_000, ETH: 1_000 });
+  const created = createBotInstance(userId, {
+    botType: 'twap',
+    poolId,
+    params: { totalQuantity: 300, slices: 3, intervalSeconds: 60, tokenIn: 'RUSD', tokenOut: 'ETH' },
+  });
+
+  const ethBefore = require('../../.test-build/ledger.js').availableBalance(userId, 'ETH');
+  for (let i = 0; i < 3; i += 1) {
+    const step = runBotInstance(userId, created.instanceId);
+    assert.equal(step.action, 'twap', `slice ${i} must settle`);
+    assert.equal(step.executed, true);
+    assert.ok(step.swapId, 'each slice is a real swap');
+  }
+  // The schedule is spent, so the next step reports completion and trades nothing.
+  const done = runBotInstance(userId, created.instanceId);
+  assert.equal(done.action, 'complete');
+  assert.equal(done.executed, false);
+  assert.ok(
+    require('../../.test-build/ledger.js').availableBalance(userId, 'ETH') > ethBefore,
+    'the slices must credit the trader with the output token',
+  );
+});
+
+test('a martingale bot step buys the next sized amount and records the step', () => {
+  const userId = seedUserAndFund({ RUSD: 1_000_000, ETH: 100 });
+  const poolId = seedPool(['RUSD', 'ETH'], { RUSD: 2_000_000, ETH: 1_000 });
+  const created = createBotInstance(userId, {
+    botType: 'martingale',
+    poolId,
+    params: { baseAmount: 100, multiplier: 2, maxAmount: 1000, tokenIn: 'RUSD', tokenOut: 'ETH' },
+  });
+
+  const first = runBotInstance(userId, created.instanceId);
+  assert.equal(first.action, 'buy');
+  assert.equal(first.executed, true);
+  assert.equal(first.amountIn, 100);
+  const second = runBotInstance(userId, created.instanceId);
+  assert.equal(second.amountIn, 200, 'the second buy doubles the first');
+});
+
+test('an infinity grid bot primes, then settles a real buy when the price falls', () => {
+  const userId = seedUserAndFund({ RUSD: 1_000_000, ETH: 100 });
+  const poolId = seedPool(['RUSD', 'ETH'], { RUSD: 2_000_000, ETH: 1_000 });
+  const created = createBotInstance(userId, {
+    botType: 'infinity_grid',
+    poolId,
+    params: { ratio: 1.5, budget: 1000, depth: 3, tokenIn: 'RUSD', tokenOut: 'ETH' },
+  });
+
+  const prime = runBotInstance(userId, created.instanceId);
+  assert.equal(prime.action, 'prime');
+  assert.equal(prime.executed, false);
+
+  db.prepare('UPDATE dex_pools SET reserves = ? WHERE pool_id = ?').run(
+    JSON.stringify({ RUSD: 1_500_000, ETH: 1_000 }),
+    poolId,
+  );
+  const ethBefore = require('../../.test-build/ledger.js').availableBalance(userId, 'ETH');
+  const step = runBotInstance(userId, created.instanceId);
+  assert.equal(step.action, 'buy');
+  assert.equal(step.executed, true);
+  assert.ok(step.swapId, 'a buy step must settle a swap');
+  assert.ok(
+    require('../../.test-build/ledger.js').availableBalance(userId, 'ETH') > ethBefore,
+    'the infinity-grid buy must credit the trader with the output token',
+  );
+});
+
+test('the new bot types are refused when their parameters cannot form a plan', () => {
+  const userId = seedUserAndFund({ RUSD: 1000 });
+  assert.throws(
+    () => createBotInstance(userId, { botType: 'twap', params: { totalQuantity: 100, slices: 1, intervalSeconds: 60, tokenIn: 'RUSD', tokenOut: 'ETH' } }),
+    /slices/,
+  );
+  assert.throws(
+    () => createBotInstance(userId, { botType: 'martingale', params: { baseAmount: 100, multiplier: 0.5, maxAmount: 100, tokenIn: 'RUSD', tokenOut: 'ETH' } }),
+    /multiplier/,
+  );
+  assert.throws(
+    () => createBotInstance(userId, { botType: 'infinity_grid', params: { ratio: 1, budget: 1000, depth: 3, tokenIn: 'RUSD', tokenOut: 'ETH' } }),
+    /ratio/,
+  );
 });
 
 

@@ -40,7 +40,20 @@ interface BotsResponse {
   liquidations: Liquidation[];
 }
 
-const BOT_TYPES = ['arbitrage', 'market_maker', 'grid', 'dca', 'rebalance', 'liquidation'] as const;
+const BOT_TYPES = [
+  'arbitrage',
+  'market_maker',
+  'grid',
+  'infinity_grid',
+  'dca',
+  'martingale',
+  'twap',
+  'rebalance',
+  'liquidation',
+] as const;
+
+// The strategies whose step settles a real swap, so the Run control is offered.
+const SETTLING_BOTS = new Set(['grid', 'infinity_grid', 'dca', 'martingale', 'twap']);
 
 export default function DexBotsPage() {
   const bots = useApiResource<BotsResponse>('/api/dex/bots');
@@ -83,7 +96,7 @@ export default function DexBotsPage() {
   return (
     <DexShell
       title="Trading bots"
-      subtitle="Arbitrage, market-making, grid, DCA, rebalancing and liquidation strategies that trade only TigerSwap's own pools. Parameters are validated by the same planner the bot runs with."
+      subtitle="Arbitrage, market-making, grid, infinity grid, DCA, martingale, TWAP, rebalancing and liquidation strategies that trade only TigerSwap's own pools. Parameters are validated by the same planner the bot runs with, and a step settles a real swap through the normal swap path."
       actions={
         <button
           onClick={bots.reload}
@@ -183,7 +196,7 @@ export default function DexBotsPage() {
                       >
                         Evaluate
                       </button>
-                      {(instance.botType === 'grid' || instance.botType === 'dca') && (
+                      {SETTLING_BOTS.has(instance.botType) && (
                         <button
                           onClick={() => send('run', { action: 'run', instanceId: instance.instanceId })}
                           disabled={busy !== null || instance.status !== 'active'}
