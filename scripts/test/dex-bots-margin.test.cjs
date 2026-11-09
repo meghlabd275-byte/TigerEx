@@ -233,6 +233,7 @@ const {
   scanArbitrage,
   runArbitrage,
   scanLiquidations,
+  runBotInstance,
 } = require('../../.test-build/bot-service.js');
 
 function seedUserAndFund(currencies) {
@@ -289,7 +290,7 @@ test('a bot instance can be paused and removed by its owner only', () => {
   const other = seedUserAndFund({ RUSD: 1000 });
   const created = createBotInstance(owner, {
     botType: 'dca',
-    params: { lookback: 5, tokenIn: 'RUSD', tokenOut: 'ETH' },
+    params: { lookback: 5, amountIn: 100, tokenIn: 'RUSD', tokenOut: 'ETH' },
   });
   const paused = setBotInstanceStatus(owner, created.instanceId, 'paused');
   assert.equal(paused.status, 'paused');
@@ -376,6 +377,79 @@ test('evaluating a grid bot reports the action for the live price move', () => {
   const primed = evaluateBotInstance(instance);
   assert.equal(primed.action, 'prime');
   assert.ok(Number(primed.detail.price) > 0);
+});
+
+test('a grid bot step primes, then settles a real buy when the price falls through a level', () => {
+  const userId = seedUserAndFund({ RUSD: 1_000_000, ETH: 100 });
+  const poolId = seedPool(['RUSD', 'ETH'], { RUSD: 2_000_000, ETH: 1_000 });
+  const created = createBotInstance(userId, {
+    botType: 'grid',
+    poolId,
+    params: { lowerPrice: 1000, upperPrice: 3000, levels: 5, orderSize: 100, tokenIn: 'RUSD', tokenOut: 'ETH' },
+  });
+
+  // First step primes the grid with the live price and trades nothing.
+  const prime = runBotInstance(userId, created.instanceId);
+  assert.equal(prime.action, 'prime');
+  assert.equal(prime.executed, false);
+
+  // Push the pool price down so it crosses a grid level, then the next step
+  // must settle a buy of RUSD into ETH.
+  db.prepare('UPDATE dex_pools SET reserves = ? WHERE pool_id = ?').run(
+    JSON.stringify({ RUSD: 1_500_000, ETH: 1_000 }),
+    poolId,
+  );
+  const ethBefore = require('../../.test-build/ledger.js').availableBalance(userId, 'ETH');
+  const step = runBotInstance(userId, created.instanceId);
+  assert.equal(step.action, 'buy');
+  assert.equal(step.executed, true);
+  assert.ok(step.swapId, 'a buy step must settle a swap');
+  const ethAfter = require('../../.test-build/ledger.js').availableBalance(userId, 'ETH');
+  assert.ok(ethAfter > ethBefore, 'the grid buy must credit the trader with the output token');
+});
+
+test('a DCA bot step settles a real buy when the price sits below its running average', () => {
+  const userId = seedUserAndFund({ RUSD: 1_000_000, ETH: 100 });
+  const poolId = seedPool(['RUSD', 'ETH'], { RUSD: 2_000_000, ETH: 1_000 });
+  // Three settled swaps at 2000 RUSD per ETH build the running average.
+  for (let i = 0; i < 3; i += 1) {
+    db.prepare(
+      `INSERT INTO dex_swaps (swap_id, pool_id, user_id, token_in, token_out, amount_in, amount_out)
+       VALUES (?, ?, ?, 'RUSD', 'ETH', 2000, 1)`,
+    ).run(generateId(), poolId, userId);
+  }
+  const created = createBotInstance(userId, {
+    botType: 'dca',
+    poolId,
+    params: { lookback: 3, amountIn: 100, tokenIn: 'RUSD', tokenOut: 'ETH' },
+  });
+
+  // The live price falls below the average, so the next step must buy.
+  db.prepare('UPDATE dex_pools SET reserves = ? WHERE pool_id = ?').run(
+    JSON.stringify({ RUSD: 1_500_000, ETH: 1_000 }),
+    poolId,
+  );
+  const ethBefore = require('../../.test-build/ledger.js').availableBalance(userId, 'ETH');
+  const step = runBotInstance(userId, created.instanceId);
+  assert.equal(step.action, 'buy');
+  assert.equal(step.executed, true);
+  assert.ok(step.swapId, 'a DCA buy must settle a swap');
+  assert.ok(
+    require('../../.test-build/ledger.js').availableBalance(userId, 'ETH') > ethBefore,
+    'the DCA buy must credit the trader with the output token',
+  );
+});
+
+test('a paused bot refuses to run', () => {
+  const userId = seedUserAndFund({ RUSD: 1_000 });
+  const poolId = seedPool(['RUSD', 'ETH'], { RUSD: 2_000_000, ETH: 1_000 });
+  const created = createBotInstance(userId, {
+    botType: 'grid',
+    poolId,
+    params: { lowerPrice: 1000, upperPrice: 3000, levels: 5, orderSize: 100, tokenIn: 'RUSD', tokenOut: 'ETH' },
+  });
+  setBotInstanceStatus(userId, created.instanceId, 'paused');
+  assert.throws(() => runBotInstance(userId, created.instanceId), /paused/);
 });
 
 

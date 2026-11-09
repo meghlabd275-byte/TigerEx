@@ -93,6 +93,12 @@ export function validateBotParams(botType: BotType, params: Record<string, unkno
       if (!Number.isInteger(Number(params.lookback)) || Number(params.lookback) < 1) {
         throw new DexError('INVALID_PARAMS', 'lookback must be a positive integer', 400);
       }
+      if (asNumber(params.amountIn, 'amountIn') <= 0) {
+        throw new DexError('INVALID_PARAMS', 'amountIn must be positive', 400);
+      }
+      if (!String(params.tokenIn ?? '').trim() || !String(params.tokenOut ?? '').trim()) {
+        throw new DexError('INVALID_PARAMS', 'tokenIn and tokenOut are required', 400);
+      }
       return;
     case 'market_maker':
       marketMakerQuote(1, 0, 1, {
@@ -531,7 +537,9 @@ function poolPrice(poolId: string | null, params: Record<string, unknown>): numb
   const pool = livePools().find((p) => p.poolId === poolId);
   if (!pool) throw new DexError('UNKNOWN_POOL', `pool ${poolId} is not active`, 404);
   const probe = 1e-9;
-  const hop = quotePool(pool, tokenIn, tokenOut, probe);
+  // Grid levels are the quote price of the base asset: RUSD per ETH, not the
+  // AMM's tokenOut-per-tokenIn ratio, which is the reciprocal.
+  const hop = quotePool(pool, tokenOut, tokenIn, probe);
   if (!(hop.amountOut > 0)) throw new DexError('NO_PRICE', 'the pool cannot price this pair', 409);
   return hop.amountOut / probe;
 }
@@ -546,5 +554,100 @@ function historyFor(poolId: string | null, limit = 50): number[] {
         ORDER BY created_at DESC LIMIT ?`,
     )
     .all(poolId, limit) as Array<{ amount_in: number; amount_out: number }>;
-  return rows.map((row) => row.amount_out / row.amount_in).reverse();
+  // The same quote-per-base unit `poolPrice` returns, so the two are comparable.
+  return rows.map((row) => row.amount_in / row.amount_out).reverse();
 }
+
+function saveState(instanceId: string, state: Record<string, unknown>): void {
+  getDb()
+    .prepare("UPDATE dex_bot_instances SET state = ?, updated_at = datetime('now') WHERE instance_id = ?")
+    .run(JSON.stringify(state), instanceId);
+}
+
+export interface BotRunResult {
+  botType: BotType;
+  action: string;
+  executed: boolean;
+  swapId?: string;
+  tokenIn?: string;
+  tokenOut?: string;
+  amountIn?: number;
+  amountOut?: number;
+}
+
+/**
+ * Run one step of a bot instance.
+ *
+ * Grid and DCA instances settle a real swap when their planner signals one, and
+ * the grid records the price it acted on so the next step compares against it.
+ * Arbitrage and liquidation are driven by `runArbitrage` and `runLiquidation`,
+ * which need an explicit opportunity rather than an instance. The market-maker
+ * and rebalancing instances report their decision without settling, because a
+ * market-maker quote and a rebalance plan are multi-order intents a caller
+ * applies deliberately.
+ */
+export function runBotInstance(userId: string, instanceId: string): BotRunResult {
+  assertDexOpen('dex');
+  const row = getDb()
+    .prepare('SELECT * FROM dex_bot_instances WHERE instance_id = ? AND user_id = ?')
+    .get(instanceId, userId) as BotInstanceRow | undefined;
+  if (!row) throw new DexError('UNKNOWN_INSTANCE', 'bot instance does not exist', 404);
+  if (row.status !== 'active') throw new DexError('BOT_INACTIVE', `bot instance is ${row.status}`, 409);
+
+  const params = JSON.parse(row.params) as Record<string, unknown>;
+  const botType = requireBotType(row.bot_type);
+  const instance = {
+    instanceId: row.instance_id,
+    botType,
+    poolId: row.pool_id,
+    params,
+    state: JSON.parse(row.state) as Record<string, unknown>,
+    status: row.status,
+  };
+  const decision = evaluateBotInstance(instance);
+
+  const settle = (tokenIn: string, tokenOut: string, amountIn: number): BotRunResult => {
+    const swap = executeSwap({ userId, tokenIn, tokenOut, amountIn });
+    return {
+      botType,
+      action: decision.action,
+      executed: true,
+      swapId: swap.swapId,
+      tokenIn,
+      tokenOut,
+      amountIn: swap.amountIn,
+      amountOut: swap.amountOut,
+    };
+  };
+
+  if (botType === 'grid') {
+    const price = poolPrice(row.pool_id, params);
+    if (decision.action === 'prime') {
+      saveState(row.instance_id, { ...instance.state, lastPrice: price });
+      return { botType, action: 'prime', executed: false };
+    }
+    const orderSize = asNumber(params.orderSize, 'orderSize');
+    const tokenIn = String(params.tokenIn ?? '').toUpperCase();
+    const tokenOut = String(params.tokenOut ?? '').toUpperCase();
+    let result: BotRunResult = { botType, action: decision.action, executed: false };
+    if (decision.action === 'buy') {
+      result = settle(tokenIn, tokenOut, orderSize);
+    } else if (decision.action === 'sell') {
+      result = settle(tokenOut, tokenIn, orderSize);
+    }
+    // The grid compares each step against the price it last acted on.
+    saveState(row.instance_id, { ...instance.state, lastPrice: price });
+    return result;
+  }
+
+  if (botType === 'dca') {
+    if (decision.action !== 'buy') return { botType, action: decision.action, executed: false };
+    const amountIn = asNumber(params.amountIn, 'amountIn');
+    const tokenIn = String(params.tokenIn ?? '').toUpperCase();
+    const tokenOut = String(params.tokenOut ?? '').toUpperCase();
+    return settle(tokenIn, tokenOut, amountIn);
+  }
+
+  return { botType, action: decision.action, executed: false };
+}
+

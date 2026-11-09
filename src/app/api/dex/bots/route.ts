@@ -12,6 +12,7 @@ import {
   runArbitrage,
   scanLiquidations,
   runLiquidation,
+  runBotInstance,
 } from '@/lib/dex/bot-service';
 
 /**
@@ -74,6 +75,11 @@ export async function POST(request: NextRequest) {
         if (!instance) return fail('UNKNOWN_INSTANCE', 'bot instance does not exist', 404);
         return NextResponse.json({ success: true, decision: evaluateBotInstance(instance) }, { headers: NO_STORE });
       }
+      case 'run':
+        return NextResponse.json(
+          { success: true, result: runBotInstance(userId, String(body.instanceId ?? '')) },
+          { status: 201, headers: NO_STORE },
+        );
       case 'arbitrage':
         return NextResponse.json(
           {
@@ -94,7 +100,7 @@ export async function POST(request: NextRequest) {
           { status: 201, headers: NO_STORE },
         );
       default:
-        return fail('INVALID_ACTION', 'action must be create, status, delete, evaluate, arbitrage or liquidate');
+        return fail('INVALID_ACTION', 'action must be create, status, delete, evaluate, run, arbitrage or liquidate');
     }
   } catch (error) {
     return dexFailure(error);

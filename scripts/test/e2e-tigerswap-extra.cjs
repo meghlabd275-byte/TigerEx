@@ -397,6 +397,14 @@ async function main() {
     assert.ok(botEval.json.decision.action, 'the evaluation must report an action');
     record('a bot instance evaluates against live state', true, botEval.json.decision.action);
 
+    const botRun = await request('POST', '/api/dex/bots', {
+      token,
+      body: { action: 'run', instanceId: botInstanceId },
+    });
+    assert.equal(botRun.status, 201, `bot run failed: ${JSON.stringify(botRun.json)}`);
+    assert.ok(botRun.json.result.action, 'a run must report an action');
+    record('a bot instance runs one step', true, botRun.json.result.action);
+
     const adminBots = await request('GET', '/api/admin/dex/bots', { token: adminToken });
     assert.equal(adminBots.status, 200, `admin bots failed: ${JSON.stringify(adminBots.json)}`);
     assert.ok(adminBots.json.instances.some((i) => i.instanceId === botInstanceId), 'the admin view must see the bot');

@@ -183,6 +183,15 @@ export default function DexBotsPage() {
                       >
                         Evaluate
                       </button>
+                      {(instance.botType === 'grid' || instance.botType === 'dca') && (
+                        <button
+                          onClick={() => send('run', { action: 'run', instanceId: instance.instanceId })}
+                          disabled={busy !== null || instance.status !== 'active'}
+                          className="rounded-md bg-orange-600 px-2 py-1 text-xs text-white hover:bg-orange-700 disabled:opacity-40"
+                        >
+                          Run step
+                        </button>
+                      )}
                       <button
                         onClick={() => send('delete', { action: 'delete', instanceId: instance.instanceId })}
                         disabled={busy !== null}
