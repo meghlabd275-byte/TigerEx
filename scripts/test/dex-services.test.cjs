@@ -26,7 +26,7 @@ const { v3LiquidityForAmounts, v3AmountsForLiquidity } = require('../../.test-bu
 const { executeSwap, quoteSwap, listPools, claimSponsoredSwap, swapFeeSplit } = require('../../.test-build/swap-service.js');
 const { applySchedule } = require('../../.test-build/fee-engine.js');
 const { addLiquidity, removeLiquidity, userPositions } = require('../../.test-build/liquidity-service.js');
-const { stakeFarm, unstakeFarm, claimFarm, lockVetgr, vetgrStatus, voteGauge, submitBribe, claimBribe, currentEpoch, fundFarmRewards, rewardFundBalance, bribeEscrowAccount } =
+const { stakeFarm, unstakeFarm, claimFarm, lockVetgr, vetgrStatus, voteGauge, submitBribe, claimBribe, currentEpoch, fundFarmRewards, rewardFundBalance, bribeEscrowAccount, distributeVetgrFees, vetgrFeePot } =
   require('../../.test-build/farm-service.js');
 const { openPosition, closePosition, applyFunding, liquidatePosition, perpPositions, markPrice, fundPerpPool, perpPoolBalance } =
   require('../../.test-build/perps-service.js');
@@ -432,6 +432,40 @@ test('veTGR locks TGR and refuses an unlock before maturity', () => {
   assert.equal(availableBalance(user, 'TGR'), 900);
   assert.equal(lockedBalance(user, 'TGR'), 100);
   assert.equal(vetgrStatus(user).amount, 100);
+});
+
+test('veTGR protocol fees are distributed to lockers pro-rata, once per epoch', () => {
+  const a = seedUser();
+  const b = seedUser();
+  credit(a, 'TGR', 1000);
+  credit(b, 'TGR', 1000);
+  lockVetgr(a, 100, 90);
+  lockVetgr(b, 300, 90);
+
+  // A settled swap's veTGR share already sits in the fee pot as real value.
+  db.prepare(
+    `INSERT INTO treasury_accounts (account_id, asset, network, account_type, balance)
+     VALUES (?, 'VETFEE', 'TIGEREX', 'dex_vetgr_fees', 1000)
+     ON CONFLICT(asset, network, account_type) DO UPDATE SET balance = balance + 1000`,
+  ).run(generateId());
+
+  const totalLocked = Number(db.prepare('SELECT COALESCE(SUM(amount), 0) AS s FROM dex_ve_locks').get().s);
+  const beforeA = availableBalance(a, 'VETFEE');
+  const beforeB = availableBalance(b, 'VETFEE');
+  const report = distributeVetgrFees();
+  const entry = report.find((row) => row.asset === 'VETFEE');
+  assert.ok(entry && Math.abs(entry.distributed - 1000) < 1e-9, 'the whole pot is paid out');
+
+  assert.ok(
+    Math.abs(availableBalance(a, 'VETFEE') - (beforeA + (1000 * 100) / totalLocked)) < 1e-6,
+    'the fee is paid pro-rata by locked amount',
+  );
+  assert.ok(Math.abs(availableBalance(b, 'VETFEE') - (beforeB + (1000 * 300) / totalLocked)) < 1e-6);
+
+  // A second call in the same epoch pays nothing more and empties nothing extra.
+  const second = distributeVetgrFees();
+  assert.ok(!second.some((row) => row.asset === 'VETFEE'), 'the pot is distributed at most once per epoch');
+  assert.equal(vetgrFeePot('VETFEE').balance, 0, 'the pot is emptied by the distribution');
 });
 
 test('a gauge vote is recorded for the current epoch', () => {

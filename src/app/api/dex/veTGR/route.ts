@@ -1,15 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/db/session';
 import { enforceRequestGuards, readJson, fail, NO_STORE } from '@/lib/api/route-guards';
-import { lockVetgr, unlockVetgr, vetgrStatus } from '@/lib/dex/farm-service';
+import { lockVetgr, unlockVetgr, vetgrStatus, vetgrFeePot } from '@/lib/dex/farm-service';
 import { dexFailure } from '@/lib/dex/route-helpers';
 
-/** The caller's veTGR lock and voting power. */
+/** The caller's veTGR lock and voting power, plus the fee pot they share in. */
 export async function GET(request: NextRequest) {
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
   try {
-    return NextResponse.json({ success: true, lock: vetgrStatus(auth.user.userId) }, { headers: NO_STORE });
+    const pot = vetgrFeePot('RUSD');
+    return NextResponse.json(
+      { success: true, lock: vetgrStatus(auth.user.userId), feePot: pot },
+      { headers: NO_STORE },
+    );
   } catch (error) {
     return dexFailure(error);
   }

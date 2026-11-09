@@ -3,6 +3,7 @@ import { getDb } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, NO_STORE, enforceRequestGuards } from '@/lib/api/route-guards';
 import { validateSchedule } from '@/lib/dex/fee-engine';
+import { distributeVetgrFees } from '@/lib/dex/farm-service';
 
 /**
  * DEX fee and revenue-split administration.
@@ -105,4 +106,22 @@ export async function PUT(request: NextRequest) {
   if (applied.length === 0) return fail('NOTHING_TO_UPDATE', 'no recognised DEX fee setting was provided');
   recordAdminAction(request, auth.admin, 'dex.fees.update', { type: 'dex_settings', detail: applied });
   return NextResponse.json({ success: true, applied }, { headers: NO_STORE });
+}
+
+/**
+ * Run the veTGR protocol-fee distribution on demand.
+ *
+ * The keeper runs this every cycle, but an administrator can force it after a
+ * treasury top-up. It only ever moves funds that already sit in the
+ * `dex_vetgr_fees` accounts, and only once per voting epoch per asset.
+ */
+export async function POST(request: NextRequest) {
+  const auth = await requireAdmin(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'admin.dex.fees.distribute');
+  if (guard) return guard;
+
+  const distributed = distributeVetgrFees();
+  recordAdminAction(request, auth.admin, 'dex.vetgr.distribute', { type: 'dex_fee_pot', detail: distributed });
+  return NextResponse.json({ success: true, distributed }, { headers: NO_STORE });
 }

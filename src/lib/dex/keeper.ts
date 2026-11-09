@@ -17,6 +17,7 @@ import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { executeSwap } from '@/lib/dex/swap-service';
 import { closePosition, applyFunding, liquidatePosition, markPrice, perpPositions } from '@/lib/dex/perps-service';
 import { accrueInterest } from '@/lib/dex/margin-service';
+import { distributeVetgrFees } from '@/lib/dex/farm-service';
 import { dcaSlicesDue, twapChildren, limitShouldTrigger } from '@/lib/dex/orders';
 import { shouldLiquidate } from '@/lib/dex/perps';
 import { loadPool, parseObject, parseStringArray } from '@/lib/dex/pool-service';
@@ -32,6 +33,7 @@ export interface KeeperReport {
   fundingApplied: string[];
   positionsLiquidated: number;
   interestAccrued: number;
+  vetgrFeesDistributed: number;
 }
 
 /** The current spot price of a pair, from the deepest pool that serves it. */
@@ -301,6 +303,7 @@ export function runKeeperCycle(now = Date.now()): KeeperReport {
   const twap = runDueTwapPlans(now);
   const perps = runPerpCycle();
   const lending = accrueInterest(now);
+  const vetgrFees = distributeVetgrFees();
   return {
     limitOrdersSettled: limits.settled,
     limitOrdersFailed: limits.failed,
@@ -311,6 +314,7 @@ export function runKeeperCycle(now = Date.now()): KeeperReport {
     fundingApplied: perps.fundingApplied,
     positionsLiquidated: perps.liquidated,
     interestAccrued: lending.charged,
+    vetgrFeesDistributed: vetgrFees.reduce((sum, entry) => sum + entry.distributed, 0),
   };
 }
 

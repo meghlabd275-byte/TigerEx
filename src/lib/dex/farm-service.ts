@@ -405,6 +405,76 @@ export function vetgrStatus(userId: string): Record<string, unknown> | null {
   };
 }
 
+/**
+ * The current balance of the veTGR fee pot for an asset, and the epoch it was
+ * last distributed at.
+ */
+export function vetgrFeePot(asset: string): { asset: string; balance: number; lastEpoch: number } {
+  const key = `dex_vetgr_fee_epoch_${asset.toUpperCase()}`;
+  const row = getDb().prepare('SELECT value FROM system_settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return {
+    asset: asset.toUpperCase(),
+    balance: fundBalance('dex_vetgr_fees', asset.toUpperCase()),
+    lastEpoch: Number(row?.value ?? 0),
+  };
+}
+
+/**
+ * Distribute the protocol's veTGR fee share to veTGR holders.
+ *
+ * Every settlement already carved the veTGR share of its fee out of the pool
+ * into the `dex_vetgr_fees` account, so this is a real transfer of held funds,
+ * never a mint: the whole pot is debited and paid to the lockers pro-rata by
+ * locked amount. Each asset is distributed at most once per voting epoch, so a
+ * keeper that calls this every cycle still pays out once an epoch. When nothing
+ * is locked the fees stay in the account for the next lock rather than being
+ * paid to nobody.
+ */
+export function distributeVetgrFees(): Array<{ asset: string; epoch: number; distributed: number; holders: number }> {
+  const db = getDb();
+  const epoch = currentEpoch();
+  const pots = db
+    .prepare("SELECT asset, balance FROM treasury_accounts WHERE network = 'TIGEREX' AND account_type = 'dex_vetgr_fees' AND balance > 0")
+    .all() as Array<{ asset: string; balance: number }>;
+  const locks = db.prepare('SELECT user_id, amount FROM dex_ve_locks WHERE amount > 0').all() as Array<{
+    user_id: string;
+    amount: number;
+  }>;
+  const totalLocked = locks.reduce((sum, lock) => sum + Number(lock.amount), 0);
+
+  const results: Array<{ asset: string; epoch: number; distributed: number; holders: number }> = [];
+  for (const pot of pots) {
+    const key = `dex_vetgr_fee_epoch_${pot.asset}`;
+    const last = Number(
+      (db.prepare('SELECT value FROM system_settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? 0,
+    );
+    const amount = Number(pot.balance);
+    if (last >= epoch || !(amount > 0) || totalLocked <= 0) continue;
+
+    db.transaction(() => {
+      debitFund('dex_vetgr_fees', pot.asset, amount);
+      let paid = 0;
+      locks.forEach((lock, index) => {
+        // The last holder takes the remainder so the parts sum to the pot
+        // exactly, however the division rounds.
+        const share = index === locks.length - 1 ? amount - paid : (amount * Number(lock.amount)) / totalLocked;
+        if (share > 0) {
+          creditAvailable(lock.user_id, pot.asset, share);
+          paid += share;
+        }
+      });
+      db.prepare(
+        `INSERT INTO system_settings (key, value, category, updated_at)
+         VALUES (?, ?, 'dex', datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+      ).run(key, String(epoch));
+    })();
+
+    results.push({ asset: pot.asset, epoch, distributed: amount, holders: locks.length });
+  }
+  return results;
+}
+
 // ============================================================================
 // Gauges and bribes
 // ============================================================================

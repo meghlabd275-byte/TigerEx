@@ -321,6 +321,12 @@ may credit a balance the venue did not take in. The rules the code must keep:
   `dex_farm_rewards` in `treasury_accounts` (`fundFarmRewards`); a shortfall stays
   pending and is paid after a top-up rather than conjured. A farm with no funding
   pays zero.
+- **The veTGR fee share is distributed from its pot, once per epoch.**
+  `recordDexRevenue` credits the veTGR bucket to `dex_vetgr_fees`; the keeper's
+  `distributeVetgrFees` debits that account and pays the lockers pro-rata by
+  locked amount (the last holder takes the remainder so the parts sum exactly),
+  and stamps the epoch so a per-cycle keeper pays once an epoch. With nothing
+  locked the fees stay in the account, never paid to nobody.
 - **Lending interest is a debt/supply adjustment, not a balance credit.**
   `accrueInterest` raises the borrower's debt and the market's `total_supply` (the
   supply position's claim), keeping a reserve cut; no user balance moves, so it
