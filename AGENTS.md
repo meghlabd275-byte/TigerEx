@@ -213,6 +213,12 @@ separate backend. `admin-system.js` is real but is not mounted by
   built with `Date.toISOString()` is `...THH:MM:SS.sssZ`. The literal `T` sorts
   after the space, so `created_at >= ?` silently drops every row. Write
   `datetime(created_at) >= datetime(?)` instead.
+- Move balances only through the ledger (`src/lib/db/ledger.ts`). An asset can
+  live in more than one balance row (one per wallet type), so `availableBalance()`
+  is a total across rows. Checking that total and then debiting a single row
+  (`ORDER BY ... LIMIT 1`) drives the chosen row negative and strands funds on
+  release. Use `debitAvailable`/`creditAvailable`/`lockAvailable`/`unlockAvailable`/
+  `consumeLocked`, which spread a movement across every row that holds the asset.
 - Read a zone-less DB timestamp in JS through `parseUtcTimestamp` in
   `src/lib/trading/candles.ts`, not `Date.parse`. `Date.parse` treats
   `YYYY-MM-DD HH:MM:SS` as local time, shifting it by the host offset; the
