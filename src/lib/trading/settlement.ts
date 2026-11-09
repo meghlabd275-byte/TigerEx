@@ -21,6 +21,7 @@ import { sweepExpiredRedPackets } from '@/lib/earn/rewards';
 import { runDueBots, type BotTickResult } from '@/lib/bots/runner';
 import { runCopySweep, type CopyExecutionResult } from '@/lib/trading/copy-engine';
 import { runArmedAdl, type AdlResult } from '@/lib/trading/adl';
+import { runMarginLiquidationKeeper } from '@/lib/trading/margin-engine';
 
 export interface FundingSettlement {
   symbol: string;
@@ -42,6 +43,8 @@ export interface SettlementReport {
   copySkipped: number;
   adlContracts: string[];
   adlClawedBack: number;
+  marginLiquidated: string[];
+  marginLiquidationSkipped: number;
 }
 
 const HOUR_NS = 60 * 60 * 1e9;
@@ -177,6 +180,15 @@ export function runSettlementCycle(nowMs: number = Date.now()): SettlementReport
     adl = [];
   }
 
+  // Spot margin enforcement: an underwater loan is force-closed by the venue
+  // when no external keeper bot claims it, so bad debt never accumulates.
+  let margin = { liquidated: [] as Array<{ loanId: string }>, skipped: [] as Array<{ loanId: string }> };
+  try {
+    margin = runMarginLiquidationKeeper(nowMs);
+  } catch {
+    margin = { liquidated: [], skipped: [] };
+  }
+
   return {
     fundingApplied: funding.applied,
     fundingSkipped: funding.skipped,
@@ -191,5 +203,7 @@ export function runSettlementCycle(nowMs: number = Date.now()): SettlementReport
     copySkipped: copy.filter((row) => row.status === 'skipped').length,
     adlContracts: adl.map((result) => result.contract),
     adlClawedBack: adl.reduce((sum, result) => sum + result.clawedBack, 0),
+    marginLiquidated: margin.liquidated.map((row) => row.loanId),
+    marginLiquidationSkipped: margin.skipped.length,
   };
 }

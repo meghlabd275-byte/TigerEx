@@ -48,6 +48,8 @@ export async function POST(request: NextRequest) {
         copySkipped: report.copySkipped,
         adlContracts: report.adlContracts.length,
         adlClawedBack: report.adlClawedBack,
+        marginLiquidated: report.marginLiquidated.length,
+        marginLiquidationSkipped: report.marginLiquidationSkipped,
       },
     });
     return NextResponse.json({ success: true, report }, { headers: NO_STORE });

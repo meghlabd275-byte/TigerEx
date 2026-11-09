@@ -18,7 +18,7 @@ process.env.ENCRYPTION_KEY = 'test-encryption-key-0123456789abcdef0123456789';
 
 const { getDb, generateId, hashPassword } = require('../../.test-build/index.js');
 const { availableBalance, lockedBalance } = require('../../.test-build/ledger.js');
-const { borrow, repay, liquidate, marginAccount, MarginError } = require('../../.test-build/margin-engine.js');
+const { borrow, repay, liquidate, marginAccount, liquidatableLoans, runMarginLiquidationKeeper, MARGIN_LIQUIDATION_ACCOUNT, MarginError } = require('../../.test-build/margin-engine.js');
 
 const db = getDb();
 
@@ -354,4 +354,75 @@ test('an unpriced collateral asset blocks the borrow rather than guessing', () =
       }),
     (error) => error instanceof MarginError && error.code === 'PRICE_UNAVAILABLE',
   );
+});
+
+test('the keeper lists an underwater loan and force-closes it', () => {
+  const user = seedUser();
+  credit(user, 'BTC', 1);
+  setPrice('BTC/RUSD', 50000);
+
+  const loan = borrow(user, {
+    symbol: 'TGR/RUSD',
+    mode: 'isolated',
+    asset: 'RUSD',
+    amount: 4500,
+    collateralAsset: 'BTC',
+    collateralAmount: 0.5,
+  });
+
+  // Drop the collateral so the debt exceeds the 75% liquidation threshold:
+  // 0.1 * 10,000 * 0.75 = 750 < 4,500.
+  setPrice('BTC/RUSD', 10000);
+
+  const candidates = liquidatableLoans();
+  assert.ok(candidates.some((row) => row.loanId === loan.loanId), 'the loan must be listed as liquidatable');
+
+  const venueBefore = availableBalance(MARGIN_LIQUIDATION_ACCOUNT, 'BTC');
+  const report = runMarginLiquidationKeeper();
+  assert.ok(report.liquidated.some((row) => row.loanId === loan.loanId));
+  assert.equal(report.skipped.length, 0);
+
+  const closed = db.prepare('SELECT status, principal FROM margin_loans WHERE loan_id = ?').get(loan.loanId);
+  assert.equal(closed.status, 'liquidated');
+  assert.equal(Number(closed.principal), 0);
+
+  // No collateral stays pledged, and the BTC the venue seized plus the BTC the
+  // borrower still holds reconcile to the 1 BTC they started with: the seizure
+  // moves value, it never mints it.
+  assert.equal(lockedBalance(user, 'BTC'), 0);
+  const seized = report.liquidated.find((row) => row.loanId === loan.loanId).seized;
+  assert.ok(seized > 0);
+  // Every loan the pass closed moved its seized BTC into the venue account, so
+  // the account's increase equals the total seized: value is conserved, never
+  // minted.
+  const totalSeized = report.liquidated.reduce((sum, row) => sum + row.seized, 0);
+  assert.ok(
+    Math.abs(availableBalance(MARGIN_LIQUIDATION_ACCOUNT, 'BTC') - venueBefore - totalSeized) < 1e-6,
+  );
+  assert.ok(Math.abs(availableBalance(user, 'BTC') + seized - 1) < 1e-9);
+
+  // A second pass finds nothing: the loan is no longer open.
+  const again = runMarginLiquidationKeeper();
+  assert.equal(again.liquidated.length, 0);
+
+  setPrice('BTC/RUSD', 50000);
+});
+
+test('the keeper leaves a healthy loan open', () => {
+  const user = seedUser();
+  credit(user, 'BTC', 1);
+  setPrice('BTC/RUSD', 50000);
+
+  const loan = borrow(user, {
+    symbol: 'BTC/RUSD',
+    asset: 'RUSD',
+    amount: 10000,
+    collateralAsset: 'BTC',
+    collateralAmount: 0.5,
+  });
+
+  const report = runMarginLiquidationKeeper();
+  assert.equal(report.liquidated.length, 0);
+  const open = db.prepare('SELECT status FROM margin_loans WHERE loan_id = ?').get(loan.loanId);
+  assert.equal(open.status, 'open');
 });

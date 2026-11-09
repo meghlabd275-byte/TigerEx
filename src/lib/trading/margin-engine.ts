@@ -444,6 +444,63 @@ export function repay(userId: string, loanId: string, amount: number): MarginLoa
 }
 
 /**
+ * Seize a loan's collateral and close it.
+ *
+ * Shared by the interactive `liquidate` path (a keeper bot claims the bonus) and
+ * the scheduled keeper (`runMarginLiquidationKeeper`, which runs on the venue's
+ * own account when no external liquidator is configured). The collateral is
+ * seized up to the debt plus the bonus, never more than the loan holds; any
+ * remainder is returned to the borrower unlocked rather than left pledged to a
+ * closed loan. Every ledger movement and the close commit in one transaction.
+ */
+function seizeLoan(
+  db: ReturnType<typeof getDb>,
+  row: LoanRow,
+  view: MarginLoanView,
+  market: MarginMarketRow,
+  receiverId: string,
+): { seized: number; asset: string; receiverId: string } {
+  const bonus = Number(market.liquidation_bonus);
+  const collateralPrice = priceInQuote(row.collateral_asset, market.quote_asset);
+  if (collateralPrice === null || collateralPrice <= 0) {
+    throw new MarginError('PRICE_UNAVAILABLE', 'Collateral cannot be priced', 409);
+  }
+
+  const owed = view.loanValue;
+  const seizeValue = owed * (1 + bonus);
+  const held = Number(row.collateral_amount);
+  const seizeAmount = Math.min(held, seizeValue / collateralPrice);
+  const remainder = Math.max(0, held - seizeAmount);
+
+  db.transaction(() => {
+    consumeLocked(row.user_id, row.collateral_asset, seizeAmount);
+    if (remainder > 0) unlockAvailable(row.user_id, row.collateral_asset, remainder);
+    // The receiver (the liquidator, or the venue's own account) takes the seized
+    // collateral; the part above the debt is their compensation.
+    creditAvailable(receiverId, row.collateral_asset, seizeAmount);
+    db.prepare(
+      `UPDATE margin_loans SET status = 'liquidated', principal = 0, interest_accrued = 0,
+              collateral_amount = MAX(0, collateral_amount - ?), updated_at = datetime('now')
+        WHERE loan_id = ?`,
+    ).run(seizeAmount, row.loan_id);
+    recordTransaction(
+      receiverId,
+      'margin_liquidation',
+      row.collateral_asset,
+      seizeAmount,
+      0,
+      'completed',
+      `Liquidated loan ${row.loan_id} (${row.symbol})`,
+    );
+    // The borrower's unpaid interest is real income the exchange earned before
+    // the position was seized, so it is booked rather than silently dropped.
+    recordRevenue('margin_interest', row.asset, view.interestAccrued, row.user_id, row.symbol);
+  })();
+
+  return { seized: seizeAmount, asset: row.collateral_asset, receiverId };
+}
+
+/**
  * Liquidate a loan whose collateral no longer covers its debt.
  *
  * The collateral is seized up to the liquidation threshold, the debt is closed,
@@ -469,47 +526,137 @@ export function liquidate(
   const market = db
     .prepare('SELECT * FROM margin_markets WHERE symbol = ?')
     .get(row.symbol) as MarginMarketRow;
-  const bonus = Number(market.liquidation_bonus);
-  const collateralPrice = priceInQuote(row.collateral_asset, market.quote_asset);
-  if (collateralPrice === null || collateralPrice <= 0) {
-    throw new MarginError('PRICE_UNAVAILABLE', 'Collateral cannot be priced', 409);
+  const result = seizeLoan(db, row, view, market, liquidatorId);
+  return { liquidatorProfit: result.seized, asset: result.asset, seized: result.seized };
+}
+
+export interface LiquidatableLoan {
+  loanId: string;
+  userId: string;
+  symbol: string;
+  collateralAsset: string;
+  collateralAmount: number;
+  totalOwed: number;
+  healthRatio: number;
+}
+
+/**
+ * Every open loan that has breached its liquidation threshold.
+ *
+ * A loan whose collateral or debt cannot be priced is skipped rather than
+ * reported, so the keeper never force-closes a position on a guessed value.
+ * The list is what the keeper and the risk dashboard both read.
+ */
+export function liquidatableLoans(now: number = Date.now()): LiquidatableLoan[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM margin_loans WHERE status = 'open'")
+    .all() as LoanRow[];
+
+  const result: LiquidatableLoan[] = [];
+  for (const row of rows) {
+    const view = valueLoan(row, now);
+    if (!view || !view.liquidatable) continue;
+    result.push({
+      loanId: row.loan_id,
+      userId: row.user_id,
+      symbol: row.symbol,
+      collateralAsset: row.collateral_asset,
+      collateralAmount: Number(row.collateral_amount),
+      totalOwed: view.totalOwed,
+      healthRatio: view.healthRatio,
+    });
+  }
+  return result;
+}
+
+export interface MarginLiquidationReport {
+  /** Loans force-closed this pass. */
+  liquidated: Array<{ loanId: string; symbol: string; seized: number; asset: string }>;
+  /** Loans that could not be closed, with the reason, so nothing fails silently. */
+  skipped: Array<{ loanId: string; reason: string }>;
+}
+
+/**
+ * Force-close every underwater margin loan.
+ *
+ * This is the scheduled enforcement point: a spot margin loan whose collateral
+ * has fallen below its liquidation threshold must be closed even when no
+ * external keeper bot claims it, or the venue carries the bad debt. The seized
+ * collateral is credited to the venue's own margin-liquidation account
+ * (`margin_liquidation` in `treasury_accounts`) rather than minted, and the
+ * borrower's unpaid interest is booked as revenue by `seizeLoan`.
+ *
+ * A loan that cannot be priced or whose market is missing is reported in
+ * `skipped`, never closed on a guess.
+ */
+export function runMarginLiquidationKeeper(now: number = Date.now()): MarginLiquidationReport {
+  const db = getDb();
+  const report: MarginLiquidationReport = { liquidated: [], skipped: [] };
+
+  const candidates = liquidatableLoans(now);
+  // Enforcement runs even while the venue is paused: a pause stops new trading,
+  // but an already-underwater loan must still be closed or the venue carries the
+  // bad debt. A loan whose price cannot be computed is skipped, so a stale
+  // oracle halts liquidation on its own.
+  if (candidates.length === 0) return report;
+  ensureLiquidationAccount();
+
+  for (const candidate of candidates) {
+    const row = db
+      .prepare("SELECT * FROM margin_loans WHERE loan_id = ? AND status = 'open'")
+      .get(candidate.loanId) as LoanRow | undefined;
+    if (!row) continue;
+
+    const view = valueLoan(row, now);
+    if (!view) {
+      report.skipped.push({ loanId: candidate.loanId, reason: 'PRICE_UNAVAILABLE' });
+      continue;
+    }
+    const market = db
+      .prepare('SELECT * FROM margin_markets WHERE symbol = ?')
+      .get(row.symbol) as MarginMarketRow | undefined;
+    if (!market) {
+      report.skipped.push({ loanId: candidate.loanId, reason: 'UNKNOWN_MARKET' });
+      continue;
+    }
+
+    try {
+      const result = seizeLoan(db, row, view, market, MARGIN_LIQUIDATION_ACCOUNT);
+      report.liquidated.push({
+        loanId: candidate.loanId,
+        symbol: candidate.symbol,
+        seized: result.seized,
+        asset: result.asset,
+      });
+    } catch (error) {
+      report.skipped.push({
+        loanId: candidate.loanId,
+        reason: error instanceof MarginError ? error.code : 'LIQUIDATION_FAILED',
+      });
+    }
   }
 
-  // Seize enough collateral to cover the debt plus the liquidator's bonus,
-  // never more than the loan holds.
-  const owed = view.loanValue;
-  const seizeValue = owed * (1 + bonus);
-  const seizeAmount = Math.min(Number(row.collateral_amount), seizeValue / collateralPrice);
+  return report;
+}
 
-  // Any collateral beyond what the debt and bonus require stays with the
-  // borrower, unlocked, rather than remaining pledged to a closed loan.
-  const remainder = Math.max(0, Number(row.collateral_amount) - seizeAmount);
+/**
+ * The venue account that receives collateral seized by the scheduled keeper.
+ *
+ * It is an ordinary user row so the ledger can credit it, created on first use
+ * and never able to authenticate: its password hash is a fixed non-hash string
+ * that no password can match.
+ */
+export const MARGIN_LIQUIDATION_ACCOUNT = 'tigerex:margin_liquidation';
 
-  const run = db.transaction(() => {
-    consumeLocked(row.user_id, row.collateral_asset, seizeAmount);
-    if (remainder > 0) unlockAvailable(row.user_id, row.collateral_asset, remainder);
-    // The liquidator repays the debt from the seized collateral; the remainder
-    // (the bonus) is their compensation, recorded as a ledger movement.
-    creditAvailable(liquidatorId, row.collateral_asset, seizeAmount);
-    db.prepare(
-      `UPDATE margin_loans SET status = 'liquidated', principal = 0, interest_accrued = 0,
-              collateral_amount = MAX(0, collateral_amount - ?), updated_at = datetime('now')
-        WHERE loan_id = ?`,
-    ).run(seizeAmount, loanId);
-    recordTransaction(
-      liquidatorId,
-      'margin_liquidation',
-      row.collateral_asset,
-      seizeAmount,
-      0,
-      'completed',
-      `Liquidated loan ${loanId} (${row.symbol})`,
-    );
-    // The borrower's unpaid interest is real income the exchange earned before
-    // the position was seized, so it is booked rather than silently dropped.
-    recordRevenue('margin_interest', row.asset, view.interestAccrued, row.user_id, row.symbol);
-  });
-  run();
-
-  return { liquidatorProfit: seizeAmount, asset: row.collateral_asset, seized: seizeAmount };
+function ensureLiquidationAccount(): void {
+  const db = getDb();
+  const existing = db
+    .prepare('SELECT user_id FROM users WHERE user_id = ?')
+    .get(MARGIN_LIQUIDATION_ACCOUNT) as { user_id: string } | undefined;
+  if (existing) return;
+  db.prepare(
+    `INSERT INTO users (user_id, email, password_hash, email_verified, status, created_at, updated_at)
+     VALUES (?, ?, ?, 1, 'active', datetime('now'), datetime('now'))`,
+  ).run(MARGIN_LIQUIDATION_ACCOUNT, 'margin-liquidation@tigerex.internal', 'system:no-login');
 }
