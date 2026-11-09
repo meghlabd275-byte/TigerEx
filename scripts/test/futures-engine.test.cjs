@@ -28,6 +28,7 @@ const {
   FuturesError,
 } = require('../../.test-build/futures-engine.js');
 const { scanPositions, processQueue } = require('../../.test-build/risk-supervisor.js');
+const { runAdl, runArmedAdl } = require('../../.test-build/adl.js');
 
 const db = getDb();
 
@@ -508,4 +509,101 @@ test('pausing the futures venue refuses new orders', () => {
   } finally {
     db.prepare("UPDATE exchange_controls SET paused = 0, reason = NULL WHERE scope = 'futures'").run();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Auto-deleveraging
+// ---------------------------------------------------------------------------
+
+/**
+ * Arm ADL on a contract with a target and threshold, and set its balance.
+ * `placeFuturesOrder` seeds the fund with each fill's insurance share, so the
+ * balance is overwritten to a chosen value.
+ */
+function armAdl(symbol, balance, target, threshold) {
+  db.prepare(
+    `INSERT INTO insurance_funds (contract, balance, target_balance, fee_share, adl_enabled, adl_threshold)
+     VALUES (?, ?, ?, 0.1, 1, ?)
+     ON CONFLICT(contract) DO UPDATE SET balance = excluded.balance, target_balance = excluded.target_balance,
+       adl_enabled = 1, adl_threshold = excluded.adl_threshold`,
+  ).run(symbol, balance, target, threshold);
+}
+
+test('adl is inert while the insurance fund is above its threshold', () => {
+  const symbol = pricedContract('ADLOK', 100);
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 1, leverage: 10 });
+
+  armAdl(symbol, 1000, 1000, 500);
+  const result = runAdl(symbol);
+  assert.equal(result.ran, false);
+  assert.match(result.reason, /threshold/);
+  assert.equal(db.prepare('SELECT status FROM futures_positions WHERE user_id = ?').get(user).status, 'open');
+});
+
+test('adl closes the profitable opposing position and refills the fund', () => {
+  const symbol = pricedContract('ADLRUN', 100);
+  const longUser = seedUser();
+  const shortUser = seedUser();
+  credit(longUser, 'RUSD', 100000);
+  credit(shortUser, 'RUSD', 100000);
+
+  // 10 notional each side; the short profits when the mark falls.
+  placeFuturesOrder(longUser, { symbol, side: 'buy', type: 'market', quantity: 10, leverage: 10 });
+  placeFuturesOrder(shortUser, { symbol, side: 'sell', type: 'market', quantity: 10, leverage: 10 });
+  setOraclePrice(symbol, 90); // short is +100
+
+  armAdl(symbol, 50, 1000, 500);
+  const shortBefore = availableBalance(shortUser, 'RUSD');
+
+  const result = runAdl(symbol);
+  assert.equal(result.ran, true);
+  assert.ok(result.deficit > 0);
+
+  const shortPosition = db.prepare('SELECT status FROM futures_positions WHERE user_id = ?').get(shortUser);
+  assert.equal(shortPosition.status, 'adl');
+
+  // The fund gains the clawback and no more than the deficit.
+  assert.ok(result.clawedBack > 0);
+  assert.ok(result.clawedBack <= result.deficit + 1e-6);
+  const fund = db.prepare('SELECT balance FROM insurance_funds WHERE contract = ?').get(symbol);
+  assert.ok(Math.abs(Number(fund.balance) - (50 + result.clawedBack)) < 1e-6);
+
+  // The deleveraged trader keeps their margin plus the profit the fund did not
+  // take, so their spendable balance rises.
+  assert.ok(availableBalance(shortUser, 'RUSD') > shortBefore);
+  // The long, unprofitable, is untouched.
+  assert.equal(db.prepare('SELECT status FROM futures_positions WHERE user_id = ?').get(longUser).status, 'open');
+});
+
+test('adl does nothing when no opposing position is profitable', () => {
+  const symbol = pricedContract('ADLNONE', 100);
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 1, leverage: 10 });
+
+  armAdl(symbol, 50, 1000, 500);
+  const result = runAdl(symbol);
+  assert.equal(result.ran, false);
+  assert.match(result.reason, /profitable/);
+  assert.equal(db.prepare('SELECT status FROM futures_positions WHERE user_id = ?').get(user).status, 'open');
+});
+
+test('runArmedAdl only touches contracts with adl enabled', () => {
+  const symbol = pricedContract('ADLARM', 100);
+  const shortUser = seedUser();
+  credit(shortUser, 'RUSD', 100000);
+  placeFuturesOrder(shortUser, { symbol, side: 'sell', type: 'market', quantity: 10, leverage: 10 });
+  setOraclePrice(symbol, 90);
+
+  // A disabled fund with the same shortfall must not be swept.
+  armAdl(symbol, 50, 1000, 500);
+  db.prepare('UPDATE insurance_funds SET adl_enabled = 0 WHERE contract = ?').run(symbol);
+  assert.equal(runArmedAdl().filter((result) => result.contract === symbol).length, 0);
+  assert.equal(db.prepare('SELECT status FROM futures_positions WHERE user_id = ?').get(shortUser).status, 'open');
+
+  db.prepare('UPDATE insurance_funds SET adl_enabled = 1 WHERE contract = ?').run(symbol);
+  assert.equal(runArmedAdl().filter((result) => result.contract === symbol).length, 1);
+  assert.equal(db.prepare('SELECT status FROM futures_positions WHERE user_id = ?').get(shortUser).status, 'adl');
 });

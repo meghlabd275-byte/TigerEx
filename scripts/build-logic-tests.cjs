@@ -40,6 +40,7 @@ const MODULES = [
   'src/lib/trading/futures-engine.ts',
   'src/lib/trading/mark-price.ts',
   'src/lib/trading/risk-supervisor.ts',
+  'src/lib/trading/adl.ts',
   'src/lib/risk/engine.ts',
   'src/lib/oracle/aggregator.ts',
   'src/lib/options/pricing.ts',

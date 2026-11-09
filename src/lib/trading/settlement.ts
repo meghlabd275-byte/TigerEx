@@ -20,6 +20,7 @@ import { fundingRate } from '@/lib/oracle/aggregator';
 import { sweepExpiredRedPackets } from '@/lib/earn/rewards';
 import { runDueBots, type BotTickResult } from '@/lib/bots/runner';
 import { runCopySweep, type CopyExecutionResult } from '@/lib/trading/copy-engine';
+import { runArmedAdl, type AdlResult } from '@/lib/trading/adl';
 
 export interface FundingSettlement {
   symbol: string;
@@ -39,6 +40,8 @@ export interface SettlementReport {
   botErrors: Array<{ botId: string; reason: string }>;
   copyMirrored: number;
   copySkipped: number;
+  adlContracts: string[];
+  adlClawedBack: number;
 }
 
 const HOUR_NS = 60 * 60 * 1e9;
@@ -165,6 +168,15 @@ export function runSettlementCycle(nowMs: number = Date.now()): SettlementReport
     copy = [];
   }
 
+  // Auto-deleveraging runs last: it closes positions, so it must see the marks
+  // and funding this cycle has already applied.
+  let adl: AdlResult[] = [];
+  try {
+    adl = runArmedAdl();
+  } catch {
+    adl = [];
+  }
+
   return {
     fundingApplied: funding.applied,
     fundingSkipped: funding.skipped,
@@ -177,5 +189,7 @@ export function runSettlementCycle(nowMs: number = Date.now()): SettlementReport
     botErrors,
     copyMirrored: copy.filter((row) => row.status === 'placed').length,
     copySkipped: copy.filter((row) => row.status === 'skipped').length,
+    adlContracts: adl.map((result) => result.contract),
+    adlClawedBack: adl.reduce((sum, result) => sum + result.clawedBack, 0),
   };
 }

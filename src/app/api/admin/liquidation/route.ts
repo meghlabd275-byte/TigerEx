@@ -3,6 +3,7 @@ import { getDb } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 import { scanPositions, processQueue } from '@/lib/trading/risk-supervisor';
+import { runAdl, runArmedAdl, AdlError } from '@/lib/trading/adl';
 
 /**
  * The liquidation work queue.
@@ -99,8 +100,8 @@ export async function POST(request: NextRequest) {
 
   const body = await readJson(request);
   const action = String(body?.action ?? 'scan').toLowerCase();
-  if (action !== 'scan' && action !== 'execute') {
-    return fail('VALIDATION_FAILED', "action must be 'scan' or 'execute'");
+  if (!['scan', 'execute', 'adl'].includes(action)) {
+    return fail('VALIDATION_FAILED', "action must be 'scan', 'execute' or 'adl'");
   }
 
   if (action === 'scan') {
@@ -110,6 +111,31 @@ export async function POST(request: NextRequest) {
       detail: { scanned: result.scanned, queued: result.queued.length, unpriced: result.unpriced.length },
     });
     return NextResponse.json({ success: true, action, ...result }, { headers: NO_STORE });
+  }
+
+  if (action === 'adl') {
+    // A named contract runs ADL for that contract alone; otherwise every fund
+    // that has armed ADL is swept.
+    const contract = body?.contract === undefined ? null : String(body.contract).trim().toUpperCase();
+    if (contract && !/^[A-Z0-9]{1,20}\/[A-Z0-9]{1,20}$/.test(contract)) {
+      return fail('VALIDATION_FAILED', 'contract must be of the form BASE/QUOTE');
+    }
+    try {
+      const results = contract ? [runAdl(contract)] : runArmedAdl();
+      const ran = results.filter((result) => result.ran);
+      recordAdminAction(request, auth.admin, 'liquidation.adl', {
+        type: 'liquidation_cycle',
+        detail: {
+          contract,
+          contracts: ran.map((result) => result.contract),
+          clawedBack: ran.reduce((sum, result) => sum + result.clawedBack, 0),
+        },
+      });
+      return NextResponse.json({ success: true, action, results }, { headers: NO_STORE });
+    } catch (error) {
+      if (error instanceof AdlError) return fail(error.code, error.message, error.status);
+      throw error;
+    }
   }
 
   const limit = body?.limit === undefined ? 50 : Number(body.limit);

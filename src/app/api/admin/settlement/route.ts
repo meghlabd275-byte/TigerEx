@@ -46,6 +46,8 @@ export async function POST(request: NextRequest) {
         botsPlaced: report.botsPlaced,
         copyMirrored: report.copyMirrored,
         copySkipped: report.copySkipped,
+        adlContracts: report.adlContracts.length,
+        adlClawedBack: report.adlClawedBack,
       },
     });
     return NextResponse.json({ success: true, report }, { headers: NO_STORE });
