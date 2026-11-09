@@ -33,7 +33,7 @@ const { openPosition, closePosition, applyFunding, liquidatePosition, perpPositi
 const { supply, borrow, repay, withdrawSupply, flashLoan, listLendingMarkets, accrueInterest, liquidateBorrow } = require('../../.test-build/margin-service.js');
 const { contribute, claimRaise, launchEscrowAccount, listNft, buyNft, initiateBridge, releaseBridge } = require('../../.test-build/launch-service.js');
 const { settleDueLimitOrders, runDueDcaPlans, runDueTwapPlans, runPerpCycle, runKeeperCycle } = require('../../.test-build/keeper.js');
-const { scanCopySwaps, mirrorCopySwaps, copyMirrors } = require('../../.test-build/copy-service.js');
+const { scanCopySwaps, mirrorCopySwaps, copyMirrors, runDexCopySweep } = require('../../.test-build/copy-service.js');
 
 const db = getDb();
 
@@ -290,6 +290,67 @@ test('DEX copy trading skips a mirror the follower cannot fund without aborting'
   assert.equal(results[0].reason, 'INSUFFICIENT_BALANCE');
   // A skipped mirror is not recorded, so it can be retried once funded.
   assert.equal(copyMirrors(follower).length, 0);
+});
+
+test('the DEX copy sweep mirrors every active follower and skips the unfunded one', () => {
+  const leader = seedUser();
+  const funded = seedUser();
+  const broke = seedUser();
+  credit(leader, 'RUSD', 1_000_000);
+  credit(funded, 'RUSD', 1_000_000);
+  credit(broke, 'RUSD', 1); // cannot fund the fixed 500 copy
+  createPool('v2', ['RUSD', 'TGR'], { RUSD: 10000000, TGR: 10000000 });
+  executeSwap({ userId: leader, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000 });
+
+  const traderId = generateId();
+  db.prepare(
+    `INSERT INTO copy_traders (trader_id, user_id, display_name, status, max_followers, profit_share)
+     VALUES (?, ?, 'Leader', 'approved', 100, 0.1)`,
+  ).run(traderId, leader);
+  for (const follower of [funded, broke]) {
+    db.prepare(
+      `INSERT INTO copy_follows (follow_id, follower_id, trader_id, copy_mode, fixed_amount, status, created_at)
+       VALUES (?, ?, ?, 'fixed', 500, 'active', datetime('now', '-1 hour'))`,
+    ).run(generateId(), follower, traderId);
+  }
+
+  const swept = runDexCopySweep();
+  const mirrored = swept.filter((r) => r.status === 'mirrored' && r.followerId === funded);
+  const skipped = swept.filter((r) => r.status === 'skipped' && r.followerId === broke);
+  assert.equal(mirrored.length, 1, 'the funded follower is mirrored');
+  assert.equal(skipped.length, 1, 'the unfunded follower is skipped, not fatal');
+  assert.equal(skipped[0].reason, 'INSUFFICIENT_BALANCE');
+
+  // A second sweep has nothing new to mirror for the funded follower.
+  assert.equal(
+    runDexCopySweep().filter((r) => r.status === 'mirrored' && r.followerId === funded).length,
+    0,
+  );
+});
+
+test('the keeper cycle settles DEX copy mirrors and reports the counts', () => {
+  const leader = seedUser();
+  const follower = seedUser();
+  credit(leader, 'RUSD', 1_000_000);
+  credit(follower, 'RUSD', 1_000_000);
+  createPool('v2', ['RUSD', 'TGR'], { RUSD: 10000000, TGR: 10000000 });
+  executeSwap({ userId: leader, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000 });
+
+  const traderId = generateId();
+  db.prepare(
+    `INSERT INTO copy_traders (trader_id, user_id, display_name, status, max_followers, profit_share)
+     VALUES (?, ?, 'Leader', 'approved', 100, 0.1)`,
+  ).run(traderId, leader);
+  db.prepare(
+    `INSERT INTO copy_follows (follow_id, follower_id, trader_id, copy_mode, fixed_amount, status, created_at)
+     VALUES (?, ?, ?, 'fixed', 500, 'active', datetime('now', '-1 hour'))`,
+  ).run(generateId(), follower, traderId);
+
+  const report = runKeeperCycle();
+  // Other tests leave active follows behind, so the cycle reports the whole
+  // venue; this follower's own mirror is what must have settled.
+  assert.ok(report.copyMirrored >= 1, 'the keeper mirrors at least this pending leader swap');
+  assert.equal(copyMirrors(follower).length, 1);
 });
 
 test('a swap without the input balance is refused and moves nothing', () => {

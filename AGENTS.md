@@ -328,7 +328,9 @@ may credit a balance the venue did not take in. The rules the code must keep:
   and the mirror row is written in the same step as the swap so a crash cannot
   double-copy. `POST /api/dex/copy` settles pending mirrors from the follower's
   own balance; a mirror the follower cannot fund is skipped and reported rather
-  than aborting the batch.
+  than aborting the batch. `runKeeperCycle` also settles every active follower's
+  pending DEX mirrors (`runDexCopySweep`), so a copy settles on the keeper's
+  schedule and not only when the follower opens the page.
 - **An OTC block settles against desk inventory, never the book.** `requestQuote`
   prices from the venue's own order book, and `executeQuote` then settles the
   block bilaterally against `dex_otc_desk:<ASSET>` (funded with `fundOtcDesk`) at

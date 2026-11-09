@@ -18,6 +18,7 @@ import { executeSwap } from '@/lib/dex/swap-service';
 import { closePosition, applyFunding, liquidatePosition, markPrice, perpPositions } from '@/lib/dex/perps-service';
 import { accrueInterest } from '@/lib/dex/margin-service';
 import { distributeVetgrFees } from '@/lib/dex/farm-service';
+import { runDexCopySweep } from '@/lib/dex/copy-service';
 import { dcaSlicesDue, twapChildren, limitShouldTrigger } from '@/lib/dex/orders';
 import { shouldLiquidate } from '@/lib/dex/perps';
 import { loadPool, parseObject, parseStringArray } from '@/lib/dex/pool-service';
@@ -34,6 +35,8 @@ export interface KeeperReport {
   positionsLiquidated: number;
   interestAccrued: number;
   vetgrFeesDistributed: number;
+  copyMirrored: number;
+  copySkipped: number;
 }
 
 /** The current spot price of a pair, from the deepest pool that serves it. */
@@ -304,6 +307,14 @@ export function runKeeperCycle(now = Date.now()): KeeperReport {
   const perps = runPerpCycle();
   const lending = accrueInterest(now);
   const vetgrFees = distributeVetgrFees();
+  // Copy mirroring places swaps, so it runs after the venue-level jobs for the
+  // same reason the settlement cycle runs its bot and copy jobs last.
+  let copy: Array<{ status: string }> = [];
+  try {
+    copy = runDexCopySweep();
+  } catch {
+    copy = [];
+  }
   return {
     limitOrdersSettled: limits.settled,
     limitOrdersFailed: limits.failed,
@@ -315,6 +326,8 @@ export function runKeeperCycle(now = Date.now()): KeeperReport {
     positionsLiquidated: perps.liquidated,
     interestAccrued: lending.charged,
     vetgrFeesDistributed: vetgrFees.reduce((sum, entry) => sum + entry.distributed, 0),
+    copyMirrored: copy.filter((row) => row.status === 'mirrored').length,
+    copySkipped: copy.filter((row) => row.status === 'skipped').length,
   };
 }
 

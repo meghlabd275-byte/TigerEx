@@ -205,3 +205,36 @@ export function copyMirrors(followerId: string, limit = 100): Array<Record<strin
     )
     .all(followerId, Math.min(Math.max(limit, 1), 500)) as Array<Record<string, unknown>>;
 }
+
+/**
+ * Settle pending DEX mirrors for every follower with an active follow.
+ *
+ * The settlement cycle calls this so a follower's TigerSwap copies settle on the
+ * same schedule as the CEX copies `runCopySweep` settles, rather than only when
+ * the follower opens the page. One follower's failure cannot stop the sweep, so
+ * each is mirrored in isolation and its error recorded.
+ */
+export function runDexCopySweep(limitPerFollower = 25): Array<CopyMirrorResult & { followerId: string; error?: string }> {
+  const followers = getDb()
+    .prepare("SELECT DISTINCT follower_id FROM copy_follows WHERE status = 'active'")
+    .all() as Array<{ follower_id: string }>;
+
+  const out: Array<CopyMirrorResult & { followerId: string; error?: string }> = [];
+  for (const { follower_id: followerId } of followers) {
+    try {
+      for (const result of mirrorCopySwaps(followerId, limitPerFollower)) {
+        out.push({ ...result, followerId });
+      }
+    } catch (error) {
+      out.push({
+        followerId,
+        followId: '',
+        leaderSwapId: '',
+        status: 'skipped',
+        reason: 'SWEEP_FAILED',
+        error: error instanceof Error ? error.message : 'sweep failed',
+      });
+    }
+  }
+  return out;
+}
