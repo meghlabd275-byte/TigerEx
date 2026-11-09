@@ -253,11 +253,21 @@ function walkNotional(book: OrderBook, side: 'buy' | 'sell', quantity: number): 
 
 /** Last observed price for a symbol, or null when none has been recorded. */
 function lastPrice(symbol: string): number | null {
-  const row = getDb().prepare('SELECT price FROM market_data WHERE symbol = ?').get(symbol) as
+  const db = getDb();
+  const row = db.prepare('SELECT price FROM market_data WHERE symbol = ?').get(symbol) as
     | { price: number }
     | undefined;
   const price = Number(row?.price);
-  return Number.isFinite(price) && price > 0 ? price : null;
+  if (Number.isFinite(price) && price > 0) return price;
+
+  // The venue's own most recent settled trade is an observed price too, so a
+  // symbol that trades here before an external feed publishes it can still
+  // price a stop order's reservation rather than being refused outright.
+  const trade = db
+    .prepare('SELECT price FROM spot_trades WHERE symbol = ? ORDER BY created_at DESC LIMIT 1')
+    .get(symbol) as { price: number } | undefined;
+  const traded = Number(trade?.price);
+  return Number.isFinite(traded) && traded > 0 ? traded : null;
 }
 
 function validateQuantity(pair: PairRow, quantity: number): void {
@@ -351,6 +361,10 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
   const rates = spotRates(userId);
 
   let record: OrderRecord;
+  // The price of the last fill this order produced, captured so parked stop
+  // orders are triggered once the transaction has committed rather than from
+  // inside it (a trigger places its own orders and must not nest).
+  let lastFillPrice: number | null = null;
 
   const run = db.transaction(() => {
     const book = loadBook(symbol);
@@ -465,6 +479,7 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
 
     const filled = outcome.filled;
     const resting = outcome.resting;
+    if (outcome.filled > 0 && outcome.averagePrice !== null) lastFillPrice = outcome.averagePrice;
     const status = outcome.rejected
       ? 'rejected'
       : resting > 0
@@ -533,6 +548,12 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
     if (error instanceof LedgerError) throw new SpotError(error.code, error.message, error.status);
     throw error;
   }
+
+  // A fill can cross the trigger of stop orders parked on this symbol. They are
+  // activated now, after the transaction has committed, so each triggered order
+  // reserves and matches on a consistent view of the book.
+  if (lastFillPrice !== null) activateStopOrders(symbol, lastFillPrice);
+
   return record!;
 }
 

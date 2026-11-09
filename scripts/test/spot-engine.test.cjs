@@ -24,6 +24,7 @@ const {
   cancelSpotOrder,
   listOpenOrders,
   listTrades,
+  getOrder,
   SpotError,
 } = require('../../.test-build/spot-engine.js');
 const { orderBookDepth, rolling24h } = require('../../.test-build/market-view.js');
@@ -318,3 +319,73 @@ test('a settled trade is visible to both counterparties with its own fee', () =>
   assert.ok(takerTrades[0].fee > 0);
 });
 
+
+
+test('a fill triggers a parked stop order whose trigger it crosses', () => {
+  const symbol = listPair('SBTC', 0.01, 0.0001);
+  const maker = seedUser();
+  const taker = seedUser();
+  const stopper = seedUser();
+  credit(maker, 'SBTC', 4);
+  credit(taker, 'RUSD', 200000);
+  credit(stopper, 'RUSD', 200);
+
+  // Establish an observed price at 100 (the C++ engine publishes this in
+  // production) and leave offers resting there.
+  db.prepare('INSERT INTO market_data (id, symbol, price) VALUES (?, ?, ?)').run(generateId(), symbol, 100);
+  placeSpotOrder(maker, { symbol, side: 'sell', type: 'limit', price: 100, quantity: 4 });
+  placeSpotOrder(taker, { symbol, side: 'buy', type: 'limit', price: 100, quantity: 1 });
+
+  // A buy-stop parked at 100: not filled yet, reserving trigger * slippage.
+  const stop = placeSpotOrder(stopper, {
+    symbol,
+    side: 'buy',
+    type: 'stop_market',
+    stopPrice: 100,
+    quantity: 1,
+  });
+  assert.equal(stop.status, 'pending_trigger');
+  assert.equal(lockedBalance(stopper, 'RUSD'), 105);
+
+  // A later trade prints at 100, crossing the stop's trigger.
+  const trigger = placeSpotOrder(taker, { symbol, side: 'buy', type: 'limit', price: 100, quantity: 1 });
+  assert.equal(trigger.status, 'filled');
+
+  // The stop is now filled at 100; the 5 RUSD over-reserved by the buffer is
+  // released back to available.
+  const filledStop = getOrder(stopper, stop.orderId);
+  assert.equal(filledStop.status, 'filled');
+  assert.equal(filledStop.filledQuantity, 1);
+  assert.equal(availableBalance(stopper, 'RUSD'), 100);
+  assert.equal(lockedBalance(stopper, 'RUSD'), 0);
+  assert.equal(availableBalance(stopper, 'SBTC'), 1 - 0.001);
+});
+
+
+test('a fill that does not cross a stop leaves it parked', () => {
+  const symbol = listPair('SBTC2', 0.01, 0.0001);
+  const maker = seedUser();
+  const taker = seedUser();
+  const stopper = seedUser();
+  credit(maker, 'SBTC2', 4);
+  credit(taker, 'RUSD', 200000);
+  credit(stopper, 'RUSD', 200);
+
+  db.prepare('INSERT INTO market_data (id, symbol, price) VALUES (?, ?, ?)').run(generateId(), symbol, 100);
+  placeSpotOrder(maker, { symbol, side: 'sell', type: 'limit', price: 100, quantity: 4 });
+  placeSpotOrder(taker, { symbol, side: 'buy', type: 'limit', price: 100, quantity: 1 });
+
+  const stop = placeSpotOrder(stopper, {
+    symbol,
+    side: 'buy',
+    type: 'stop_market',
+    stopPrice: 150,
+    quantity: 1,
+  });
+
+  // The next trade also prints at 100, below the 150 trigger.
+  placeSpotOrder(taker, { symbol, side: 'buy', type: 'limit', price: 100, quantity: 1 });
+
+  assert.equal(getOrder(stopper, stop.orderId).status, 'pending_trigger');
+  assert.equal(lockedBalance(stopper, 'RUSD'), 157.5);
+});
