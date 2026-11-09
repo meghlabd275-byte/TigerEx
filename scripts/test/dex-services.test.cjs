@@ -31,7 +31,7 @@ const { openPosition, closePosition, applyFunding, liquidatePosition, perpPositi
   require('../../.test-build/perps-service.js');
 const { supply, borrow, repay, withdrawSupply, flashLoan, listLendingMarkets } = require('../../.test-build/margin-service.js');
 const { contribute, listNft, buyNft, initiateBridge, releaseBridge } = require('../../.test-build/launch-service.js');
-const { settleDueLimitOrders, runDueDcaPlans, runDueTwapPlans, runKeeperCycle } = require('../../.test-build/keeper.js');
+const { settleDueLimitOrders, runDueDcaPlans, runDueTwapPlans, runPerpCycle, runKeeperCycle } = require('../../.test-build/keeper.js');
 
 const db = getDb();
 
@@ -362,7 +362,7 @@ test('a gauge vote is recorded for the current epoch', () => {
 
 let contractSeq = 0;
 
-function listPerp(base, price) {
+function listPerp(base, price, maintenanceRate = 0.005) {
   contractSeq += 1;
   const symbol = `${base}${contractSeq}/RUSD`;
   db.prepare(
@@ -371,8 +371,8 @@ function listPerp(base, price) {
         contract_size, tick_size, min_quantity, max_quantity, max_leverage, maker_fee_bps, taker_fee_bps,
         funding_interval_hours, funding_rate_cap, maintenance_margin_rate, initial_margin_rate,
         liquidation_fee_rate, insurance_fund_share, status)
-     VALUES (?, ?, ?, 'RUSD', 'RUSD', 'RUSD_M', 'perpetual', 1, 0.1, 0.001, 1000000, 100, 2, 5, 8, 0.01, 0.005, 0.008, 0.005, 0.1, 'active')`,
-  ).run(generateId(), symbol, base);
+     VALUES (?, ?, ?, 'RUSD', 'RUSD', 'RUSD_M', 'perpetual', 1, 0.1, 0.001, 1000000, 100, 2, 5, 8, 0.01, ?, 0.008, 0.005, 0.1, 'active')`,
+  ).run(generateId(), symbol, base, maintenanceRate);
   db.prepare('INSERT INTO market_data (id, symbol, price, volume_24h) VALUES (?, ?, ?, 0)').run(
     generateId(),
     symbol,
@@ -426,6 +426,23 @@ test('funding moves collateral between the two sides of a market', () => {
   const after = db.prepare('SELECT collateral FROM dex_perp_positions WHERE position_id = ?').get(longPos.positionId);
   assert.ok(after.collateral < before.collateral, 'a positive rate charges the long');
   assert.ok(shortPos.positionId);
+});
+
+test('the keeper liquidates using the market own maintenance margin', () => {
+  const trader = seedUser();
+  credit(trader, 'RUSD', 100000);
+  // A market with a 50% maintenance rate: at a mark of 700 the equity (200)
+  // sits below maintenance (350), so the position must be liquidated. A
+  // hardcoded 0.5% rate would compute 3.5 and leave the position open.
+  const symbol = listPerp('HIGHX', 1000, 0.5);
+  const opened = openPosition({ userId: trader, symbol, side: 'long', size: 1, leverage: 2 });
+  db.prepare('UPDATE market_data SET price = 700 WHERE symbol = ?').run(symbol);
+
+  const report = runPerpCycle();
+  assert.ok(report.liquidated >= 1, 'a position below its maintenance margin must be liquidated');
+  const row = db.prepare('SELECT status FROM dex_perp_positions WHERE position_id = ?').get(opened.positionId);
+  assert.equal(row.status, 'liquidated');
+  assert.equal(lockedBalance(trader, 'RUSD'), 0);
 });
 
 // ---------------------------------------------------------------------------

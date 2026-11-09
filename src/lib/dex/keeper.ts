@@ -229,9 +229,14 @@ export function runDueTwapPlans(now = Date.now()): { run: number; failed: number
  */
 export function runPerpCycle(): { fundingApplied: string[]; liquidated: number } {
   const db = getDb();
-  const markets = db.prepare("SELECT symbol, funding_rate_cap FROM futures_markets WHERE status = 'active'").all() as Array<{
+  const markets = db
+    .prepare(
+      "SELECT symbol, funding_rate_cap, maintenance_margin_rate FROM futures_markets WHERE status = 'active'",
+    )
+    .all() as Array<{
     symbol: string;
     funding_rate_cap: number;
+    maintenance_margin_rate: number;
   }>;
 
   const fundingApplied: string[] = [];
@@ -264,7 +269,7 @@ export function runPerpCycle(): { fundingApplied: string[]; liquidated: number }
       } catch {
         continue;
       }
-      if (shouldLiquidate(position.side as 'long' | 'short', position.size, position.entry_price, mark, position.collateral, 0.005)) {
+      if (shouldLiquidate(position.side as 'long' | 'short', position.size, position.entry_price, mark, position.collateral, market.maintenance_margin_rate)) {
         try {
           liquidatePosition(position.position_id, mark);
           liquidated += 1;
