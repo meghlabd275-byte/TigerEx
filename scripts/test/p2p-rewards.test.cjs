@@ -38,8 +38,10 @@ const {
   createRedPacket,
   claimRedPacket,
   refundRedPacket,
+  sweepExpiredRedPackets,
   RewardsError,
 } = require('../../.test-build/rewards.js');
+const { isBlocked, updateP2pSettings } = require('../../.test-build/profile.js');
 
 const db = getDb();
 
@@ -187,6 +189,29 @@ test('a payment method the ad does not offer is refused', () => {
   assert.throws(
     () => placeOrder({ buyerId: buyer, offerId: created.id, amount: 10, paymentMethod: 'Wire' }),
     (error) => error instanceof P2pError && error.code === 'VALIDATION_FAILED',
+  );
+});
+
+test('a blocked counterparty cannot place an order against the ad', () => {
+  const seller = seedUser();
+  const buyer = seedUser();
+  fund(seller, 'USDT', 100);
+  const created = ad(seller, 100);
+
+  updateP2pSettings(seller, { blockedCounterparties: [buyer] });
+  assert.equal(isBlocked(seller, buyer), true);
+
+  assert.throws(
+    () => placeOrder({ buyerId: buyer, offerId: created.id, amount: 10, paymentMethod: 'PayPal' }),
+    (error) => error instanceof P2pError && error.code === 'COUNTERPARTY_BLOCKED',
+  );
+
+  // The taker blocking the advertiser is enforced just the same.
+  updateP2pSettings(seller, { blockedCounterparties: [] });
+  updateP2pSettings(buyer, { blockedCounterparties: [seller] });
+  assert.throws(
+    () => placeOrder({ buyerId: buyer, offerId: created.id, amount: 10, paymentMethod: 'PayPal' }),
+    (error) => error instanceof P2pError && error.code === 'COUNTERPARTY_BLOCKED',
   );
 });
 
@@ -420,6 +445,38 @@ test('a packet that has not expired cannot be refunded', () => {
     () => refundRedPacket(creator, packet.id),
     (error) => error instanceof RewardsError && error.code === 'NOT_EXPIRED',
   );
+});
+
+test('the scheduled sweep refunds expired packets without a caller', () => {
+  const creator = seedUser();
+  fund(creator, 'USDT', 100);
+  createRedPacket({
+    userId: creator,
+    asset: 'USDT',
+    amount: 30,
+    quantity: 3,
+    type: 'average',
+    expiresAt: new Date(Date.now() - 1000).toISOString(),
+  });
+  // A live packet must be left alone.
+  createRedPacket({
+    userId: creator,
+    asset: 'USDT',
+    amount: 20,
+    quantity: 2,
+    type: 'average',
+    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+  });
+
+  assert.equal(availableBalance(creator, 'USDT'), 50);
+  const swept = sweepExpiredRedPackets();
+  assert.equal(swept, 1);
+  // Only the expired packet's escrow is released; the live one stays locked.
+  assert.equal(availableBalance(creator, 'USDT'), 80);
+  assert.equal(lockedBalance(creator, 'USDT'), 20);
+  // A second sweep is a no-op, so the escrow cannot be released twice.
+  assert.equal(sweepExpiredRedPackets(), 0);
+  assert.equal(availableBalance(creator, 'USDT'), 80);
 });
 
 test('staking pools report the real total staked', () => {

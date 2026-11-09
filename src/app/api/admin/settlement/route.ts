@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
         funding: report.fundingApplied.length,
         options: report.optionsSettled.length,
         etf: report.etfRebalanced.length,
+        redPacketsRefunded: report.redPacketsRefunded,
       },
     });
     return NextResponse.json({ success: true, report }, { headers: NO_STORE });

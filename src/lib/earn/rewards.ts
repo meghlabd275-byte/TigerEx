@@ -320,6 +320,28 @@ export function claimRedPacket(userId: string, packetId: string): { amount: numb
   return { amount: share };
 }
 
+/**
+ * Refund the unclaimed balance of an expired packet to its creator.
+ *
+ * The core is split out so the scheduled sweep can reuse it without a caller
+ * identity; the exported entry point checks ownership first.
+ */
+function refundPacketRow(row: Record<string, unknown>): number {
+  const db = getDb();
+  const packet = packetRow(row);
+  const claimedAmount = db
+    .prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM red_packet_claims WHERE packet_id = ?')
+    .get(packet.id) as { total: number } | undefined;
+  const refunded = Math.max(0, packet.amount - (Number(claimedAmount?.total) || 0));
+
+  db.transaction(() => {
+    if (refunded > 0) unlockAvailable(packet.creatorId, packet.asset, refunded);
+    db.prepare("UPDATE red_packets SET status = 'expired' WHERE packet_id = ?").run(packet.id);
+  })();
+
+  return refunded;
+}
+
 /** Refund the unclaimed balance of an expired packet to its creator. */
 export function refundRedPacket(creatorId: string, packetId: string): { refunded: number } {
   const db = getDb();
@@ -333,15 +355,33 @@ export function refundRedPacket(creatorId: string, packetId: string): { refunded
     throw new RewardsError('NOT_EXPIRED', 'This red packet has not expired yet', 409);
   }
 
-  const claimedAmount = db
-    .prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM red_packet_claims WHERE packet_id = ?')
-    .get(packetId) as { total: number } | undefined;
-  const refunded = Math.max(0, packet.amount - (Number(claimedAmount?.total) || 0));
+  return { refunded: refundPacketRow(row) };
+}
 
-  db.transaction(() => {
-    if (refunded > 0) unlockAvailable(creatorId, packet.asset, refunded);
-    db.prepare("UPDATE red_packets SET status = 'expired' WHERE packet_id = ?").run(packetId);
-  })();
+/**
+ * Refund every active red packet whose expiry has passed.
+ *
+ * A packet escrows its whole amount up front, so an expired packet with
+ * unclaimed shares would otherwise hold the creator's funds locked forever.
+ * This is the scheduled counterpart to the creator-driven refund and returns
+ * how many packets were released.
+ */
+export function sweepExpiredRedPackets(nowMs: number = Date.now()): number {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM red_packets
+        WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <> ''`,
+    )
+    .all() as Array<Record<string, unknown>>;
 
-  return { refunded };
+  let swept = 0;
+  for (const row of rows) {
+    const expiresAt = row.expires_at === null || row.expires_at === undefined ? null : String(row.expires_at);
+    const expiryMs = expiresAt === null ? NaN : Date.parse(expiresAt);
+    if (!Number.isFinite(expiryMs) || expiryMs >= nowMs) continue;
+    refundPacketRow(row);
+    swept += 1;
+  }
+  return swept;
 }

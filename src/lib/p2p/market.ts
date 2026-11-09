@@ -13,6 +13,7 @@
 import { getDb, generateId } from '@/lib/db';
 import { lockAvailable, unlockAvailable, consumeLocked, creditAvailable, recordTransaction } from '@/lib/db/ledger';
 import { transition, type P2pStatus } from '@/lib/p2p/escrow';
+import { isBlocked } from '@/lib/p2p/profile';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
 
 export class P2pError extends Error {
@@ -263,6 +264,11 @@ export function placeOrder(input: PlaceP2pOrderInput): P2pOrder {
   if (!ad) throw new P2pError('NOT_FOUND', 'No such ad', 404);
   if (ad.status !== 'active') throw new P2pError('AD_NOT_ACTIVE', 'This ad is not active', 409);
   if (ad.user_id === input.buyerId) throw new P2pError('SELF_TRADE', 'You cannot trade against your own ad');
+  // A blocked counterparty is refused on either side, so a block set by the
+  // advertiser or by the taker actually stops the trade from being placed.
+  if (isBlocked(ad.user_id, input.buyerId) || isBlocked(input.buyerId, ad.user_id)) {
+    throw new P2pError('COUNTERPARTY_BLOCKED', 'This trade is not available with this counterparty', 403);
+  }
   if (amount < Number(ad.min_amount) || amount > Number(ad.max_amount)) {
     throw new P2pError('OUT_OF_LIMITS', `Amount must be between ${ad.min_amount} and ${ad.max_amount}`);
   }

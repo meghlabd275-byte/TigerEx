@@ -17,6 +17,7 @@ import { listOptionsMarkets, settleExpired } from '@/lib/options/options-engine'
 import { rebalanceAll } from '@/lib/trading/etf-engine';
 import { indexPriceFor } from '@/lib/trading/mark-price';
 import { fundingRate } from '@/lib/oracle/aggregator';
+import { sweepExpiredRedPackets } from '@/lib/earn/rewards';
 
 export interface FundingSettlement {
   symbol: string;
@@ -30,6 +31,7 @@ export interface SettlementReport {
   optionsSettled: Array<{ symbol: string; settled: number; totalValue: number }>;
   optionsSkipped: string[];
   etfRebalanced: string[];
+  redPacketsRefunded: number;
 }
 
 const HOUR_NS = 60 * 60 * 1e9;
@@ -133,11 +135,13 @@ export function runSettlementCycle(nowMs: number = Date.now()): SettlementReport
   const funding = settleDueFunding(nowMs);
   const options = settleExpiredOptions(nowMs);
   const etf = rebalanceEtfTokens(nowMs);
+  const redPacketsRefunded = sweepExpiredRedPackets(nowMs);
   return {
     fundingApplied: funding.applied,
     fundingSkipped: funding.skipped,
     optionsSettled: options.settled,
     optionsSkipped: options.skipped,
     etfRebalanced: etf,
+    redPacketsRefunded,
   };
 }
