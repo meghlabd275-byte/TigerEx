@@ -12,6 +12,9 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { orderBookDepth, lastTradePrice, type DepthLevel } from '@/lib/trading/market-view';
+import { parseUtcTimestamp } from '@/lib/trading/candles';
+import { creditAvailable, debitAvailable, covers, availableBalance, recordTransaction } from '@/lib/db/ledger';
+import { creditFund, debitFund, fundBalance, recordDexRevenue } from '@/lib/dex/pool-service';
 
 export class OtcError extends Error {
   constructor(
@@ -149,4 +152,106 @@ export function quoteHistory(userId: string, limit = 50): OtcQuote[] {
     .prepare('SELECT * FROM otc_quotes WHERE user_id = ? ORDER BY created_at DESC LIMIT ?')
     .all(userId, bounded) as Array<Record<string, unknown>>;
   return rows.map(toView);
+}
+
+/** The account the desk quotes from: the venue's own OTC inventory, per asset. */
+export function otcDeskAccount(asset: string): string {
+  return `dex_otc_desk:${asset.toUpperCase()}`;
+}
+
+/** Move inventory into the desk account so it can fill client blocks. */
+export function fundOtcDesk(asset: string, amount: number): void {
+  const value = Number(amount);
+  if (!Number.isFinite(value) || value <= 0) throw new OtcError('VALIDATION_FAILED', 'amount must be a positive number');
+  creditFund(otcDeskAccount(asset), asset.toUpperCase(), value);
+}
+
+/** The inventory the desk currently holds for an asset. */
+export function otcDeskBalance(asset: string): number {
+  return fundBalance(otcDeskAccount(asset), asset.toUpperCase());
+}
+
+export interface OtcFillResult {
+  quoteId: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  amount: number;
+  price: number;
+  baseAmount: number;
+  quoteAmount: number;
+  fee: number;
+  feeAsset: string;
+  status: string;
+}
+
+/**
+ * Execute an OTC block quote against the desk's own inventory.
+ *
+ * A block trade is settled bilaterally with the venue's desk rather than by
+ * crossing the public book, so a large order moves no book price and incurs no
+ * market impact. Both legs are real ledger movements between the client and the
+ * desk account, which an operator funds with `fundOtcDesk`; a desk that does not
+ * hold the asset it would deliver fails closed, so a fill can never conjure
+ * inventory. The spread the quote carried is the desk's revenue and is booked to
+ * the treasury, so the two legs balance to the last unit.
+ */
+export function executeQuote(userId: string, quoteId: string): OtcFillResult {
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM otc_quotes WHERE quote_id = ?').get(quoteId) as
+    | { quote_id: string; user_id: string; symbol: string; side: string; amount: number; quote_price: number; fee: number; status: string; expires_at: string }
+    | undefined;
+  if (!row) throw new OtcError('QUOTE_NOT_FOUND', 'no quote with that id', 404);
+  if (row.user_id !== userId) throw new OtcError('QUOTE_NOT_FOUND', 'no quote with that id', 404);
+  if (row.status !== 'quoted') throw new OtcError('QUOTE_NOT_OPEN', `the quote is ${row.status}`, 409);
+  if (parseUtcTimestamp(row.expires_at) < Date.now()) throw new OtcError('QUOTE_EXPIRED', 'the quote has expired', 409);
+
+  const [base, quote] = row.symbol.split('/');
+  const side = row.side === 'sell' ? 'sell' : 'buy';
+  const amount = Number(row.amount);
+  const price = Number(row.quote_price);
+  const fee = Number(row.fee);
+  const grossQuote = amount * price;
+
+  // A buy delivers the base to the client and takes the quote; a sell is the
+  // mirror. The desk is the counterparty on both legs.
+  const clientPays = side === 'buy' ? grossQuote : amount;
+  const clientPaysAsset = side === 'buy' ? quote : base;
+  const clientReceives = side === 'buy' ? amount : grossQuote;
+  const clientReceivesAsset = side === 'buy' ? base : quote;
+
+  if (!covers(availableBalance(userId, clientPaysAsset), clientPays)) {
+    throw new OtcError('INSUFFICIENT_BALANCE', `Insufficient ${clientPaysAsset} balance to settle the block`, 400);
+  }
+  if (!covers(otcDeskBalance(clientReceivesAsset), clientReceives)) {
+    throw new OtcError('DESK_INVENTORY_LOW', `the OTC desk does not hold enough ${clientReceivesAsset}`, 409);
+  }
+
+  db.transaction(() => {
+    debitAvailable(userId, clientPaysAsset, clientPays);
+    recordTransaction(userId, 'otc_block', clientPaysAsset, clientPays, 0, 'completed', `otc ${row.symbol}`);
+    creditFund(otcDeskAccount(clientPaysAsset), clientPaysAsset, clientPays);
+
+    debitFund(otcDeskAccount(clientReceivesAsset), clientReceivesAsset, clientReceives);
+    creditAvailable(userId, clientReceivesAsset, clientReceives);
+    recordTransaction(userId, 'otc_block', clientReceivesAsset, clientReceives, 0, 'completed', `otc ${row.symbol}`);
+
+    // The quote's spread is the desk's revenue; book it to the treasury.
+    if (fee > 0) {
+      recordDexRevenue('dex_otc_fee', quote, fee, { lp: 0, vetgr: 0, treasury: fee, insurance: 0, burn: 0 }, row.quote_id);
+    }
+    db.prepare("UPDATE otc_quotes SET status = 'filled' WHERE quote_id = ?").run(row.quote_id);
+  })();
+
+  return {
+    quoteId: row.quote_id,
+    symbol: row.symbol,
+    side,
+    amount,
+    price,
+    baseAmount: amount,
+    quoteAmount: grossQuote,
+    fee,
+    feeAsset: quote,
+    status: 'filled',
+  };
 }

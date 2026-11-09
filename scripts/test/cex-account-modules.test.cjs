@@ -204,6 +204,53 @@ test('a quote is written to history for its own requester only', () => {
   assert.equal(otc.quoteHistory(bob).length, 0);
 });
 
+test('an OTC buy settles against desk inventory and the desk keeps the spread', () => {
+  const buyer = seedUser();
+  const { pairId } = listPair('OTCD');
+  restOrder(pairId, seedUser(), 'sell', 100, 10);
+  credit(buyer, 'RUSD', 1_000_000);
+  otc.fundOtcDesk('OTCD', 10);
+
+  const quote = otc.requestQuote(buyer, 'OTCD', 'buy', 5);
+  const gross = quote.amount * quote.quotePrice;
+  const fill = otc.executeQuote(buyer, quote.id);
+
+  assert.equal(fill.status, 'filled');
+  assert.equal(availableBalance(buyer, 'OTCD'), 5, 'the client receives the base');
+  assert.ok(Math.abs(availableBalance(buyer, 'RUSD') - (1_000_000 - gross)) < 1e-6, 'the client pays the quote');
+  assert.ok(Math.abs(otc.otcDeskBalance('OTCD') - 5) < 1e-6, 'the desk delivers from its own inventory');
+  assert.ok(Math.abs(otc.otcDeskBalance('RUSD') - gross) < 1e-6, 'the desk receives the quote');
+
+  // The quote is one-shot: a second fill is refused.
+  assert.throws(() => otc.executeQuote(buyer, quote.id), (error) => error.code === 'QUOTE_NOT_OPEN');
+});
+
+test('an OTC fill fails closed when the desk holds no inventory', () => {
+  const buyer = seedUser();
+  const { pairId } = listPair('OTCE');
+  restOrder(pairId, seedUser(), 'sell', 100, 10);
+  credit(buyer, 'RUSD', 1_000_000);
+
+  const quote = otc.requestQuote(buyer, 'OTCE', 'buy', 1);
+  // The desk was never funded, so it cannot deliver the base.
+  assert.throws(() => otc.executeQuote(buyer, quote.id), (error) => error.code === 'DESK_INVENTORY_LOW');
+  assert.equal(availableBalance(buyer, 'OTCE'), 0, 'nothing was conjured');
+});
+
+test('an OTC fill refuses a client who cannot pay and one who did not ask', () => {
+  const buyer = seedUser();
+  const other = seedUser();
+  const { pairId } = listPair('OTCF');
+  restOrder(pairId, seedUser(), 'sell', 100, 10);
+  otc.fundOtcDesk('OTCF', 10);
+  const quote = otc.requestQuote(buyer, 'OTCF', 'buy', 1);
+
+  // The requester has no RUSD, so the buy cannot settle.
+  assert.throws(() => otc.executeQuote(buyer, quote.id), (error) => error.code === 'INSUFFICIENT_BALANCE');
+  // Another account cannot fill someone else's quote.
+  assert.throws(() => otc.executeQuote(other, quote.id), (error) => error.code === 'QUOTE_NOT_FOUND');
+});
+
 // ---------------------------------------------------------------------------
 // Leaderboard
 // ---------------------------------------------------------------------------

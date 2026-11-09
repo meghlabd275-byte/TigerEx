@@ -317,6 +317,13 @@ may credit a balance the venue did not take in. The rules the code must keep:
   available, so the reservations still add up to the collateral afterwards. It
   previously changed only `dex_perp_positions.collateral`, which left a receiver
   unable to close ("insufficient locked balance").
+- **An OTC block settles against desk inventory, never the book.** `requestQuote`
+  prices from the venue's own order book, and `executeQuote` then settles the
+  block bilaterally against `dex_otc_desk:<ASSET>` (funded with `fundOtcDesk`) at
+  the quoted price, so a large order moves no book price. The desk leg fails
+  closed with `DESK_INVENTORY_LOW` when it does not hold what it would deliver,
+  so a fill cannot conjure inventory; the quote's spread is the desk's revenue
+  and is booked to the treasury, leaving the two legs balanced.
 - **Rewards are paid from a funded account, not minted.** Farms settle against
   `dex_farm_rewards` in `treasury_accounts` (`fundFarmRewards`); a shortfall stays
   pending and is paid after a top-up rather than conjured. A farm with no funding

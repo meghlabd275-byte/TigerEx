@@ -46,6 +46,8 @@ export default function OTCPage() {
   const [side, setSide] = useState<'buy' | 'sell'>('buy');
   const [amount, setAmount] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [executing, setExecuting] = useState(false);
+  const [lastQuoteId, setLastQuoteId] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const requestQuote = async () => {
@@ -62,6 +64,7 @@ export default function OTCPage() {
       );
       const data = (await response.json()) as OTCQuoteResponse & Partial<OTCQuote>;
       if (response.ok && data.success !== false) {
+        setLastQuoteId(data.id ?? null);
         setResult({
           ok: true,
           message: `Quote received: ${formatPrice(data.quotePrice ?? data.quote_price)} ${
@@ -79,6 +82,37 @@ export default function OTCPage() {
       });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const executeQuote = async (quoteId: string) => {
+    setResult(null);
+    setExecuting(true);
+    try {
+      const token = readAuthToken();
+      const response = await fetch('/api/otc/execute', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ quoteId }),
+      });
+      const data = (await response.json()) as OTCQuoteResponse;
+      if (response.ok && data.success !== false) {
+        setResult({ ok: true, message: 'Block executed against the desk at the quoted price.' });
+        setLastQuoteId(null);
+        history.reload();
+      } else {
+        setResult({ ok: false, message: data.error || 'Could not execute the quote.' });
+      }
+    } catch (error) {
+      setResult({
+        ok: false,
+        message: error instanceof Error ? error.message : 'Could not execute the quote.',
+      });
+    } finally {
+      setExecuting(false);
     }
   };
 
@@ -146,6 +180,15 @@ export default function OTCPage() {
             >
               {result.message}
             </div>
+          )}
+          {lastQuoteId && (
+            <button
+              onClick={() => executeQuote(lastQuoteId)}
+              disabled={executing}
+              className="mt-3 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-bold disabled:opacity-50"
+            >
+              {executing ? 'Executing…' : 'Execute this block'}
+            </button>
           )}
         </div>
 
