@@ -141,7 +141,16 @@ test('a position is liquidatable when the health factor falls below 1', () => {
 test('a liquidation repays at most the close factor and pays a bonus', () => {
   const result = liquidate(1000, 2000, 1000, 0.05, 0.5);
   assert.ok(Math.abs(result.debtRepaid - 500) < 1e-9);
-  assert.ok(result.bonus > 0);
+  assert.ok(Math.abs(result.seizedValue - 525) < 1e-9, `seized value ${result.seizedValue}`);
+  assert.ok(Math.abs(result.bonusValue - 25) < 1e-9, `bonus value ${result.bonusValue}`);
+});
+
+test('a liquidation never seizes more collateral than the position holds', () => {
+  // The collateral is worth less than the repayment plus bonus, so the seizure
+  // is capped at the collateral value rather than going negative.
+  const result = liquidate(1000, 300, 1000, 0.05, 0.5);
+  assert.ok(Math.abs(result.seizedValue - 300) < 1e-9, `seized value ${result.seizedValue}`);
+  assert.equal(result.bonusValue, 0, 'no bonus when the collateral cannot cover the repayment');
 });
 
 test('flash loan fee is a fraction of the amount', () => {

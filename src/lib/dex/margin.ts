@@ -108,21 +108,24 @@ export function isLiquidatable(collateralValue: number, liquidationThreshold: nu
 }
 
 export interface LiquidationResult {
-  /** Debt repaid by the liquidator. */
+  /** Debt repaid by the liquidator, in debt units. */
   debtRepaid: number;
-  /** Collateral seized, including the bonus. */
-  collateralSeized: number;
-  /** The bonus portion of the seized collateral, in collateral units. */
-  bonus: number;
+  /** Value of the collateral seized, including the bonus, in debt units. */
+  seizedValue: number;
+  /** The bonus portion of the seized value, in debt units. */
+  bonusValue: number;
 }
 
 /**
  * A partial liquidation.
  *
  * The liquidator repays at most `closeFactor` of the debt and receives
- * collateral worth the repayment plus the liquidation bonus. The repayment is
- * capped so it never exceeds the debt, and the bonus is computed from the
- * collateral price the caller supplies.
+ * collateral worth the repayment plus the liquidation bonus. Every amount here
+ * is in the debt asset's value — `debtValue` is the value of `debt` — and the
+ * seizure is capped at `collateralValue`, so a liquidator can never take more
+ * collateral than the position holds. The caller converts `seizedValue` and
+ * `bonusValue` into collateral units by dividing by the collateral price; that
+ * conversion cannot happen here because this function never sees the price.
  */
 export function liquidate(
   debt: number,
@@ -141,11 +144,13 @@ export function liquidate(
   const debtRepaid = Math.min(owed, owed * factor);
   const repaidValue = owedValue * (debtRepaid / owed);
   const seizedValue = Math.min(collateral, repaidValue * (1 + bonus));
-  const collateralSeized = seizedValue;
+  // When the collateral is worth less than the repayment the seizure is capped
+  // at the collateral and the liquidator absorbs the shortfall; the bonus is
+  // reported as zero rather than negative, since a bonus is never a charge.
   return {
     debtRepaid,
-    collateralSeized,
-    bonus: seizedValue - repaidValue,
+    seizedValue,
+    bonusValue: Math.max(0, seizedValue - repaidValue),
   };
 }
 

@@ -334,17 +334,23 @@ export function liquidateBorrow(liquidatorId: string, marketId: string, position
 
   const result = liquidate(
     position.borrowed,
-    lockedCollateral,
+    collateralValue,
     position.borrowed,
     market.liquidation_bonus,
     0.5,
   );
 
+  // `liquidate` returns values in the debt asset; the ledger moves collateral
+  // units, so convert at the collateral price. The bonus is the value above the
+  // repayment, and the two always add back to the seized value.
+  const collateralSeized = result.seizedValue / collateralPrice;
+  const bonus = result.bonusValue / collateralPrice;
+
   return getDb().transaction(() => {
     debitAvailable(liquidatorId, market.asset, result.debtRepaid);
-    creditAvailable(liquidatorId, collateral, result.collateralSeized);
+    creditAvailable(liquidatorId, collateral, collateralSeized);
     recordTransaction(liquidatorId, 'dex_margin_liquidate', market.asset, result.debtRepaid, 0, 'completed', `liquidate ${positionId}`);
-    recordTransaction(liquidatorId, 'dex_margin_bonus', collateral, result.collateralSeized, 0, 'completed', `liquidate ${positionId}`);
+    recordTransaction(liquidatorId, 'dex_margin_bonus', collateral, collateralSeized, 0, 'completed', `liquidate ${positionId}`);
 
     const remainingDebt = position.borrowed - result.debtRepaid;
     getDb()
@@ -355,13 +361,13 @@ export function liquidateBorrow(liquidatorId: string, marketId: string, position
       .run(result.debtRepaid, market.market_id);
 
     // The seized collateral leaves the borrower's locked balance.
-    unlockAvailable(position.user_id, collateral, result.collateralSeized);
+    unlockAvailable(position.user_id, collateral, collateralSeized);
 
-    if (result.bonus > 0) {
-      const parts = applySchedule(result.bonus, { lpBps: 0, vetgrBps: 0, treasuryBps: 10_000, insuranceBps: 0, burnBps: 0 });
-      recordDexRevenue('dex_margin_liquidation', collateral, result.bonus, parts, positionId);
+    if (bonus > 0) {
+      const parts = applySchedule(bonus, { lpBps: 0, vetgrBps: 0, treasuryBps: 10_000, insuranceBps: 0, burnBps: 0 });
+      recordDexRevenue('dex_margin_liquidation', collateral, bonus, parts, positionId);
     }
-    return { positionId, debtRepaid: result.debtRepaid, collateralSeized: result.collateralSeized, bonus: result.bonus };
+    return { positionId, debtRepaid: result.debtRepaid, collateralSeized, bonus };
   })() as LiquidateResult;
 }
 

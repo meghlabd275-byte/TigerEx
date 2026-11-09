@@ -29,7 +29,7 @@ const { stakeFarm, unstakeFarm, claimFarm, lockVetgr, vetgrStatus, voteGauge, su
   require('../../.test-build/farm-service.js');
 const { openPosition, closePosition, applyFunding, liquidatePosition, perpPositions, markPrice } =
   require('../../.test-build/perps-service.js');
-const { supply, borrow, repay, withdrawSupply, flashLoan, listLendingMarkets, accrueInterest } = require('../../.test-build/margin-service.js');
+const { supply, borrow, repay, withdrawSupply, flashLoan, listLendingMarkets, accrueInterest, liquidateBorrow } = require('../../.test-build/margin-service.js');
 const { contribute, listNft, buyNft, initiateBridge, releaseBridge } = require('../../.test-build/launch-service.js');
 const { settleDueLimitOrders, runDueDcaPlans, runDueTwapPlans, runPerpCycle, runKeeperCycle } = require('../../.test-build/keeper.js');
 
@@ -621,6 +621,34 @@ test('a second accrual with no elapsed time charges nothing', () => {
   accrueInterest();
   const second = accrueInterest();
   assert.equal(second.charged, 0, 'no time has passed, so no interest is due');
+});
+
+test('a liquidation seizes collateral worth the debt repaid plus the bonus, not the whole balance', () => {
+  const lender = seedUser();
+  const borrower = seedUser();
+  const liquidator = seedUser();
+  credit(lender, 'RUSD', 100000);
+  credit(borrower, 'ETH', 10);
+  credit(liquidator, 'RUSD', 100000);
+  createLendingMarket('RUSD');
+  createLendingMarket('ETH', 0.7, 0.75);
+  listPair('ETH', 2000);
+  supply(lender, 'RUSD', 100000);
+  borrow(borrower, 'RUSD', 10000, 'ETH', 10);
+
+  // The collateral halves, so the position falls below its threshold.
+  db.prepare('UPDATE market_data SET price = 1000 WHERE symbol = ?').run('ETH/RUSD');
+  const position = db.prepare('SELECT position_id FROM dex_lending_positions WHERE user_id = ?').get(borrower);
+
+  const result = liquidateBorrow(liquidator, createLendingMarket('RUSD'), position.position_id, 'ETH');
+
+  // Half the debt (5000 RUSD) is repaid; at 1000 RUSD/ETH plus a 5% bonus the
+  // liquidator receives 5.25 ETH, never the borrower's entire 10 ETH.
+  assert.ok(Math.abs(result.debtRepaid - 5000) < 1e-6, `repaid ${result.debtRepaid}`);
+  assert.ok(Math.abs(result.collateralSeized - 5.25) < 1e-6, `seized ${result.collateralSeized}`);
+  assert.ok(Math.abs(result.bonus - 0.25) < 1e-6, `bonus ${result.bonus}`);
+  assert.equal(availableBalance(liquidator, 'ETH'), 5.25);
+  assert.equal(lockedBalance(borrower, 'ETH'), 10 - 5.25);
 });
 
 // ---------------------------------------------------------------------------

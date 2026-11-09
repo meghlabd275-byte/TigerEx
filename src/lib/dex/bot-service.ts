@@ -438,11 +438,13 @@ export function scanLiquidations(): ScannedLiquidation[] {
     const collateralValue = collateral * collateralPrice;
     const health = healthFactor(collateralValue, Number(row.liquidation_threshold), borrowed);
     if (health >= 1) continue;
-    const { bonus } = liquidate(borrowed, collateralValue, borrowed, Number(row.liquidation_bonus), 0.5);
+    const { bonusValue } = liquidate(borrowed, collateralValue, borrowed, Number(row.liquidation_bonus), 0.5);
     candidates.push({
       positionId: String(row.position_id),
       healthFactor: health,
-      bounty: bonus * collateralPrice,
+      // The bounty is already a value in the borrowed asset, which is the unit
+      // the candidate list ranks on.
+      bounty: bonusValue,
       marketId: String(row.market_id),
       userId: String(row.user_id),
       asset,
