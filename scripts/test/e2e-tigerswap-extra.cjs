@@ -426,6 +426,60 @@ async function main() {
     assert.equal(botDelete.json.removed, true);
     record('a bot instance is removed', true);
 
+    // --- Emergency controls ----------------------------------------------
+    // A blacklisted token is refused by the swap path even while a pool holds
+    // it, and a blacklisted wallet cannot swap at all.
+    const blockedSwap = await request('POST', '/api/dex/swap', {
+      token,
+      body: { tokenIn: 'TGR', tokenOut: 'RUSD', amountIn: 10 },
+    });
+    assert.equal(blockedSwap.status, 201, `the control swap failed: ${JSON.stringify(blockedSwap.json)}`);
+    record('a swap settles before the blacklist is applied', true, blockedSwap.json.swap.tokenOut);
+
+    const block = await request('POST', '/api/admin/dex/risk', {
+      token: adminToken,
+      body: { action: 'blacklist', kind: 'token', value: 'TGR', reason: 'e2e check' },
+    });
+    assert.equal(block.status, 201, `blacklist failed: ${JSON.stringify(block.json)}`);
+    const blockedAgain = await request('POST', '/api/dex/swap', {
+      token,
+      body: { tokenIn: 'TGR', tokenOut: 'RUSD', amountIn: 10 },
+    });
+    assert.equal(blockedAgain.status, 403, `a blacklisted token must be refused, got ${blockedAgain.status}`);
+    const unblock = await request('POST', '/api/admin/dex/risk', {
+      token: adminToken,
+      body: { action: 'unblacklist', kind: 'token', value: 'TGR' },
+    });
+    assert.equal(unblock.status, 200, `unblacklist failed: ${JSON.stringify(unblock.json)}`);
+    record('the blacklist blocks a swap and can be lifted', true);
+
+    const pause = await request('POST', '/api/admin/dex/risk', {
+      token: adminToken,
+      body: { action: 'pause', scope: 'dex', reason: 'e2e check' },
+    });
+    assert.equal(pause.status, 200, `pause failed: ${JSON.stringify(pause.json)}`);
+    const pausedSwap = await request('POST', '/api/dex/swap', {
+      token,
+      body: { tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 10 },
+    });
+    assert.equal(pausedSwap.status, 409, `a paused venue must refuse a swap, got ${pausedSwap.status}`);
+    const resume = await request('POST', '/api/admin/dex/risk', {
+      token: adminToken,
+      body: { action: 'resume', scope: 'dex' },
+    });
+    assert.equal(resume.status, 200, `resume failed: ${JSON.stringify(resume.json)}`);
+    const resumedSwap = await request('POST', '/api/dex/swap', {
+      token,
+      body: { tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 10 },
+    });
+    assert.equal(resumedSwap.status, 201, `a resumed venue must settle again, got ${resumedSwap.status}`);
+    record('the pause stops settlement and the resume restores it', true);
+
+    const riskList = await request('GET', '/api/admin/dex/risk', { token: adminToken });
+    assert.equal(riskList.status, 200, `risk list failed: ${JSON.stringify(riskList.json)}`);
+    assert.ok(Array.isArray(riskList.json.controls), 'the risk view must list the controls');
+    record('the risk view lists the controls', true);
+
     // --- Security ---------------------------------------------------------
     for (const [method, url] of [
       ['GET', '/api/dex/vaults'],
@@ -460,6 +514,11 @@ async function main() {
     assert.ok(
       botGuard.status === 401 || botGuard.status === 403,
       `a trader token must not open the bot admin route, got ${botGuard.status}`,
+    );
+    const riskGuard = await request('GET', '/api/admin/dex/risk', { token });
+    assert.ok(
+      riskGuard.status === 401 || riskGuard.status === 403,
+      `a trader token must not open the risk admin route, got ${riskGuard.status}`,
     );
     record('admin routes reject a trader token', true, `status ${adminGuard.status}`);
   } finally {

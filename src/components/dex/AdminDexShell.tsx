@@ -15,6 +15,7 @@ const NAV: Array<{ name: string; href: string }> = [
   { name: 'Margin markets', href: '/admin/dex/margin' },
   { name: 'Hooks', href: '/admin/dex/hooks' },
   { name: 'Bots', href: '/admin/dex/bots' },
+  { name: 'Risk controls', href: '/admin/dex/risk' },
   { name: 'Fees & splits', href: '/admin/dex/fees' },
   { name: 'Users', href: '/admin/dex/users' },
   { name: 'Revenue', href: '/admin/dex/revenue' },
