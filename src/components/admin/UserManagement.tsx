@@ -1,6 +1,6 @@
 'use client';
 
-import { readAuthToken } from '@/lib/auth/token';
+import { readAdminToken } from '@/lib/auth/token';
 
 import React, { useState, useEffect } from 'react';
 import { Users, Shield, Search, MoreVertical, Loader2 } from 'lucide-react';
@@ -22,7 +22,7 @@ export function UserManagement() {
 
   useEffect(() => {
     const fetchUsers = async () => {
-      const token = readAuthToken();
+      const token = readAdminToken();
       if (!token) {
         setLoading(false);
         return;
