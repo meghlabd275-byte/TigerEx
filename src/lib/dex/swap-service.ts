@@ -340,8 +340,8 @@ export function executeSwap(request: SwapRequest): SwapResult {
 
     db.prepare(
       `INSERT INTO dex_swaps
-         (swap_id, pool_id, user_id, token_in, token_out, amount_in, amount_out, fee, price_impact, route)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (swap_id, pool_id, user_id, token_in, token_out, amount_in, amount_out, fee, price_impact, route, sponsored)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       swapId,
       quote.hops[0]?.poolId ?? '',
@@ -353,6 +353,7 @@ export function executeSwap(request: SwapRequest): SwapResult {
       quote.fee,
       quote.priceImpact,
       JSON.stringify(quote.hops),
+      sponsored ? 1 : 0,
     );
   })();
 
@@ -384,7 +385,7 @@ export function claimSponsoredSwap(userId: string): boolean {
   const row = getDb()
     .prepare(
       `SELECT COUNT(*) AS used FROM dex_swaps
-        WHERE user_id = ? AND created_at >= datetime('now', 'start of day')`,
+        WHERE user_id = ? AND sponsored = 1 AND created_at >= datetime('now', 'start of day')`,
     )
     .get(userId) as { used: number } | undefined;
   return (Number(row?.used) || 0) < limit;

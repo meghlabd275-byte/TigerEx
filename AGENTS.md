@@ -317,6 +317,10 @@ may credit a balance the venue did not take in. The rules the code must keep:
   available, so the reservations still add up to the collateral afterwards. It
   previously changed only `dex_perp_positions.collateral`, which left a receiver
   unable to close ("insufficient locked balance").
+- **The gasless allowance counts sponsored swaps, not every swap.** A sponsored
+  swap is recorded with `dex_swaps.sponsored = 1`, and `claimSponsoredSwap` counts
+  only those rows for the day. Counting all of a trader's swaps let a busy trader
+  exhaust the free allowance with swaps they paid for.
 - **An OTC block settles against desk inventory, never the book.** `requestQuote`
   prices from the venue's own order book, and `executeQuote` then settles the
   block bilaterally against `dex_otc_desk:<ASSET>` (funded with `fundOtcDesk`) at

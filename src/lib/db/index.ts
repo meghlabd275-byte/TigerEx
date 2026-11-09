@@ -1463,6 +1463,7 @@ function initializeSchema() {
       fee REAL NOT NULL DEFAULT 0,
       price_impact REAL NOT NULL DEFAULT 0,
       route TEXT,
+      sponsored INTEGER NOT NULL DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -1983,6 +1984,10 @@ function applyColumnMigrations(database: Database.Database) {
     // A launch project records the asset its raise is denominated in, so the
     // escrow that holds the raise and the payout to the project agree.
     { table: 'dex_launch_projects', column: 'quote_asset', definition: "TEXT NOT NULL DEFAULT 'RUSD'" },
+    // A swap records whether the protocol sponsored it, so the daily free-swap
+    // allowance counts only sponsored swaps rather than every swap the trader
+    // made (which let a busy trader exhaust the allowance with paid swaps).
+    { table: 'dex_swaps', column: 'sponsored', definition: 'INTEGER NOT NULL DEFAULT 0' },
   ];
 
   for (const { table, column, definition } of migrations) {

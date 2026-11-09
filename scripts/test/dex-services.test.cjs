@@ -202,6 +202,27 @@ test('a settlement fee is taken from the output, not minted into the treasury', 
   }
 });
 
+test('a sponsored swap allowance counts only sponsored swaps, not paid ones', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 1000000);
+  createPool('v2', ['RUSD', 'TGR'], { RUSD: 10000000, TGR: 10000000 });
+
+  // The protocol sponsors three swaps per day. A trader who pays for swaps must
+  // not have those paid swaps consume the free allowance.
+  for (let i = 0; i < 5; i += 1) {
+    executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000 });
+  }
+  assert.equal(claimSponsoredSwap(user), true, 'paid swaps must not exhaust the allowance');
+
+  // Three sponsored swaps consume it; the fourth is refused.
+  const sponsored = [];
+  for (let i = 0; i < 4; i += 1) {
+    sponsored.push(executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000, gasless: true }).sponsored);
+  }
+  assert.deepEqual(sponsored, [true, true, true, false]);
+  assert.equal(claimSponsoredSwap(user), false);
+});
+
 test('a swap without the input balance is refused and moves nothing', () => {
   const user = seedUser();
   createPool('v2', ['RUSD', 'SOL'], { RUSD: 1000000, SOL: 10000 });
