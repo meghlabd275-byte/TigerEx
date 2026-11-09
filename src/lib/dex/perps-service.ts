@@ -17,6 +17,9 @@ import {
   recordDexRevenue,
   assertDexOpen,
   assertNotBlacklisted,
+  creditFund,
+  debitFund,
+  fundBalance,
 } from '@/lib/dex/pool-service';
 import {
   unrealizedPnl,
@@ -100,6 +103,39 @@ export function markPrice(symbol: string): number {
     throw new DexError('NO_PRICE', `no mark price is available for ${symbol}`, 409);
   }
   return value;
+}
+
+/**
+ * The settlement account that stands on the other side of every perpetual.
+ *
+ * A perpetual is a zero-sum contract between a trader and a counterparty. The
+ * venue runs that counterparty as a real funded pool: a trader's realised profit
+ * is paid out of it and a trader's realised loss is paid into it. Without the
+ * pool a winning close would credit the trader with value nobody posted, and a
+ * liquidation would delete the seized margin instead of banking it.
+ */
+const PERP_POOL = 'dex_perp_pool';
+
+/** The per-asset balance of the perpetual counterparty pool. */
+export function perpPoolBalance(asset: string): number {
+  return fundBalance(PERP_POOL, asset);
+}
+
+/** Seed the pool so it can pay out profit, as a funded transfer would. */
+export function fundPerpPool(asset: string, amount: number): void {
+  creditFund(PERP_POOL, asset, amount);
+}
+
+/** Pay a trader's realised profit out of the pool, failing closed when short. */
+function poolPays(asset: string, amount: number): void {
+  if (amount <= 0) return;
+  debitFund(PERP_POOL, asset, amount);
+}
+
+/** Bank a trader's realised loss (or seized collateral) into the pool. */
+function poolReceives(asset: string, amount: number): void {
+  if (amount <= 0) return;
+  creditFund(PERP_POOL, asset, amount);
 }
 
 export interface OpenPositionRequest {
@@ -232,6 +268,9 @@ export function closePosition(userId: string, positionId: string): ClosePosition
   const closeFee = (position.size * exitPrice * market.taker_fee_bps) / 10_000;
   const pnl = realizedPnl(side, position.size, position.entry_price, exitPrice, market.taker_fee_bps / 10_000, market.taker_fee_bps / 10_000);
   const settlement = market.settlement_asset;
+  // The price move, before fees. The counterparty pool is the other side of
+  // this move: it pays a profit and banks a loss.
+  const gross = unrealizedPnl(side, position.size, position.entry_price, exitPrice);
   // The margin is locked, so closing unlocks it. The price PnL and the close
   // fee then move on top of the unlocked margin. The open fee was already
   // charged when the position opened, so it is not charged again: the net
@@ -248,6 +287,18 @@ export function closePosition(userId: string, positionId: string): ClosePosition
       // position posted, which is the isolated-loss guarantee.
       debitAvailable(userId, settlement, Math.min(-settlementDelta, position.collateral));
     }
+
+    // The pool settles the price move. A profit is paid out of the pool's real
+    // balance (it fails closed when the pool is short, so a winning close can
+    // never mint); a loss is banked into it, capped at what the trader actually
+    // paid for the price move after the close fee the protocol already took.
+    if (gross > 0) {
+      poolPays(settlement, gross);
+    } else if (gross < 0) {
+      const paidByTrader = settlementDelta < 0 ? Math.min(-settlementDelta, position.collateral) : 0;
+      poolReceives(settlement, Math.min(-gross, Math.max(0, paidByTrader - closeFee)));
+    }
+
     recordTransaction(userId, 'dex_perp_close', settlement, released, Math.max(closeFee, 0), 'completed', `close ${position.market}`);
 
     const feeParts = applySchedule(Math.max(closeFee, 0), perpFeeSplit());
@@ -375,6 +426,11 @@ export function liquidatePosition(positionId: string, mark?: number): Liquidatio
     const returned = Math.max(0, equity - penalty);
     const seized = position.collateral - returned;
     if (seized > 0) debitAvailable(position.user_id, market.settlement_asset, seized);
+    // The seized margin is the trader's loss; it is banked into the pool that
+    // was the other side of the price move, less the penalty the protocol
+    // books to the insurance fund and treasury below. Deleting it instead would
+    // destroy value the pool is owed.
+    poolReceives(market.settlement_asset, Math.max(0, seized - penalty));
     recordTransaction(position.user_id, 'dex_perp_liquidation', market.settlement_asset, returned, penalty, 'completed', `liquidate ${position.market}`);
 
     if (penalty > 0) {

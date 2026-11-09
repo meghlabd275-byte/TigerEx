@@ -28,7 +28,7 @@ const { applySchedule } = require('../../.test-build/fee-engine.js');
 const { addLiquidity, removeLiquidity, userPositions } = require('../../.test-build/liquidity-service.js');
 const { stakeFarm, unstakeFarm, claimFarm, lockVetgr, vetgrStatus, voteGauge, submitBribe, claimBribe, currentEpoch, fundFarmRewards, rewardFundBalance, bribeEscrowAccount } =
   require('../../.test-build/farm-service.js');
-const { openPosition, closePosition, applyFunding, liquidatePosition, perpPositions, markPrice } =
+const { openPosition, closePosition, applyFunding, liquidatePosition, perpPositions, markPrice, fundPerpPool, perpPoolBalance } =
   require('../../.test-build/perps-service.js');
 const { supply, borrow, repay, withdrawSupply, flashLoan, listLendingMarkets, accrueInterest, liquidateBorrow } = require('../../.test-build/margin-service.js');
 const { contribute, claimRaise, launchEscrowAccount, listNft, buyNft, initiateBridge, releaseBridge } = require('../../.test-build/launch-service.js');
@@ -130,12 +130,13 @@ test('a swap moves real balances and grows the input reserve', () => {
   assert.equal(availableBalance(user, 'TGR'), quote.amountOut);
 
   const reserves = reservesOf(poolId);
-  // The pool keeps the LP share of the fee; the protocol's share (treasury and
-  // insurance) is carved out of the pool and credited to those accounts, so it
-  // is not left in the reserves as well.
+  // The pool keeps the LP share of the fee; every other bucket (veTGR, treasury,
+  // insurance, burn) is carved out of the pool and held in the account that owns
+  // it, so it is not left in the reserves as well.
   const split = swapFeeSplit();
   const parts = applySchedule(quote.fee, split);
-  assert.ok(Math.abs(reserves.RUSD - (1001000 - parts.treasury - parts.insurance)) < 1e-6);
+  const protocolShare = parts.vetgr + parts.treasury + parts.insurance + parts.burn;
+  assert.ok(Math.abs(reserves.RUSD - (1001000 - protocolShare)) < 1e-6);
   assert.ok(Math.abs(reserves.TGR - (1000000 - quote.amountOut)) < 1e-6);
 });
 
@@ -482,7 +483,7 @@ test('a bribe cannot be recorded that the sponsor cannot fund', () => {
 
 let contractSeq = 0;
 
-function listPerp(base, price, maintenanceRate = 0.005) {
+function listPerp(base, price, maintenanceRate = 0.005, settlement = 'RUSD') {
   contractSeq += 1;
   const symbol = `${base}${contractSeq}/RUSD`;
   db.prepare(
@@ -491,8 +492,8 @@ function listPerp(base, price, maintenanceRate = 0.005) {
         contract_size, tick_size, min_quantity, max_quantity, max_leverage, maker_fee_bps, taker_fee_bps,
         funding_interval_hours, funding_rate_cap, maintenance_margin_rate, initial_margin_rate,
         liquidation_fee_rate, insurance_fund_share, status)
-     VALUES (?, ?, ?, 'RUSD', 'RUSD', 'RUSD_M', 'perpetual', 1, 0.1, 0.001, 1000000, 100, 2, 5, 8, 0.01, ?, 0.008, 0.005, 0.1, 'active')`,
-  ).run(generateId(), symbol, base, maintenanceRate);
+     VALUES (?, ?, ?, 'RUSD', ?, 'RUSD_M', 'perpetual', 1, 0.1, 0.001, 1000000, 100, 2, 5, 8, 0.01, ?, 0.008, 0.005, 0.1, 'active')`,
+  ).run(generateId(), symbol, base, settlement, maintenanceRate);
   db.prepare('INSERT INTO market_data (id, symbol, price, volume_24h) VALUES (?, ?, ?, 0)').run(
     generateId(),
     symbol,
@@ -644,6 +645,57 @@ test('the keeper liquidates using the market own maintenance margin', () => {
   const row = db.prepare('SELECT status FROM dex_perp_positions WHERE position_id = ?').get(opened.positionId);
   assert.equal(row.status, 'liquidated');
   assert.equal(lockedBalance(trader, 'RUSD'), 0);
+});
+
+test('a winning perpetual close is paid out of the counterparty pool, never minted', () => {
+  const trader = seedUser();
+  credit(trader, 'RUSD', 100000);
+  const symbol = listPerp('WINX', 50000);
+  // Fund the pool the way the venue does: a real transfer in.
+  fundPerpPool('RUSD', 50000);
+  const opened = openPosition({ userId: trader, symbol, side: 'long', size: 1, leverage: 10 });
+  db.prepare('UPDATE market_data SET price = 60000 WHERE symbol = ?').run(symbol);
+
+  const poolBefore = perpPoolBalance('RUSD');
+  const closed = closePosition(trader, opened.positionId);
+  // The 10000 price gain leaves the pool and reaches the trader.
+  assert.ok(Math.abs(perpPoolBalance('RUSD') - (poolBefore - 10000)) < 1e-6, 'the pool pays the profit');
+  assert.ok(
+    Math.abs(availableBalance(trader, 'RUSD') - (100000 - opened.fee - closed.fee + 10000)) < 1e-6,
+    `the trader is paid the profit, got ${availableBalance(trader, 'RUSD')}`,
+  );
+});
+
+test('a winning close with an empty pool fails closed instead of minting the profit', () => {
+  const trader = seedUser();
+  // A USDC-settled contract: nothing has funded the USDC counterparty pool.
+  credit(trader, 'USDC', 100000);
+  const symbol = listPerp('EMPTYX', 50000, 0.005, 'USDC');
+  const opened = openPosition({ userId: trader, symbol, side: 'long', size: 1, leverage: 10 });
+  db.prepare('UPDATE market_data SET price = 60000 WHERE symbol = ?').run(symbol);
+
+  const before = availableBalance(trader, 'USDC');
+  assert.throws(() => closePosition(trader, opened.positionId), 'the pool cannot pay a profit it does not hold');
+  // The failed close rolled back, so the margin is still locked and the balance
+  // is unchanged: no value was created.
+  assert.equal(availableBalance(trader, 'USDC'), before, 'a failed close leaves the balance untouched');
+});
+
+test('a liquidation banks the seized margin into the pool instead of destroying it', () => {
+  const trader = seedUser();
+  credit(trader, 'RUSD', 100000);
+  const symbol = listPerp('SEIZEX', 2000);
+  const opened = openPosition({ userId: trader, symbol, side: 'long', size: 10, leverage: 50 });
+  // Equity is far below zero, so the whole margin is seized and the penalty is
+  // zero; all of it belongs to the pool that was the other side of the move.
+  const poolBefore = perpPoolBalance('RUSD');
+  const result = liquidatePosition(opened.positionId, 1000);
+
+  assert.ok(result.penalty >= 0);
+  assert.ok(
+    Math.abs(perpPoolBalance('RUSD') - (poolBefore + opened.margin - result.penalty)) < 1e-6,
+    'the seized margin, less the penalty the protocol booked, is banked into the pool',
+  );
 });
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, NO_STORE, enforceRequestGuards } from '@/lib/api/route-guards';
-import { applyFunding, liquidatePosition, markPrice, perpPositions } from '@/lib/dex/perps-service';
+import { applyFunding, liquidatePosition, markPrice, perpPositions, fundPerpPool, perpPoolBalance } from '@/lib/dex/perps-service';
 
 /**
  * Perpetual risk administration for TigerSwap.
@@ -68,6 +68,34 @@ export async function POST(request: NextRequest) {
     const total = applyFunding(market.symbol, rate);
     recordAdminAction(request, auth.admin, 'dex.perp.funding', { type: 'futures_market', id: symbol, detail: { rate, total } });
     return NextResponse.json({ success: true, total });
+  }
+
+  if (action === 'fund-pool') {
+    const asset = String(body.asset ?? '').trim().toUpperCase();
+    const amount = Number(body.amount);
+    if (!asset) return fail('VALIDATION_FAILED', 'asset is required');
+    if (!Number.isFinite(amount) || amount <= 0) return fail('VALIDATION_FAILED', 'amount must be positive');
+    // The perpetual counterparty pool is the venue's side of every trade. It is
+    // funded from a real account, so a winning close pays out of value the venue
+    // actually holds rather than minting it.
+    const source = String(body.source ?? 'dex_treasury');
+    const db = getDb();
+    const row = db
+      .prepare("SELECT balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
+      .get(asset, source) as { balance: number } | undefined;
+    if (!row || Number(row.balance) + 1e-9 < amount) {
+      return fail('INSUFFICIENT_SOURCE', `the ${source} ${asset} account cannot cover ${amount}`, 409);
+    }
+    db.transaction(() => {
+      db.prepare("UPDATE treasury_accounts SET balance = balance - ?, updated_at = datetime('now') WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?").run(
+        amount,
+        asset,
+        source,
+      );
+      fundPerpPool(asset, amount);
+    })();
+    recordAdminAction(request, auth.admin, 'dex.perp.fund_pool', { type: 'dex_perp_pool', id: asset, detail: { amount, source } });
+    return NextResponse.json({ success: true, balance: perpPoolBalance(asset) });
   }
 
   if (action === 'liquidate') {

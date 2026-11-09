@@ -353,6 +353,8 @@ export function recordDexRevenue(
   );
 
   if (split.treasury > 0) creditTreasury(asset, split.treasury, 'dex_treasury');
+  if (split.vetgr > 0) creditTreasury(asset, split.vetgr, 'dex_vetgr_fees');
+  if (split.burn > 0) creditTreasury(asset, split.burn, 'dex_burn');
   if (split.insurance > 0) {
     creditTreasury(asset, split.insurance, 'dex_insurance');
     db.prepare(

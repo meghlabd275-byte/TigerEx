@@ -28,8 +28,28 @@ export default function AdminDexPerpsPage() {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [rateDraft, setRateDraft] = useState<Record<string, string>>({});
   const [positionId, setPositionId] = useState('');
+  const [poolAsset, setPoolAsset] = useState('RUSD');
+  const [poolAmount, setPoolAmount] = useState('');
 
   const markets = perps.data?.markets ?? [];
+
+  const fundPool = async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const body = await apiRequest<{ balance: number }>('/api/admin/dex/perps', {
+        method: 'POST',
+        body: { action: 'fund-pool', asset: poolAsset, amount: Number(poolAmount) },
+      });
+      setMessage({ ok: true, text: `Pool funded; ${poolAsset} balance is now ${formatAmount(body.balance)}.` });
+      setPoolAmount('');
+      perps.reload();
+    } catch (error) {
+      setMessage({ ok: false, text: error instanceof Error ? error.message : 'Could not fund the pool.' });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const applyFunding = async (symbol: string) => {
     setBusy(true);
@@ -78,7 +98,7 @@ export default function AdminDexPerpsPage() {
         . TigerSwap settles against the same rows.
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Force liquidation">
           <Field label="Position id" value={positionId} onChange={setPositionId} placeholder="position id" />
           <button
@@ -87,6 +107,22 @@ export default function AdminDexPerpsPage() {
             className="mt-2 w-full rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
           >
             Liquidate at mark price
+          </button>
+        </Card>
+
+        <Card title="Counterparty pool">
+          <p className="mb-2 text-sm text-gray-500 dark:text-slate-400">
+            The venue is the other side of every perpetual. Fund the pool from the treasury so a
+            winning close pays out of real value; a winning close fails closed when the pool is short.
+          </p>
+          <Field label="Asset" value={poolAsset} onChange={setPoolAsset} placeholder="RUSD" />
+          <Field label="Amount" value={poolAmount} onChange={setPoolAmount} placeholder="0.0" />
+          <button
+            onClick={fundPool}
+            disabled={busy || !poolAmount || Number(poolAmount) <= 0}
+            className="mt-2 w-full rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            Fund from treasury
           </button>
         </Card>
 

@@ -329,6 +329,21 @@ may credit a balance the venue did not take in. The rules the code must keep:
   `executeSwap` subtracts the settlement fee from the output *before* crediting
   the trader and books exactly that amount as revenue. Booking revenue without
   debiting the payer credited the treasury tokens no one gave up.
+- **A pool's fee split is a carve-out, not a parallel credit.** A swap leaves the
+  whole fee in the pool's reserves, so the LP share is already owned there; every
+  other bucket (veTGR, treasury, insurance, burn) is removed from the pool
+  (`applyPoolDeltas` returns the reserves it wrote, and the settlement subtracts
+  the non-LP share) before `recordDexRevenue` credits it. Leaving the full fee in
+  the pool *and* crediting the protocol shares counted the fee twice and grew the
+  total supply by the treasury share on every swap.
+- **A perpetual's PnL is settled against a funded counterparty pool, not
+  minted.** The venue is the other side of every perp, so a realised gain is paid
+  out of `dex_perp_pool` in `treasury_accounts` (`fundPerpPool` seeds it) and a
+  realised loss (or a liquidation's seized margin, less the penalty the protocol
+  books) is banked into it. A winning close on an empty pool fails closed with
+  `REWARD_FUND_EMPTY` rather than crediting the trader value nobody posted; a
+  liquidation that only deleted the seized margin destroyed value the pool was
+  owed.
 - **A borrow draws only the liquidity the lenders supplied.** `borrow` caps the
   amount at `total_supply - total_borrow`, matching `withdrawSupply` and
   `flashLoan`; without it the borrower was credited tokens the market never held.

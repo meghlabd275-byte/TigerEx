@@ -309,16 +309,15 @@ export function executeSwap(request: SwapRequest): SwapResult {
       updateV3State(poolId, sqrtPrice, liquidityOf(pools, poolId));
     }
 
-    // Split each hop's fee, recorded against the pool that earned it. The whole
-    // fee stays in the pool, so the LP share is the only part already backed by
-    // reserves. The protocol's shares are a real carve-out: they are removed
-    // from the pool and credited to the treasury and insurance fund, so the
-    // pool's LP value is not double-counted with the protocol's claim.
+    // Split each hop's fee, recorded against the pool that earned it. The LP
+    // share stays in the pool; every other bucket is a real carve-out that is
+    // removed from the pool and held in the account that owns it, so the pool's
+    // LP value is not double-counted with a protocol claim.
     const split = swapFeeSplit();
     for (const hop of quote.hops) {
       const parts = applySchedule(hop.fee, split);
       recordDexRevenue('dex_swap', hop.tokenIn, hop.fee, parts, swapId);
-      const protocolShare = parts.treasury + parts.insurance;
+      const protocolShare = parts.vetgr + parts.treasury + parts.insurance + parts.burn;
       if (protocolShare > 0) {
         const reserves = updatedReserves.get(hop.poolId);
         if (!reserves) throw new DexError('CORRUPT_POOL', `pool ${hop.poolId} was not updated`, 500);
