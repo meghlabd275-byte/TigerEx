@@ -181,10 +181,14 @@ export function borrow(
 
     getDb()
       .prepare(
-        `INSERT INTO dex_lending_positions (position_id, market_id, user_id, borrowed) VALUES (?, ?, ?, ?)
-         ON CONFLICT(market_id, user_id) DO UPDATE SET borrowed = borrowed + excluded.borrowed, updated_at = datetime('now')`,
+        `INSERT INTO dex_lending_positions (position_id, market_id, user_id, borrowed, collateral_asset)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(market_id, user_id) DO UPDATE SET
+           borrowed = borrowed + excluded.borrowed,
+           collateral_asset = excluded.collateral_asset,
+           updated_at = datetime('now')`,
       )
-      .run(generateId(), market.market_id, userId, amount);
+      .run(generateId(), market.market_id, userId, amount, collateral);
     getDb()
       .prepare("UPDATE dex_lending_markets SET total_borrow = total_borrow + ? WHERE market_id = ?")
       .run(amount, market.market_id);
@@ -430,14 +434,27 @@ export function marginPositions(userId: string): Array<Record<string, unknown>> 
     .all(userId) as Array<Record<string, unknown>>;
   return rows.map((row) => {
     const borrowed = Number(row.borrowed);
-    const locked = collateralAvailableToRelease(userId, String(row.asset));
+    const asset = String(row.asset);
+    // The collateral is a balance in its own asset; the health factor compares
+    // it to a debt in the borrowed asset, so it is valued in that asset first.
+    // Without a price there is no health factor, and reporting one from the raw
+    // quantity would read a healthy position as liquidatable.
+    const collateralAsset = row.collateral_asset === null || row.collateral_asset === undefined ? null : String(row.collateral_asset);
+    const locked = collateralAsset === null ? 0 : collateralAvailableToRelease(userId, collateralAsset);
+    const collateralPrice = collateralAsset === null ? null : priceInQuote(collateralAsset, asset);
+    const collateralValue = collateralPrice === null ? null : locked * collateralPrice;
     return {
       positionId: row.position_id,
-      asset: row.asset,
+      asset,
       supplied: Number(row.supplied),
       borrowed,
+      collateralAsset,
       collateral: locked,
-      healthFactor: borrowed > 0 ? healthFactor(locked, Number(row.liquidation_threshold), borrowed) : null,
+      collateralValue,
+      healthFactor:
+        borrowed > 0 && collateralValue !== null
+          ? healthFactor(collateralValue, Number(row.liquidation_threshold), borrowed)
+          : null,
     };
   });
 }

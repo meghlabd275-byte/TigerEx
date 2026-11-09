@@ -30,7 +30,9 @@ interface MarginResponse {
     asset: string;
     supplied: number;
     borrowed: number;
+    collateralAsset: string | null;
     collateral: number;
+    collateralValue: number | null;
     healthFactor: number | null;
   }>;
 }
@@ -222,6 +224,7 @@ export default function DexMarginPage() {
                 <Th right>Supplied</Th>
                 <Th right>Borrowed</Th>
                 <Th right>Collateral</Th>
+                <Th right>Collateral value</Th>
                 <Th right>Health factor</Th>
               </tr>
             </thead>
@@ -231,7 +234,8 @@ export default function DexMarginPage() {
                   <Td>{position.asset}</Td>
                   <Td right>{formatAmount(position.supplied)}</Td>
                   <Td right>{formatAmount(position.borrowed)}</Td>
-                  <Td right>{formatAmount(position.collateral)}</Td>
+                  <Td right>{formatAmount(position.collateral)}{position.collateralAsset ? ` ${position.collateralAsset}` : ''}</Td>
+                  <Td right>{position.collateralValue === null ? '—' : formatAmount(position.collateralValue)}</Td>
                   <Td
                     right
                     className={

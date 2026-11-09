@@ -22,6 +22,7 @@ const NAV: Array<{ name: string; href: string }> = [
   { name: 'Bridge', href: '/dex/bridge' },
   { name: 'MEV shield', href: '/dex/mev' },
   { name: 'Sniping', href: '/dex/sniping' },
+  { name: 'Bots', href: '/dex/bots' },
   { name: 'Portfolio', href: '/dex/portfolio' },
 ];
 

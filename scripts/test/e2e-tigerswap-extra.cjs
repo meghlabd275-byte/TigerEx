@@ -361,6 +361,63 @@ async function main() {
       record('a snipe settles through the normal swap path', true, `out ${snipe.json.snipe.amountOut.toFixed(4)}`);
     }
 
+    // --- Bots -------------------------------------------------------------
+    const botCreate = await request('POST', '/api/dex/bots', {
+      token,
+      body: {
+        action: 'create',
+        botType: 'grid',
+        poolId,
+        params: { lowerPrice: 1, upperPrice: 100, levels: 5, orderSize: 10, tokenIn: 'RUSD', tokenOut: 'TGR' },
+      },
+    });
+    assert.equal(botCreate.status, 201, `bot create failed: ${JSON.stringify(botCreate.json)}`);
+    const botInstanceId = botCreate.json.instance.instanceId;
+    record('a bot instance is created', true, botCreate.json.instance.botType);
+
+    const badBot = await request('POST', '/api/dex/bots', {
+      token,
+      body: { action: 'create', botType: 'grid', params: { lowerPrice: 100, upperPrice: 1, levels: 5, orderSize: 10 } },
+    });
+    assert.equal(badBot.status, 400, `an inverted grid must be refused, got ${badBot.status}`);
+    record('a bot with an invalid plan is refused', true);
+
+    const botList = await request('GET', '/api/dex/bots', { token });
+    assert.equal(botList.status, 200, `bot list failed: ${JSON.stringify(botList.json)}`);
+    assert.ok(botList.json.instances.some((i) => i.instanceId === botInstanceId), 'the new bot must be listed');
+    assert.ok(Array.isArray(botList.json.opportunities), 'the arbitrage scan must be present');
+    assert.ok(Array.isArray(botList.json.liquidations), 'the liquidation scan must be present');
+    record('the bots view lists instances and venue opportunities', true);
+
+    const botEval = await request('POST', '/api/dex/bots', {
+      token,
+      body: { action: 'evaluate', instanceId: botInstanceId },
+    });
+    assert.equal(botEval.status, 200, `bot evaluate failed: ${JSON.stringify(botEval.json)}`);
+    assert.ok(botEval.json.decision.action, 'the evaluation must report an action');
+    record('a bot instance evaluates against live state', true, botEval.json.decision.action);
+
+    const adminBots = await request('GET', '/api/admin/dex/bots', { token: adminToken });
+    assert.equal(adminBots.status, 200, `admin bots failed: ${JSON.stringify(adminBots.json)}`);
+    assert.ok(adminBots.json.instances.some((i) => i.instanceId === botInstanceId), 'the admin view must see the bot');
+    record('admin sees every bot instance', true, `${adminBots.json.instances.length} instances`);
+
+    const botPause = await request('POST', '/api/dex/bots', {
+      token,
+      body: { action: 'status', instanceId: botInstanceId, status: 'paused' },
+    });
+    assert.equal(botPause.status, 200, `bot pause failed: ${JSON.stringify(botPause.json)}`);
+    assert.equal(botPause.json.instance.status, 'paused');
+    record('a bot instance is paused', true);
+
+    const botDelete = await request('POST', '/api/dex/bots', {
+      token,
+      body: { action: 'delete', instanceId: botInstanceId },
+    });
+    assert.equal(botDelete.status, 200, `bot delete failed: ${JSON.stringify(botDelete.json)}`);
+    assert.equal(botDelete.json.removed, true);
+    record('a bot instance is removed', true);
+
     // --- Security ---------------------------------------------------------
     for (const [method, url] of [
       ['GET', '/api/dex/vaults'],
@@ -373,6 +430,8 @@ async function main() {
       ['GET', '/api/dex/hooks'],
       ['GET', '/api/dex/sniping?tokenIn=TGR'],
       ['POST', '/api/dex/sniping'],
+      ['GET', '/api/dex/bots'],
+      ['POST', '/api/dex/bots'],
     ]) {
       const response = await request(method, url, method === 'GET' ? {} : { body: {} });
       assert.equal(response.status, 401, `${method} ${url} must require auth, got ${response.status}`);
@@ -388,6 +447,11 @@ async function main() {
     assert.ok(
       hookGuard.status === 401 || hookGuard.status === 403,
       `a trader token must not open the hook admin route, got ${hookGuard.status}`,
+    );
+    const botGuard = await request('GET', '/api/admin/dex/bots', { token });
+    assert.ok(
+      botGuard.status === 401 || botGuard.status === 403,
+      `a trader token must not open the bot admin route, got ${botGuard.status}`,
     );
     record('admin routes reject a trader token', true, `status ${adminGuard.status}`);
   } finally {

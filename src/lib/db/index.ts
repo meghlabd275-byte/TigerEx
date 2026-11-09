@@ -1708,6 +1708,7 @@ function initializeSchema() {
       user_id TEXT NOT NULL,
       supplied REAL NOT NULL DEFAULT 0,
       borrowed REAL NOT NULL DEFAULT 0,
+      collateral_asset TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       UNIQUE(market_id, user_id)
@@ -1961,6 +1962,10 @@ function applyColumnMigrations(database: Database.Database) {
     // dex_farms gained an updated_at column after the table shipped, so a
     // database created before it must be altered rather than recreated.
     { table: 'dex_farms', column: 'updated_at', definition: 'TEXT' },
+    // A borrow records which asset was posted as collateral, so the position
+    // view can value it in the borrowed asset; without it a health factor could
+    // only be reported for a position collateralised in the borrowed asset.
+    { table: 'dex_lending_positions', column: 'collateral_asset', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {

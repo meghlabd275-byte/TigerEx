@@ -107,6 +107,7 @@ const MODULES = [
   'src/lib/dex/mev-service.ts',
   'src/lib/dex/hook-service.ts',
   'src/lib/dex/sniping-service.ts',
+  'src/lib/dex/bot-service.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });
