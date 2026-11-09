@@ -1539,6 +1539,15 @@ function initializeSchema() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS dex_bribe_claims (
+      claim_id TEXT PRIMARY KEY,
+      bribe_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      amount REAL NOT NULL,
+      claimed_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(bribe_id, user_id)
+    );
+
     CREATE TABLE IF NOT EXISTS dex_limit_orders (
       order_id TEXT PRIMARY KEY,
       pool_id TEXT NOT NULL,
@@ -1597,6 +1606,7 @@ function initializeSchema() {
       curve_k REAL,
       soft_cap REAL,
       hard_cap REAL,
+      quote_asset TEXT NOT NULL DEFAULT 'RUSD',
       start_at TEXT,
       end_at TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
@@ -1970,6 +1980,9 @@ function applyColumnMigrations(database: Database.Database) {
     // The lending market tracks when interest was last applied, so a keeper run
     // accrues exactly the elapsed time rather than a fixed interval.
     { table: 'dex_lending_markets', column: 'last_accrued_at', definition: 'TEXT' },
+    // A launch project records the asset its raise is denominated in, so the
+    // escrow that holds the raise and the payout to the project agree.
+    { table: 'dex_launch_projects', column: 'quote_asset', definition: "TEXT NOT NULL DEFAULT 'RUSD'" },
   ];
 
   for (const { table, column, definition } of migrations) {

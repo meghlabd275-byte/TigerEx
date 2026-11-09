@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/db/session';
 import { enforceRequestGuards, readJson, fail, NO_STORE } from '@/lib/api/route-guards';
-import { contribute, listProjects, projectDetail } from '@/lib/dex/launch-service';
+import { contribute, claimRaise, listProjects, projectDetail } from '@/lib/dex/launch-service';
 import { dexFailure } from '@/lib/dex/route-helpers';
 
 /** List launch projects, or one project's detail with `?projectId=`. */
@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/** Contribute to a launch project. */
+/** Contribute to a launch project, or claim a closed project's raise. */
 export async function POST(request: NextRequest) {
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
@@ -25,6 +25,10 @@ export async function POST(request: NextRequest) {
   const body = await readJson(request);
   if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
   try {
+    if (String(body.action ?? 'contribute').toLowerCase() === 'claim') {
+      const result = claimRaise(String(body.projectId ?? ''), auth.user.userId);
+      return NextResponse.json({ success: true, claim: result }, { headers: NO_STORE });
+    }
     const result = contribute(auth.user.userId, String(body.projectId ?? ''), Number(body.amount), String(body.quoteAsset ?? 'RUSD'));
     return NextResponse.json({ success: true, contribution: result }, { status: 201, headers: NO_STORE });
   } catch (error) {

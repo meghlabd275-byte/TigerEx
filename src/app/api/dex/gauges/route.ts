@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/db/session';
 import { enforceRequestGuards, readJson, fail, NO_STORE } from '@/lib/api/route-guards';
-import { voteGauge, submitBribe, currentEpoch } from '@/lib/dex/farm-service';
+import { voteGauge, submitBribe, claimBribe, currentEpoch } from '@/lib/dex/farm-service';
 import { dexFailure } from '@/lib/dex/route-helpers';
 import { getDb } from '@/lib/db';
 
@@ -17,7 +17,7 @@ export async function GET(_request: NextRequest) {
   }
 }
 
-/** Cast a gauge vote, or submit a bribe when `action` is `bribe`. */
+/** Cast a gauge vote, submit a bribe, or claim a bribe (`action`). */
 export async function POST(request: NextRequest) {
   const auth = await requireSession(request);
   if ('error' in auth) return auth.error;
@@ -27,9 +27,14 @@ export async function POST(request: NextRequest) {
   const body = await readJson(request);
   if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
   try {
-    if (String(body.action ?? 'vote').toLowerCase() === 'bribe') {
+    const action = String(body.action ?? 'vote').toLowerCase();
+    if (action === 'bribe') {
       const bribeId = submitBribe(auth.user.userId, String(body.gaugeId ?? ''), String(body.token ?? ''), Number(body.amount));
       return NextResponse.json({ success: true, bribeId }, { status: 201, headers: NO_STORE });
+    }
+    if (action === 'claim') {
+      const claim = claimBribe(auth.user.userId, String(body.bribeId ?? ''));
+      return NextResponse.json({ success: true, claim }, { headers: NO_STORE });
     }
     voteGauge(auth.user.userId, String(body.gaugeId ?? ''), Number(body.weight));
     return NextResponse.json({ success: true }, { headers: NO_STORE });

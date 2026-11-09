@@ -25,12 +25,12 @@ const { DexError } = require('../../.test-build/pool-service.js');
 const { v3LiquidityForAmounts, v3AmountsForLiquidity } = require('../../.test-build/amm.js');
 const { executeSwap, quoteSwap, listPools, claimSponsoredSwap } = require('../../.test-build/swap-service.js');
 const { addLiquidity, removeLiquidity, userPositions } = require('../../.test-build/liquidity-service.js');
-const { stakeFarm, unstakeFarm, claimFarm, lockVetgr, vetgrStatus, voteGauge, submitBribe, currentEpoch, fundFarmRewards, rewardFundBalance } =
+const { stakeFarm, unstakeFarm, claimFarm, lockVetgr, vetgrStatus, voteGauge, submitBribe, claimBribe, currentEpoch, fundFarmRewards, rewardFundBalance, bribeEscrowAccount } =
   require('../../.test-build/farm-service.js');
 const { openPosition, closePosition, applyFunding, liquidatePosition, perpPositions, markPrice } =
   require('../../.test-build/perps-service.js');
 const { supply, borrow, repay, withdrawSupply, flashLoan, listLendingMarkets, accrueInterest, liquidateBorrow } = require('../../.test-build/margin-service.js');
-const { contribute, listNft, buyNft, initiateBridge, releaseBridge } = require('../../.test-build/launch-service.js');
+const { contribute, claimRaise, launchEscrowAccount, listNft, buyNft, initiateBridge, releaseBridge } = require('../../.test-build/launch-service.js');
 const { settleDueLimitOrders, runDueDcaPlans, runDueTwapPlans, runPerpCycle, runKeeperCycle } = require('../../.test-build/keeper.js');
 
 const db = getDb();
@@ -405,6 +405,7 @@ test('veTGR locks TGR and refuses an unlock before maturity', () => {
 test('a gauge vote is recorded for the current epoch', () => {
   const voter = seedUser();
   credit(voter, 'TGR', 1000);
+  credit(voter, 'RUSD', 1000);
   lockVetgr(voter, 100, 90);
   const poolId = createPool('v2', ['RUSD', 'AVAX'], { RUSD: 1000000, AVAX: 100000 });
   const gaugeId = generateId();
@@ -418,6 +419,30 @@ test('a gauge vote is recorded for the current epoch', () => {
   assert.ok(bribeId);
   const bribe = db.prepare('SELECT * FROM dex_bribes WHERE bribe_id = ?').get(bribeId);
   assert.equal(bribe.amount, 500);
+
+  // The bribe is a real transfer: the sponsor is debited and the tokens sit in
+  // the bribe's own escrow, so the claim below pays from funds that exist.
+  assert.equal(availableBalance(voter, 'RUSD'), 500, 'the sponsor pays the bribe');
+  const escrow = db
+    .prepare("SELECT balance FROM treasury_accounts WHERE account_type = ? AND asset = 'RUSD'")
+    .get(bribeEscrowAccount(bribeId));
+  assert.equal(escrow.balance, 500, 'the bribe is held in escrow, not fabricated');
+
+  const claim = claimBribe(voter, bribeId);
+  assert.equal(claim.amount, 500, 'the only voter takes the whole bribe');
+  assert.equal(availableBalance(voter, 'RUSD'), 1000, 'the claimed bribe returns to the voter');
+  assert.throws(() => claimBribe(voter, bribeId), 'a second claim is refused');
+});
+
+test('a bribe cannot be recorded that the sponsor cannot fund', () => {
+  const sponsor = seedUser();
+  credit(sponsor, 'RUSD', 100);
+  const poolId = createPool('v2', ['RUSD', 'AVAX'], { RUSD: 1000000, AVAX: 100000 });
+  const gaugeId = generateId();
+  db.prepare('INSERT INTO dex_gauges (gauge_id, pool_id) VALUES (?, ?)').run(gaugeId, poolId);
+
+  assert.throws(() => submitBribe(sponsor, gaugeId, 'RUSD', 500), 'an unfunded bribe is refused');
+  assert.equal(db.prepare('SELECT COUNT(*) AS c FROM dex_bribes WHERE sponsor = ?').get(sponsor).c, 0);
 });
 
 // ---------------------------------------------------------------------------
@@ -788,6 +813,37 @@ test('an IDO contribution debits the quote and credits the project token', () =>
   assert.equal(result.tokens, 500);
   assert.equal(availableBalance(contributor, 'RUSD'), 9000);
   assert.equal(availableBalance(contributor, 'PRJ'), 500);
+
+  // The quote the contributor paid is escrowed for the project, not left
+  // unbacked: the tokens credited above are paid for by funds that exist.
+  const escrow = db
+    .prepare("SELECT balance FROM treasury_accounts WHERE account_type = ? AND asset = 'RUSD'")
+    .get(launchEscrowAccount(projectId));
+  assert.equal(escrow.balance, 1000, 'the raise is held in the project escrow');
+
+  // A live project cannot claim yet; once closed it draws exactly the escrow.
+  assert.throws(() => claimRaise(projectId, contributor), 'a live project cannot claim');
+  db.prepare("UPDATE dex_launch_projects SET status = 'closed' WHERE project_id = ?").run(projectId);
+  const projectUser = seedUser();
+  const claim = claimRaise(projectId, projectUser);
+  assert.equal(claim.amount, 1000, 'the project draws exactly what was raised');
+  assert.equal(claim.quoteAsset, 'RUSD');
+  assert.equal(availableBalance(projectUser, 'RUSD'), 1000);
+  assert.throws(() => claimRaise(projectId, projectUser), 'a second claim is refused');
+});
+
+test('a launch project cannot be raised in the wrong quote asset', () => {
+  const contributor = seedUser();
+  credit(contributor, 'RUSD', 10000);
+  credit(contributor, 'USDC', 10000);
+  const projectId = generateId();
+  db.prepare(
+    `INSERT INTO dex_launch_projects (project_id, name, symbol, kind, total_supply, price, raise_target, quote_asset, status)
+     VALUES (?, 'Project', 'PRJ2', 'ido', 1000000, 2, 100000, 'USDC', 'live')`,
+  ).run(projectId);
+
+  assert.throws(() => contribute(contributor, projectId, 1000, 'RUSD'), 'the wrong quote asset is refused');
+  assert.equal(availableBalance(contributor, 'RUSD'), 10000, 'nothing was taken on the refused contribution');
 });
 
 test('an NFT sale settles between seller and buyer', () => {

@@ -17,6 +17,9 @@ import {
   recordDexRevenue,
   assertDexOpen,
   assertNotBlacklisted,
+  creditFund,
+  debitFund,
+  fundBalance,
 } from '@/lib/dex/pool-service';
 import {
   bondingTokensForBudget,
@@ -40,6 +43,7 @@ interface LaunchProjectRow {
   curve_k: number | null;
   soft_cap: number | null;
   hard_cap: number | null;
+  quote_asset: string;
   start_at: string | null;
   end_at: string | null;
   status: string;
@@ -89,6 +93,9 @@ export function contribute(userId: string, projectId: string, amount: number, qu
   const project = loadProject(projectId);
   assertOpen(project);
   const quote = quoteAsset.toUpperCase();
+  if (quote !== String(project.quote_asset ?? 'RUSD').toUpperCase()) {
+    throw new DexError('WRONG_QUOTE', `this project raises ${project.quote_asset}`, 400);
+  }
 
   if (!covers(availableBalance(userId, quote), amount)) {
     throw new DexError('INSUFFICIENT_BALANCE', `Insufficient ${quote} balance`, 400);
@@ -123,6 +130,12 @@ export function contribute(userId: string, projectId: string, amount: number, qu
     creditAvailable(userId, project.symbol, tokens);
     recordTransaction(userId, 'dex_launch_tokens', project.symbol, tokens, 0, 'completed', `project ${projectId}`);
 
+    // The raise is escrowed in the project's own account rather than left in the
+    // contributor's wake: the venue holds the quote until the project claims it,
+    // so the tokens credited above are paid for and the project can only draw
+    // what contributors actually paid.
+    creditFund(launchEscrowAccount(projectId), quote, amount);
+
     getDb()
       .prepare('INSERT INTO dex_launch_contributions (contribution_id, project_id, user_id, amount, tokens) VALUES (?, ?, ?, ?, ?)')
       .run(contributionId, projectId, userId, amount, tokens);
@@ -132,6 +145,45 @@ export function contribute(userId: string, projectId: string, amount: number, qu
   })();
 
   return { contributionId, projectId, amount, tokens };
+}
+
+/** The escrow account that holds a project's raise until the project claims it. */
+export function launchEscrowAccount(projectId: string): string {
+  return `dex_launch_escrow:${projectId}`;
+}
+
+export interface ClaimRaiseResult {
+  projectId: string;
+  quoteAsset: string;
+  amount: number;
+}
+
+/**
+ * Pay a completed project the raise its contributors escrowed.
+ *
+ * The project may claim only what the escrow actually holds, so the payout is a
+ * transfer of contributed funds, never a mint. The project is marked `claimed`
+ * once, and the single status change is the guard against a second claim.
+ */
+export function claimRaise(projectId: string, projectUserId: string): ClaimRaiseResult {
+  const project = loadProject(projectId);
+  if (project.status === 'claimed') throw new DexError('ALREADY_CLAIMED', 'the raise has been claimed', 409);
+  if (project.status === 'live' || project.status === 'pending') {
+    throw new DexError('PROJECT_OPEN', 'the raise can be claimed only after the sale closes', 409);
+  }
+  const quote = String(project.quote_asset ?? 'RUSD').toUpperCase();
+  const held = fundBalance(launchEscrowAccount(projectId), quote);
+  if (!(held > 0)) throw new DexError('NOTHING_RAISED', 'the project raised nothing to claim', 409);
+
+  return getDb().transaction(() => {
+    debitFund(launchEscrowAccount(projectId), quote, held);
+    creditAvailable(projectUserId, quote, held);
+    recordTransaction(projectUserId, 'dex_launch_claim', quote, held, 0, 'completed', `project ${projectId}`);
+    getDb()
+      .prepare("UPDATE dex_launch_projects SET status = 'claimed' WHERE project_id = ?")
+      .run(projectId);
+    return { projectId, quoteAsset: quote, amount: held };
+  })() as ClaimRaiseResult;
 }
 
 /** A project's contributions and progress. */

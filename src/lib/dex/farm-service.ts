@@ -470,9 +470,77 @@ export function submitBribe(sponsor: string, gaugeId: string, token: string, amo
   if (!Number.isFinite(amount) || amount <= 0) throw new DexError('INVALID_AMOUNT', 'amount must be positive', 400);
   const gauge = getDb().prepare('SELECT gauge_id FROM dex_gauges WHERE gauge_id = ?').get(gaugeId);
   if (!gauge) throw new DexError('UNKNOWN_GAUGE', 'gauge does not exist', 404);
+  const asset = String(token).trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,20}$/.test(asset)) throw new DexError('INVALID_SYMBOL', 'token must be an asset symbol', 400);
+
+  // A bribe is a real transfer, not a promise: the sponsor's tokens leave their
+  // balance and are held in a per-bribe escrow that only the voters can draw.
+  // Recording the amount without moving it would leave the venue owing tokens it
+  // never received, and a claim would then have to mint them.
+  if (!covers(availableBalance(sponsor, asset), amount)) {
+    throw new DexError('INSUFFICIENT_BALANCE', `Insufficient ${asset} balance`, 400);
+  }
+
   const bribeId = generateId();
-  getDb()
-    .prepare('INSERT INTO dex_bribes (bribe_id, gauge_id, token, amount, sponsor, epoch) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(bribeId, gaugeId, token.toUpperCase(), amount, sponsor, currentEpoch());
+  getDb().transaction(() => {
+    debitAvailable(sponsor, asset, amount);
+    recordTransaction(sponsor, 'dex_bribe', asset, amount, 0, 'completed', `bribe ${bribeId}`);
+    creditFund(bribeEscrowAccount(bribeId), asset, amount);
+    getDb()
+      .prepare('INSERT INTO dex_bribes (bribe_id, gauge_id, token, amount, sponsor, epoch) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(bribeId, gaugeId, asset, amount, sponsor, currentEpoch());
+  })();
   return bribeId;
+}
+
+/** The escrow account that holds one bribe until its voters claim it. */
+export function bribeEscrowAccount(bribeId: string): string {
+  return `dex_bribe_escrow:${bribeId}`;
+}
+
+export interface BribeClaim {
+  bribeId: string;
+  token: string;
+  amount: number;
+}
+
+/**
+ * Pay a voter their share of a bribe.
+ *
+ * The share is the voter's weight in the bribe's gauge for the bribe's epoch
+ * over that epoch's total weight, drawn from the bribe's own escrow. The escrow
+ * was funded by the sponsor, so the payout moves real tokens rather than
+ * minting them; a claim larger than the escrow holds fails closed, and the
+ * unique (bribe, voter) row makes a second claim impossible.
+ */
+export function claimBribe(userId: string, bribeId: string): BribeClaim {
+  const bribe = getDb().prepare('SELECT * FROM dex_bribes WHERE bribe_id = ?').get(bribeId) as
+    | { bribe_id: string; gauge_id: string; token: string; amount: number; epoch: number }
+    | undefined;
+  if (!bribe) throw new DexError('UNKNOWN_BRIBE', 'bribe does not exist', 404);
+
+  const vote = getDb()
+    .prepare('SELECT weight FROM dex_gauge_votes WHERE gauge_id = ? AND user_id = ? AND epoch = ?')
+    .get(bribe.gauge_id, userId, bribe.epoch) as { weight: number } | undefined;
+  if (!vote || Number(vote.weight) <= 0) {
+    throw new DexError('NO_VOTE', 'no vote in this gauge for the bribe epoch', 403);
+  }
+  const total = getDb()
+    .prepare('SELECT COALESCE(SUM(weight), 0) AS total FROM dex_gauge_votes WHERE gauge_id = ? AND epoch = ?')
+    .get(bribe.gauge_id, bribe.epoch) as { total: number };
+  const totalWeight = Number(total.total);
+  if (totalWeight <= 0) throw new DexError('NO_VOTES', 'the gauge has no votes for this epoch', 409);
+
+  const share = (Number(bribe.amount) * Number(vote.weight)) / totalWeight;
+  if (!(share > 0)) throw new DexError('NOTHING_TO_CLAIM', 'the claim amount is zero', 409);
+
+  return getDb().transaction(() => {
+    debitFund(bribeEscrowAccount(bribeId), bribe.token, share);
+    creditAvailable(userId, bribe.token, share);
+    recordTransaction(userId, 'dex_bribe_claim', bribe.token, share, 0, 'completed', `bribe ${bribeId}`);
+    getDb()
+      .prepare('INSERT INTO dex_bribe_claims (claim_id, bribe_id, user_id, amount) VALUES (?, ?, ?, ?)')
+      .run(generateId(), bribeId, userId, share);
+    return { bribeId, token: bribe.token, amount: share };
+  })() as BribeClaim;
 }
