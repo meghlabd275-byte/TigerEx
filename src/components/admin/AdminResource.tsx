@@ -123,16 +123,20 @@ export default function AdminResource({ spec }: { spec: ResourceSpec }) {
     return Array.from(keys).slice(0, 8);
   }, [rows, spec.columns]);
 
-  const run = async () => {
-    if (!activeAction) return;
+  const run = async (
+    action: ResourceAction | null = activeAction,
+    row: Row | null = activeRow,
+    entered: Record<string, string> = values,
+  ) => {
+    if (!action) return;
     setBusy(true);
     setStatus(null);
     try {
       const token = adminToken();
-      const url = activeAction.url ? activeAction.url(activeRow) : spec.endpoint;
-      const body = activeAction.body ? activeAction.body(values, activeRow) : undefined;
+      const url = action.url ? action.url(row) : spec.endpoint;
+      const body = action.body ? action.body(entered, row) : undefined;
       const response = await fetch(url, {
-        method: activeAction.method,
+        method: action.method,
         headers: {
           ...(body ? { 'Content-Type': 'application/json' } : {}),
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -144,7 +148,7 @@ export default function AdminResource({ spec }: { spec: ResourceSpec }) {
         setStatus({ ok: false, text: result?.error?.message || result?.error || 'The action was refused.' });
         return;
       }
-      setStatus({ ok: true, text: `${activeAction.label} completed.` });
+      setStatus({ ok: true, text: `${action.label} completed.` });
       setActiveAction(null);
       setActiveRow(null);
       setValues({});
@@ -183,21 +187,22 @@ export default function AdminResource({ spec }: { spec: ResourceSpec }) {
 
       {spec.actions && spec.actions.length > 0 && (
         <div className="mb-4 flex flex-wrap gap-2">
-          {spec.actions
-            .filter((action) => action.fields && action.fields.length > 0)
-            .map((action) => (
-              <button
-                key={action.label}
-                onClick={() => {
-                  setActiveAction(action);
-                  setActiveRow(null);
-                  setValues({});
-                }}
-                className="inline-flex items-center gap-1 rounded bg-blue-600 px-3 py-2 text-sm text-white"
-              >
-                <Play className="h-3 w-3" /> {action.label}
-              </button>
-            ))}
+          {spec.actions.map((action) => (
+            <button
+              key={action.label}
+              onClick={() => {
+                setActiveAction(action);
+                setActiveRow(null);
+                setValues({});
+                // An action with no fields is a one-shot command; run it
+                // immediately rather than opening an empty form.
+                if (!action.fields || action.fields.length === 0) void run(action, null, {});
+              }}
+              className="inline-flex items-center gap-1 rounded bg-blue-600 px-3 py-2 text-sm text-white"
+            >
+              <Play className="h-3 w-3" /> {action.label}
+            </button>
+          ))}
         </div>
       )}
 
@@ -234,7 +239,7 @@ export default function AdminResource({ spec }: { spec: ResourceSpec }) {
           </div>
           <div className="mt-4 flex items-center gap-3">
             <button
-              onClick={run}
+              onClick={() => void run()}
               disabled={busy}
               className="rounded bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
             >

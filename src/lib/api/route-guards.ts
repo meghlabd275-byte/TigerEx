@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { isAllowedOrigin, checkRateLimit } from '@/lib/security/guards';
+import { isAllowedOrigin, checkRateLimit, rateLimitKey } from '@/lib/security/guards';
 
 /** Standard error envelope used by every native route. */
 export function fail(code: string, message: string, status = 400): NextResponse {
@@ -138,9 +138,7 @@ export function enforceRateLimit(
 
 /** Rate-limit subject: the forwarded client address, else the user agent. */
 function rateLimitSubject(request: NextRequest): string {
-  const forwarded = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  if (forwarded) return forwarded;
-  return request.headers.get('user-agent') || 'unknown';
+  return rateLimitKey(request.headers.get('x-forwarded-for'), request.headers.get('user-agent') || 'unknown');
 }
 
 /**

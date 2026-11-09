@@ -21,7 +21,7 @@
 import { getDb, generateId } from '@/lib/db';
 import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { lockAvailable, unlockAvailable, creditAvailable, recordTransaction, LedgerError } from '@/lib/db/ledger';
-import { accrueSimple, lockedRedeemable } from '@/lib/earn/products';
+import { accrueForProduct, lockedRedeemable } from '@/lib/earn/products';
 import { creditFund, fundBalance, debitFund } from '@/lib/dex/pool-service';
 
 export class SubscriptionError extends Error {
@@ -206,7 +206,7 @@ export function redeem(userId: string, subscriptionId: string): RedeemResult {
     throw new SubscriptionError('LOCKED', 'This subscription is still locked', 409);
   }
 
-  const reward = accrueSimple(principal, Number(row.apy) || 0, nowNs - startedNs);
+  const reward = accrueForProduct(principal, Number(row.apy) || 0, nowNs - startedNs, row.product_type);
 
   db.transaction(() => {
     unlockAvailable(userId, row.asset, principal);

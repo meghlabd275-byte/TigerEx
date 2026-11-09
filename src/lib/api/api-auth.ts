@@ -13,10 +13,11 @@
  * Free of `next/server` so the rules can be exercised by the logic test runner.
  */
 
-import { createHash, createHmac, timingSafeEqual } from 'crypto';
+import { createHash, createHmac } from 'crypto';
 import { getDb } from '@/lib/db';
 import { decrypt } from '@/lib/db';
 import { verifyApiSecret } from '@/lib/security/account';
+import { constantTimeEqual } from '@/lib/security/guards';
 
 /** How far a request timestamp may drift from the server clock. */
 export const MAX_CLOCK_SKEW_MS = 30_000;
@@ -57,10 +58,7 @@ export function signRequest(secret: string, method: string, path: string, timest
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
-  const left = Buffer.from(a, 'utf8');
-  const right = Buffer.from(b, 'utf8');
-  if (left.length !== right.length) return false;
-  return timingSafeEqual(left, right);
+  return constantTimeEqual(a, b);
 }
 
 /**

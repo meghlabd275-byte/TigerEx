@@ -67,6 +67,7 @@ const MODULES = [
   'src/lib/trading/copy-engine.ts',
   'src/lib/options/options-engine.ts',
   'src/lib/trading/etf-engine.ts',
+  'src/lib/trading/settlement.ts',
   'src/lib/earn/subscriptions.ts',
   'src/lib/security/account-deletion.ts',
   'src/lib/security/session-rotate.ts',

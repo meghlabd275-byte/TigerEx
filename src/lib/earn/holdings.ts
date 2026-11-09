@@ -11,7 +11,7 @@
 
 import { getDb } from '@/lib/db';
 import { parseUtcTimestamp } from '@/lib/trading/candles';
-import { accrueSimple } from '@/lib/earn/products';
+import { accrueForProduct } from '@/lib/earn/products';
 
 export interface EarnHolding {
   id: string;
@@ -48,7 +48,7 @@ function toHolding(row: Record<string, unknown>): EarnHolding {
     Number.isFinite(maturedMs) && maturedMs < Date.now() ? Math.max(0, (maturedMs - startedMs) * 1_000_000) : elapsedNs;
 
   const stored = Number(row.accrued_reward) || 0;
-  const projected = accrueSimple(amount, apy, effectiveNs);
+  const projected = accrueForProduct(amount, apy, effectiveNs, String(row.product_type ?? ''));
   const rewards = Math.max(stored, projected);
 
   return {

@@ -165,6 +165,24 @@ test('a locked product is redeemable only after its term', () => {
   assert.equal(earn.lockedRedeemable(0, 30, 31 * dayNs), true);
 });
 
+test('only the vault product type compounds', () => {
+  assert.equal(earn.productCompounds('vault'), true);
+  assert.equal(earn.productCompounds('VAULT'), true);
+  assert.equal(earn.productCompounds('flexible'), false);
+  assert.equal(earn.productCompounds('locked'), false);
+  assert.equal(earn.productCompounds(null), false);
+});
+
+test('a vault subscription accrues compounding interest, a flexible one simple', () => {
+  const yearNs = 365 * 24 * 60 * 60 * 1e9;
+  const vault = earn.accrueForProduct(1000, 0.15, yearNs, 'vault');
+  const flexible = earn.accrueForProduct(1000, 0.15, yearNs, 'flexible');
+  assert.ok(vault > flexible, `vault ${vault} should exceed simple ${flexible}`);
+  assert.ok(Math.abs(flexible - 150) < 1e-6);
+  // Continuous compounding: 1000 * (e^0.15 - 1).
+  assert.ok(Math.abs(vault - 1000 * (Math.exp(0.15) - 1)) < 1e-6);
+});
+
 test('dual investment converts at the strike when the condition is met', () => {
   const converted = earn.settleDualInvestment({
     amount: 1000, apy: 0.2, strike: 100, settlementPrice: 90, direction: 'buy_low', termDays: 7,

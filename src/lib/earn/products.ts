@@ -58,6 +58,28 @@ export function lockedRedeemable(
   return Number.isFinite(nowNs) && nowNs - startedNs >= durationDays * dayNs;
 }
 
+/**
+ * Whether a product's reward compounds.
+ *
+ * The RYUSD vault reinvests its yield, so its position grows continuously; a
+ * flexible or locked product pays simple interest on the original principal.
+ */
+export function productCompounds(productType: string | null | undefined): boolean {
+  return String(productType ?? '').trim().toLowerCase() === 'vault';
+}
+
+/** Reward accrued by a subscription, compounding for a vault product. */
+export function accrueForProduct(
+  principal: number,
+  apr: number,
+  elapsedNs: number,
+  productType: string | null | undefined,
+): number {
+  return productCompounds(productType)
+    ? accrueCompounded(principal, apr, elapsedNs)
+    : accrueSimple(principal, apr, elapsedNs);
+}
+
 export interface DualInvestmentInput {
   /** Notional the user commits. */
   amount: number;
