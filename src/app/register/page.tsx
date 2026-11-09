@@ -291,25 +291,47 @@ function RegisterForm() {
       setError('Please install MetaMask to use this feature');
       return;
     }
-    
+
     setLoading(true);
     try {
-      const accounts = await window.ethereum.request({ 
-        method: 'eth_requestAccounts' 
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      const address = String(accounts?.[0] ?? '');
+      if (!address) {
+        setError('No wallet account was returned');
+        return;
+      }
+
+      const challengeResponse = await fetch('/api/auth/metamask/challenge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address }),
       });
-      
+      const challenge = await challengeResponse.json();
+      if (!challengeResponse.ok || !challenge?.message) {
+        setError(challenge?.error?.message || 'Could not start wallet sign-up');
+        return;
+      }
+
+      const signature = await window.ethereum.request({
+        method: 'personal_sign',
+        params: [challenge.message, address],
+      });
+
       const response = await fetch('/api/auth/metamask/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: accounts[0] }),
+        body: JSON.stringify({ challengeId: challenge.challengeId, signature }),
       });
-      
+
       if (!response.ok) {
         const data = await response.json();
         setError(data.error?.message || 'MetaMask registration failed');
         return;
       }
-      
+
+      const data = await response.json();
+      localStorage.setItem('tigerex_access_token', data.accessToken);
+      if (data.refreshToken) localStorage.setItem('tigerex_refresh_token', data.refreshToken);
       router.push('/dashboard');
     } catch (err) {
       setError('MetaMask registration failed');

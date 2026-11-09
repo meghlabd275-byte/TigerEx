@@ -1579,7 +1579,7 @@ export function TradingApp() {
 
   useEffect(() => {
     // Check for saved theme preference
-    const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
+    const savedTheme = localStorage.getItem('tigerex-theme') as 'light' | 'dark' | null;
     if (savedTheme) {
       setTheme(savedTheme);
     }
@@ -1588,7 +1588,7 @@ export function TradingApp() {
   useEffect(() => {
     // Apply theme to document
     document.documentElement.classList.toggle('dark', theme === 'dark');
-    localStorage.setItem('theme', theme);
+    localStorage.setItem('tigerex-theme', theme);
   }, [theme]);
 
   // Balances are the user's real wallet holdings; the assets panel rendered an

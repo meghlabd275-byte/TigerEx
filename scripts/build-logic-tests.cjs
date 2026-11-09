@@ -73,6 +73,8 @@ const MODULES = [
   'src/lib/wallet/deposit.ts',
   'src/lib/auth/oidc.ts',
   'src/lib/auth/password.ts',
+  'src/lib/auth/wallet-signature.ts',
+  'src/lib/auth/wallet.ts',
   'src/lib/dex/amm.ts',
   'src/lib/dex/router.ts',
   'src/lib/dex/orders.ts',

@@ -373,6 +373,21 @@ function initializeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_oauth_login_codes_hash ON oauth_login_codes(code_hash);
 
+    -- Single-use challenges for wallet-signature (EIP-191) authentication. The
+    -- full message is stored so the server can rebuild exactly what was signed;
+    -- it carries no long-lived secret, expires quickly, and is marked consumed on
+    -- the first verification so a captured signature cannot be replayed.
+    CREATE TABLE IF NOT EXISTS wallet_challenges (
+      challenge_id TEXT PRIMARY KEY,
+      address TEXT NOT NULL,
+      message TEXT NOT NULL,
+      nonce_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_wallet_challenges_address ON wallet_challenges(address);
+
     -- Market data
     CREATE TABLE IF NOT EXISTS market_data (
       id TEXT PRIMARY KEY,

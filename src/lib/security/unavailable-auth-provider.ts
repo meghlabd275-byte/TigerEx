@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 
-type UnavailableProvider = 'wallet-signature' | 'otp-delivery' | 'mfa-enrollment' | 'mfa-management';
+type UnavailableProvider = 'otp-delivery' | 'mfa-enrollment' | 'mfa-management';
 
 const messages: Record<UnavailableProvider, string> = {
-  'wallet-signature': 'Wallet authentication is unavailable until signed challenge verification and durable account/session storage are configured.',
   'otp-delivery': 'Verification-code delivery is unavailable until a real delivery provider and shared, durable challenge storage are configured.',
   'mfa-enrollment': 'Multi-factor enrollment is unavailable until the authenticated session is verified and the secret can be stored encrypted.',
   'mfa-management': 'Multi-factor changes are unavailable until the authenticator secret and submitted code can be verified against durable account state.',
