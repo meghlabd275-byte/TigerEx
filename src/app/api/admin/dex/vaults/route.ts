@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { validateVaultInput } from '@/lib/dex/validation';
+import { dexFailure } from '@/lib/dex/route-helpers';
 import { harvestVault, listVaults } from '@/lib/dex/vault-service';
 
 export const dynamic = 'force-dynamic';
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest) {
   try {
     return NextResponse.json({ success: true, vaults: listVaults() }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
-    return fail('VAULT_LIST_FAILED', (error as Error).message, 500);
+    return dexFailure(error);
   }
 }
 
@@ -139,7 +140,6 @@ export async function PATCH(request: NextRequest) {
     recordAdminAction(request, auth.admin, 'dex.vault.harvest', { type: 'dex_vault', id: vaultId, detail: result });
     return NextResponse.json({ success: true, harvest: result });
   } catch (error) {
-    const status = (error as { status?: number }).status ?? 400;
-    return fail('HARVEST_FAILED', (error as Error).message, status);
+    return dexFailure(error);
   }
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { validateLiquidStakingInput } from '@/lib/dex/validation';
+import { dexFailure } from '@/lib/dex/route-helpers';
 import { listLiquidStaking, distributeRewards } from '@/lib/dex/liquid-staking-service';
 
 export const dynamic = 'force-dynamic';
@@ -24,7 +25,7 @@ export async function GET(request: NextRequest) {
   try {
     return NextResponse.json({ success: true, pools: listLiquidStaking() }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
-    return fail('STAKE_LIST_FAILED', (error as Error).message, 500);
+    return dexFailure(error);
   }
 }
 
@@ -116,7 +117,6 @@ export async function PATCH(request: NextRequest) {
     recordAdminAction(request, auth.admin, 'dex.liquid_staking.rewards', { type: 'dex_liquid_staking', id: stakeId, detail: result });
     return NextResponse.json({ success: true, distribution: result });
   } catch (error) {
-    const status = (error as { status?: number }).status ?? 400;
-    return fail('REWARD_FAILED', (error as Error).message, status);
+    return dexFailure(error);
   }
 }

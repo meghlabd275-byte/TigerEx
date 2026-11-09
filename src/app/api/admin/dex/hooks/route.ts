@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { listHooks, setHook, removeHook } from '@/lib/dex/hook-service';
+import { dexFailure } from '@/lib/dex/route-helpers';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +23,7 @@ export async function GET(request: NextRequest) {
   try {
     return NextResponse.json({ success: true, hooks: listHooks(poolId) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
-    return fail('HOOK_LIST_FAILED', (error as Error).message, 500);
+    return dexFailure(error);
   }
 }
 
@@ -46,7 +47,7 @@ export async function POST(request: NextRequest) {
     recordAdminAction(request, auth.admin, 'dex.hook.set', { type: 'pool', id: hook.poolId, detail: { kind: hook.kind, config: hook.config } });
     return NextResponse.json({ success: true, hook }, { status: 201, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
-    return fail('HOOK_SET_FAILED', (error as Error).message, 400);
+    return dexFailure(error);
   }
 }
 
@@ -64,6 +65,6 @@ export async function DELETE(request: NextRequest) {
     recordAdminAction(request, auth.admin, 'dex.hook.remove', { type: 'pool', id: poolId, detail: { kind } });
     return NextResponse.json({ success: true, ...result }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
-    return fail('HOOK_REMOVE_FAILED', (error as Error).message, 400);
+    return dexFailure(error);
   }
 }
