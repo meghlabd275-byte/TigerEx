@@ -3,7 +3,7 @@ import { enforceRequestGuards } from '@/lib/api/route-guards';
 import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { validateLendingMarketInput, lendingMarketRowToInput } from '@/lib/dex/validation';
-import { listLendingMarkets } from '@/lib/dex/margin-service';
+import { listLendingMarkets, accrueInterest } from '@/lib/dex/margin-service';
 
 /**
  * TigerSwap lending and isolated-pool administration.
@@ -33,6 +33,13 @@ export async function POST(request: NextRequest) {
     body = (await request.json()) as Record<string, unknown>;
   } catch {
     return fail('INVALID_BODY', 'A JSON body is required');
+  }
+  // Interest is normally accrued by the keeper on a schedule; an operator can
+  // also force a run, for instance after restoring a market from maintenance.
+  if (String(body.action ?? '').toLowerCase() === 'accrue-interest') {
+    const report = accrueInterest();
+    recordAdminAction(request, auth.admin, 'dex.margin.accrue', { type: 'dex_lending_markets', id: 'all', detail: report });
+    return NextResponse.json({ success: true, report }, { headers: { 'Cache-Control': 'no-store' } });
   }
   const validated = validateLendingMarketInput(body);
   if ('error' in validated) return fail('VALIDATION_FAILED', validated.error);

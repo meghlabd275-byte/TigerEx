@@ -1699,6 +1699,7 @@ function initializeSchema() {
       supply_cap REAL NOT NULL,
       borrow_cap REAL NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',
+      last_accrued_at TEXT DEFAULT (datetime('now')),
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -1966,6 +1967,9 @@ function applyColumnMigrations(database: Database.Database) {
     // view can value it in the borrowed asset; without it a health factor could
     // only be reported for a position collateralised in the borrowed asset.
     { table: 'dex_lending_positions', column: 'collateral_asset', definition: 'TEXT' },
+    // The lending market tracks when interest was last applied, so a keeper run
+    // accrues exactly the elapsed time rather than a fixed interval.
+    { table: 'dex_lending_markets', column: 'last_accrued_at', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {

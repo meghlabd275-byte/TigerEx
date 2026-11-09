@@ -29,7 +29,7 @@ const { stakeFarm, unstakeFarm, claimFarm, lockVetgr, vetgrStatus, voteGauge, su
   require('../../.test-build/farm-service.js');
 const { openPosition, closePosition, applyFunding, liquidatePosition, perpPositions, markPrice } =
   require('../../.test-build/perps-service.js');
-const { supply, borrow, repay, withdrawSupply, flashLoan, listLendingMarkets } = require('../../.test-build/margin-service.js');
+const { supply, borrow, repay, withdrawSupply, flashLoan, listLendingMarkets, accrueInterest } = require('../../.test-build/margin-service.js');
 const { contribute, listNft, buyNft, initiateBridge, releaseBridge } = require('../../.test-build/launch-service.js');
 const { settleDueLimitOrders, runDueDcaPlans, runDueTwapPlans, runPerpCycle, runKeeperCycle } = require('../../.test-build/keeper.js');
 
@@ -544,6 +544,56 @@ test('lending markets are listed with live rates', () => {
   const markets = listLendingMarkets();
   assert.ok(markets.length > 0);
   assert.ok(markets.every((market) => market.borrowRate >= 0));
+});
+
+test('borrow interest accrues to the debt and the lenders, not to thin air', () => {
+  const lender = seedUser();
+  const borrower = seedUser();
+  credit(lender, 'RUSD', 100000);
+  credit(borrower, 'ETH', 10);
+  const marketId = createLendingMarket('RUSD');
+  createLendingMarket('ETH', 0.7, 0.75);
+  listPair('ETH', 2000);
+  supply(lender, 'RUSD', 100000);
+  borrow(borrower, 'RUSD', 10000, 'ETH', 10);
+
+  // Pretend the last accrual was exactly one year ago. A whole year makes the
+  // expected interest the plain annual rate, so the assertion does not depend on
+  // the exact number of seconds a test happens to run.
+  const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
+  db.prepare('UPDATE dex_lending_markets SET last_accrued_at = ? WHERE market_id = ?').run(oneYearAgo, marketId);
+
+  const before = db.prepare('SELECT borrowed FROM dex_lending_positions WHERE market_id = ? AND user_id = ?').get(marketId, borrower);
+  const marketBefore = db.prepare('SELECT total_supply, total_borrow FROM dex_lending_markets WHERE market_id = ?').get(marketId);
+
+  const report = accrueInterest();
+  assert.ok(report.charged > 0, 'a year of borrow interest must be charged');
+  assert.ok(Math.abs(report.charged - report.credited - report.reserve) < 1e-6, 'the reserve cut is the difference');
+
+  const after = db.prepare('SELECT borrowed FROM dex_lending_positions WHERE market_id = ? AND user_id = ?').get(marketId, borrower);
+  const marketAfter = db.prepare('SELECT total_supply, total_borrow FROM dex_lending_markets WHERE market_id = ?').get(marketId);
+  assert.ok(after.borrowed > before.borrowed, 'the borrower owes more');
+  assert.ok(marketAfter.total_borrow > marketBefore.total_borrow, 'market debt grows');
+  assert.ok(marketAfter.total_supply > marketBefore.total_supply, 'lenders earn the interest, minus the reserve');
+
+  // Nothing was minted into a user balance: the lender's spendable balance is
+  // unchanged, its supply position is worth more because the market grew.
+  assert.equal(availableBalance(lender, 'RUSD'), 0);
+});
+
+test('a second accrual with no elapsed time charges nothing', () => {
+  const lender = seedUser();
+  const borrower = seedUser();
+  credit(lender, 'RUSD', 50000);
+  credit(borrower, 'ETH', 10);
+  createLendingMarket('RUSD');
+  createLendingMarket('ETH', 0.7, 0.75);
+  listPair('ETH', 2000);
+  supply(lender, 'RUSD', 50000);
+  borrow(borrower, 'RUSD', 5000, 'ETH', 10);
+  accrueInterest();
+  const second = accrueInterest();
+  assert.equal(second.charged, 0, 'no time has passed, so no interest is due');
 });
 
 // ---------------------------------------------------------------------------

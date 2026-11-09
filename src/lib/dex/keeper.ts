@@ -16,6 +16,7 @@ import { getDb } from '@/lib/db';
 import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { executeSwap } from '@/lib/dex/swap-service';
 import { closePosition, applyFunding, liquidatePosition, markPrice, perpPositions } from '@/lib/dex/perps-service';
+import { accrueInterest } from '@/lib/dex/margin-service';
 import { dcaSlicesDue, twapChildren, limitShouldTrigger } from '@/lib/dex/orders';
 import { shouldLiquidate } from '@/lib/dex/perps';
 import { loadPool, parseObject, parseStringArray } from '@/lib/dex/pool-service';
@@ -30,6 +31,7 @@ export interface KeeperReport {
   twapSlicesFailed: number;
   fundingApplied: string[];
   positionsLiquidated: number;
+  interestAccrued: number;
 }
 
 /** The current spot price of a pair, from the deepest pool that serves it. */
@@ -298,6 +300,7 @@ export function runKeeperCycle(now = Date.now()): KeeperReport {
   const dca = runDueDcaPlans(now);
   const twap = runDueTwapPlans(now);
   const perps = runPerpCycle();
+  const lending = accrueInterest(now);
   return {
     limitOrdersSettled: limits.settled,
     limitOrdersFailed: limits.failed,
@@ -307,6 +310,7 @@ export function runKeeperCycle(now = Date.now()): KeeperReport {
     twapSlicesFailed: twap.failed,
     fundingApplied: perps.fundingApplied,
     positionsLiquidated: perps.liquidated,
+    interestAccrued: lending.charged,
   };
 }
 

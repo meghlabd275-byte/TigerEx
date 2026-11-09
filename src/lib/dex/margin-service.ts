@@ -56,6 +56,7 @@ interface LendingMarketRow {
   supply_cap: number;
   borrow_cap: number;
   status: string;
+  last_accrued_at?: string | null;
 }
 
 function loadMarket(asset: string): LendingMarketRow {
@@ -460,3 +461,97 @@ export function marginPositions(userId: string): Array<Record<string, unknown>> 
 }
 
 export { accruedInterest };
+
+export interface AccrualReport {
+  markets: number;
+  charged: number;
+  /** Interest actually credited to lenders, after the reserve cut. */
+  credited: number;
+  reserve: number;
+}
+
+/** The protocol's share of borrow interest, read from settings. */
+function reserveFactor(): number {
+  const factor = dexSetting('dex_lending_reserve_factor', 0.1);
+  return Math.min(0.5, Math.max(0, factor));
+}
+
+/**
+ * Accrue borrow interest on every active market since it was last charged.
+ *
+ * Interest is charged to each borrower's debt and paid to the market's lenders,
+ * in the same asset. The protocol keeps a reserve cut of the interest; the rest
+ * is added to `total_supply`, which is what raises the value of a lender's
+ * supply position, since a supply position is a claim on the market's supply
+ * plus its accrued interest. Nothing moves between user balances: the debt
+ * simply grows and the market's supply grows with it.
+ *
+ * A borrower whose debt cannot be paid out of its balance is left with the
+ * debt; the interest is not a balance movement, so no account can be driven
+ * negative by it.
+ */
+export function accrueInterest(now = Date.now()): AccrualReport {
+  const db = getDb();
+  const markets = db.prepare("SELECT * FROM dex_lending_markets WHERE status = 'active'").all() as LendingMarketRow[];
+  const report: AccrualReport = { markets: 0, charged: 0, credited: 0, reserve: 0 };
+
+  for (const market of markets) {
+    const elapsedSeconds = elapsedSince(market, now);
+    if (elapsedSeconds <= 0) continue;
+
+    const positions = db
+      .prepare('SELECT * FROM dex_lending_positions WHERE market_id = ? AND borrowed > 0')
+      .all(market.market_id) as Array<{ position_id: string; borrowed: number; supplied: number }>;
+
+    // The borrow rate depends on utilisation, which does not change as interest
+    // accrues (both sides grow by the same proportion before the reserve cut),
+    // so one rate applies to the whole interval.
+    const { borrowRate: rate } = marketRates(market);
+    let interest = 0;
+    for (const position of positions) {
+      interest += accruedInterest(Number(position.borrowed), rate, elapsedSeconds);
+    }
+    if (interest <= 0) {
+      db.prepare("UPDATE dex_lending_markets SET last_accrued_at = datetime('now') WHERE market_id = ?").run(market.market_id);
+      continue;
+    }
+
+    const toLenders = interest * (1 - reserveFactor());
+
+    db.transaction(() => {
+      for (const position of positions) {
+        const share = accruedInterest(Number(position.borrowed), rate, elapsedSeconds);
+        db.prepare("UPDATE dex_lending_positions SET borrowed = borrowed + ?, updated_at = datetime('now') WHERE position_id = ?").run(
+          share,
+          position.position_id,
+        );
+      }
+      db.prepare(
+        "UPDATE dex_lending_markets SET total_borrow = total_borrow + ?, total_supply = total_supply + ?, last_accrued_at = datetime('now') WHERE market_id = ?",
+      ).run(interest, toLenders, market.market_id);
+      recordDexRevenue('dex_lending_interest', market.asset, interest, applySchedule(interest, {
+        lpBps: Math.round((1 - reserveFactor()) * 10_000),
+        vetgrBps: 0,
+        treasuryBps: Math.round(reserveFactor() * 10_000),
+        insuranceBps: 0,
+        burnBps: 0,
+      }), market.market_id);
+    })();
+    report.markets += 1;
+    report.charged += interest;
+    report.credited += toLenders;
+    report.reserve += interest - toLenders;
+  }
+
+  return report;
+}
+
+function elapsedSince(market: LendingMarketRow, now: number): number {
+  const last = market.last_accrued_at;
+  if (!last) return 0;
+  const lastMs = Date.parse(last.includes('T') ? last : `${last.replace(' ', 'T')}Z`);
+  if (!Number.isFinite(lastMs)) return 0;
+  const seconds = (now - lastMs) / 1000;
+  // A negative elapsed time (a clock skew) is treated as nothing to accrue.
+  return Math.max(0, Math.floor(seconds));
+}
