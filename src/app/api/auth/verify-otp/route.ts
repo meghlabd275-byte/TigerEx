@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { checkOtp } from '@/lib/security/otp-verify-request';
 import { readJson } from '@/lib/security/otp-request';
-import { issueSession } from '@/lib/security/session-issue';
+import { issueSession, SessionError } from '@/lib/security/session-issue';
 import { decryptSecret, verifyTotp } from '@/lib/security/totp';
 import { enforceRequestGuards } from '@/lib/api/route-guards';
 
@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
     const db = getDb();
     const session = db
       .prepare(
-        `SELECT session_id, user_id FROM sessions WHERE access_token = ? AND expires_at > datetime('now')`,
+        `SELECT session_id, user_id FROM sessions WHERE access_token = ? AND datetime(expires_at) > datetime('now')`,
       )
       .get(tempToken) as { session_id: string; user_id: string } | undefined;
 
@@ -86,6 +86,12 @@ export async function POST(request: NextRequest) {
       user: full.user,
     });
   } catch (error) {
+    if (error instanceof SessionError) {
+      return NextResponse.json(
+        { success: false, error: { code: error.code, message: error.message } },
+        { status: error.status },
+      );
+    }
     console.error('Verify OTP error:', error);
     return NextResponse.json(
       { success: false, error: { code: 'INTERNAL_ERROR', message: 'Verification failed' } },

@@ -44,7 +44,7 @@ export async function requireSession(
       `SELECT s.user_id, u.email, u.phone, u.username, u.kyc_level, u.kyc_status, u.status
          FROM sessions s
          JOIN users u ON s.user_id = u.user_id
-        WHERE s.access_token = ? AND s.expires_at > datetime('now')`,
+        WHERE s.access_token = ? AND datetime(s.expires_at) > datetime('now')`,
     )
     .get(token) as
     | {
@@ -63,6 +63,15 @@ export async function requireSession(
       error: NextResponse.json(
         { success: false, error: { code: 'INVALID_TOKEN', message: 'Invalid or expired token' } },
         { status: 401 },
+      ),
+    };
+  }
+
+  if (session.status && session.status !== 'active') {
+    return {
+      error: NextResponse.json(
+        { success: false, error: { code: 'ACCOUNT_INACTIVE', message: 'This account is not active' } },
+        { status: 403 },
       ),
     };
   }

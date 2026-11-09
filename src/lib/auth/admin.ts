@@ -50,7 +50,7 @@ export async function requireAdmin(
       `SELECT s.admin_id, a.email, a.role, a.permissions, a.status
          FROM admin_sessions s
          JOIN admin_users a ON s.admin_id = a.admin_id
-        WHERE s.access_token = ? AND s.expires_at > datetime('now')`,
+        WHERE s.access_token = ? AND datetime(s.expires_at) > datetime('now')`,
     )
     .get(token) as
     | {

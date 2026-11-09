@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server';
 import { randomBytes } from 'crypto';
 import { getDb, generateId } from '@/lib/db';
+import { assertAccountActive } from '@/lib/security/session-rotate';
+
+export { SessionError, RefreshError, rotateSession } from '@/lib/security/session-rotate';
 
 export interface IssuedSession {
   accessToken: string;
@@ -9,13 +12,21 @@ export interface IssuedSession {
   user: Record<string, unknown>;
 }
 
-/** Create a durable session row and return the tokens for the client. */
+/**
+ * Create a durable session row and return the tokens for the client.
+ *
+ * Refuses to issue a session for an account that is not active, so every
+ * issuance path (password, wallet, social, OTP) shares one fail-closed rule
+ * and a suspended account cannot obtain a working token.
+ */
 export function issueSession(
   request: NextRequest,
   userId: string,
   options: { trustedDevice?: boolean } = {},
 ): IssuedSession {
   const db = getDb();
+  assertAccountActive(userId);
+
   const accessToken = randomBytes(32).toString('hex');
   const refreshToken = randomBytes(32).toString('hex');
   const ttlMs = options.trustedDevice ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;

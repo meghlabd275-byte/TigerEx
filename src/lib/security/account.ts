@@ -282,7 +282,7 @@ export function listSessions(userId: string, currentToken: string | null): Sessi
       `SELECT session_id, device_id, user_agent, ip_address, access_token,
               created_at, last_active_at, expires_at, trusted
          FROM sessions
-        WHERE user_id = ? AND expires_at > datetime('now')
+        WHERE user_id = ? AND datetime(expires_at) > datetime('now')
         ORDER BY last_active_at DESC`,
     )
     .all(userId) as Array<{

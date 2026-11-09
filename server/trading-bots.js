@@ -329,7 +329,7 @@ function processSignalBot(bot, config) {
     // Get latest signals for this symbol
     const signals = db.prepare(`
       SELECT * FROM trading_signals
-      WHERE symbol = ? AND expires_at > datetime('now')
+      WHERE symbol = ? AND datetime(expires_at) > datetime('now')
       ORDER BY created_at DESC
       LIMIT 5
     `).all(bot.symbol);

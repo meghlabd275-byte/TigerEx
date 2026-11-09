@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
              u.two_factor_enabled, u.status as user_status, u.created_at, u.last_login_at
       FROM sessions s
       JOIN users u ON s.user_id = u.user_id
-      WHERE s.access_token = ? AND s.expires_at > datetime('now')
+      WHERE s.access_token = ? AND datetime(s.expires_at) > datetime('now')
     `).get(token);
     
     if (!session) {

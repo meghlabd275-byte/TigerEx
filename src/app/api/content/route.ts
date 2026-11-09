@@ -10,7 +10,7 @@ import { NO_STORE } from '@/lib/api/route-guards';
  * backend, so the content an operator publishes is exactly what a visitor sees.
  */
 function publishedBanners(placement: string | null) {
-  const clauses = ["status = 'published'", "(starts_at IS NULL OR starts_at <= datetime('now'))", "(ends_at IS NULL OR ends_at >= datetime('now'))"];
+  const clauses = ["status = 'published'", "(starts_at IS NULL OR datetime(starts_at) <= datetime('now'))", "(ends_at IS NULL OR datetime(ends_at) >= datetime('now'))"];
   const params: string[] = [];
   if (placement) {
     clauses.push('placement = ?');

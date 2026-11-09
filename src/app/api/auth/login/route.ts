@@ -4,6 +4,8 @@ import { isSignInIpAllowed } from '@/lib/security/account';
 import { createNotification } from '@/lib/notifications/inbox';
 import { randomBytes } from 'crypto';
 import { enforceRequestGuards } from '@/lib/api/route-guards';
+import { decryptSecret, verifyTotp } from '@/lib/security/totp';
+import { checkOtp } from '@/lib/security/otp-verify-request';
 
 /**
  * Login API - Production Implementation
@@ -14,7 +16,7 @@ export async function POST(request: NextRequest) {
   if (guard) return guard;
   try {
     const body = await request.json();
-    const { credential, password, rememberMe } = body;
+    const { credential, password, rememberMe, twoFactorCode } = body;
     
     if (!credential || !password) {
       return NextResponse.json(
@@ -57,6 +59,26 @@ export async function POST(request: NextRequest) {
       );
     }
     
+    // A suspended or otherwise inactive account may not open a session, even
+    // with the correct password. The admin console deletes its sessions on
+    // suspension, so this is the second half of that guarantee.
+    if (user.status && user.status !== 'active') {
+      db.prepare(`
+        INSERT INTO login_attempts (attempt_id, user_id, email, phone, ip_address, success, failure_reason)
+        VALUES (?, ?, ?, ?, ?, 0, 'account_inactive')
+      `).run(
+        generateId(),
+        user.user_id,
+        isEmail ? credential.toLowerCase() : null,
+        isEmail ? null : credential,
+        request.headers.get('x-forwarded-for') || 'unknown',
+      );
+      return NextResponse.json(
+        { success: false, message: 'This account is not active. Contact support.' },
+        { status: 403 },
+      );
+    }
+
     // Check if account is locked
     if (user.locked_until) {
       const lockTime = new Date(user.locked_until as string);
@@ -145,6 +167,26 @@ export async function POST(request: NextRequest) {
 
     // Check if 2FA is enabled
     if (user.two_factor_enabled) {
+      // A second factor supplied with the password completes sign-in here.
+      // Otherwise a short-lived temporary session is issued for the client to
+      // finish verification against.
+      const submittedCode = String(twoFactorCode ?? '').trim();
+      let secondFactorOk = false;
+      if (submittedCode) {
+        if (!user.two_factor_type || user.two_factor_type === 'totp') {
+          if (user.two_factor_secret) {
+            try {
+              secondFactorOk = verifyTotp(decryptSecret(user.two_factor_secret), submittedCode);
+            } catch {
+              secondFactorOk = false;
+            }
+          }
+        } else if (user.two_factor_type === 'email' || user.two_factor_type === 'sms') {
+          secondFactorOk = checkOtp('login', credential, submittedCode).ok;
+        }
+      }
+
+      if (!secondFactorOk) {
       // Generate temp token for 2FA verification
       const tempToken = randomBytes(32).toString('hex');
       const tempExpiry = new Date(Date.now() + 10 * 60 * 1000).toISOString();
@@ -169,6 +211,7 @@ export async function POST(request: NextRequest) {
         tempToken: tempToken,
         message: '2FA verification required',
       });
+      }
     }
     
     // Generate tokens

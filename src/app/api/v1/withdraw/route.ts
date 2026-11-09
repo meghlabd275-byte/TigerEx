@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { requireApiKey, v1Error, v1Ok } from '@/lib/api/v1-guard';
+import { getDb } from '@/lib/db';
 import { usdPrice } from '@/lib/db/portfolio';
 import { withdrawalPolicy, createWithdrawal, WithdrawalError } from '@/lib/wallet/withdrawals';
 import { LedgerError } from '@/lib/db/ledger';
@@ -10,7 +11,8 @@ import { LedgerError } from '@/lib/db/ledger';
  * Requires the `withdraw` permission. The amount plus the fee is locked against
  * the real balance and the request is queued for operator approval; nothing is
  * broadcast here, and the API key's owner is the only account that can be
- * debited.
+ * debited. The owner's verified KYC level is read from the account, never
+ * assumed, so the API path cannot bypass a withdrawal limit.
  */
 export async function POST(request: NextRequest) {
   const body = await request.text();
@@ -41,10 +43,16 @@ export async function POST(request: NextRequest) {
   const policy = withdrawalPolicy(coin, network);
   if (!policy) return v1Error('CHAIN_NOT_CONFIGURED', `Withdrawals of ${coin} on ${network} are not enabled`, 409);
 
+  const account = getDb()
+    .prepare('SELECT kyc_level FROM users WHERE user_id = ?')
+    .get(auth.identity.userId) as { kyc_level: string | null } | undefined;
+  if (!account) return v1Error('UNAUTHORIZED', 'The API key owner no longer exists', 401);
+  const kycLevel = account.kyc_level ?? 'none';
+
   try {
     const result = createWithdrawal({
       userId: auth.identity.userId,
-      kycLevel: '0',
+      kycLevel,
       asset: coin,
       network,
       amount,

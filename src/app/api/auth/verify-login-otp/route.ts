@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkOtp } from '@/lib/security/otp-verify-request';
 import { readJson } from '@/lib/security/otp-request';
-import { issueSession } from '@/lib/security/session-issue';
+import { issueSession, SessionError } from '@/lib/security/session-issue';
 import { enforceRequestGuards } from '@/lib/api/route-guards';
 
 /**
@@ -38,6 +38,12 @@ export async function POST(request: NextRequest) {
       user: session.user,
     });
   } catch (error) {
+    if (error instanceof SessionError) {
+      return NextResponse.json(
+        { success: false, error: { code: error.code, message: error.message } },
+        { status: error.status },
+      );
+    }
     console.error('Verify login OTP error:', error);
     return NextResponse.json(
       { success: false, error: { code: 'INTERNAL_ERROR', message: 'Verification failed' } },
