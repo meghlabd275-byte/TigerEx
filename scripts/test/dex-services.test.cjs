@@ -486,6 +486,30 @@ test('funding moves collateral between the two sides of a market', () => {
   assert.equal(lockedBalance(short, 'RUSD'), 0);
 });
 
+test('a payer that cannot cover its funding is liquidated and the transfer stays zero-sum', () => {
+  const long = seedUser();
+  const short = seedUser();
+  // The long posts the minimum margin at a high leverage, so its funding charge
+  // exceeds its collateral; the short is fully funded.
+  credit(long, 'RUSD', 100000);
+  credit(short, 'RUSD', 100000);
+  const symbol = listPerp('FUNDX', 100);
+  const longPos = openPosition({ userId: long, symbol, side: 'long', size: 100, leverage: 100 });
+  openPosition({ userId: short, symbol, side: 'short', size: 1, leverage: 10 });
+
+  const shortBefore = lockedBalance(short, 'RUSD');
+  const paid = applyFunding(symbol, 0.05);
+  const shortAfter = lockedBalance(short, 'RUSD');
+
+  // The payer was liquidated, so it contributed nothing to the funding pool and
+  // the receiver is credited only that: the old path paid the receiver in full
+  // and minted the shortfall as locked balance out of nothing.
+  assert.equal(paid, 0, 'a liquidated payer contributes nothing');
+  assert.equal(shortAfter, shortBefore, 'the receiver is credited only what the payer contributed');
+  const longRow = db.prepare('SELECT status FROM dex_perp_positions WHERE position_id = ?').get(longPos.positionId);
+  assert.equal(longRow.status, 'liquidated', 'an insolvent payer is liquidated');
+});
+
 test('the keeper liquidates using the market own maintenance margin', () => {
   const trader = seedUser();
   credit(trader, 'RUSD', 100000);

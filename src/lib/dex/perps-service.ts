@@ -276,14 +276,15 @@ function loadPosition(userId: string, positionId: string): PositionRow {
  * margin is charged, then every receiver is credited. The two passes move the
  * same total, so funding is zero-sum and the reservations still add up to the
  * collateral on each position. A payer whose margin cannot cover its payment is
- * liquidated rather than allowed to go negative.
+ * liquidated and contributes nothing; the receivers are then paid pro-rata out
+ * of what the payers actually gave up, so a liquidation can never mint locked
+ * balance for the surviving side.
  */
 export function applyFunding(symbol: string, rate: number): number {
   if (!Number.isFinite(rate)) throw new DexError('INVALID_RATE', 'funding rate must be finite', 400);
   const positions = getDb()
     .prepare("SELECT * FROM dex_perp_positions WHERE market = ? AND status = 'open'")
     .all(symbol.toUpperCase()) as PositionRow[];
-  let total = 0;
 
   // Work out each position's signed payment and the mark it was struck at.
   const plan = positions.map((position) => {
@@ -295,10 +296,15 @@ export function applyFunding(symbol: string, rate: number): number {
     return { position, mark, signed };
   });
 
+  let collected = 0;
+
   getDb().transaction(() => {
     const payers = plan.filter((entry) => entry.signed < 0);
     const receivers = plan.filter((entry) => entry.signed > 0);
 
+    // Pass one: charge every payer, liquidating one that cannot cover the
+    // payment. `collected` is what actually left the payers' reservations, which
+    // is the only amount the receivers may be paid.
     for (const entry of payers) {
       const charge = Math.min(-entry.signed, entry.position.collateral);
       if (entry.position.collateral - charge <= 0) {
@@ -309,17 +315,29 @@ export function applyFunding(symbol: string, rate: number): number {
       getDb()
         .prepare('UPDATE dex_perp_positions SET collateral = collateral - ? WHERE position_id = ?')
         .run(charge, entry.position.position_id);
-      total += charge;
+      collected += charge;
     }
 
-    for (const entry of receivers) {
-      creditLocked(entry.position.user_id, entry.position.collateral_asset, entry.signed);
-      getDb()
-        .prepare('UPDATE dex_perp_positions SET collateral = collateral + ? WHERE position_id = ?')
-        .run(entry.signed, entry.position.position_id);
+    // Pass two: pay the receivers pro-rata out of `collected`. When every payer
+    // paid, this is exactly the planned amount; when a payer was liquidated the
+    // pool is smaller and the receivers share it.
+    const wanted = receivers.reduce((sum, entry) => sum + entry.signed, 0);
+    if (collected > 0 && wanted > 0) {
+      let paid = 0;
+      receivers.forEach((entry, index) => {
+        // The last receiver takes the remainder so the parts always sum to
+        // `collected` exactly, however the division rounds.
+        const amount = index === receivers.length - 1 ? collected - paid : (collected * entry.signed) / wanted;
+        if (amount <= 0) return;
+        creditLocked(entry.position.user_id, entry.position.collateral_asset, amount);
+        getDb()
+          .prepare('UPDATE dex_perp_positions SET collateral = collateral + ? WHERE position_id = ?')
+          .run(amount, entry.position.position_id);
+        paid += amount;
+      });
     }
   })();
-  return total;
+  return collected;
 }
 
 export interface LiquidationResult {
