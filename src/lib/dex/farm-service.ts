@@ -18,6 +18,9 @@ import {
   assertDexOpen,
   assertNotBlacklisted,
   creditTreasury,
+  creditFund,
+  debitFund,
+  fundBalance,
 } from '@/lib/dex/pool-service';
 import {
   accrueFarm,
@@ -94,28 +97,16 @@ const REWARD_FUND = 'dex_farm_rewards';
 
 /** The balance of a farm's reward account for one asset. */
 export function rewardFundBalance(asset: string): number {
-  const row = getDb()
-    .prepare("SELECT balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
-    .get(asset.toUpperCase(), REWARD_FUND) as { balance: number } | undefined;
-  return Number(row?.balance) || 0;
+  return fundBalance(REWARD_FUND, asset);
 }
 
 /** Move an amount into a farm's reward account, creating it on first use. */
 export function fundFarmRewards(asset: string, amount: number): void {
-  if (!Number.isFinite(amount) || amount <= 0) throw new DexError('INVALID_AMOUNT', 'amount must be positive', 400);
-  creditTreasury(asset, amount, REWARD_FUND);
+  creditFund(REWARD_FUND, asset, amount);
 }
 
 function debitRewardFund(asset: string, amount: number): void {
-  if (amount <= 0) return;
-  const db = getDb();
-  const row = db
-    .prepare("SELECT account_id, balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
-    .get(asset.toUpperCase(), REWARD_FUND) as { account_id: string; balance: number } | undefined;
-  if (!row || Number(row.balance) + 1e-9 < amount) {
-    throw new DexError('REWARD_FUND_EMPTY', `the ${asset} farm reward fund cannot cover ${amount}`, 409);
-  }
-  db.prepare("UPDATE treasury_accounts SET balance = balance - ?, updated_at = datetime('now') WHERE account_id = ?").run(amount, row.account_id);
+  debitFund(REWARD_FUND, asset, amount);
 }
 
 interface RewardSettlement {

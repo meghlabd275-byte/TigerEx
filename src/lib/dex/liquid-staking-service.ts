@@ -14,7 +14,14 @@
 import { getDb, generateId } from '@/lib/db';
 import { debitAvailable, creditAvailable, availableBalance, covers, recordTransaction } from '@/lib/db/ledger';
 import { AmmError } from '@/lib/dex/amm';
-import { DexError, assertDexOpen, recordDexRevenue } from '@/lib/dex/pool-service';
+import {
+  DexError,
+  assertDexOpen,
+  recordDexRevenue,
+  creditFund,
+  debitFund,
+  fundBalance,
+} from '@/lib/dex/pool-service';
 import {
   exchangeRate,
   sharesForStake,
@@ -207,9 +214,11 @@ export interface DistributeResult {
 /**
  * Distribute staking rewards, raising the exchange rate.
  *
- * The rewards are real tokens the operator has moved into the pool; the function
- * only records them, and refuses when no stTGR is outstanding so it can never
- * mint value for a first depositor out of nothing.
+ * The rewards are real tokens: they are drawn from the liquid-staking reward
+ * account, which an operator funds with `fundLiquidStakingRewards`, so the pool
+ * can only pay what it actually holds and can never raise the rate out of
+ * nothing. The account is keyed to the pool's stake token, so each token has its
+ * own funded pool. It refuses when no stTGR is outstanding.
  */
 export function distributeRewards(stakeId: string, rewards: number): DistributeResult {
   const row = loadStake(stakeId);
@@ -226,11 +235,31 @@ export function distributeRewards(stakeId: string, rewards: number): DistributeR
     throw new DexError('INVALID_REWARDS', (error as AmmError).message, 409);
   }
 
-  getDb()
-    .prepare("UPDATE dex_liquid_staking SET total_staked = ?, updated_at = datetime('now') WHERE stake_id = ?")
-    .run(result.totalStaked, stakeId);
+  getDb().transaction(() => {
+    // The reward account must hold the tokens before the rate can rise; a short
+    // account fails closed rather than minting the difference.
+    debitFund(liquidRewardAccount(row.stake_token), row.stake_token, amount);
+    getDb()
+      .prepare("UPDATE dex_liquid_staking SET total_staked = ?, updated_at = datetime('now') WHERE stake_id = ?")
+      .run(result.totalStaked, stakeId);
+  })();
 
   return { stakeId, rewards: amount, previousRate: result.previousRate, rate: result.rate };
+}
+
+/** The reward account that funds a stake token's liquid-staking pool. */
+export function liquidRewardAccount(stakeToken: string): string {
+  return `dex_liquid_staking_rewards:${stakeToken.toUpperCase()}`;
+}
+
+/** Move tokens into a stake token's liquid-staking reward account. */
+export function fundLiquidStakingRewards(stakeToken: string, amount: number): void {
+  creditFund(liquidRewardAccount(stakeToken), stakeToken, amount);
+}
+
+/** The balance available to distribute for a stake token. */
+export function liquidRewardBalance(stakeToken: string): number {
+  return fundBalance(liquidRewardAccount(stakeToken), stakeToken);
 }
 
 /** A user's stTGR positions with the current rate and redemption value. */

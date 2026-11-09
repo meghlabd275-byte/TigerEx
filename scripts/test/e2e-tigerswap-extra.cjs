@@ -196,6 +196,20 @@ async function main() {
     assert.equal(deposit.json.deposit.shares, 1000, 'the first deposit must mint one share per asset');
     record('vault deposit mints shares', true);
 
+    const unfundedHarvest = await request('PATCH', '/api/admin/dex/vaults', {
+      token: adminToken,
+      body: { vaultId, rewardAmount: 100, assetsAdded: 100 },
+    });
+    assert.equal(unfundedHarvest.status, 409, 'an unfunded harvest must fail closed');
+    record('a harvest without a funded reward account is refused', true);
+
+    const fundVault = await request('PATCH', '/api/admin/dex/vaults', {
+      token: adminToken,
+      body: { vaultId, action: 'fund-rewards', asset: 'TGR', amount: 100 },
+    });
+    assert.equal(fundVault.status, 201, `vault funding failed: ${JSON.stringify(fundVault.json)}`);
+    record('admin funds the vault reward account', true);
+
     const harvest = await request('PATCH', '/api/admin/dex/vaults', {
       token: adminToken,
       body: { vaultId, rewardAmount: 100, assetsAdded: 100 },
@@ -248,6 +262,13 @@ async function main() {
     assert.equal(staked.status, 201, `stake failed: ${JSON.stringify(staked.json)}`);
     assert.equal(staked.json.stake.shares, 1000, 'the first stake must mint one share per token');
     record('trader stakes TGR for stTGR', true);
+
+    const fundRewards = await request('PATCH', '/api/admin/dex/liquid-staking', {
+      token: adminToken,
+      body: { action: 'fund-rewards', stakeToken: 'TGR', amount: 100 },
+    });
+    assert.equal(fundRewards.status, 201, `reward funding failed: ${JSON.stringify(fundRewards.json)}`);
+    record('admin funds the liquid-staking reward account', true);
 
     const rewards = await request('PATCH', '/api/admin/dex/liquid-staking', {
       token: adminToken,

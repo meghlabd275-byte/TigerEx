@@ -3,7 +3,7 @@ import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { validateLiquidStakingInput } from '@/lib/dex/validation';
 import { dexFailure } from '@/lib/dex/route-helpers';
-import { listLiquidStaking, distributeRewards } from '@/lib/dex/liquid-staking-service';
+import { listLiquidStaking, distributeRewards, fundLiquidStakingRewards, liquidRewardBalance } from '@/lib/dex/liquid-staking-service';
 
 export const dynamic = 'force-dynamic';
 
@@ -99,7 +99,7 @@ export async function PUT(request: NextRequest) {
   return NextResponse.json({ success: true });
 }
 
-/** Distribute staking rewards, raising the exchange rate. */
+/** Fund a pool's reward account, or distribute rewards to raise the rate. */
 export async function PATCH(request: NextRequest) {
   const auth = await requireAdmin(request);
   if ('error' in auth) return auth.error;
@@ -109,6 +109,25 @@ export async function PATCH(request: NextRequest) {
     body = (await request.json()) as Record<string, unknown>;
   } catch {
     return fail('INVALID_BODY', 'A JSON body is required');
+  }
+
+  // Rewards are real tokens: the operator funds the reward account first, then
+  // distributes from it. Distribution fails closed when the account is short.
+  if (String(body.action ?? '').toLowerCase() === 'fund-rewards') {
+    const stakeToken = String(body.stakeToken ?? '').trim().toUpperCase();
+    if (!stakeToken) return fail('VALIDATION_FAILED', 'stakeToken is required');
+    try {
+      fundLiquidStakingRewards(stakeToken, Number(body.amount ?? 0));
+    } catch (error) {
+      const dexError = error as { code?: string; message?: string; status?: number };
+      return fail(dexError.code ?? 'INVALID_AMOUNT', dexError.message ?? 'could not fund rewards', dexError.status ?? 400);
+    }
+    recordAdminAction(request, auth.admin, 'dex.liquid_staking.fund', {
+      type: 'dex_liquid_staking_reward',
+      id: stakeToken,
+      detail: { stakeToken, amount: Number(body.amount ?? 0) },
+    });
+    return NextResponse.json({ success: true, stakeToken, balance: liquidRewardBalance(stakeToken) }, { status: 201 });
   }
 
   const stakeId = String(body.stakeId ?? '');

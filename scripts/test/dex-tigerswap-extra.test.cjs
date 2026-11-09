@@ -435,8 +435,8 @@ test('vault deposit and withdrawal move real balances and preserve the price', (
   assert.equal(vaultDetail(vaultId).totalSupply, 0, 'all shares must be burned');
 });
 
-test('a harvest raises the vault share price without minting shares', () => {
-  const { depositVault, harvestVault, vaultDetail } = require('../../.test-build/vault-service.js');
+test('a harvest raises the vault share price from funded rewards, not minted value', () => {
+  const { depositVault, harvestVault, vaultDetail, fundVaultRewards } = require('../../.test-build/vault-service.js');
   const userId = seedUser();
   seedBalance(userId, 'TGR', 1000);
 
@@ -448,6 +448,15 @@ test('a harvest raises the vault share price without minting shares', () => {
 
   depositVault(userId, vaultId, 1000);
   const before = vaultDetail(vaultId).sharePrice;
+
+  // The gain must be funded before it can be compounded; an unfunded harvest
+  // must fail closed instead of minting the assets into the vault.
+  assert.throws(
+    () => harvestVault(vaultId, 100, 100),
+    (error) => error.code === 'REWARD_FUND_EMPTY',
+  );
+
+  fundVaultRewards(vaultId, 'TGR', 100);
   const harvest = harvestVault(vaultId, 100, 100);
   const after = vaultDetail(vaultId);
 
@@ -462,8 +471,8 @@ test('a harvest raises the vault share price without minting shares', () => {
   assert.ok(revenue && Math.abs(revenue.amount - 10) < 1e-9, 'the performance fee must be recorded');
 });
 
-test('liquid staking moves real balances and raises the rate on rewards', () => {
-  const { stakeLiquid, unstakeLiquid, distributeRewards, liquidStakeDetail } = require('../../.test-build/liquid-staking-service.js');
+test('liquid staking moves real balances and raises the rate on funded rewards', () => {
+  const { stakeLiquid, unstakeLiquid, distributeRewards, liquidStakeDetail, fundLiquidStakingRewards } = require('../../.test-build/liquid-staking-service.js');
   const userId = seedUser();
   seedBalance(userId, 'TGR', 1000);
 
@@ -477,6 +486,11 @@ test('liquid staking moves real balances and raises the rate on rewards', () => 
   assert.equal(staked.shares, 500, 'the first stake is one share per token');
   assert.equal(availableBalance(userId, 'TGR'), 500);
 
+  // Rewards are real tokens: the account must be funded before the rate can
+  // rise. Distributing from an empty account must fail closed.
+  assert.throws(() => distributeRewards(stakeId, 50), (error) => error.code === 'REWARD_FUND_EMPTY');
+
+  fundLiquidStakingRewards('TGR', 50);
   distributeRewards(stakeId, 50);
   const detail = liquidStakeDetail(stakeId);
   assert.ok(Math.abs(detail.exchangeRate - 1.1) < 1e-9, `rate should be 1.1, got ${detail.exchangeRate}`);

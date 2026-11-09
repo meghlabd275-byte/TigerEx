@@ -14,7 +14,15 @@
 import { getDb, generateId } from '@/lib/db';
 import { debitAvailable, creditAvailable, availableBalance, covers, recordTransaction } from '@/lib/db/ledger';
 import { AmmError } from '@/lib/dex/amm';
-import { DexError, dexSetting, assertDexOpen, recordDexRevenue } from '@/lib/dex/pool-service';
+import {
+  DexError,
+  dexSetting,
+  assertDexOpen,
+  recordDexRevenue,
+  creditFund,
+  debitFund,
+  fundBalance,
+} from '@/lib/dex/pool-service';
 import {
   assetsPerShare,
   sharesForDeposit,
@@ -211,11 +219,12 @@ export interface HarvestResult {
 }
 
 /**
- * Compound the rewards the vault is holding.
+ * Record a harvest that compounds a real, funded gain into the vault.
  *
- * `rewardAmount` and `assetsAdded` are what the strategy actually harvested and
- * swapped, so the accounting is driven by real token movement rather than by a
- * projected rate. The performance fee is taken from the gain and credited to the
+ * The vault must hold the staked-token gain before the share price can rise:
+ * the strategy funds the vault's harvest account with `fundVaultRewards`, and a
+ * harvest larger than that account fails closed rather than minting assets out
+ * of nothing. The performance fee is taken from the gain and credited to the
  * treasury; the remainder lifts the share price for every holder. A harvest
  * below the vault's minimum is skipped rather than executed at a loss.
  */
@@ -247,6 +256,10 @@ export function harvestVault(vaultId: string, rewardAmount: number, assetsAdded:
   const db = getDb();
   const sharePrice = compound.totalAssets / (state.totalSupply || 1);
   db.transaction(() => {
+    // The whole gain must be funded before it can be split; a short account
+    // fails closed rather than minting the difference. `added` is drawn out,
+    // `net` compounds into the vault and `fee` is credited to the treasury.
+    debitFund(vaultRewardAccount(vaultId), row.staked_token, added);
     db.prepare(
       "UPDATE dex_vaults SET total_assets = total_assets + ?, updated_at = datetime('now') WHERE vault_id = ?",
     ).run(net, vaultId);
@@ -263,6 +276,21 @@ export function harvestVault(vaultId: string, rewardAmount: number, assetsAdded:
   })();
 
   return { vaultId, rewardSold: usable, assetsAdded: net, performanceFee: fee, sharePrice, skipped: false };
+}
+
+/** The harvest account that funds a vault's compounded gains. */
+export function vaultRewardAccount(vaultId: string): string {
+  return `dex_vault_harvest:${vaultId}`;
+}
+
+/** Move staked tokens into a vault's harvest account, creating it on first use. */
+export function fundVaultRewards(vaultId: string, asset: string, amount: number): void {
+  creditFund(vaultRewardAccount(vaultId), asset, amount);
+}
+
+/** The balance available to compound into a vault. */
+export function vaultRewardBalance(vaultId: string, asset: string): number {
+  return fundBalance(vaultRewardAccount(vaultId), asset);
 }
 
 /** A user's vault positions with the vault's current share price. */

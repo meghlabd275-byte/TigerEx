@@ -3,7 +3,7 @@ import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { validateVaultInput } from '@/lib/dex/validation';
 import { dexFailure } from '@/lib/dex/route-helpers';
-import { harvestVault, listVaults } from '@/lib/dex/vault-service';
+import { harvestVault, listVaults, fundVaultRewards, vaultRewardBalance } from '@/lib/dex/vault-service';
 
 export const dynamic = 'force-dynamic';
 
@@ -117,11 +117,11 @@ export async function PUT(request: NextRequest) {
 }
 
 /**
- * Record a harvest.
+ * Fund a vault's harvest account, or record a harvest.
  *
- * The reward and asset figures are supplied by the operator's strategy, which
- * has already sold the rewards into the staked token. The service refuses a
- * negative gain, so a losing strategy cannot be hidden inside the share price.
+ * A harvest compounds a real, funded gain into the vault. The operator first
+ * funds the harvest account; the service refuses a harvest larger than the
+ * account holds, so the share price can never be lifted with minted value.
  */
 export async function PATCH(request: NextRequest) {
   const auth = await requireAdmin(request);
@@ -135,6 +135,20 @@ export async function PATCH(request: NextRequest) {
   }
 
   const vaultId = String(body.vaultId ?? '');
+  if (String(body.action ?? '').toLowerCase() === 'fund-rewards') {
+    const asset = String(body.asset ?? '').trim().toUpperCase();
+    if (!vaultId) return fail('VALIDATION_FAILED', 'vaultId is required');
+    if (!asset) return fail('VALIDATION_FAILED', 'asset is required');
+    try {
+      fundVaultRewards(vaultId, asset, Number(body.amount ?? 0));
+    } catch (error) {
+      const dexError = error as { code?: string; message?: string; status?: number };
+      return fail(dexError.code ?? 'INVALID_AMOUNT', dexError.message ?? 'could not fund rewards', dexError.status ?? 400);
+    }
+    recordAdminAction(request, auth.admin, 'dex.vault.fund', { type: 'dex_vault_reward', id: vaultId, detail: { asset, amount: Number(body.amount ?? 0) } });
+    return NextResponse.json({ success: true, vaultId, balance: vaultRewardBalance(vaultId, asset) }, { status: 201 });
+  }
+
   try {
     const result = harvestVault(vaultId, Number(body.rewardAmount ?? 0), Number(body.assetsAdded ?? 0));
     recordAdminAction(request, auth.admin, 'dex.vault.harvest', { type: 'dex_vault', id: vaultId, detail: result });

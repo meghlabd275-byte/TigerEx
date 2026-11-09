@@ -372,6 +372,38 @@ export function creditTreasury(asset: string, amount: number, accountType: strin
     .run(generateId(), asset, accountType, amount, amount);
 }
 
+/**
+ * The balance of a protocol reward account.
+ *
+ * A reward pool may only pay out what it holds, so the balance is the gate every
+ * settlement consults rather than an advisory figure.
+ */
+export function fundBalance(accountType: string, asset: string): number {
+  const row = getDb()
+    .prepare("SELECT balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
+    .get(asset.toUpperCase(), accountType) as { balance: number } | undefined;
+  return Number(row?.balance) || 0;
+}
+
+/** Move an amount into a protocol reward account, creating it on first use. */
+export function creditFund(accountType: string, asset: string, amount: number): void {
+  if (!Number.isFinite(amount) || amount <= 0) throw new DexError('INVALID_AMOUNT', 'amount must be positive', 400);
+  creditTreasury(asset, amount, accountType);
+}
+
+/** Draw an amount out of a protocol reward account, failing closed when short. */
+export function debitFund(accountType: string, asset: string, amount: number): void {
+  if (amount <= 0) return;
+  const db = getDb();
+  const row = db
+    .prepare("SELECT account_id, balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
+    .get(asset.toUpperCase(), accountType) as { account_id: string; balance: number } | undefined;
+  if (!row || Number(row.balance) + 1e-9 < amount) {
+    throw new DexError('REWARD_FUND_EMPTY', `the ${asset} reward fund cannot cover ${amount}`, 409);
+  }
+  db.prepare("UPDATE treasury_accounts SET balance = balance - ?, updated_at = datetime('now') WHERE account_id = ?").run(amount, row.account_id);
+}
+
 /** Read a numeric protocol setting, falling back to a documented default. */
 export function dexSetting(key: string, fallback: number): number {
   const row = getDb().prepare('SELECT value FROM system_settings WHERE key = ?').get(key) as
