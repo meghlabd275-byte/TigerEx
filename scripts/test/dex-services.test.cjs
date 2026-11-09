@@ -133,6 +133,43 @@ test('a swap moves real balances and grows the input reserve', () => {
   assert.ok(Math.abs(reserves.TGR - (1000000 - quote.amountOut)) < 1e-6);
 });
 
+test('a settlement fee is taken from the output, not minted into the treasury', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  createPool('v2', ['RUSD', 'TGR'], { RUSD: 1000000, TGR: 1000000 });
+
+  const previous = db.prepare("SELECT value FROM system_settings WHERE key = 'dex_settlement_fee_bps'").get();
+  db.prepare(
+    "INSERT INTO system_settings (key, value, category) VALUES ('dex_settlement_fee_bps', '100', 'dex') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  ).run();
+  try {
+    const quote = quoteSwap({ tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000 });
+    const settlementFee = quote.amountOut * 0.01;
+    const treasuryBefore = Number(
+      db.prepare("SELECT balance FROM treasury_accounts WHERE asset = 'TGR' AND account_type = 'dex_treasury'").get()?.balance ?? 0,
+    );
+
+    executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000 });
+
+    // The protocol fee must come out of the trader's output. If it is only
+    // credited to the treasury, the treasury is funded with tokens nobody paid.
+    assert.ok(
+      Math.abs(availableBalance(user, 'TGR') - (quote.amountOut - settlementFee)) < 1e-6,
+      `the trader keeps the output net of the settlement fee, got ${availableBalance(user, 'TGR')}`,
+    );
+    const treasuryAfter = Number(
+      db.prepare("SELECT balance FROM treasury_accounts WHERE asset = 'TGR' AND account_type = 'dex_treasury'").get()?.balance ?? 0,
+    );
+    assert.ok(Math.abs(treasuryAfter - (treasuryBefore + settlementFee)) < 1e-6, 'the treasury receives exactly the fee');
+  } finally {
+    if (previous) {
+      db.prepare("UPDATE system_settings SET value = ? WHERE key = 'dex_settlement_fee_bps'").run(previous.value);
+    } else {
+      db.prepare("DELETE FROM system_settings WHERE key = 'dex_settlement_fee_bps'").run();
+    }
+  }
+});
+
 test('a swap without the input balance is refused and moves nothing', () => {
   const user = seedUser();
   createPool('v2', ['RUSD', 'SOL'], { RUSD: 1000000, SOL: 10000 });

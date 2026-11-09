@@ -285,7 +285,12 @@ export function executeSwap(request: SwapRequest): SwapResult {
     }
 
     debitAvailable(request.userId, quote.tokenIn, input);
-    creditAvailable(request.userId, quote.tokenOut, output);
+    // The protocol settlement fee is withheld from the output before it reaches
+    // the trader, so the treasury is credited only tokens the trader gave up.
+    // Crediting the full output and then booking the fee as revenue would fund
+    // the treasury with value nobody paid.
+    const settlementFee = settlementFeeBps > 0 ? (output * settlementFeeBps) / 10_000 : 0;
+    creditAvailable(request.userId, quote.tokenOut, output - settlementFee);
     recordTransaction(request.userId, 'dex_swap', quote.tokenIn, input, quote.fee, 'completed', `swap ${swapId}`);
 
     const deltas = new Map<string, Array<{ tokenIn: string; tokenOut: string; amountIn: number; amountOut: number }>>();
@@ -312,8 +317,7 @@ export function executeSwap(request: SwapRequest): SwapResult {
       refreshPoolStats(hop.poolId);
     }
 
-    if (settlementFeeBps > 0) {
-      const settlementFee = (output * settlementFeeBps) / 10_000;
+    if (settlementFee > 0) {
       const parts = applySchedule(settlementFee, { lpBps: 0, vetgrBps: 0, treasuryBps: 10_000, insuranceBps: 0, burnBps: 0 });
       recordDexRevenue('dex_settlement', quote.tokenOut, settlementFee, parts, swapId);
     }
