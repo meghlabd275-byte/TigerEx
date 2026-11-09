@@ -367,13 +367,12 @@ export function liquidateBorrow(liquidatorId: string, marketId: string, position
       .prepare("UPDATE dex_lending_markets SET total_borrow = total_borrow - ? WHERE market_id = ?")
       .run(result.debtRepaid, market.market_id);
 
-    // The seized collateral leaves the borrower's locked balance.
+    // The seized collateral leaves the borrower's locked balance. It is not
+    // booked as protocol revenue: the bonus is the liquidator's whole reward and
+    // was already credited to them above, so booking it again would credit the
+    // treasury collateral that nobody gave up.
     unlockAvailable(position.user_id, collateral, collateralSeized);
 
-    if (bonus > 0) {
-      const parts = applySchedule(bonus, { lpBps: 0, vetgrBps: 0, treasuryBps: 10_000, insuranceBps: 0, burnBps: 0 });
-      recordDexRevenue('dex_margin_liquidation', collateral, bonus, parts, positionId);
-    }
     return { positionId, debtRepaid: result.debtRepaid, collateralSeized, bonus };
   })() as LiquidateResult;
 }

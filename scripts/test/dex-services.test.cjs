@@ -740,6 +740,37 @@ test('a liquidation seizes collateral worth the debt repaid plus the bonus, not 
   assert.equal(lockedBalance(borrower, 'ETH'), 10 - 5.25);
 });
 
+test('a margin liquidation does not also pay the liquidator bonus into the treasury', () => {
+  const lender = seedUser();
+  const borrower = seedUser();
+  const liquidator = seedUser();
+  credit(lender, 'RUSD', 100000);
+  credit(borrower, 'AVAX', 10);
+  credit(liquidator, 'RUSD', 100000);
+  createLendingMarket('RUSD');
+  createLendingMarket('AVAX', 0.7, 0.75);
+  listPair('AVAX', 2000);
+  supply(lender, 'RUSD', 100000);
+  borrow(borrower, 'RUSD', 10000, 'AVAX', 10);
+  db.prepare('UPDATE market_data SET price = 1000 WHERE symbol = ?').run('AVAX/RUSD');
+  const position = db.prepare('SELECT position_id FROM dex_lending_positions WHERE user_id = ?').get(borrower);
+
+  const treasuryBefore = Number(
+    db.prepare("SELECT balance FROM treasury_accounts WHERE asset = 'AVAX' AND account_type = 'dex_treasury'").get()?.balance ?? 0,
+  );
+  const result = liquidateBorrow(liquidator, createLendingMarket('RUSD'), position.position_id, 'AVAX');
+
+  // The whole seized collateral, bonus included, is the liquidator's reward. It
+  // must not also be booked as treasury revenue, which would credit the
+  // treasury collateral nobody gave up.
+  const treasuryAfter = Number(
+    db.prepare("SELECT balance FROM treasury_accounts WHERE asset = 'AVAX' AND account_type = 'dex_treasury'").get()?.balance ?? 0,
+  );
+  assert.ok(result.bonus > 0, 'the liquidation pays the liquidator a bonus');
+  assert.equal(treasuryAfter, treasuryBefore, 'the liquidator bonus must not be minted into the treasury');
+  assert.equal(availableBalance(liquidator, 'AVAX'), result.collateralSeized);
+});
+
 // ---------------------------------------------------------------------------
 // Launchpad, NFT and bridge
 // ---------------------------------------------------------------------------
