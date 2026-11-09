@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb, verifyPassword, generateToken, generateId, hashPassword } from '@/lib/db';
+import { getDb, verifyPassword, generateId } from '@/lib/db';
 import { isSignInIpAllowed } from '@/lib/security/account';
 import { createNotification } from '@/lib/notifications/inbox';
 import { randomBytes } from 'crypto';
 import { enforceRequestGuards } from '@/lib/api/route-guards';
 import { decryptSecret, verifyTotp } from '@/lib/security/totp';
 import { checkOtp } from '@/lib/security/otp-verify-request';
+import { createLoginChallenge } from '@/lib/security/login-challenge';
 
 /**
  * Login API - Production Implementation
@@ -16,7 +17,10 @@ export async function POST(request: NextRequest) {
   if (guard) return guard;
   try {
     const body = await request.json();
-    const { credential, password, rememberMe, twoFactorCode } = body;
+    // `emailOrPhone` is the name the client sends; `credential` is accepted too
+    // so existing API clients are not broken.
+    const credential = body.credential ?? body.emailOrPhone;
+    const { password, rememberMe, twoFactorCode } = body;
     
     if (!credential || !password) {
       return NextResponse.json(
@@ -187,28 +191,15 @@ export async function POST(request: NextRequest) {
       }
 
       if (!secondFactorOk) {
-      // Generate temp token for 2FA verification
-      const tempToken = randomBytes(32).toString('hex');
-      const tempExpiry = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-      
-      // Store temp token
-      const sessionId = generateId();
-      db.prepare(`
-        INSERT INTO sessions (session_id, user_id, access_token, expires_at, ip_address, user_agent)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(
-        sessionId,
-        user.user_id,
-        tempToken,
-        tempExpiry,
-        request.headers.get('x-forwarded-for') || 'unknown',
-        request.headers.get('user-agent') || 'unknown'
-      );
-      
+      // Hand back a single-use challenge token for the second step. It is
+      // stored in `login_challenges`, never in `sessions`, so it cannot be
+      // used as a bearer token before the second factor is verified.
+      const challenge = createLoginChallenge(user.user_id);
+
       return NextResponse.json({
         success: true,
         requires2FA: true,
-        tempToken: tempToken,
+        tempToken: challenge.token,
         message: '2FA verification required',
       });
       }

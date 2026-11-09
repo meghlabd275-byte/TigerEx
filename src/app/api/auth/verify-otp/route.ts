@@ -5,20 +5,27 @@ import { readJson } from '@/lib/security/otp-request';
 import { issueSession, SessionError } from '@/lib/security/session-issue';
 import { decryptSecret, verifyTotp } from '@/lib/security/totp';
 import { enforceRequestGuards } from '@/lib/api/route-guards';
+import {
+  requireLoginChallenge,
+  recordChallengeFailure,
+  consumeChallenge,
+  ChallengeError,
+} from '@/lib/security/login-challenge';
 
 /**
  * Second-factor verification for an in-progress login.
  *
- * A temporary session is created by the login route when the password is
- * correct but 2FA is required. This route accepts either an authenticator code
- * (TOTP) or a delivered one-time code, and promotes the temporary session to a
- * full session only after a code is confirmed.
+ * The login route hands the client a single-use challenge token when the
+ * password is correct but 2FA is required. This route accepts either an
+ * authenticator code (TOTP) or a delivered one-time code and issues a durable
+ * session only after a code is confirmed. The challenge token is not a session
+ * and grants nothing on its own.
  */
 export async function POST(request: NextRequest) {
   const guard = enforceRequestGuards(request, 'auth.otp.verify', 10, 60_000);
   if (guard) return guard;
   const body = await readJson(request);
-  const credential = String(body.credential ?? '').trim();
+  const credential = String(body.credential ?? body.emailOrPhone ?? '').trim();
   const otp = String(body.otp ?? '').trim();
   const tempToken = String(body.tempToken ?? '').trim();
 
@@ -30,26 +37,16 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const challenge = requireLoginChallenge(tempToken);
+
     const db = getDb();
-    const session = db
-      .prepare(
-        `SELECT session_id, user_id FROM sessions WHERE access_token = ? AND datetime(expires_at) > datetime('now')`,
-      )
-      .get(tempToken) as { session_id: string; user_id: string } | undefined;
-
-    if (!session) {
-      return NextResponse.json(
-        { success: false, error: { code: 'SESSION_EXPIRED', message: 'Login session has expired. Sign in again.' } },
-        { status: 400 },
-      );
-    }
-
     const user = db
       .prepare('SELECT two_factor_secret, two_factor_enabled, email, phone FROM users WHERE user_id = ?')
-      .get(session.user_id) as
+      .get(challenge.userId) as
       | { two_factor_secret: string | null; two_factor_enabled: number; email: string | null; phone: string | null }
       | undefined;
     if (!user) {
+      consumeChallenge(challenge.challengeId);
       return NextResponse.json(
         { success: false, error: { code: 'NOT_FOUND', message: 'User not found' } },
         { status: 404 },
@@ -57,26 +54,32 @@ export async function POST(request: NextRequest) {
     }
 
     // Authenticator (TOTP) path.
-    let totpOk = false;
+    let verified = false;
     if (user.two_factor_enabled && user.two_factor_secret) {
       try {
-        totpOk = verifyTotp(decryptSecret(user.two_factor_secret), otp);
+        verified = verifyTotp(decryptSecret(user.two_factor_secret), otp);
       } catch {
-        totpOk = false;
+        verified = false;
       }
     }
 
     // Delivered one-time code path.
-    if (!totpOk) {
+    if (!verified) {
       const delivered = checkOtp('login', credential, otp);
-      if ('response' in delivered) {
-        return delivered.response;
-      }
+      verified = !('response' in delivered);
     }
 
-    // Consume the temporary session and issue a full one.
-    db.prepare('DELETE FROM sessions WHERE session_id = ?').run(session.session_id);
-    const full = issueSession(request, session.user_id);
+    if (!verified) {
+      recordChallengeFailure(challenge.challengeId);
+      return NextResponse.json(
+        { success: false, error: { code: 'INVALID_CODE', message: 'Invalid verification code' } },
+        { status: 400 },
+      );
+    }
+
+    // Consume the challenge and issue a durable session.
+    consumeChallenge(challenge.challengeId);
+    const full = issueSession(request, challenge.userId);
 
     return NextResponse.json({
       success: true,
@@ -86,6 +89,12 @@ export async function POST(request: NextRequest) {
       user: full.user,
     });
   } catch (error) {
+    if (error instanceof ChallengeError) {
+      return NextResponse.json(
+        { success: false, error: { code: error.code, message: error.message } },
+        { status: error.status },
+      );
+    }
     if (error instanceof SessionError) {
       return NextResponse.json(
         { success: false, error: { code: error.code, message: error.message } },

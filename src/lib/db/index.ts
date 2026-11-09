@@ -140,6 +140,21 @@ function initializeSchema() {
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
     );
 
+    -- Pending second-factor login challenges.
+    -- A password-correct login with 2FA enabled stores an opaque, single-use
+    -- token here (digest only) instead of in the sessions table, so the token
+    -- can never be used as a bearer credential before the second factor.
+    CREATE TABLE IF NOT EXISTS login_challenges (
+      challenge_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      attempts INTEGER DEFAULT 0,
+      max_attempts INTEGER DEFAULT 5,
+      expires_at TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+    );
+
     -- Login attempts tracking
     CREATE TABLE IF NOT EXISTS login_attempts (
       attempt_id TEXT PRIMARY KEY,
@@ -1876,6 +1891,7 @@ function initializeSchema() {
     CREATE INDEX IF NOT EXISTS idx_card_transactions_user ON card_transactions(user_id);
     CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_login_challenges_user ON login_challenges(user_id);
     CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email);
     CREATE INDEX IF NOT EXISTS idx_otp_phone ON otp_codes(phone);
     CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);

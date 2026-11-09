@@ -67,6 +67,7 @@ const MODULES = [
   'src/lib/earn/subscriptions.ts',
   'src/lib/security/account-deletion.ts',
   'src/lib/security/session-rotate.ts',
+  'src/lib/security/login-challenge.ts',
   'src/lib/p2p/profile.ts',
   'src/lib/api/api-auth.ts',
   'src/lib/security/ip-allowlist.ts',
