@@ -18,6 +18,8 @@ import { rebalanceAll } from '@/lib/trading/etf-engine';
 import { indexPriceFor } from '@/lib/trading/mark-price';
 import { fundingRate } from '@/lib/oracle/aggregator';
 import { sweepExpiredRedPackets } from '@/lib/earn/rewards';
+import { runDueBots, type BotTickResult } from '@/lib/bots/runner';
+import { runCopySweep, type CopyExecutionResult } from '@/lib/trading/copy-engine';
 
 export interface FundingSettlement {
   symbol: string;
@@ -32,6 +34,11 @@ export interface SettlementReport {
   optionsSkipped: string[];
   etfRebalanced: string[];
   redPacketsRefunded: number;
+  botsRun: number;
+  botsPlaced: number;
+  botErrors: Array<{ botId: string; reason: string }>;
+  copyMirrored: number;
+  copySkipped: number;
 }
 
 const HOUR_NS = 60 * 60 * 1e9;
@@ -136,6 +143,28 @@ export function runSettlementCycle(nowMs: number = Date.now()): SettlementReport
   const options = settleExpiredOptions(nowMs);
   const etf = rebalanceEtfTokens(nowMs);
   const redPacketsRefunded = sweepExpiredRedPackets(nowMs);
+
+  // Running bots is the one job that can place orders, so it is scheduled last:
+  // a cycle that paused a venue or moved a price does so before any bot reacts.
+  let bots: BotTickResult[] = [];
+  try {
+    bots = runDueBots(nowMs * 1e6);
+  } catch {
+    bots = [];
+  }
+  const botErrors = bots
+    .filter((tick) => tick.action === 'skipped' && tick.reason)
+    .map((tick) => ({ botId: tick.botId, reason: tick.reason as string }));
+
+  // Copy mirroring also places orders, so it runs after the venue-level jobs
+  // for the same reason the bot runner does.
+  let copy: CopyExecutionResult[] = [];
+  try {
+    copy = runCopySweep();
+  } catch {
+    copy = [];
+  }
+
   return {
     fundingApplied: funding.applied,
     fundingSkipped: funding.skipped,
@@ -143,5 +172,10 @@ export function runSettlementCycle(nowMs: number = Date.now()): SettlementReport
     optionsSkipped: options.skipped,
     etfRebalanced: etf,
     redPacketsRefunded,
+    botsRun: bots.length,
+    botsPlaced: bots.filter((tick) => tick.action === 'placed').length,
+    botErrors,
+    copyMirrored: copy.filter((row) => row.status === 'placed').length,
+    copySkipped: copy.filter((row) => row.status === 'skipped').length,
   };
 }

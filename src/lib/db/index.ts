@@ -921,6 +921,25 @@ function initializeSchema() {
       UNIQUE(follower_id, trader_id)
     );
 
+    -- One row per leader fill a follower has mirrored. The unique key makes the
+    -- copy path idempotent: a scheduler that re-runs cannot place the same
+    -- leader fill twice, and it needs no timestamp watermark.
+    CREATE TABLE IF NOT EXISTS copy_executions (
+      execution_id TEXT PRIMARY KEY,
+      follow_id TEXT NOT NULL,
+      follower_id TEXT NOT NULL,
+      leader_history_id TEXT NOT NULL,
+      follower_order_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      status TEXT NOT NULL,
+      reason TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(follow_id, leader_history_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_copy_exec_follower ON copy_executions(follower_id, created_at DESC);
+
     -- Earn products: flexible, locked, dual investment, shark fin, RYUSD vault,
     -- auto-invest and launchpool all share this table with a product_type.
     CREATE TABLE IF NOT EXISTS earn_products (
@@ -1955,6 +1974,13 @@ function applyColumnMigrations(database: Database.Database) {
     { table: 'orders', column: 'hidden_quantity', definition: 'REAL DEFAULT 0' },
     { table: 'orders', column: 'locked_amount', definition: 'REAL DEFAULT 0' },
     { table: 'orders', column: 'locked_asset', definition: 'TEXT' },
+    // Bot orders are attributable to the bot that placed them, so the runner can
+    // tell whether one is already resting instead of stacking duplicates.
+    { table: 'orders', column: 'bot_id', definition: 'TEXT' },
+    // A bot's run state (step index, last run) so a scheduled strategy resumes
+    // where it left off rather than restarting on every sweep.
+    { table: 'trading_bots', column: 'state', definition: "TEXT NOT NULL DEFAULT '{}'" },
+    { table: 'trading_bots', column: 'last_run_ns', definition: 'INTEGER' },
     { table: 'wallets', column: 'memo', definition: 'TEXT' },
     { table: 'wallets', column: 'address_index', definition: 'TEXT' },
     // Security toggles are dedicated columns so a query that needs one does not

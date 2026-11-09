@@ -51,6 +51,8 @@ export interface PlaceOrderInput {
   timeInForce?: TimeInForce;
   postOnly?: boolean;
   icebergQuantity?: number;
+  /** Set when a trading bot places the order, so the runner can track it. */
+  botId?: string;
 }
 
 export interface OrderRecord {
@@ -402,8 +404,8 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
     db.prepare(
       `INSERT INTO orders
          (order_id, user_id, pair_id, side, type, price, quantity, filled_quantity, remaining_quantity,
-          status, time_in_force, stop_price, iceberg_quantity, hidden_quantity, locked_amount, locked_asset, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?, ?, datetime('now'))`,
+          status, time_in_force, stop_price, iceberg_quantity, hidden_quantity, locked_amount, locked_asset, bot_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, datetime('now'))`,
     ).run(
       orderId,
       userId,
@@ -419,6 +421,7 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
       icebergQuantity ?? null,
       lockedAmount,
       lockedAsset,
+      input.botId ?? null,
       createdAt,
     );
 

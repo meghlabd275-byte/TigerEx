@@ -42,6 +42,10 @@ export async function POST(request: NextRequest) {
         options: report.optionsSettled.length,
         etf: report.etfRebalanced.length,
         redPacketsRefunded: report.redPacketsRefunded,
+        botsRun: report.botsRun,
+        botsPlaced: report.botsPlaced,
+        copyMirrored: report.copyMirrored,
+        copySkipped: report.copySkipped,
       },
     });
     return NextResponse.json({ success: true, report }, { headers: NO_STORE });

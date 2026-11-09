@@ -24,6 +24,7 @@ process.env.TIGEREX_OPTIONS_DEFAULT_VOLATILITY = '0.8';
 
 const { getDb, generateId, hashPassword } = require('../../.test-build/index.js');
 const { creditAvailable, availableBalance } = require('../../.test-build/ledger.js');
+const { placeSpotOrder } = require('../../.test-build/spot-engine.js');
 const copyEngine = require('../../.test-build/copy-engine.js');
 const optionsEngine = require('../../.test-build/options-engine.js');
 const etfEngine = require('../../.test-build/etf-engine.js');
@@ -211,6 +212,112 @@ test('a leader profile is created pending and metrics are zero with no history',
     () => copyEngine.applyAsLeader(user, { displayName: 'Alice' }),
     (error) => error.code === 'ALREADY_APPLIED',
   );
+});
+
+/** Record a settled leader fill in both orders and order_history. */
+function leaderFill(leader, symbol, side, price, quantity) {
+  const pairId = db.prepare('SELECT pair_id FROM trading_pairs WHERE symbol = ?').get(symbol).pair_id;
+  const orderId = generateId();
+  const historyId = generateId();
+  db.prepare(
+    `INSERT INTO orders (order_id, user_id, pair_id, side, type, price, quantity, filled_quantity, remaining_quantity, status)
+     VALUES (?, ?, ?, ?, 'market', ?, ?, ?, 0, 'filled')`,
+  ).run(orderId, leader, pairId, side, price, quantity, quantity);
+  db.prepare(
+    `INSERT INTO order_history (history_id, order_id, user_id, pair_id, side, type, price, quantity, filled_quantity, average_price, status)
+     VALUES (?, ?, ?, ?, ?, 'market', ?, ?, ?, ?, 'filled')`,
+  ).run(historyId, orderId, leader, pairId, side, price, quantity, quantity, price);
+  return historyId;
+}
+
+test('a copy sweep places a real mirrored order for the follower', () => {
+  const leader = seedUser();
+  const traderId = approveLeader(leader);
+  const follower = seedUser();
+  credit(leader, 'RUSD', 100000);
+  credit(leader, 'BTC', 5);
+  credit(follower, 'RUSD', 100000);
+  credit(follower, 'BTC', 5);
+  listPair('COPYA');
+
+  // A resting sell, placed through the real engine so the maker's base is
+  // actually reserved, gives the follower's mirrored market buy something to
+  // take.
+  const maker = seedUser();
+  credit(maker, 'COPYA', 100);
+  placeSpotOrder(maker, { symbol: 'COPYA/RUSD', side: 'sell', type: 'limit', price: 50, quantity: 100 });
+
+  copyEngine.followLeader(follower, { traderId, mode: 'ratio', ratio: 1, maxPosition: 5000 });
+  const historyId = leaderFill(leader, 'COPYA/RUSD', 'buy', 50, 1);
+
+  const results = copyEngine.runCopySweep();
+  const placed = results.filter((row) => row.status === 'placed');
+  assert.equal(placed.length, 1);
+  assert.equal(placed[0].symbol, 'COPYA/RUSD');
+  assert.equal(placed[0].side, 'buy');
+  assert.ok(placed[0].orderId, 'a mirrored order id must be returned');
+
+  // The order exists and is attributed to the follower, and the execution is
+  // recorded against the leader fill.
+  const row = db.prepare('SELECT user_id, bot_id FROM orders WHERE order_id = ?').get(placed[0].orderId);
+  assert.equal(row.user_id, follower);
+  const execution = db
+    .prepare('SELECT status, follower_order_id FROM copy_executions WHERE leader_history_id = ?')
+    .get(historyId);
+  assert.equal(execution.status, 'placed');
+  assert.equal(execution.follower_order_id, placed[0].orderId);
+});
+
+test('a second copy sweep does not mirror the same leader fill twice', () => {
+  const leader = seedUser();
+  const traderId = approveLeader(leader);
+  const follower = seedUser();
+  credit(leader, 'RUSD', 100000);
+  credit(leader, 'BTC', 5);
+  credit(follower, 'RUSD', 100000);
+  listPair('COPYB');
+
+  const maker = seedUser();
+  credit(maker, 'COPYB', 100);
+  placeSpotOrder(maker, { symbol: 'COPYB/RUSD', side: 'sell', type: 'limit', price: 50, quantity: 100 });
+
+  copyEngine.followLeader(follower, { traderId, mode: 'ratio', ratio: 1, maxPosition: 5000 });
+  leaderFill(leader, 'COPYB/RUSD', 'buy', 50, 1);
+
+  assert.equal(copyEngine.runCopySweep().filter((r) => r.status === 'placed').length, 1);
+  // The unique key on (follow_id, leader_history_id) means the re-run finds no
+  // new fills at all.
+  assert.equal(copyEngine.runCopySweep().filter((r) => r.status === 'placed').length, 0);
+});
+
+test('a follower with no balance records a skipped execution rather than throwing', () => {
+  const leader = seedUser();
+  const traderId = approveLeader(leader);
+  const follower = seedUser();
+  credit(leader, 'RUSD', 100000);
+  credit(leader, 'BTC', 5);
+  // The follower has a token balance, so the copy path is attempted and the
+  // order itself is refused for want of funds.
+  credit(follower, 'RUSD', 1);
+  listPair('COPYC');
+
+  // Liquidity exists, so the only reason the mirrored order fails is the
+  // follower's own balance.
+  const maker = seedUser();
+  credit(maker, 'COPYC', 100);
+  placeSpotOrder(maker, { symbol: 'COPYC/RUSD', side: 'sell', type: 'limit', price: 50, quantity: 100 });
+
+  copyEngine.followLeader(follower, { traderId, mode: 'fixed', fixedAmount: 100 });
+  const historyId = leaderFill(leader, 'COPYC/RUSD', 'buy', 50, 1);
+
+  const results = copyEngine.runCopySweep();
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, 'skipped');
+  assert.match(results[0].reason, /insufficient/i);
+
+  // The refusal is recorded, so the fill is not retried forever.
+  const execution = db.prepare('SELECT status, reason FROM copy_executions WHERE leader_history_id = ?').get(historyId);
+  assert.equal(execution.status, 'skipped');
 });
 
 // ---------------------------------------------------------------------------

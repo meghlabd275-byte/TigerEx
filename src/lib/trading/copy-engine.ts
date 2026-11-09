@@ -17,6 +17,7 @@
 import { getDb, generateId } from '@/lib/db';
 import { copyOrder, leaderMetrics, profitShare, type CopyConfig } from '@/lib/trading/copy';
 import { portfolioSummary } from '@/lib/db/portfolio';
+import { placeSpotOrder } from '@/lib/trading/spot-engine';
 
 export class CopyError extends Error {
   constructor(
@@ -438,6 +439,17 @@ export interface MirroredOrder {
   traderId: string;
 }
 
+export interface CopyExecutionResult {
+  followId: string;
+  leaderHistoryId: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  quantity: number;
+  status: 'placed' | 'skipped';
+  orderId?: string;
+  reason?: string;
+}
+
 /**
  * The orders a follower's config would mirror from a leader's recent fills.
  *
@@ -515,6 +527,232 @@ export function mirroredOrders(followerId: string, limit = 100): MirroredOrder[]
   }
 
   return out.slice(0, Math.min(Math.max(limit, 1), 500));
+}
+
+/**
+ * Mirror a leader's settled fills for one follower.
+ *
+ * Every leader fill not yet recorded in `copy_executions` is sized by the same
+ * `copyOrder` planner the preview uses and submitted through the real spot
+ * engine, so the follower actually trades. The unique key on
+ * (follow_id, leader_history_id) is claimed before the order is placed, which
+ * makes a re-run idempotent and records a refusal (for example insufficient
+ * balance) so the same fill is not retried forever.
+ *
+ * A missing balance is recorded as `skipped`, not thrown, so one broke follower
+ * cannot stop the sweep for everyone else.
+ */
+export function executeFollow(
+  follow: {
+    follow_id: string;
+    follower_id: string;
+    trader_id: string;
+    leader_user_id: string;
+    copy_mode: string;
+    fixed_amount: number | null;
+    ratio: number | null;
+    max_position: number | null;
+    created_at: string;
+  },
+  limit = 200,
+): CopyExecutionResult[] {
+  const db = getDb();
+  const followerEquity = portfolioSummary(follow.follower_id).totalBalanceUSDT;
+  const leaderEquity = portfolioSummary(follow.leader_user_id).totalBalanceUSDT;
+
+  const fills = db
+    .prepare(
+      `SELECT h.history_id, h.side, h.filled_quantity AS quantity, h.average_price AS price,
+              h.created_at, p.symbol
+         FROM order_history h JOIN trading_pairs p ON p.pair_id = h.pair_id
+        WHERE h.user_id = ? AND h.status = 'filled'
+              AND h.filled_quantity > 0 AND h.average_price > 0
+              AND datetime(h.created_at) >= datetime(?)
+          AND NOT EXISTS (
+                SELECT 1 FROM copy_executions e
+                 WHERE e.follow_id = ? AND e.leader_history_id = h.history_id)
+        ORDER BY h.created_at ASC
+        LIMIT ?`,
+    )
+    .all(
+      follow.leader_user_id,
+      follow.created_at,
+      follow.follow_id,
+      Math.min(Math.max(limit, 1), 500),
+    ) as Array<{
+    history_id: string;
+    side: string;
+    quantity: number;
+    price: number;
+    created_at: string;
+    symbol: string;
+  }>;
+
+  const config: CopyConfig = {
+    mode: follow.copy_mode === 'fixed' ? 'fixed' : 'ratio',
+    fixedAmount: follow.fixed_amount === null ? undefined : Number(follow.fixed_amount),
+    ratio: follow.ratio === null ? undefined : Number(follow.ratio),
+    maxPosition: follow.max_position === null ? undefined : Number(follow.max_position),
+  };
+
+  const results: CopyExecutionResult[] = [];
+  for (const fill of fills) {
+    const side: 'buy' | 'sell' = fill.side === 'sell' ? 'sell' : 'buy';
+    const order = copyOrder(
+      {
+        symbol: fill.symbol,
+        side,
+        price: Number(fill.price),
+        quantity: Number(fill.quantity),
+        leaderEquity,
+      },
+      config,
+      followerEquity,
+    );
+
+    const executionId = generateId();
+    if (!order || 'error' in order) {
+      const reason = order && 'error' in order ? order.error : 'nothing to copy';
+      db.prepare(
+        `INSERT OR IGNORE INTO copy_executions
+           (execution_id, follow_id, follower_id, leader_history_id, follower_order_id, symbol, side, quantity, status, reason)
+         VALUES (?, ?, ?, ?, '', ?, ?, 0, 'skipped', ?)`,
+      ).run(executionId, follow.follow_id, follow.follower_id, fill.history_id, fill.symbol, side, reason);
+      results.push({
+        followId: follow.follow_id,
+        leaderHistoryId: fill.history_id,
+        symbol: fill.symbol,
+        side,
+        quantity: 0,
+        status: 'skipped',
+        reason,
+      });
+      continue;
+    }
+
+    // Claim the fill before trading. If another sweep already claimed it the
+    // insert is ignored and this fill is left alone.
+    const claim = db
+      .prepare(
+        `INSERT OR IGNORE INTO copy_executions
+           (execution_id, follow_id, follower_id, leader_history_id, follower_order_id, symbol, side, quantity, status, reason)
+         VALUES (?, ?, ?, ?, '', ?, ?, ?, 'pending', NULL)`,
+      )
+      .run(executionId, follow.follow_id, follow.follower_id, fill.history_id, fill.symbol, side, order.quantity);
+    if (claim.changes === 0) continue;
+
+    try {
+      const placed = placeSpotOrder(follow.follower_id, {
+        symbol: order.symbol,
+        side: order.side,
+        type: 'market',
+        quantity: order.quantity,
+      });
+      db.prepare(
+        `UPDATE copy_executions SET follower_order_id = ?, status = 'placed', reason = NULL
+          WHERE follow_id = ? AND leader_history_id = ?`,
+      ).run(placed.orderId, follow.follow_id, fill.history_id);
+      results.push({
+        followId: follow.follow_id,
+        leaderHistoryId: fill.history_id,
+        symbol: order.symbol,
+        side: order.side,
+        quantity: order.quantity,
+        status: 'placed',
+        orderId: placed.orderId,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'copy order refused';
+      db.prepare(
+        `UPDATE copy_executions SET status = 'skipped', reason = ?
+          WHERE follow_id = ? AND leader_history_id = ?`,
+      ).run(reason, follow.follow_id, fill.history_id);
+      results.push({
+        followId: follow.follow_id,
+        leaderHistoryId: fill.history_id,
+        symbol: order.symbol,
+        side: order.side,
+        quantity: order.quantity,
+        status: 'skipped',
+        reason,
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Run every active follow once and report what was mirrored.
+ *
+ * Each follow is independent: a failure in one (a broken leader, a paused
+ * market) is contained so the rest of the sweep still runs.
+ */
+export function runCopySweep(limitPerFollow = 200): CopyExecutionResult[] {
+  const db = getDb();
+  const follows = db
+    .prepare(
+      `SELECT f.follow_id, f.follower_id, f.trader_id, f.copy_mode, f.fixed_amount, f.ratio,
+              f.max_position, f.created_at, t.user_id AS leader_user_id
+         FROM copy_follows f JOIN copy_traders t ON t.trader_id = f.trader_id
+        WHERE f.status = 'active' AND t.status = 'approved'`,
+    )
+    .all() as Array<{
+    follow_id: string;
+    follower_id: string;
+    trader_id: string;
+    copy_mode: string;
+    fixed_amount: number | null;
+    ratio: number | null;
+    max_position: number | null;
+    created_at: string;
+    leader_user_id: string;
+  }>;
+
+  const out: CopyExecutionResult[] = [];
+  for (const follow of follows) {
+    try {
+      out.push(...executeFollow(follow, limitPerFollow));
+    } catch {
+      // A single broken follow must not abort the sweep.
+    }
+  }
+  return out;
+}
+
+/**
+ * The mirrored orders a follower's copy sweeps have actually placed.
+ *
+ * Read straight from `copy_executions`, so the follower sees the real orders
+ * their configuration produced rather than a preview.
+ */
+export function executedCopies(followerId: string, limit = 100): Array<{
+  symbol: string;
+  side: string;
+  quantity: number;
+  status: string;
+  reason: string | null;
+  orderId: string;
+  createdAt: string;
+}> {
+  const rows = getDb()
+    .prepare(
+      `SELECT symbol, side, quantity, status, reason, follower_order_id AS orderId, created_at AS createdAt
+         FROM copy_executions
+        WHERE follower_id = ? AND status = 'placed'
+        ORDER BY created_at DESC
+        LIMIT ?`,
+    )
+    .all(followerId, Math.min(Math.max(limit, 1), 500)) as Array<{
+    symbol: string;
+    side: string;
+    quantity: number;
+    status: string;
+    reason: string | null;
+    orderId: string;
+    createdAt: string;
+  }>;
+  return rows;
 }
 
 export interface ProfitEvent {
