@@ -3,9 +3,10 @@ import { poolDetail } from '@/lib/dex/swap-service';
 import { dexOk, dexFailure } from '@/lib/dex/route-helpers';
 
 /** A pool's detail: reserves, TVL and its most recent swaps. */
-export async function GET(_request: NextRequest, context: { params: { poolId: string } }) {
+export async function GET(_request: NextRequest, context: { params: Promise<{ poolId: string }> }) {
   try {
-    return dexOk({ pool: poolDetail(context.params.poolId) });
+    const { poolId } = await context.params;
+    return dexOk({ pool: poolDetail(poolId) });
   } catch (error) {
     return dexFailure(error);
   }
