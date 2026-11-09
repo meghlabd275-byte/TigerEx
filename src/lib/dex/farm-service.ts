@@ -17,6 +17,7 @@ import {
   lpTokenSymbol,
   assertDexOpen,
   assertNotBlacklisted,
+  creditTreasury,
 } from '@/lib/dex/pool-service';
 import {
   accrueFarm,
@@ -80,6 +81,76 @@ function persistFarmMeta(farmId: string, state: { accRewardPerShare: number; las
     .run(farmId, state.accRewardPerShare, state.lastUpdate);
 }
 
+/**
+ * Farm rewards are paid from a funded account rather than minted.
+ *
+ * The accumulator says how much a stake has earned; this account says how much
+ * the protocol actually set aside to pay. Settlement pays the smaller of the
+ * two, so a farm that was never funded — or whose fund has run dry — pays
+ * nothing instead of conjuring reward tokens into a claimer's balance. Fund the
+ * account with `fundFarmRewards`.
+ */
+const REWARD_FUND = 'dex_farm_rewards';
+
+/** The balance of a farm's reward account for one asset. */
+export function rewardFundBalance(asset: string): number {
+  const row = getDb()
+    .prepare("SELECT balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
+    .get(asset.toUpperCase(), REWARD_FUND) as { balance: number } | undefined;
+  return Number(row?.balance) || 0;
+}
+
+/** Move an amount into a farm's reward account, creating it on first use. */
+export function fundFarmRewards(asset: string, amount: number): void {
+  if (!Number.isFinite(amount) || amount <= 0) throw new DexError('INVALID_AMOUNT', 'amount must be positive', 400);
+  creditTreasury(asset, amount, REWARD_FUND);
+}
+
+function debitRewardFund(asset: string, amount: number): void {
+  if (amount <= 0) return;
+  const db = getDb();
+  const row = db
+    .prepare("SELECT account_id, balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
+    .get(asset.toUpperCase(), REWARD_FUND) as { account_id: string; balance: number } | undefined;
+  if (!row || Number(row.balance) + 1e-9 < amount) {
+    throw new DexError('REWARD_FUND_EMPTY', `the ${asset} farm reward fund cannot cover ${amount}`, 409);
+  }
+  db.prepare("UPDATE treasury_accounts SET balance = balance - ?, updated_at = datetime('now') WHERE account_id = ?").run(amount, row.account_id);
+}
+
+interface RewardSettlement {
+  /** Reward actually paid out of the fund. */
+  payable: number;
+  /** Reward earned but left unpaid because the fund is short. */
+  unpaid: number;
+  /** The stake's new reward debt, carrying the unpaid amount forward. */
+  debt: number;
+}
+
+/**
+ * Pay what the fund can cover for a stake and return the new reward debt.
+ *
+ * The debt is advanced only by what was paid, so any shortfall stays pending and
+ * is paid once the fund is refilled; a shortfall is never silently forgiven.
+ */
+function settleFarmReward(
+  userId: string,
+  farm: FarmRow,
+  stakeAmount: number,
+  rewardDebt: number,
+  accRewardPerShare: number,
+): RewardSettlement {
+  const pending = pendingFarmRewards(stakeAmount, accRewardPerShare, rewardDebt);
+  const payable = Math.max(0, Math.min(pending, rewardFundBalance(farm.reward_token)));
+  if (payable > 0) {
+    debitRewardFund(farm.reward_token, payable);
+    creditAvailable(userId, farm.reward_token, payable);
+    recordTransaction(userId, 'dex_farm_reward', farm.reward_token, payable, 0, 'completed', `farm ${farm.farm_id}`);
+  }
+  const unpaid = pending - payable;
+  return { payable, unpaid, debt: rewardDebtFor(stakeAmount, accRewardPerShare) - unpaid };
+}
+
 export interface StakeResult {
   farmId: string;
   staked: number;
@@ -117,18 +188,18 @@ export function stakeFarm(userId: string, farmId: string, amount: number): Stake
 
   const result = getDb().transaction(() => {
     const state = currentFarmState(farm);
-    const pending = pendingFarmRewards(Number(stake?.amount) || 0, state.accRewardPerShare, Number(stake?.reward_debt) || 0);
     const newAmount = (Number(stake?.amount) || 0) + amount;
 
     lockAvailable(userId, lpToken, amount);
     recordTransaction(userId, 'dex_farm_stake', lpToken, amount, 0, 'completed', `farm ${farmId}`);
 
-    if (pending > 0) {
-      creditAvailable(userId, farm.reward_token, pending);
-      recordTransaction(userId, 'dex_farm_reward', farm.reward_token, pending, 0, 'completed', `farm ${farmId}`);
-    }
-
-    const debt = rewardDebtFor(newAmount, state.accRewardPerShare);
+    // Rewards earned before this deposit are settled first, paid from the farm's
+    // reward fund; a shortfall stays pending rather than being minted, so the
+    // new stake's debt is reduced by whatever could not be paid.
+    const settlement = stake
+      ? settleFarmReward(userId, farm, Number(stake.amount), Number(stake.reward_debt), state.accRewardPerShare)
+      : { payable: 0, unpaid: 0, debt: 0 };
+    const debt = rewardDebtFor(newAmount, state.accRewardPerShare) - settlement.unpaid;
     if (stake) {
       getDb()
         .prepare("UPDATE dex_farm_stakes SET amount = ?, reward_debt = ?, updated_at = datetime('now') WHERE stake_id = ?")
@@ -142,7 +213,7 @@ export function stakeFarm(userId: string, farmId: string, amount: number): Stake
     getDb()
       .prepare("UPDATE dex_farms SET total_staked = total_staked + ?, updated_at = datetime('now') WHERE farm_id = ?")
       .run(amount, farmId);
-    return { farmId, staked: newAmount, pending };
+    return { farmId, staked: newAmount, pending: settlement.payable };
   })();
 
   return result as StakeResult;
@@ -174,15 +245,15 @@ export function unstakeFarm(userId: string, farmId: string, amount: number): Uns
 
   const result = getDb().transaction(() => {
     const state = currentFarmState(farm);
-    const pending = pendingFarmRewards(stake.amount, state.accRewardPerShare, stake.reward_debt);
     const remaining = stake.amount - amount;
 
     unlockAvailable(userId, lpToken, amount);
     recordTransaction(userId, 'dex_farm_unstake', lpToken, amount, 0, 'completed', `farm ${farmId}`);
-    if (pending > 0) {
-      creditAvailable(userId, farm.reward_token, pending);
-      recordTransaction(userId, 'dex_farm_reward', farm.reward_token, pending, 0, 'completed', `farm ${farmId}`);
-    }
+
+    // Settle the earned rewards out of the fund; an unfunded shortfall is
+    // dropped, because a position that is leaving the farm holds no claim on
+    // rewards the protocol never set aside.
+    const settlement = settleFarmReward(userId, farm, stake.amount, stake.reward_debt, state.accRewardPerShare);
 
     if (remaining <= 1e-12) {
       getDb().prepare('DELETE FROM dex_farm_stakes WHERE stake_id = ?').run(stake.stake_id);
@@ -195,7 +266,7 @@ export function unstakeFarm(userId: string, farmId: string, amount: number): Uns
     getDb()
       .prepare("UPDATE dex_farms SET total_staked = total_staked - ?, updated_at = datetime('now') WHERE farm_id = ?")
       .run(amount, farmId);
-    return { farmId, remaining, pending };
+    return { farmId, remaining, pending: settlement.payable };
   })();
 
   return result as UnstakeResult;
@@ -213,15 +284,13 @@ export function claimFarm(userId: string, farmId: string): number {
 
   return getDb().transaction(() => {
     const state = currentFarmState(farm);
-    const pending = pendingFarmRewards(stake.amount, state.accRewardPerShare, stake.reward_debt);
-    if (pending <= 0) return 0;
-    creditAvailable(userId, farm.reward_token, pending);
-    recordTransaction(userId, 'dex_farm_reward', farm.reward_token, pending, 0, 'completed', `farm ${farmId}`);
+    const settlement = settleFarmReward(userId, farm, stake.amount, stake.reward_debt, state.accRewardPerShare);
+    if (settlement.payable <= 0 && settlement.unpaid <= 0) return 0;
     getDb()
       .prepare("UPDATE dex_farm_stakes SET reward_debt = ?, updated_at = datetime('now') WHERE stake_id = ?")
-      .run(rewardDebtFor(stake.amount, state.accRewardPerShare), stake.stake_id);
+      .run(settlement.debt, stake.stake_id);
     persistFarmMeta(farmId, state);
-    return pending;
+    return settlement.payable;
   })() as number;
 }
 

@@ -3,7 +3,7 @@ import { enforceRequestGuards } from '@/lib/api/route-guards';
 import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { validateFarmInput } from '@/lib/dex/validation';
-import { recomputeGaugeWeights } from '@/lib/dex/farm-service';
+import { recomputeGaugeWeights, fundFarmRewards, rewardFundBalance } from '@/lib/dex/farm-service';
 
 /**
  * TigerSwap farm, gauge and emission administration.
@@ -37,6 +37,21 @@ export async function POST(request: NextRequest) {
     body = (await request.json()) as Record<string, unknown>;
   } catch {
     return fail('INVALID_BODY', 'A JSON body is required');
+  }
+  // A farm can only pay what its reward fund holds, so funding is an explicit,
+  // audited action rather than something the farm conjures on demand.
+  if (String(body.action ?? '').toLowerCase() === 'fund-rewards') {
+    const asset = String(body.asset ?? '').trim().toUpperCase();
+    const amount = Number(body.amount);
+    if (!asset) return fail('VALIDATION_FAILED', 'asset is required');
+    try {
+      fundFarmRewards(asset, amount);
+    } catch (error) {
+      const dexError = error as { code?: string; message?: string; status?: number };
+      return fail(dexError.code ?? 'INVALID_AMOUNT', dexError.message ?? 'could not fund rewards', dexError.status ?? 400);
+    }
+    recordAdminAction(request, auth.admin, 'dex.farm.fund', { type: 'dex_farm_reward', id: asset, detail: { asset, amount } });
+    return NextResponse.json({ success: true, asset, funded: amount, balance: rewardFundBalance(asset) }, { status: 201 });
   }
   const validated = validateFarmInput(body);
   if ('error' in validated) return fail('VALIDATION_FAILED', validated.error);

@@ -25,7 +25,7 @@ const { DexError } = require('../../.test-build/pool-service.js');
 const { v3LiquidityForAmounts, v3AmountsForLiquidity } = require('../../.test-build/amm.js');
 const { executeSwap, quoteSwap, listPools, claimSponsoredSwap } = require('../../.test-build/swap-service.js');
 const { addLiquidity, removeLiquidity, userPositions } = require('../../.test-build/liquidity-service.js');
-const { stakeFarm, unstakeFarm, claimFarm, lockVetgr, vetgrStatus, voteGauge, submitBribe, currentEpoch } =
+const { stakeFarm, unstakeFarm, claimFarm, lockVetgr, vetgrStatus, voteGauge, submitBribe, currentEpoch, fundFarmRewards, rewardFundBalance } =
   require('../../.test-build/farm-service.js');
 const { openPosition, closePosition, applyFunding, liquidatePosition, perpPositions, markPrice } =
   require('../../.test-build/perps-service.js');
@@ -311,6 +311,8 @@ test('staked LP tokens accrue rewards that a claim credits', () => {
   const poolId = createPool('v2', ['RUSD', 'BNB'], { RUSD: 1000000, BNB: 1000 });
   const added = addLiquidity({ userId: provider, poolId, amounts: { RUSD: 10000, BNB: 10 } });
   const farmId = createFarm(poolId);
+  // A farm pays only what its reward fund holds, so it must be funded first.
+  fundFarmRewards('TGR', 1000000);
 
   const staked = stakeFarm(provider, farmId, added.liquidity);
   assert.equal(staked.staked, added.liquidity);
@@ -321,11 +323,36 @@ test('staked LP tokens accrue rewards that a claim credits', () => {
   const claimed = claimFarm(provider, farmId);
   assert.ok(claimed > 0, 'an hour of rewards at 1/sec should be positive');
   assert.equal(availableBalance(provider, 'TGR'), claimed);
+  // The reward came out of the fund, not out of thin air.
+  assert.equal(rewardFundBalance('TGR'), 1000000 - claimed);
 
   const unstaked = unstakeFarm(provider, farmId, added.liquidity);
   assert.equal(unstaked.remaining, 0);
   assert.equal(lockedBalance(provider, 'TS-LP-RUSD-BNB'), 0);
   assert.equal(availableBalance(provider, 'TS-LP-RUSD-BNB'), added.liquidity);
+});
+
+test('a farm with an empty reward fund pays nothing and keeps the shortfall pending', () => {
+  const provider = seedUser();
+  credit(provider, 'RUSD', 50000);
+  credit(provider, 'BNB', 50);
+  const poolId = createPool('v2', ['RUSD', 'BNB'], { RUSD: 1000000, BNB: 1000 });
+  const added = addLiquidity({ userId: provider, poolId, amounts: { RUSD: 10000, BNB: 10 } });
+  const farmId = createFarm(poolId);
+
+  stakeFarm(provider, farmId, added.liquidity);
+  db.prepare('UPDATE dex_farm_meta SET last_update = ? WHERE farm_id = ?').run(Date.now() - 3_600_000, farmId);
+
+  // No funding, so the claim must pay nothing rather than mint reward tokens.
+  const claimed = claimFarm(provider, farmId);
+  assert.equal(claimed, 0);
+  assert.equal(availableBalance(provider, 'TGR'), 0);
+
+  // Once the fund is topped up the reward is still owed and can be claimed.
+  fundFarmRewards('TGR', 1000000);
+  const afterFunding = claimFarm(provider, farmId);
+  assert.ok(afterFunding > 0, 'the pending reward is paid once the fund is refilled');
+  assert.equal(availableBalance(provider, 'TGR'), afterFunding);
 });
 
 test('veTGR locks TGR and refuses an unlock before maturity', () => {
