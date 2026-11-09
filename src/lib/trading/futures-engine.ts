@@ -27,6 +27,7 @@ import {
 } from '@/lib/db/ledger';
 import { positionRisk, selectRiskTier, type RiskTier } from '@/lib/risk/engine';
 import { futuresRates } from '@/lib/trading/spot-engine';
+import { pausedScope, pauseMessage } from '@/lib/trading/controls';
 import { markPriceForContract, indexPriceFor } from '@/lib/trading/mark-price';
 import { fundingPayment } from '@/lib/oracle/aggregator';
 
@@ -202,6 +203,8 @@ export interface FuturesFillResult {
  * orders can never flip a position's side.
  */
 export function placeFuturesOrder(userId: string, input: FuturesOrderInput): FuturesFillResult {
+  const paused = pausedScope('futures');
+  if (paused) throw new FuturesError('TRADING_PAUSED', pauseMessage(paused), 409);
   const market = loadMarket(input.symbol);
   const mark = markPriceFor(market.symbol);
   if (mark === null) {

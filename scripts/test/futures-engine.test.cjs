@@ -461,3 +461,25 @@ test('a healthy position is not queued for liquidation', () => {
   const row = db.prepare('SELECT status FROM futures_positions WHERE user_id = ?').get(user);
   assert.equal(row.status, 'open');
 });
+
+test('pausing the futures venue refuses new orders', () => {
+  const symbol = pricedContract('PBTC', 50000);
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+
+  db.prepare(
+    `INSERT INTO exchange_controls (scope, paused, reason) VALUES ('futures', 1, 'maintenance')
+     ON CONFLICT(scope) DO UPDATE SET paused = 1, reason = 'maintenance'`,
+  ).run();
+  try {
+    assert.throws(
+      () => placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 0.01, leverage: 10 }),
+      (error) => error instanceof FuturesError && error.code === 'TRADING_PAUSED',
+    );
+    // Nothing was opened and no margin was reserved.
+    assert.equal(lockedBalance(user, 'RUSD'), 0);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM futures_positions WHERE user_id = ?').get(user).n, 0);
+  } finally {
+    db.prepare("UPDATE exchange_controls SET paused = 0, reason = NULL WHERE scope = 'futures'").run();
+  }
+});

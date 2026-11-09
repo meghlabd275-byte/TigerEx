@@ -24,6 +24,7 @@ import {
   DEFAULT_ETF_CONFIG,
   type EtfConfig,
 } from '@/lib/trading/etf';
+import { pausedScope, pauseMessage } from '@/lib/trading/controls';
 
 export class EtfError extends Error {
   constructor(
@@ -216,6 +217,8 @@ export interface SubscribeInput {
  * run in one transaction.
  */
 export function subscribe(input: SubscribeInput): EtfPositionView {
+  const paused = pausedScope('etf');
+  if (paused) throw new EtfError('TRADING_PAUSED', pauseMessage(paused), 409);
   const market = getEtfMarket(input.symbol);
   if (!market) throw new EtfError('UNKNOWN_TOKEN', `${input.symbol} is not a listed token`, 404);
   if (market.status !== 'active') throw new EtfError('TOKEN_INACTIVE', 'This token is not trading', 409);

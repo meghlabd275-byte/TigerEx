@@ -13,6 +13,7 @@
 import { getDb, generateId } from '@/lib/db';
 import { lockAvailable, unlockAvailable, consumeLocked, creditAvailable, recordTransaction } from '@/lib/db/ledger';
 import { transition, type P2pStatus } from '@/lib/p2p/escrow';
+import { pausedScope, pauseMessage } from '@/lib/trading/controls';
 
 export class P2pError extends Error {
   constructor(
@@ -233,6 +234,8 @@ export interface P2pOrder {
  * side delivers crypto has it reserved before fiat changes hands.
  */
 export function placeOrder(input: PlaceP2pOrderInput): P2pOrder {
+  const paused = pausedScope('p2p');
+  if (paused) throw new P2pError('TRADING_PAUSED', pauseMessage(paused), 409);
   const db = getDb();
   const amount = Number(input.amount);
   if (!Number.isFinite(amount) || amount <= 0) throw new P2pError('INVALID_AMOUNT', 'Amount must be positive');

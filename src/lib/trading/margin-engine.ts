@@ -27,6 +27,7 @@ import {
 } from '@/lib/db/ledger';
 import { priceInQuote, valueInQuote } from '@/lib/trading/valuation';
 import { borrowInterest } from '@/lib/trading/fees';
+import { pausedScope, pauseMessage } from '@/lib/trading/controls';
 
 export class MarginError extends Error {
   constructor(
@@ -285,6 +286,8 @@ export interface BorrowInput {
  * asset's LTV, so the loan is not liquidatable the instant it opens.
  */
 export function borrow(userId: string, input: BorrowInput): MarginLoanView {
+  const paused = pausedScope('margin');
+  if (paused) throw new MarginError('TRADING_PAUSED', pauseMessage(paused), 409);
   const mode = (input.mode ?? 'cross').trim().toLowerCase();
   const market = loadMarket(input.symbol, mode);
 

@@ -15,6 +15,7 @@ import { getDb, generateId } from '@/lib/db';
 import { debitAvailable, creditAvailable, recordTransaction } from '@/lib/db/ledger';
 import { usdPrice } from '@/lib/db/portfolio';
 import { blackScholes, settlementValue, impliedVolatility, type OptionGreeks } from '@/lib/options/pricing';
+import { pausedScope, pauseMessage } from '@/lib/trading/controls';
 
 export class OptionsError extends Error {
   constructor(
@@ -274,6 +275,8 @@ export interface OpenPositionInput {
  * through the ledger in one transaction with the position row.
  */
 export function openPosition(input: OpenPositionInput): OptionsPositionView {
+  const paused = pausedScope('options');
+  if (paused) throw new OptionsError('TRADING_PAUSED', pauseMessage(paused), 409);
   const market = getOptionsMarket(input.symbol);
   if (!market) throw new OptionsError('UNKNOWN_CONTRACT', `${input.symbol} is not a listed contract`, 404);
   if (market.status !== 'active') throw new OptionsError('CONTRACT_INACTIVE', 'This contract is not trading', 409);
