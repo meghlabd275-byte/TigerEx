@@ -516,6 +516,32 @@ test('a position below its maintenance margin is liquidated', () => {
   );
 });
 
+test('a partial-loss liquidation returns the surviving equity exactly once', () => {
+  const trader = seedUser();
+  credit(trader, 'RUSD', 100000);
+  const symbol = listPerp('BNBX', 50000);
+  // 2x leverage: margin 25000. Marked down to 45000 the position still has
+  // positive equity, so the trader must be returned that equity less the penalty.
+  const opened = openPosition({ userId: trader, symbol, side: 'long', size: 1, leverage: 2 });
+  const result = liquidatePosition(opened.positionId, 45000);
+
+  const equity = 20000; // 25000 margin - 5000 price loss
+  const penalty = equity * 0.005;
+  const returned = equity - penalty;
+  const seized = opened.margin - returned;
+
+  assert.ok(Math.abs(result.penalty - penalty) < 1e-6, `penalty ${result.penalty}`);
+  // The unlock returns the whole margin, so the net movement is `returned -
+  // seized`. Crediting `returned` as well double-counts the seized margin and
+  // lets a liquidation hand the trader more than they opened with.
+  assert.equal(lockedBalance(trader, 'RUSD'), 0, 'the margin reservation is released');
+  assert.ok(
+    Math.abs(availableBalance(trader, 'RUSD') - (100000 - opened.fee - seized)) < 1e-6,
+    `available ${availableBalance(trader, 'RUSD')} should be the opening balance less the open fee and the seized margin`,
+  );
+  assert.ok(availableBalance(trader, 'RUSD') < 100000, 'a liquidation never credits more than was opened with');
+});
+
 test('funding moves collateral between the two sides of a market', () => {
   const long = seedUser();
   const short = seedUser();
@@ -763,6 +789,10 @@ test('a liquidation seizes collateral worth the debt repaid plus the bonus, not 
   assert.ok(Math.abs(result.bonus - 0.25) < 1e-6, `bonus ${result.bonus}`);
   assert.equal(availableBalance(liquidator, 'ETH'), 5.25);
   assert.equal(lockedBalance(borrower, 'ETH'), 10 - 5.25);
+  // The seized collateral must leave the borrower entirely. Unlocking it would
+  // move it into the borrower's available balance while the liquidator is also
+  // credited it, minting a second copy of the collateral.
+  assert.equal(availableBalance(borrower, 'ETH'), 0, 'the borrower must not keep the seized collateral');
 });
 
 test('a margin liquidation does not also pay the liquidator bonus into the treasury', () => {

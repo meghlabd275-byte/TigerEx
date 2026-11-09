@@ -14,6 +14,7 @@ import { getDb, generateId } from '@/lib/db';
 import {
   lockAvailable,
   unlockAvailable,
+  consumeLocked,
   creditAvailable,
   debitAvailable,
   covers,
@@ -367,11 +368,12 @@ export function liquidateBorrow(liquidatorId: string, marketId: string, position
       .prepare("UPDATE dex_lending_markets SET total_borrow = total_borrow - ? WHERE market_id = ?")
       .run(result.debtRepaid, market.market_id);
 
-    // The seized collateral leaves the borrower's locked balance. It is not
-    // booked as protocol revenue: the bonus is the liquidator's whole reward and
-    // was already credited to them above, so booking it again would credit the
-    // treasury collateral that nobody gave up.
-    unlockAvailable(position.user_id, collateral, collateralSeized);
+    // The seized collateral leaves the borrower's locked balance entirely — it
+    // is the liquidator's reward, already credited to them above. Unlocking it
+    // would move it back into the borrower's spendable balance as well, minting
+    // a second copy. It is not booked as protocol revenue either, for the same
+    // reason: nobody gave the treasury any collateral.
+    consumeLocked(position.user_id, collateral, collateralSeized);
 
     return { positionId, debtRepaid: result.debtRepaid, collateralSeized, bonus };
   })() as LiquidateResult;

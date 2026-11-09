@@ -369,12 +369,11 @@ export function liquidatePosition(positionId: string, mark?: number): Liquidatio
 
   return getDb().transaction(() => {
     unlockAvailable(position.user_id, market.settlement_asset, position.collateral);
-    // The trader keeps whatever equity is left after the penalty; that is the
-    // same as releasing the collateral and then removing the loss and penalty,
-    // so the net movement is `equity - penalty` on top of the unlocked margin.
+    // The unlock already returns the whole margin to the account, so only the
+    // seized part is removed from it. Crediting the returned equity as well
+    // would hand the trader the seized margin back and turn a loss into a mint.
     const returned = Math.max(0, equity - penalty);
     const seized = position.collateral - returned;
-    if (returned > 0) creditAvailable(position.user_id, market.settlement_asset, returned);
     if (seized > 0) debitAvailable(position.user_id, market.settlement_asset, seized);
     recordTransaction(position.user_id, 'dex_perp_liquidation', market.settlement_asset, returned, penalty, 'completed', `liquidate ${position.market}`);
 
