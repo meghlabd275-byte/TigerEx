@@ -310,6 +310,17 @@ may credit a balance the venue did not take in. The rules the code must keep:
   `accrueInterest` raises the borrower's debt and the market's `total_supply` (the
   supply position's claim), keeping a reserve cut; no user balance moves, so it
   cannot mint spendable funds. The market's `last_accrued_at` bounds the interval.
+- **A protocol fee is withheld from the payer, never booked on its own.**
+  `executeSwap` subtracts the settlement fee from the output *before* crediting
+  the trader and books exactly that amount as revenue. Booking revenue without
+  debiting the payer credited the treasury tokens no one gave up.
+- **A borrow draws only the liquidity the lenders supplied.** `borrow` caps the
+  amount at `total_supply - total_borrow`, matching `withdrawSupply` and
+  `flashLoan`; without it the borrower was credited tokens the market never held.
+- **A liquidation bonus is the liquidator's whole reward, not revenue.**
+  `liquidateBorrow` credits the liquidator the seized collateral and must not
+  also book the bonus through `recordDexRevenue`, which would credit the treasury
+  the same value a second time.
 
 When adding a settlement path, ask which of these it is and make the ledger
 match the position row; then assert the *resulting balances* in a test, not just
