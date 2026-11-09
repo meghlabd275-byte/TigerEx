@@ -288,7 +288,7 @@ function generateKlineData(symbol, interval = '1h') {
     // Get trades in this interval
     const trades = db.prepare(`
       SELECT price, quantity FROM trades
-      WHERE symbol = ? AND created_at >= ?
+      WHERE symbol = ? AND datetime(created_at) >= datetime(?)
       ORDER BY created_at ASC
     `).all(symbol, startTime.toISOString());
 

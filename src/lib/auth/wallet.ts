@@ -12,6 +12,7 @@
  */
 
 import { createHash, randomBytes } from 'crypto';
+import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { verifyMessage } from 'ethers';
 import { getDb, generateId } from '@/lib/db';
 import { buildChallengeMessage, isChallengeFresh, normalizeAddress, sameAddress } from '@/lib/auth/wallet-signature';
@@ -113,7 +114,7 @@ export function verifyChallenge(challengeId: unknown, signature: unknown): strin
     throw new WalletAuthError('CHALLENGE_USED', 'This challenge has already been used', 401);
   }
 
-  const createdAtMs = Date.parse(row.created_at);
+  const createdAtMs = parseUtcTimestamp(row.created_at);
   if (!isChallengeFresh(createdAtMs, Date.now(), CHALLENGE_TTL_MS + 60_000)) {
     throw new WalletAuthError('CHALLENGE_EXPIRED', 'This challenge has expired', 401);
   }

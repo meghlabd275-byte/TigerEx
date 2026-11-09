@@ -40,16 +40,21 @@ const INTERVALS: Record<string, number> = {
 export const SUPPORTED_INTERVALS = Object.keys(INTERVALS);
 
 /**
- * Parse a SQLite `datetime('now')` value as UTC.
+ * Parse a database timestamp as UTC.
  *
- * The column stores `YYYY-MM-DD HH:MM:SS` with no zone marker. `Date.parse`
- * would read that as local time, which shifts every bucket by the server's
- * offset, so the fields are read explicitly as UTC.
+ * The schema stores two shapes: `datetime('now')` columns as
+ * `YYYY-MM-DD HH:MM:SS` with no zone marker, and token columns written from
+ * `Date.toISOString()` as `...THH:MM:SS.sssZ`. `Date.parse` reads the first
+ * shape as *local* time, which shifts every value by the server's UTC offset —
+ * on a withdrawal this mis-dates a settlement and on a challenge it moves the
+ * expiry. The zone-less shape is therefore read explicitly as UTC, while a
+ * value that carries its own zone (`Z` or `+hh:mm`) is left to `Date.parse`.
  */
 export function parseUtcTimestamp(value: string): number {
-  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/.exec(value.trim());
+  const text = String(value).trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/.exec(text);
   if (!match) {
-    const fallback = Date.parse(value);
+    const fallback = Date.parse(text);
     return Number.isFinite(fallback) ? fallback : Number.NaN;
   }
   return Date.UTC(
@@ -96,7 +101,7 @@ export function candlesFor(symbol: string, interval: string, limit: number): Can
     .prepare(
       `SELECT price, quantity, created_at
          FROM spot_trades
-        WHERE symbol = ? AND created_at >= ?
+        WHERE symbol = ? AND datetime(created_at) >= datetime(?)
         ORDER BY created_at ASC, trade_id ASC`,
     )
     .all(normalized, windowStart) as Array<{ price: number; quantity: number; created_at: string }>;

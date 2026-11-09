@@ -9,6 +9,7 @@
  */
 
 import { getDb, generateId } from '@/lib/db';
+import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { debitAvailable, creditAvailable, covers, availableBalance, recordTransaction } from '@/lib/db/ledger';
 import {
   DexError,
@@ -58,10 +59,10 @@ function assertOpen(project: LaunchProjectRow): void {
     throw new DexError('PROJECT_NOT_LIVE', `project is ${project.status}`, 409);
   }
   const now = Date.now();
-  if (project.start_at && new Date(project.start_at).getTime() > now) {
+  if (project.start_at && parseUtcTimestamp(project.start_at) > now) {
     throw new DexError('PROJECT_NOT_STARTED', `the sale starts at ${project.start_at}`, 409);
   }
-  if (project.end_at && new Date(project.end_at).getTime() < now) {
+  if (project.end_at && parseUtcTimestamp(project.end_at) < now) {
     throw new DexError('PROJECT_ENDED', `the sale ended at ${project.end_at}`, 409);
   }
 }

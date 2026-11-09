@@ -10,6 +10,7 @@
  */
 
 import { getDb } from '@/lib/db';
+import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { accrueSimple } from '@/lib/earn/products';
 
 export interface EarnHolding {
@@ -38,11 +39,11 @@ function toHolding(row: Record<string, unknown>): EarnHolding {
   const apy = Number(row.apy) || 0;
   const durationDays = row.duration_days === null || row.duration_days === undefined ? null : Number(row.duration_days);
   const startedAt = String(row.started_at ?? row.created_at);
-  const startedMs = Date.parse(startedAt);
+  const startedMs = parseUtcTimestamp(startedAt);
   const elapsedNs = Number.isFinite(startedMs) ? Math.max(0, (Date.now() - startedMs) * 1_000_000) : 0;
 
   // A locked product accrues only until it matures; a flexible one keeps going.
-  const maturedMs = row.matures_at ? Date.parse(String(row.matures_at)) : NaN;
+  const maturedMs = row.matures_at ? parseUtcTimestamp(String(row.matures_at)) : NaN;
   const effectiveNs =
     Number.isFinite(maturedMs) && maturedMs < Date.now() ? Math.max(0, (maturedMs - startedMs) * 1_000_000) : elapsedNs;
 

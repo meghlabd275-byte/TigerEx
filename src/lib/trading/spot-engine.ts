@@ -14,6 +14,7 @@
  */
 
 import { getDb, generateId } from '@/lib/db';
+import { parseUtcTimestamp } from '@/lib/trading/candles';
 import {
   creditAvailable,
   lockAvailable,
@@ -946,7 +947,7 @@ export function listTrades(userId: string, symbol: string | null, limit: number)
       quantity: Number(row.quantity),
       total: Number(row.quote_quantity),
       fee: Number(isMaker ? row.maker_fee : row.taker_fee),
-      timestamp: Date.parse(String(row.created_at)),
+      timestamp: parseUtcTimestamp(String(row.created_at)),
       role: isMaker ? 'maker' : 'taker',
     };
   });

@@ -470,7 +470,7 @@ export function mirroredOrders(followerId: string, limit = 100): MirroredOrder[]
            FROM order_history h JOIN trading_pairs p ON p.pair_id = h.pair_id
           WHERE h.user_id = ? AND h.status = 'filled'
                 AND h.filled_quantity > 0 AND h.average_price > 0
-                AND h.created_at >= ?
+                AND datetime(h.created_at) >= datetime(?)
           ORDER BY h.created_at DESC
           LIMIT ?`,
       )

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { getDb, verifyPassword } from '@/lib/db';
 import { requireSession } from '@/lib/db/session';
 import { decryptSecret, verifyTotp } from '@/lib/security/totp';
 import { enforceRequestGuards } from '@/lib/api/route-guards';
@@ -50,7 +50,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { verifyPassword } = require('@/lib/db');
     if (!verifyPassword(password, row.password_hash)) {
       return NextResponse.json(
         { success: false, error: { code: 'INVALID_PASSWORD', message: 'Password is incorrect' } },

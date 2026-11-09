@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
         `SELECT COALESCE(SUM(ABS(amount)), 0) AS spend,
                 COALESCE(SUM(cashback), 0) AS cashback
            FROM card_transactions
-          WHERE user_id = ? AND created_at >= ?`,
+          WHERE user_id = ? AND datetime(created_at) >= datetime(?)`,
       )
       .get(auth.user.userId, monthStart.toISOString()) as { spend: number; cashback: number };
 

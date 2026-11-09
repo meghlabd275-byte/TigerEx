@@ -13,6 +13,7 @@
  */
 
 import { getDb, generateId } from '@/lib/db';
+import { parseUtcTimestamp } from '@/lib/trading/candles';
 import {
   availableBalance,
   lockAvailable,
@@ -121,7 +122,7 @@ export function accruedInterest(loan: LoanRow, now: number = Date.now()): number
     .get(loan.symbol) as MarginMarketRow | undefined;
   if (!market) return 0;
 
-  const since = Date.parse(loan.updated_at);
+  const since = parseUtcTimestamp(loan.updated_at);
   const hours = Number.isFinite(since) ? Math.max(0, (now - since) / 3_600_000) : 0;
   if (hours <= 0) return 0;
 

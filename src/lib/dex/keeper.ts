@@ -13,6 +13,7 @@
  */
 
 import { getDb } from '@/lib/db';
+import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { executeSwap } from '@/lib/dex/swap-service';
 import { closePosition, applyFunding, liquidatePosition, markPrice, perpPositions } from '@/lib/dex/perps-service';
 import { dcaSlicesDue, twapChildren, limitShouldTrigger } from '@/lib/dex/orders';
@@ -118,7 +119,7 @@ export function runDueDcaPlans(now = Date.now()): { run: number; failed: number 
   let run = 0;
   let failed = 0;
   for (const plan of plans) {
-    const startAt = new Date(plan.start_at).getTime();
+    const startAt = parseUtcTimestamp(plan.start_at);
     const due = dcaSlicesDue(
       {
         poolId: plan.pool_id,
@@ -193,7 +194,7 @@ export function runDueTwapPlans(now = Date.now()): { run: number; failed: number
       totalAmountIn: plan.total_amount_in,
       slices: plan.slices,
       intervalMs: plan.interval_ms,
-      startAt: new Date(plan.start_at).getTime(),
+      startAt: parseUtcTimestamp(plan.start_at),
     });
     const due = children.filter((child) => child.releaseAt <= now).length;
     const outstanding = due - plan.executed_slices;

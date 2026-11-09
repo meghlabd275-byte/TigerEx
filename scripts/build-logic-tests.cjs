@@ -27,6 +27,7 @@ const MODULES = [
   'src/lib/trading/fees.ts',
   'src/lib/trading/spot-engine.ts',
   'src/lib/trading/market-view.ts',
+  'src/lib/trading/exchange-stats.ts',
   'src/lib/trading/candles.ts',
   'src/lib/db/ledger.ts',
   'src/lib/db/referral.ts',

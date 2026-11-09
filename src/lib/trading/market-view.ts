@@ -8,6 +8,7 @@
  */
 
 import { getDb } from '@/lib/db';
+import { parseUtcTimestamp } from '@/lib/trading/candles';
 
 export interface DepthLevel {
   price: number;
@@ -180,7 +181,7 @@ export function recentTrades(symbol: string, limit: number): PublicTrade[] {
     quantity: Number(row.quantity),
     quoteQuantity: Number(row.quote_quantity),
     side: row.side,
-    timestamp: Date.parse(row.created_at),
+    timestamp: parseUtcTimestamp(row.created_at),
   }));
 }
 

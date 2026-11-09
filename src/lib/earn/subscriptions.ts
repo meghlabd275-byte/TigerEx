@@ -13,6 +13,7 @@
  */
 
 import { getDb, generateId } from '@/lib/db';
+import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { lockAvailable, unlockAvailable, creditAvailable, recordTransaction, LedgerError } from '@/lib/db/ledger';
 import { accrueSimple, lockedRedeemable } from '@/lib/earn/products';
 
@@ -173,7 +174,7 @@ export function redeem(userId: string, subscriptionId: string): RedeemResult {
 
   const principal = Number(row.amount) || 0;
   const durationDays = row.duration_days === null || row.duration_days === undefined ? null : Number(row.duration_days);
-  const startedNs = Date.parse(row.started_at) * 1e6;
+  const startedNs = parseUtcTimestamp(row.started_at) * 1e6;
   const nowNs = Date.now() * 1e6;
 
   if (durationDays !== null && durationDays > 0 && !lockedRedeemable(startedNs, durationDays, nowNs)) {

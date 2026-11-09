@@ -9,6 +9,7 @@
  */
 
 import { getDb, generateId } from '@/lib/db';
+import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { debitAvailable, creditAvailable, lockAvailable, unlockAvailable, covers, availableBalance, recordTransaction } from '@/lib/db/ledger';
 import {
   DexError,
@@ -315,7 +316,7 @@ export function unlockVetgr(userId: string): number {
     | { lock_id: string; amount: number; unlock_at: string }
     | undefined;
   if (!lock) throw new DexError('NO_LOCK', 'no veTGR lock for this account', 404);
-  if (new Date(lock.unlock_at).getTime() > nowMs()) {
+  if (parseUtcTimestamp(lock.unlock_at) > nowMs()) {
     throw new DexError('LOCK_NOT_MATURED', `the lock matures at ${lock.unlock_at}`, 409);
   }
   return getDb().transaction(() => {

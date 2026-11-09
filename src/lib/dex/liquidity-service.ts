@@ -10,6 +10,7 @@
  */
 
 import { getDb, generateId } from '@/lib/db';
+import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { debitAvailable, creditAvailable, covers, availableBalance, recordTransaction } from '@/lib/db/ledger';
 import {
   AmmError,
@@ -295,7 +296,7 @@ export function removeLiquidity(request: RemoveLiquidityRequest): RemoveLiquidit
   const burn = Number(request.liquidity);
   if (!Number.isFinite(burn) || burn <= 0) throw new DexError('INVALID_AMOUNT', 'liquidity must be positive', 400);
   if (burn > position.liquidity + 1e-9) throw new DexError('INSUFFICIENT_LIQUIDITY', 'more than the position holds', 400);
-  if (position.locked_until && new Date(position.locked_until).getTime() > Date.now()) {
+  if (position.locked_until && parseUtcTimestamp(position.locked_until) > Date.now()) {
     throw new DexError('POSITION_LOCKED', `position is locked until ${position.locked_until}`, 409);
   }
 

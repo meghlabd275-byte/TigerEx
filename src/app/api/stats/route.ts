@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { exchangeStats } from '@/lib/trading/exchange-stats';
 
 // This handler reads live state on every request. Without an explicit
 // dynamic marker Next.js would prerender it once at build time and serve
@@ -16,36 +16,8 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET() {
   try {
-    const db = getDb();
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
-    const pairs = db
-      .prepare(`SELECT COUNT(*) AS n FROM trading_pairs WHERE status = 'active'`)
-      .get() as { n: number };
-
-    const users = db.prepare(`SELECT COUNT(*) AS n FROM users`).get() as { n: number };
-
-    const volume = db
-      .prepare(
-        `SELECT COALESCE(SUM(filled_quantity * COALESCE(average_price, price, 0)), 0) AS v,
-                COUNT(*) AS trades
-           FROM orders
-          WHERE created_at >= ? AND status IN ('filled', 'partially_filled')`,
-      )
-      .get(since) as { v: number; trades: number };
-
     return NextResponse.json(
-      {
-        success: true,
-        data: {
-          dailyVolume: volume.v,
-          tradingPairs: pairs.n,
-          totalUsers: users.n,
-          trades24h: volume.trades,
-          window: '24h',
-          asOf: new Date().toISOString(),
-        },
-      },
+      { success: true, data: exchangeStats() },
       { headers: { 'Cache-Control': 'no-store' } },
     );
   } catch (error) {
