@@ -1,4 +1,6 @@
 import { getDb, generateId, generateReferralCode } from '@/lib/db';
+import { creditFund } from '@/lib/dex/pool-service';
+import { creditAvailable } from '@/lib/db/ledger';
 
 /**
  * Referral tiers. Commission rates are the share of the referee's trading fee
@@ -282,6 +284,86 @@ export function recordReferredTrade(refereeId: string, volume: number, feeAmount
     ).run(amount, tier.name, referral.referral_id);
   });
   credit();
+}
+
+/**
+ * Reward account that pays referral commissions.
+ *
+ * A commission is paid from this account rather than minted, so a payout can
+ * never credit funds the protocol did not set aside. Fund it with
+ * `fundReferralPool`; an unfunded pool leaves commissions `pending`.
+ */
+const REFERRAL_REWARD_FUND = 'referral_rewards';
+
+/** The balance of the referral reward account for one asset. */
+export function referralPoolBalance(asset: string): number {
+  const row = getDb()
+    .prepare("SELECT balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
+    .get(asset.toUpperCase(), REFERRAL_REWARD_FUND) as { balance: number } | undefined;
+  return Number(row?.balance) || 0;
+}
+
+/** Move an amount into the referral reward account, creating it on first use. */
+export function fundReferralPool(asset: string, amount: number): void {
+  creditFund(REFERRAL_REWARD_FUND, asset, amount);
+}
+
+export interface CommissionPayout {
+  commissionId: string;
+  referrerId: string;
+  amount: number;
+  currency: string;
+}
+
+/**
+ * Pay the referrer's pending commissions out of the reward pool.
+ *
+ * Commissions are paid oldest-first, each debited from the pool in the asset it
+ * was earned in and credited to the referrer's available balance in one
+ * transaction. The pool is checked row by row, so a partially funded pool pays
+ * what it can and leaves the rest pending rather than going short. Returns the
+ * commissions that were paid.
+ */
+export function payoutReferralCommissions(referrerId: string): CommissionPayout[] {
+  const db = getDb();
+  const pending = db
+    .prepare(
+      `SELECT commission_id, amount, currency
+         FROM referral_commissions
+        WHERE referrer_id = ? AND status = 'pending'
+        ORDER BY created_at ASC, commission_id ASC`,
+    )
+    .all(referrerId) as Array<{ commission_id: string; amount: number; currency: string }>;
+
+  const paid: CommissionPayout[] = [];
+  for (const row of pending) {
+    const amount = Number(row.amount);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const asset = String(row.currency).toUpperCase();
+
+    const pay = db.transaction(() => {
+      const pool = db
+        .prepare("SELECT account_id, balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
+        .get(asset, REFERRAL_REWARD_FUND) as { account_id: string; balance: number } | undefined;
+      // Fail closed: an unfunded or short pool leaves the commission pending.
+      if (!pool || Number(pool.balance) + 1e-9 < amount) return false;
+
+      const claimed = db
+        .prepare("UPDATE referral_commissions SET status = 'paid', paid_at = datetime('now') WHERE commission_id = ? AND status = 'pending'")
+        .run(row.commission_id);
+      if (claimed.changes === 0) return false;
+
+      db.prepare("UPDATE treasury_accounts SET balance = balance - ?, updated_at = datetime('now') WHERE account_id = ?").run(
+        amount,
+        pool.account_id,
+      );
+      creditAvailable(referrerId, asset, amount);
+      return true;
+    });
+
+    if (pay()) paid.push({ commissionId: row.commission_id, referrerId, amount, currency: asset });
+  }
+  return paid;
 }
 
 /** Leaderboard of referrers ranked by commission earned. */

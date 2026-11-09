@@ -62,7 +62,17 @@ const nextConfig = {
         value: 'max-age=63072000; includeSubDomains; preload',
       });
     }
-    return [{ source: '/:path*', headers: securityHeaders }];
+    return [
+      { source: '/:path*', headers: securityHeaders },
+      // Every API response is per-request and must never be stored by a browser,
+      // proxy or CDN: balances, order books and account state are all sensitive
+      // and time-critical. This is a belt-and-braces guarantee on top of each
+      // handler's own NO_STORE header.
+      {
+        source: '/api/:path*',
+        headers: [{ key: 'Cache-Control', value: 'no-store, no-cache, must-revalidate' }],
+      },
+    ];
   },
 };
 
