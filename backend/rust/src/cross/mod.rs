@@ -165,6 +165,21 @@ impl HTLC {
     pub fn swap_id(&self) -> &str {
         &self.swap_id
     }
+
+    /// Address that funded the swap; refunds settle back here.
+    pub fn sender(&self) -> &str {
+        &self.sender
+    }
+
+    /// Address that receives the swap once claimed.
+    pub fn recipient(&self) -> &str {
+        &self.recipient
+    }
+
+    /// Block height at or after which the sender may refund.
+    pub fn timelock(&self) -> i64 {
+        self.timelock
+    }
 }
 
 // Chain registry

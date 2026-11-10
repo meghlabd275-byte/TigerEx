@@ -20,6 +20,8 @@ pub struct User {
     pub created: i64,
     pub password_hash: Option<String>,
     pub two_factor_secret: Option<String>,
+    /// Referral code this user registered under, if any.
+    pub referral_code: Option<String>,
     pub failed_login_attempts: u32,
     pub locked_until: Option<i64>,
 }
@@ -62,7 +64,23 @@ impl AuthService {
     }
 
     /// Register new user
+    ///
+    /// `referral_code` is validated and recorded on the user. The previous
+    /// implementation accepted the argument and discarded it, so a referral was
+    /// silently lost and no caller could ever act on it.
     pub fn register(&mut self, email: &str, password: &str, referral_code: Option<&str>) -> AuthResult {
+        if let Some(code) = referral_code {
+            if code.trim().is_empty() {
+                return AuthResult {
+                    success: false,
+                    token: None,
+                    refresh_token: None,
+                    user: None,
+                    message: Some("Referral code must not be empty".to_string()),
+                };
+            }
+        }
+
         // Check if email exists
         if self.email_to_id.contains_key(email) {
             return AuthResult {
@@ -99,6 +117,7 @@ impl AuthService {
             created: current_timestamp_ms(),
             password_hash: Some(password_hash),
             two_factor_secret: None,
+            referral_code: referral_code.map(|c| c.trim().to_string()),
             failed_login_attempts: 0,
             locked_until: None,
         };
@@ -556,6 +575,22 @@ mod tests {
         let mut auth = AuthService::new();
         let result = auth.register("test@example.com", "SecurePass123", None);
         assert!(result.success);
+    }
+
+    #[test]
+    fn referral_code_is_recorded_on_the_user() {
+        let mut auth = AuthService::new();
+        let result = auth.register("referred@example.com", "SecurePass123", Some(" TGR50 "));
+        assert!(result.success);
+        assert_eq!(result.user.unwrap().referral_code.as_deref(), Some("TGR50"));
+    }
+
+    #[test]
+    fn empty_referral_code_is_rejected() {
+        let mut auth = AuthService::new();
+        let result = auth.register("bad-ref@example.com", "SecurePass123", Some("   "));
+        assert!(!result.success);
+        assert!(!auth.email_to_id.contains_key("bad-ref@example.com"));
     }
 
     #[test]

@@ -68,6 +68,8 @@ pub struct WSConnection {
 pub struct WebSocketGateway {
     connections: HashMap<String, WSConnection>,
     subscriptions: HashMap<String, Vec<String>>,
+    /// Outbound queue per connection, drained by the transport layer.
+    pending: HashMap<String, Vec<WSMessage>>,
     counter: u64,
 }
 
@@ -76,6 +78,7 @@ impl WebSocketGateway {
         Self {
             connections: HashMap::new(),
             subscriptions: HashMap::new(),
+            pending: HashMap::new(),
             counter: 0,
         }
     }
@@ -110,15 +113,20 @@ impl WebSocketGateway {
         Ok(())
     }
 
-    /// Send ticker update
-    pub fn send_ticker(&self, symbol: &str, price: f64) -> WSMessage {
+    /// Send ticker update.
+    ///
+    /// `change_24h` and `volume_24h` are supplied by the caller from the
+    /// exchange's own market data. The previous implementation hardcoded them
+    /// (`0.025` and `1_000_000_000.0`), so every subscriber received a
+    /// fabricated 24h change and volume regardless of the real market.
+    pub fn send_ticker(&self, symbol: &str, price: f64, change_24h: f64, volume_24h: f64) -> WSMessage {
         WSMessage {
             channel: format!("{}@ticker", symbol),
             data: serde_json::json!({
                 "symbol": symbol,
                 "price": price,
-                "change_24h": 0.025,
-                "volume_24h": 1000000000.0
+                "change_24h": change_24h,
+                "volume_24h": volume_24h
             }),
             timestamp: current_timestamp_ms(),
         }
@@ -138,26 +146,60 @@ impl WebSocketGateway {
         }
     }
 
-    /// Send trade
-    pub fn send_trade(&self, symbol: &str, price: f64, qty: f64) -> WSMessage {
+    /// Send trade.
+    ///
+    /// The trade id is derived from the trade's own fields and `is_buyer_maker`
+    /// is passed through from the match. The previous implementation stamped
+    /// every trade with the literal id `"trade_1"` and forced
+    /// `isBuyerMaker: false`, so clients could not distinguish two prints and
+    /// the aggressor side was always reported as the taker.
+    pub fn send_trade(&self, symbol: &str, price: f64, qty: f64, is_buyer_maker: bool) -> WSMessage {
+        let time = current_timestamp_ms();
         WSMessage {
             channel: format!("{}@trade", symbol),
             data: serde_json::json!({
-                "id": "trade_1",
+                "id": trade_id(symbol, price, qty, time),
                 "symbol": symbol,
                 "price": price,
                 "quantity": qty,
-                "time": current_timestamp_ms(),
-                "isBuyerMaker": false
+                "time": time,
+                "isBuyerMaker": is_buyer_maker
             }),
-            timestamp: current_timestamp_ms(),
+            timestamp: time,
         }
     }
 
-    /// Broadcast to channel
-    pub fn broadcast(&self, channel: &str, message: WSMessage) {
-        let _conn_ids = self.subscriptions.get(channel);
-        // In real impl: send to all connected clients
+    /// Queue a message to every subscriber of `channel`, returning how many
+    /// connections it was queued for.
+    ///
+    /// Delivery to the socket belongs to the transport layer; this only fills
+    /// each subscriber's outbound queue. The previous implementation looked up
+    /// the subscriber list and dropped it on the floor, so a broadcast reached
+    /// nobody.
+    pub fn broadcast(&mut self, channel: &str, message: WSMessage) -> usize {
+        let conn_ids = match self.subscriptions.get(channel) {
+            Some(ids) => ids.clone(),
+            None => return 0,
+        };
+
+        for conn_id in &conn_ids {
+            self.pending
+                .entry(conn_id.clone())
+                .or_default()
+                .push(message.clone());
+        }
+
+        conn_ids.len()
+    }
+
+    /// Take everything queued for a connection, oldest first.
+    pub fn drain_outbound(&mut self, conn_id: &str) -> Vec<WSMessage> {
+        self.pending.remove(conn_id).unwrap_or_default()
+    }
+
+    /// Number of messages waiting to be written to a connection.
+    pub fn pending_count(&self, conn_id: &str) -> usize {
+        self.pending.get(conn_id).map(|q| q.len()).unwrap_or(0)
     }
 
     /// Authenticate a connection against the session store.
@@ -201,6 +243,7 @@ impl WebSocketGateway {
                 }
             }
         }
+        self.pending.remove(conn_id);
     }
 }
 
@@ -257,5 +300,57 @@ mod tests {
 
         assert_eq!(user, "user-42");
         assert!(gw.is_authenticated(&conn_id));
+    }
+
+    #[test]
+    fn broadcast_queues_for_every_subscriber() {
+        let mut gw = WebSocketGateway::new();
+        let a = gw.accept_connection();
+        let b = gw.accept_connection();
+        gw.subscribe(&a, "BTC/USDT@trade").unwrap();
+        gw.subscribe(&b, "BTC/USDT@trade").unwrap();
+
+        let msg = gw.send_trade("BTC/USDT", 50_000.0, 1.0, true);
+        assert_eq!(gw.broadcast("BTC/USDT@trade", msg.clone()), 2);
+
+        assert_eq!(gw.pending_count(&a), 1);
+        assert_eq!(gw.pending_count(&b), 1);
+        assert_eq!(gw.drain_outbound(&a).len(), 1);
+        assert_eq!(gw.pending_count(&a), 0);
+        // Unsubscribed channel reaches nobody.
+        assert_eq!(gw.broadcast("ETH/USDT@trade", msg), 0);
+    }
+
+    #[test]
+    fn trade_messages_carry_distinct_ids_and_real_aggressor_side() {
+        let gw = WebSocketGateway::new();
+        let buy = gw.send_trade("BTC/USDT", 50_000.0, 1.0, true);
+        assert_eq!(buy.data["isBuyerMaker"], serde_json::json!(true));
+        assert!(buy.data["id"].as_str().unwrap().contains("BTC/USDT"));
+
+        // Two prints at different prices must not share an id.
+        let other = gw.send_trade("BTC/USDT", 50_001.0, 1.0, true);
+        assert_ne!(buy.data["id"], other.data["id"]);
+    }
+
+    #[test]
+    fn ticker_carries_supplied_market_data() {
+        let gw = WebSocketGateway::new();
+        let msg = gw.send_ticker("BTC/USDT", 50_000.0, -0.012, 987_654.0);
+        assert_eq!(msg.data["change_24h"], serde_json::json!(-0.012));
+        assert_eq!(msg.data["volume_24h"], serde_json::json!(987_654.0));
+    }
+
+    #[test]
+    fn closing_a_connection_drops_its_queue() {
+        let mut gw = WebSocketGateway::new();
+        let conn = gw.accept_connection();
+        gw.subscribe(&conn, "BTC/USDT@ticker").unwrap();
+        let msg = gw.send_ticker("BTC/USDT", 50_000.0, 0.0, 0.0);
+        gw.broadcast("BTC/USDT@ticker", msg);
+        assert_eq!(gw.pending_count(&conn), 1);
+
+        gw.close_connection(&conn);
+        assert_eq!(gw.pending_count(&conn), 0);
     }
 }

@@ -38,6 +38,53 @@ pub struct Position {
     pub cost_basis: f64, // total cost
 }
 
+/// Apply one fill to a position and return the PnL it realized.
+///
+/// A fill that reduces or flips the position realizes `(price - entry) * qty`
+/// for the closed part, where the sign of the closed quantity carries the
+/// direction (long closed by a sell, short closed by a buy). The remainder of
+/// the fill opens a position in the new direction at the fill price. The
+/// previous implementation only ever updated a long position, so a short was
+/// never opened, reduced, or realized, and its PnL was silently dropped.
+fn apply_fill(position: &mut Position, trade: &Trade) -> f64 {
+    let signed = if trade.side == "buy" {
+        trade.quantity
+    } else {
+        -trade.quantity
+    };
+
+    // Fills in the same direction as the current position (or the first fill
+    // of a flat position) extend it.
+    if position.quantity == 0.0 || (position.quantity > 0.0) == (signed > 0.0) {
+        let new_quantity = position.quantity + signed;
+        position.cost_basis += trade.price * signed;
+        position.quantity = new_quantity;
+        position.entry_price = position.cost_basis / new_quantity;
+        return 0.0;
+    }
+
+    // Opposite direction: close what we hold, realize on the closed part.
+    let closing = signed.abs().min(position.quantity.abs());
+    let direction = if position.quantity > 0.0 { 1.0 } else { -1.0 };
+    let realized = (trade.price - position.entry_price) * closing * direction;
+
+    position.quantity -= direction * closing;
+    position.cost_basis = position.entry_price * position.quantity;
+
+    // Anything left over opens a position in the new direction.
+    let remainder = signed.abs() - closing;
+    if remainder > 0.0 {
+        position.quantity = direction * -remainder;
+        position.cost_basis = trade.price * position.quantity;
+        position.entry_price = trade.price;
+    } else if position.quantity == 0.0 {
+        position.cost_basis = 0.0;
+        position.entry_price = 0.0;
+    }
+
+    realized
+}
+
 // PnL Engine
 pub struct PnLEngine {
     // user_id -> symbol -> Position
@@ -54,13 +101,12 @@ impl PnLEngine {
         }
     }
 
-    // Record trade
+    // Record a fill and update the position.
     pub fn record_trade(&mut self, trade: Trade) {
-        // Update position
         let user_positions = self.positions
             .entry(trade.user_id.clone())
             .or_insert_with(HashMap::new);
-        
+
         let position = user_positions
             .entry(trade.symbol.clone())
             .or_insert_with(|| Position {
@@ -70,68 +116,43 @@ impl PnLEngine {
                 entry_price: 0.0,
                 cost_basis: 0.0,
             });
-        
-        let value = trade.price * trade.quantity;
-        
-        if trade.side == "buy" {
-            // Add to position
-            let new_quantity = position.quantity + trade.quantity;
-            let new_cost = position.cost_basis + value;
-            position.quantity = new_quantity;
-            position.cost_basis = new_cost;
-            if new_quantity > 0.0 {
-                position.entry_price = new_cost / new_quantity;
-            }
-        } else {
-            // Sell - realize PnL if long
-            let sold = trade.quantity.min(position.quantity.abs());
-            if position.quantity > 0.0 && sold > 0.0 {
-                let pnl = (trade.price - position.entry_price) * sold;
-                position.quantity -= sold;
-                position.cost_basis -= position.entry_price * sold;
-            }
-        }
-        
-        // Record trade
+
+        apply_fill(position, &trade);
+
         self.trades
             .entry(trade.user_id.clone())
             .or_insert_with(Vec::new)
             .push(trade);
     }
 
-    // Calculate realized PnL
+    // Realized PnL, computed by replaying the user's fills for the symbol.
+    //
+    // The position is rebuilt from the trade log rather than read back from
+    // the live map, so the result depends only on the fills and stays correct
+    // as the position is opened, flipped and closed.
     pub fn calculate_realized_pnl(&self, user_id: &str, symbol: &str) -> f64 {
         let user_trades = match self.trades.get(user_id) {
             Some(t) => t,
             None => return 0.0,
         };
-        
-        let position = self.positions
-            .get(user_id)
-            .and_then(|p| p.get(symbol));
-        
-        let mut pnl = 0.0;
-        let mut cost = 0.0;
-        let mut qty = 0.0;
-        
+
+        let mut position = Position {
+            user_id: user_id.to_string(),
+            symbol: symbol.to_string(),
+            quantity: 0.0,
+            entry_price: 0.0,
+            cost_basis: 0.0,
+        };
+
+        let mut realized = 0.0;
         for trade in user_trades {
             if trade.symbol != symbol {
                 continue;
             }
-            
-            if trade.side == "buy" {
-                cost += trade.price * trade.quantity;
-                qty += trade.quantity;
-            } else {
-                // Realize PnL on sale
-                let avg_price = if qty > 0.0 { cost / qty } else { 0.0 };
-                pnl += (trade.price - avg_price) * trade.quantity.min(qty);
-                cost -= avg_price * trade.quantity.min(qty);
-                qty -= trade.quantity.min(qty);
-            }
+            realized += apply_fill(&mut position, trade);
         }
-        
-        pnl
+
+        realized
     }
 
     // Calculate unrealized PnL
@@ -142,7 +163,8 @@ impl PnLEngine {
         };
         
         if let Some(pos) = position {
-            if pos.quantity > 0.0 {
+            if pos.quantity != 0.0 {
+                // Signed quantity: a short (negative) earns when price falls.
                 return (current_price - pos.entry_price) * pos.quantity;
             }
         }
@@ -152,10 +174,6 @@ impl PnLEngine {
 
     // Get total PnL record
     pub fn get_pnl_record(&self, user_id: &str, symbol: &str, current_price: f64) -> PnLRecord {
-        let position = self.positions
-            .get(user_id)
-            .and_then(|p| p.get(symbol));
-        
         let realized = self.calculate_realized_pnl(user_id, symbol);
         let unrealized = self.calculate_unrealized_pnl(user_id, symbol, current_price);
         
@@ -216,35 +234,82 @@ impl PnLEngine {
 mod tests {
     use super::*;
 
+    fn trade(side: &str, price: f64, quantity: f64) -> Trade {
+        Trade {
+            order_id: "o".to_string(),
+            user_id: "user1".to_string(),
+            symbol: "BTCUSDT".to_string(),
+            side: side.to_string(),
+            price,
+            quantity,
+            fee: 0.0,
+            timestamp: 0,
+        }
+    }
+
     #[test]
-    fn test_pnl() {
+    fn long_round_trip_realizes_the_price_difference() {
         let mut engine = PnLEngine::new();
-        
-        // Buy
-        engine.record_trade(Trade {
-            order_id: "1".to_string(),
-            user_id: "user1".to_string(),
-            symbol: "BTCUSDT".to_string(),
-            side: "buy".to_string(),
-            price: 50000.0,
-            quantity: 1.0,
-            fee: 10.0,
-            timestamp: 1000,
-        });
-        
-        // Sell
-        engine.record_trade(Trade {
-            order_id: "2".to_string(),
-            user_id: "user1".to_string(),
-            symbol: "BTCUSDT".to_string(),
-            side: "sell".to_string(),
-            price: 55000.0,
-            quantity: 1.0,
-            fee: 10.0,
-            timestamp: 2000,
-        });
-        
-        let pnl = engine.get_pnl_record("user1", "BTCUSDT", 55000.0);
-        println!("Realized: {} Unrealized: {}", pnl.realized_pnl, pnl.unrealized_pnl);
+        engine.record_trade(trade("buy", 50_000.0, 1.0));
+        engine.record_trade(trade("sell", 55_000.0, 1.0));
+
+        assert_eq!(engine.calculate_realized_pnl("user1", "BTCUSDT"), 5_000.0);
+        // Flat afterwards, so there is nothing unrealized.
+        assert_eq!(engine.calculate_unrealized_pnl("user1", "BTCUSDT", 60_000.0), 0.0);
+    }
+
+    #[test]
+    fn short_round_trip_realizes_a_profit_when_price_falls() {
+        let mut engine = PnLEngine::new();
+        engine.record_trade(trade("sell", 50_000.0, 2.0));
+        engine.record_trade(trade("buy", 45_000.0, 2.0));
+
+        // The old implementation dropped this entirely and returned 0.
+        assert_eq!(engine.calculate_realized_pnl("user1", "BTCUSDT"), 10_000.0);
+    }
+
+    #[test]
+    fn open_short_has_unrealized_pnl_that_grows_as_price_falls() {
+        let mut engine = PnLEngine::new();
+        engine.record_trade(trade("sell", 50_000.0, 1.0));
+
+        assert_eq!(engine.calculate_unrealized_pnl("user1", "BTCUSDT", 45_000.0), 5_000.0);
+        assert_eq!(engine.calculate_unrealized_pnl("user1", "BTCUSDT", 55_000.0), -5_000.0);
+    }
+
+    #[test]
+    fn partial_close_realizes_only_the_closed_quantity() {
+        let mut engine = PnLEngine::new();
+        engine.record_trade(trade("buy", 50_000.0, 2.0));
+        engine.record_trade(trade("sell", 51_000.0, 1.0));
+
+        assert_eq!(engine.calculate_realized_pnl("user1", "BTCUSDT"), 1_000.0);
+        // One unit still long at 50k; at 52k that is +2k unrealized.
+        assert_eq!(engine.calculate_unrealized_pnl("user1", "BTCUSDT", 52_000.0), 2_000.0);
+    }
+
+    #[test]
+    fn flip_through_zero_closes_then_opens_the_other_side() {
+        let mut engine = PnLEngine::new();
+        engine.record_trade(trade("buy", 50_000.0, 1.0));
+        // Sell 3: closes the long (+1k) and opens a 2-unit short at 51k.
+        engine.record_trade(trade("sell", 51_000.0, 3.0));
+
+        assert_eq!(engine.calculate_realized_pnl("user1", "BTCUSDT"), 1_000.0);
+        // Short 2 at 51k; at 50k that is +2k unrealized.
+        assert_eq!(engine.calculate_unrealized_pnl("user1", "BTCUSDT", 50_000.0), 2_000.0);
+    }
+
+    #[test]
+    fn pnl_record_totals_realized_and_unrealized() {
+        let mut engine = PnLEngine::new();
+        engine.record_trade(trade("buy", 50_000.0, 1.0));
+        engine.record_trade(trade("sell", 52_000.0, 1.0));
+        engine.record_trade(trade("buy", 52_000.0, 1.0));
+
+        let record = engine.get_pnl_record("user1", "BTCUSDT", 53_000.0);
+        assert_eq!(record.realized_pnl, 2_000.0);
+        assert_eq!(record.unrealized_pnl, 1_000.0);
+        assert_eq!(record.total_pnl, 3_000.0);
     }
 }
