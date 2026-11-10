@@ -440,8 +440,10 @@ Wiring rules:
   (`forge-std` v1.9.4, OpenZeppelin v5.0.2 — OZ is pinned to a tag whose
   `pragma` is satisfiable by `solc 0.8.20`).
 - The vendored `go.mod` declares `go 1.26.0` and builds with that toolchain.
-- CI jobs `tigerswap-contracts` (install deps, `forge build`, `forge test`) and
-  `tigerswap-go` (`go build`/`go test` under `tigerswap/backend`) keep it green.
+- CI jobs `tigerswap-contracts` (`forge build`/`forge test`), `tigerswap-go`
+  (`go build`/`go test`), `tigerswap-rust` (`cargo test`), `tigerswap-cpp`
+  (cmake + ctest), `tigerswap-python` (SDK + ML pytest) and `tigerswap-java`
+  (`build.sh`) keep every vendored layer green.
 
 Verify locally:
 
