@@ -54,3 +54,8 @@ add_executable(hft-low-latency-tests tests/hft_low_latency_test.cpp)
 target_include_directories(hft-low-latency-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(hft-low-latency-tests PRIVATE Threads::Threads)
 add_test(NAME hft-low-latency-tests COMMAND hft-low-latency-tests)
+
+# Networking hot path: real loopback sockets, epoll and fail-closed zero-copy.
+add_executable(networking-hot-path-tests tests/networking_hot_path_test.cpp)
+target_link_libraries(networking-hot-path-tests PRIVATE Threads::Threads)
+add_test(NAME networking-hot-path-tests COMMAND networking-hot-path-tests)
