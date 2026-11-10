@@ -454,3 +454,34 @@ cd tigerswap/contracts && ./install-deps.sh && forge build && forge test
 # Go backend (needs Go 1.26+; auto-downloads via the toolchain directive)
 cd tigerswap/backend && go build ./... && go test ./...
 ```
+
+## TigerSwap security audit (2026-11)
+
+Line-by-line audit of the vendored DEX layer. Five real defects were found and
+fixed, each with a regression test that fails against the old code:
+
+1. **Cross-site WebSocket hijacking** — `backend/go/distributed/{cache,trading}`
+   set `CheckOrigin: func(...) bool { return true }`. Now same-origin /
+   `TIGEREX_WS_ALLOWED_ORIGINS` allowlist, matching `order_matching`.
+2. **Governance could never execute** — `TigerSwapGovernance.executeProposal`
+   built calldata with `abi.encodeWithSignature(sig, calldatas[i])`, passing the
+   encoded args as a single argument, so every call reverted. Now prefixes the
+   selector to the encoded args (blank signature forwards verbatim).
+3. **Bridge threshold fail-open** — `TigerSwapBridge.completeBridge` required
+   `valid >= validatorThreshold`, and the threshold defaults to 0, so a bridge
+   deployed without `setValidatorThreshold` accepted an empty signature set and
+   released locked funds. Now reverts `THRESHOLD_NOT_SET` when unset.
+4. **Staking ignored ERC20 returns (SWC-104)** — `TigerSwapStaking.stake/
+   withdraw/getReward` did not check transfer results, so a false-returning
+   token let `stake` mint phantom balance and `withdraw` zero a balance without
+   paying. Now checked. `test/FalseReturnERC20.sol` exercises this.
+5. The two Go origin checks and the four contract fixes are covered by new
+   tests; contracts went 696 -> 704 tests.
+
+Verified clean (no change needed): lending/margin interest index math,
+perps payout caps and liquidation, options LP-collateral reservation and
+Black-Scholes, the xyK/stable/weighted/concentrated AMM math, meme bonding
+curve, veTGR decay, locker boost math, oracle median + staleness, vault
+inflation mitigation, and the Go matching engine (price-time priority,
+self-trade prevention, maker pricing). No SQL string concatenation, no
+hardcoded secrets, no fake data.
