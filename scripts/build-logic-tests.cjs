@@ -89,6 +89,7 @@ const MODULES = [
   'src/lib/dex/fee-engine.ts',
   'src/lib/dex/staking.ts',
   'src/lib/dex/perps.ts',
+  'src/lib/dex/conditional.ts',
   'src/lib/dex/margin.ts',
   'src/lib/dex/launchpad.ts',
   'src/lib/dex/bots.ts',

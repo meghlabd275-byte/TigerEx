@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { DexShell, Panel, TableWrap, Th, Td } from '@/components/dex/DexShell';
 import { useApiResource } from '@/lib/useApiResource';
@@ -34,6 +34,19 @@ interface PerpsResponse {
     liquidationPrice: number;
     marginMode: string;
   }>;
+  conditionalOrders: Array<{
+    orderId: string;
+    market: string;
+    positionId: string;
+    positionSide: string;
+    side: string;
+    type: string;
+    stopPrice: number | null;
+    callbackRate: number | null;
+    quantity: number;
+    status: string;
+    createdAt: string;
+  }>;
 }
 
 export default function DexPerpsPage() {
@@ -45,10 +58,31 @@ export default function DexPerpsPage() {
   const [marginMode, setMarginMode] = useState<'isolated' | 'cross'>('isolated');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [condType, setCondType] = useState<'stop_loss' | 'take_profit' | 'trailing_stop'>('stop_loss');
+  const [condStop, setCondStop] = useState('');
+  const [condCallback, setCondCallback] = useState('5');
+  const [condQuantity, setCondQuantity] = useState('');
+  const [reduceSize, setReduceSize] = useState('');
+  const [reducePositionId, setReducePositionId] = useState('');
+  const [condPositionId, setCondPositionId] = useState('');
 
   const markets = perps.data?.markets ?? [];
   const positions = perps.data?.positions ?? [];
+  const conditionalOrders = perps.data?.conditionalOrders ?? [];
   const selected = markets.find((market) => market.symbol === symbol) ?? markets[0] ?? null;
+
+  // Keep the reduce and protect selectors pointed at a position that exists, so
+  // a close never leaves them addressing a position that has gone.
+  useEffect(() => {
+    const ids = positions.map((position) => position.positionId);
+    if (ids.length === 0) {
+      setReducePositionId('');
+      setCondPositionId('');
+      return;
+    }
+    if (!ids.includes(reducePositionId)) setReducePositionId(ids[0]);
+    if (!ids.includes(condPositionId)) setCondPositionId(ids[0]);
+  }, [perps.data, reducePositionId, condPositionId]);
 
   const open = async () => {
     if (!selected) return;
@@ -96,6 +130,67 @@ export default function DexPerpsPage() {
       perps.reload();
     } catch (error) {
       setMessage({ ok: false, text: error instanceof Error ? error.message : 'The close was refused.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reduce = async (positionId: string) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const body = await apiRequest<{ reduced: { closedSize: number; remainingSize: number; pnl: number; closed: boolean } }>(
+        '/api/dex/perps',
+        { method: 'PATCH', body: { positionId, quantity: Number(reduceSize) } },
+      );
+      setMessage({
+        ok: true,
+        text: body.reduced.closed
+          ? `Reduced ${formatAmount(body.reduced.closedSize)}; the position is now closed with realised PnL ${formatAmount(body.reduced.pnl)}.`
+          : `Reduced ${formatAmount(body.reduced.closedSize)}; ${formatAmount(body.reduced.remainingSize)} remains open.`,
+      });
+      setReduceSize('');
+      perps.reload();
+    } catch (error) {
+      setMessage({ ok: false, text: error instanceof Error ? error.message : 'The reduce was refused.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const placeConditional = async (positionId: string) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const body = await apiRequest<{ order: { orderId: string; type: string } }>('/api/dex/conditional-orders', {
+        method: 'POST',
+        body: {
+          positionId,
+          type: condType,
+          quantity: Number(condQuantity),
+          ...(condType === 'trailing_stop' ? { callbackRate: Number(condCallback) / 100 } : { stopPrice: Number(condStop) }),
+        },
+      });
+      setMessage({ ok: true, text: `Placed ${body.order.type} order ${body.order.orderId}; the keeper fires it when the mark crosses.` });
+      setCondStop('');
+      setCondQuantity('');
+      perps.reload();
+    } catch (error) {
+      setMessage({ ok: false, text: error instanceof Error ? error.message : 'The order was refused.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelConditional = async (orderId: string) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await apiRequest('/api/dex/conditional-orders', { method: 'DELETE', body: { orderId } });
+      setMessage({ ok: true, text: 'The conditional order was cancelled.' });
+      perps.reload();
+    } catch (error) {
+      setMessage({ ok: false, text: error instanceof Error ? error.message : 'The cancel was refused.' });
     } finally {
       setBusy(false);
     }
@@ -290,6 +385,161 @@ export default function DexPerpsPage() {
                       className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                     >
                       Close
+                    </button>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        )}
+      </Panel>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <Panel title="Reduce a position">
+          {positions.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-slate-400">Open a position before you reduce one.</p>
+          ) : (
+            <>
+              <label className="block text-xs text-gray-500 dark:text-slate-400">Position</label>
+              <select
+                className="mb-3 w-full rounded-md border border-gray-300 px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                value={reducePositionId}
+                onChange={(event) => setReducePositionId(event.target.value)}
+              >
+                {positions.map((position) => (
+                  <option key={position.positionId} value={position.positionId}>
+                    {position.symbol} · {position.side} · {formatAmount(position.size)}
+                  </option>
+                ))}
+              </select>
+              <label className="block text-xs text-gray-500 dark:text-slate-400">Quantity to reduce (base units)</label>
+              <input
+                className="mb-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                type="number"
+                min="0"
+                value={reduceSize}
+                onChange={(event) => setReduceSize(event.target.value)}
+              />
+              <button
+                onClick={() => reduce(reducePositionId)}
+                disabled={busy || !reducePositionId || !reduceSize}
+                className="flex w-full items-center justify-center gap-2 rounded-md border border-orange-600 px-4 py-3 text-sm font-semibold text-orange-700 hover:bg-orange-50 disabled:opacity-50 dark:text-orange-400 dark:hover:bg-orange-900/20"
+              >
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />} Reduce position
+              </button>
+            </>
+          )}
+        </Panel>
+
+        <Panel title="Protect a position">
+          {positions.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-slate-400">Open a position before you protect one.</p>
+          ) : (
+            <>
+              <label className="block text-xs text-gray-500 dark:text-slate-400">Position</label>
+              <select
+                className="mb-3 w-full rounded-md border border-gray-300 px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                value={condPositionId}
+                onChange={(event) => setCondPositionId(event.target.value)}
+              >
+                {positions.map((position) => (
+                  <option key={position.positionId} value={position.positionId}>
+                    {position.symbol} · {position.side} · mark {formatNumber(position.markPrice, 4)}
+                  </option>
+                ))}
+              </select>
+              <label className="block text-xs text-gray-500 dark:text-slate-400">Type</label>
+              <select
+                className="mb-3 w-full rounded-md border border-gray-300 px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                value={condType}
+                onChange={(event) => setCondType(event.target.value as 'stop_loss' | 'take_profit' | 'trailing_stop')}
+              >
+                <option value="stop_loss">Stop-loss</option>
+                <option value="take_profit">Take-profit</option>
+                <option value="trailing_stop">Trailing stop</option>
+              </select>
+              <label className="block text-xs text-gray-500 dark:text-slate-400">Quantity (base units)</label>
+              <input
+                className="mb-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                type="number"
+                min="0"
+                value={condQuantity}
+                onChange={(event) => setCondQuantity(event.target.value)}
+              />
+              {condType === 'trailing_stop' ? (
+                <>
+                  <label className="block text-xs text-gray-500 dark:text-slate-400">Callback (%)</label>
+                  <input
+                    className="mb-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    type="number"
+                    min="0.01"
+                    max="99.99"
+                    step="0.1"
+                    value={condCallback}
+                    onChange={(event) => setCondCallback(event.target.value)}
+                  />
+                </>
+              ) : (
+                <>
+                  <label className="block text-xs text-gray-500 dark:text-slate-400">Trigger price</label>
+                  <input
+                    className="mb-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    type="number"
+                    min="0"
+                    value={condStop}
+                    onChange={(event) => setCondStop(event.target.value)}
+                  />
+                </>
+              )}
+              <button
+                onClick={() => placeConditional(condPositionId)}
+                disabled={busy || !condPositionId || !condQuantity}
+                className="flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-slate-700 dark:hover:bg-slate-600"
+              >
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />} Place conditional order
+              </button>
+            </>
+          )}
+        </Panel>
+      </div>
+
+      <Panel title="Your conditional orders" className="mt-4">
+        {conditionalOrders.length === 0 && (
+          <p className="text-sm text-gray-500 dark:text-slate-400">You have no conditional order.</p>
+        )}
+        {conditionalOrders.length > 0 && (
+          <TableWrap>
+            <thead>
+              <tr>
+                <Th>Market</Th>
+                <Th>Type</Th>
+                <Th>Position side</Th>
+                <Th right>Trigger</Th>
+                <Th right>Quantity</Th>
+                <Th>Status</Th>
+                <Th right>Action</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {conditionalOrders.map((order) => (
+                <tr key={order.orderId}>
+                  <Td>{order.market}</Td>
+                  <Td>{order.type}</Td>
+                  <Td>{order.positionSide}</Td>
+                  <Td right>
+                    {order.type === 'trailing_stop'
+                      ? `${formatNumber((order.callbackRate ?? 0) * 100, 2)}%`
+                      : formatNumber(order.stopPrice ?? 0, 4)}
+                  </Td>
+                  <Td right>{formatAmount(order.quantity)}</Td>
+                  <Td>{order.status}</Td>
+                  <Td right>
+                    <button
+                      onClick={() => cancelConditional(order.orderId)}
+                      disabled={busy || order.status !== 'pending'}
+                      className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                    >
+                      Cancel
                     </button>
                   </Td>
                 </tr>

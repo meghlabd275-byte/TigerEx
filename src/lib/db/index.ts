@@ -1749,6 +1749,28 @@ function initializeSchema() {
       closed_at TEXT
     );
 
+    -- Conditional orders that protect a TigerSwap perpetual position. The
+    -- anchor carries a trailing stop's best price between keeper cycles; it
+    -- starts at the entry price and only moves in the position's favour.
+    CREATE TABLE IF NOT EXISTS dex_perp_conditional_orders (
+      order_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      market TEXT NOT NULL,
+      position_id TEXT NOT NULL,
+      position_side TEXT NOT NULL,
+      side TEXT NOT NULL,
+      type TEXT NOT NULL,
+      stop_price REAL,
+      callback_rate REAL,
+      quantity REAL NOT NULL,
+      anchor REAL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT DEFAULT (datetime('now')),
+      triggered_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_dex_perp_conditional_user ON dex_perp_conditional_orders(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_dex_perp_conditional_market ON dex_perp_conditional_orders(market, status);
+
     CREATE TABLE IF NOT EXISTS dex_lending_markets (
       market_id TEXT PRIMARY KEY,
       asset TEXT NOT NULL UNIQUE,

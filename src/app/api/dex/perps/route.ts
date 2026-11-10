@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/db/session';
 import { enforceRequestGuards, readJson, fail, NO_STORE } from '@/lib/api/route-guards';
-import { openPosition, closePosition, perpPositions, markPrice } from '@/lib/dex/perps-service';
+import { openPosition, closePosition, reducePosition, perpPositions, markPrice, listConditionalOrders } from '@/lib/dex/perps-service';
 import { dexFailure } from '@/lib/dex/route-helpers';
 import { getDb } from '@/lib/db';
 
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
       }
       return { ...market, markPrice: price };
     });
-    return NextResponse.json({ success: true, markets: priced, positions: perpPositions(auth.user.userId) }, { headers: NO_STORE });
+    return NextResponse.json({ success: true, markets: priced, positions: perpPositions(auth.user.userId), conditionalOrders: listConditionalOrders(auth.user.userId) }, { headers: NO_STORE });
   } catch (error) {
     return dexFailure(error);
   }
@@ -67,6 +67,33 @@ export async function DELETE(request: NextRequest) {
   const positionId = String(body?.positionId ?? request.nextUrl.searchParams.get('positionId') ?? '');
   try {
     return NextResponse.json({ success: true, closed: closePosition(auth.user.userId, positionId) }, { headers: NO_STORE });
+  } catch (error) {
+    return dexFailure(error);
+  }
+}
+
+/**
+ * Reduce an open position by a partial quantity.
+ *
+ * A reduce-only path: the closed fraction returns its pro-rata margin and the
+ * position keeps its entry price, so a trader can cut risk without closing the
+ * whole position. A quantity equal to the position size closes it.
+ */
+export async function PATCH(request: NextRequest) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'dex.perp.reduce', 60, 60_000);
+  if (guard) return guard;
+
+  const body = await readJson(request);
+  if (!body) return fail('INVALID_BODY', 'A JSON object body is required');
+  const positionId = String(body.positionId ?? '');
+  if (!positionId) return fail('VALIDATION_FAILED', 'positionId is required');
+  try {
+    return NextResponse.json(
+      { success: true, reduced: reducePosition(auth.user.userId, positionId, Number(body.quantity)) },
+      { headers: NO_STORE },
+    );
   } catch (error) {
     return dexFailure(error);
   }

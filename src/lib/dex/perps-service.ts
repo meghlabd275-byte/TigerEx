@@ -34,6 +34,13 @@ import {
   medianMarkPrice,
   type PerpSide,
 } from '@/lib/dex/perps';
+import {
+  CONDITIONAL_TYPES,
+  evaluateConditional,
+  reductionQuantity,
+  validateConditionalParams,
+  type ConditionalType,
+} from '@/lib/dex/conditional';
 import { applySchedule } from '@/lib/dex/fee-engine';
 import { priceInQuote } from '@/lib/trading/valuation';
 
@@ -499,3 +506,380 @@ export function perpPositions(userId: string): Array<Record<string, unknown>> {
 }
 
 export { oraclePriceImpact, borrowFee };
+
+// ============================================================================
+// Partial reduce (reduce-only)
+// ============================================================================
+
+export interface ReduceResult {
+  positionId: string;
+  closedSize: number;
+  remainingSize: number;
+  exitPrice: number;
+  pnl: number;
+  fee: number;
+  released: number;
+  closed: boolean;
+}
+
+/**
+ * Reduce an open position by `quantity`, returning the pro-rata margin.
+ *
+ * This is the reduce-only path a conditional order and a manual partial close
+ * both take: the margin backing the closed fraction is unlocked, the price move
+ * and the close fee settle on top of it, and a loss is capped at the margin the
+ * closed fraction posted. A reduction that would leave nothing closes the
+ * position. Reducing is never paused, so a trader can always cut risk.
+ */
+export function reducePosition(userId: string, positionId: string, quantity: number): ReduceResult {
+  assertNotBlacklisted([{ kind: 'wallet', value: userId }]);
+  const position = loadPosition(userId, positionId);
+  const market = loadMarket(position.market);
+  const requested = Number(quantity);
+  if (!Number.isFinite(requested) || requested <= 0) {
+    throw new DexError('INVALID_AMOUNT', 'quantity must be positive', 400);
+  }
+  const closeSize = Math.min(requested, position.size);
+  if (closeSize <= 0) throw new DexError('NO_POSITION', 'nothing left to reduce', 409);
+
+  const exitPrice = markPrice(position.market);
+  const side = position.side as PerpSide;
+  const fraction = closeSize / position.size;
+  const releasedMargin = position.collateral * fraction;
+  const gross = unrealizedPnl(side, closeSize, position.entry_price, exitPrice);
+  const closeFee = (closeSize * exitPrice * market.taker_fee_bps) / 10_000;
+  const settlement = market.settlement_asset;
+  const remaining = position.size - closeSize;
+  const closing = remaining <= 1e-9;
+  const net = gross - closeFee;
+  // A loss cannot push the released margin below zero: it is capped at the
+  // margin the closed fraction posted, matching the full-close path.
+  const released = Math.max(0, releasedMargin + net);
+
+  return getDb().transaction(() => {
+    unlockAvailable(userId, settlement, releasedMargin);
+    if (net > 0) {
+      creditAvailable(userId, settlement, net);
+    } else if (net < 0) {
+      debitAvailable(userId, settlement, Math.min(-net, releasedMargin));
+    }
+
+    // The pool is the other side of the price move, exactly as on a full close.
+    if (gross > 0) {
+      poolPays(settlement, gross);
+    } else if (gross < 0) {
+      const paidByTrader = net < 0 ? Math.min(-net, releasedMargin) : 0;
+      poolReceives(settlement, Math.min(-gross, Math.max(0, paidByTrader - closeFee)));
+    }
+
+    recordTransaction(
+      userId,
+      closing ? 'dex_perp_close' : 'dex_perp_reduce',
+      settlement,
+      releasedMargin,
+      Math.max(closeFee, 0),
+      'completed',
+      `${closing ? 'close' : 'reduce'} ${closeSize} ${position.market}`,
+    );
+    const feeParts = applySchedule(Math.max(closeFee, 0), perpFeeSplit());
+    recordDexRevenue('dex_perp_fee', settlement, Math.max(closeFee, 0), feeParts, positionId);
+
+    getDb()
+      .prepare(
+        `UPDATE dex_perp_positions
+            SET size = ?, collateral = ?, realized_pnl = realized_pnl + ?, status = ?, closed_at = ?
+          WHERE position_id = ?`,
+      )
+      .run(
+        closing ? 0 : remaining,
+        closing ? 0 : position.collateral - releasedMargin,
+        net,
+        closing ? 'closed' : 'open',
+        closing ? new Date().toISOString() : null,
+        positionId,
+      );
+
+    // A position that has gone makes every conditional order that protected it
+    // inert; leaving them pending would fire them at a position that is no
+    // longer there.
+    if (closing) {
+      getDb()
+        .prepare("UPDATE dex_perp_conditional_orders SET status = 'cancelled' WHERE position_id = ? AND status = 'pending'")
+        .run(positionId);
+    }
+
+    return {
+      positionId,
+      closedSize: closeSize,
+      remainingSize: closing ? 0 : remaining,
+      exitPrice,
+      pnl: net,
+      fee: closeFee,
+      released,
+      closed: closing,
+    };
+  })() as ReduceResult;
+}
+
+// ============================================================================
+// Conditional orders (stop-loss, take-profit, trailing stop)
+// ============================================================================
+
+interface ConditionalRow {
+  order_id: string;
+  user_id: string;
+  market: string;
+  position_id: string;
+  position_side: string;
+  side: string;
+  type: string;
+  stop_price: number | null;
+  callback_rate: number | null;
+  quantity: number;
+  anchor: number | null;
+  status: string;
+  created_at: string;
+  triggered_at: string | null;
+}
+
+export interface ConditionalOrderView {
+  orderId: string;
+  market: string;
+  positionId: string;
+  positionSide: string;
+  side: string;
+  type: ConditionalType;
+  stopPrice: number | null;
+  callbackRate: number | null;
+  quantity: number;
+  anchor: number | null;
+  status: string;
+  createdAt: string;
+  triggeredAt: string | null;
+}
+
+function toConditional(row: ConditionalRow): ConditionalOrderView {
+  return {
+    orderId: row.order_id,
+    market: row.market,
+    positionId: row.position_id,
+    positionSide: row.position_side,
+    side: row.side,
+    type: row.type as ConditionalType,
+    stopPrice: row.stop_price === null ? null : Number(row.stop_price),
+    callbackRate: row.callback_rate === null ? null : Number(row.callback_rate),
+    quantity: Number(row.quantity),
+    anchor: row.anchor === null ? null : Number(row.anchor),
+    status: row.status,
+    createdAt: row.created_at,
+    triggeredAt: row.triggered_at,
+  };
+}
+
+export interface PlaceConditionalRequest {
+  userId: string;
+  positionId: string;
+  type: ConditionalType;
+  quantity: number;
+  stopPrice?: number;
+  callbackRate?: number;
+}
+
+/**
+ * Place a conditional order that protects an open perpetual position.
+ *
+ * The order's side is the opposite of the position's, because it can only
+ * reduce: a long is protected by a sell, a short by a buy. The stop is required
+ * to sit on the correct side of the current mark, so a stop-loss cannot be
+ * parked above a long's mark and fire on the next cycle. The quantity is capped
+ * at the position size for the same reduce-only reason.
+ */
+export function placeConditionalOrder(request: PlaceConditionalRequest): ConditionalOrderView {
+  assertNotBlacklisted([{ kind: 'wallet', value: request.userId }]);
+  if (!(CONDITIONAL_TYPES as readonly string[]).includes(request.type)) {
+    throw new DexError('INVALID_TYPE', `type must be one of ${CONDITIONAL_TYPES.join(', ')}`, 400);
+  }
+  const position = loadPosition(request.userId, request.positionId);
+  const positionSide = position.side === 'long' ? 'long' : 'short';
+
+  const quantity = Number(request.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new DexError('INVALID_AMOUNT', 'quantity must be positive', 400);
+  }
+  if (quantity > position.size + 1e-9) {
+    throw new DexError('QUANTITY_OUT_OF_RANGE', 'quantity exceeds the open position', 400);
+  }
+
+  let params: { stopPrice: number | null; callbackRate: number | null };
+  try {
+    params = validateConditionalParams(request.type, {
+      stopPrice: request.stopPrice,
+      callbackRate: request.callbackRate,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'invalid parameters';
+    throw new DexError('INVALID_PARAMS', message, 400);
+  }
+
+  const mark = markPrice(position.market);
+  if (request.type === 'stop_loss') {
+    const wrongSide = positionSide === 'long' ? params.stopPrice! >= mark : params.stopPrice! <= mark;
+    if (wrongSide) {
+      throw new DexError(
+        'INVALID_STOP',
+        positionSide === 'long'
+          ? 'a long stop-loss must sit below the current mark'
+          : 'a short stop-loss must sit above the current mark',
+        400,
+      );
+    }
+  } else if (request.type === 'take_profit') {
+    const wrongSide = positionSide === 'long' ? params.stopPrice! <= mark : params.stopPrice! >= mark;
+    if (wrongSide) {
+      throw new DexError(
+        'INVALID_STOP',
+        positionSide === 'long'
+          ? 'a long take-profit must sit above the current mark'
+          : 'a short take-profit must sit below the current mark',
+        400,
+      );
+    }
+  }
+
+  const orderId = generateId();
+  getDb()
+    .prepare(
+      `INSERT INTO dex_perp_conditional_orders
+         (order_id, user_id, market, position_id, position_side, side, type, stop_price, callback_rate, quantity, anchor, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    )
+    .run(
+      orderId,
+      request.userId,
+      position.market,
+      position.position_id,
+      positionSide,
+      positionSide === 'long' ? 'sell' : 'buy',
+      request.type,
+      params.stopPrice,
+      params.callbackRate,
+      quantity,
+      position.entry_price,
+    );
+
+  const row = getDb()
+    .prepare('SELECT * FROM dex_perp_conditional_orders WHERE order_id = ?')
+    .get(orderId) as ConditionalRow;
+  return toConditional(row);
+}
+
+/** A user's conditional orders, newest first. */
+export function listConditionalOrders(userId: string): ConditionalOrderView[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM dex_perp_conditional_orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 200')
+    .all(userId) as ConditionalRow[];
+  return rows.map(toConditional);
+}
+
+/** Cancel a pending conditional order, scoped to its owner. */
+export function cancelConditionalOrder(userId: string, orderId: string): ConditionalOrderView {
+  const id = String(orderId ?? '').trim();
+  if (!id) throw new DexError('VALIDATION_FAILED', 'orderId is required', 400);
+  const db = getDb();
+  const row = db
+    .prepare('SELECT * FROM dex_perp_conditional_orders WHERE order_id = ? AND user_id = ?')
+    .get(id, userId) as ConditionalRow | undefined;
+  if (!row) throw new DexError('UNKNOWN_ORDER', 'no such conditional order', 404);
+  if (row.status !== 'pending') throw new DexError('TERMINAL_STATE', `this order is already ${row.status}`, 409);
+  db.prepare("UPDATE dex_perp_conditional_orders SET status = 'cancelled' WHERE order_id = ?").run(id);
+  return toConditional({ ...row, status: 'cancelled' });
+}
+
+export interface ConditionalTriggerReport {
+  triggered: Array<{ orderId: string; market: string; type: string; price: number; reduced: number; closed: boolean }>;
+  skipped: string[];
+}
+
+/**
+ * Fire every pending conditional order whose condition the mark has crossed.
+ *
+ * Each order reduces the position it protects by the smaller of its own
+ * quantity and what is left open, at the mark, through the same reduce path a
+ * manual close uses. An order whose position has gone is cancelled rather than
+ * fired, and an order whose mark cannot be read is skipped and left pending, so
+ * a missing price can never trigger a trade. A trailing stop's anchor is
+ * persisted each cycle, so the retracement is measured from the best price seen
+ * rather than from the current mark.
+ */
+export function triggerConditionalOrders(): ConditionalTriggerReport {
+  const db = getDb();
+  const pending = db
+    .prepare("SELECT * FROM dex_perp_conditional_orders WHERE status = 'pending' ORDER BY created_at")
+    .all() as ConditionalRow[];
+
+  const triggered: ConditionalTriggerReport['triggered'] = [];
+  const skipped: string[] = [];
+
+  for (const order of pending) {
+    let mark: number;
+    try {
+      mark = markPrice(order.market);
+    } catch {
+      skipped.push(order.order_id);
+      continue;
+    }
+
+    const position = db
+      .prepare("SELECT * FROM dex_perp_positions WHERE position_id = ? AND status = 'open'")
+      .get(order.position_id) as PositionRow | undefined;
+    if (!position) {
+      db.prepare("UPDATE dex_perp_conditional_orders SET status = 'cancelled' WHERE order_id = ?").run(order.order_id);
+      continue;
+    }
+
+    const evaluation = evaluateConditional({
+      type: order.type as ConditionalType,
+      positionSide: order.position_side === 'long' ? 'long' : 'short',
+      stopPrice: order.stop_price,
+      callbackRate: order.callback_rate,
+      mark,
+      anchor: order.anchor,
+    });
+
+    // The anchor only moves in the position's favour, so it is written every
+    // cycle for a trailing stop and is a no-op for the fixed-price types.
+    if (order.type === 'trailing_stop' && evaluation.anchor !== Number(order.anchor)) {
+      db.prepare('UPDATE dex_perp_conditional_orders SET anchor = ? WHERE order_id = ?').run(
+        evaluation.anchor,
+        order.order_id,
+      );
+    }
+    if (!evaluation.trigger) continue;
+
+    const quantity = reductionQuantity(order.quantity, position.size);
+    if (quantity <= 0) {
+      db.prepare("UPDATE dex_perp_conditional_orders SET status = 'cancelled' WHERE order_id = ?").run(order.order_id);
+      continue;
+    }
+
+    try {
+      const result = reducePosition(order.user_id, order.position_id, quantity);
+      db.prepare(
+        "UPDATE dex_perp_conditional_orders SET status = 'triggered', triggered_at = datetime('now') WHERE order_id = ?",
+      ).run(order.order_id);
+      triggered.push({
+        orderId: order.order_id,
+        market: order.market,
+        type: order.type,
+        price: result.exitPrice,
+        reduced: result.closedSize,
+        closed: result.closed,
+      });
+    } catch {
+      // A reduce that cannot settle leaves the order pending for the next cycle.
+      skipped.push(order.order_id);
+    }
+  }
+
+  return { triggered, skipped };
+}

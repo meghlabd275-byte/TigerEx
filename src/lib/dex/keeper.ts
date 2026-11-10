@@ -15,7 +15,7 @@
 import { getDb } from '@/lib/db';
 import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { executeSwap } from '@/lib/dex/swap-service';
-import { closePosition, applyFunding, liquidatePosition, markPrice, perpPositions } from '@/lib/dex/perps-service';
+import { closePosition, applyFunding, liquidatePosition, markPrice, perpPositions, triggerConditionalOrders } from '@/lib/dex/perps-service';
 import { accrueInterest } from '@/lib/dex/margin-service';
 import { distributeVetgrFees } from '@/lib/dex/farm-service';
 import { runDexCopySweep } from '@/lib/dex/copy-service';
@@ -34,6 +34,7 @@ export interface KeeperReport {
   twapSlicesFailed: number;
   fundingApplied: string[];
   positionsLiquidated: number;
+  conditionalOrdersTriggered: number;
   interestAccrued: number;
   vetgrFeesDistributed: number;
   copyMirrored: number;
@@ -237,7 +238,7 @@ export function runDueTwapPlans(now = Date.now()): { run: number; failed: number
  * Apply funding to every listed perpetual and liquidate any position that the
  * mark price has pushed below its maintenance margin.
  */
-export function runPerpCycle(): { fundingApplied: string[]; liquidated: number } {
+export function runPerpCycle(): { fundingApplied: string[]; liquidated: number; conditionalTriggered: number } {
   const db = getDb();
   const markets = db
     .prepare(
@@ -289,7 +290,18 @@ export function runPerpCycle(): { fundingApplied: string[]; liquidated: number }
       }
     }
   }
-  return { fundingApplied, liquidated };
+
+  // Conditional orders run after the liquidations: an order whose position was
+  // just liquidated is cancelled by the reduce path rather than fired at a
+  // position that is no longer there.
+  let conditionalTriggered = 0;
+  try {
+    conditionalTriggered = triggerConditionalOrders().triggered.length;
+  } catch {
+    conditionalTriggered = 0;
+  }
+
+  return { fundingApplied, liquidated, conditionalTriggered };
 }
 
 /** The funding rate for a symbol from the stored oracle sources. */
@@ -336,6 +348,7 @@ export function runKeeperCycle(now = Date.now()): KeeperReport {
     twapSlicesFailed: twap.failed,
     fundingApplied: perps.fundingApplied,
     positionsLiquidated: perps.liquidated,
+    conditionalOrdersTriggered: perps.conditionalTriggered,
     interestAccrued: lending.charged,
     vetgrFeesDistributed: vetgrFees.reduce((sum, entry) => sum + entry.distributed, 0),
     copyMirrored: copy.filter((row) => row.status === 'mirrored').length,

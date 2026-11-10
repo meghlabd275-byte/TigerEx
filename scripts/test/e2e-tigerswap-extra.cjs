@@ -126,6 +126,7 @@ async function main() {
       ENCRYPTION_KEY: 'test-encryption-key-0123456789abcdef0123456789',
       TIGEREX_BOOTSTRAP_ADMIN_EMAIL: adminEmail,
       TIGEREX_BOOTSTRAP_ADMIN_PASSWORD: adminPassword,
+      TIGEREX_KEEPER_SECRET: 'e2e-keeper-secret-0123456789',
       NODE_ENV: 'production',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -470,6 +471,103 @@ async function main() {
     assert.equal(botDelete.json.removed, true);
     record('a bot instance is removed', true);
 
+    // --- Perpetual conditional orders ------------------------------------
+    // A perpetual market is listed by the admin, a trader opens a position and
+    // protects it with a stop-loss. The stop is not client-driven: it is fired
+    // by the keeper, so the check drives the keeper secret rather than trusting
+    // the trader to settle their own stop.
+    const perpSymbol = `BTC${Date.now() % 100000}/RUSD`;
+    const perpMarket = await request('POST', '/api/admin/futures/markets', {
+      token: adminToken,
+      body: {
+        symbol: perpSymbol,
+        settlementAsset: 'RUSD',
+        contractType: 'RUSD_M',
+        listingType: 'perpetual',
+        contractSize: 1,
+        tickSize: 1,
+        pricePrecision: 2,
+        quantityPrecision: 3,
+        minQuantity: 0.001,
+        maxQuantity: 1000,
+        maxLeverage: 50,
+        makerFeeBps: 2,
+        takerFeeBps: 5,
+        maintenanceMarginRate: 0.005,
+        initialMarginRate: 0.008,
+        status: 'active',
+      },
+    });
+    assert.equal(perpMarket.status, 201, `perp listing failed: ${JSON.stringify(perpMarket.json)}`);
+    // Seed the mark the way the oracle does, so the position opens at a known price.
+    const markDb = new Database(dbPath);
+    try {
+      markDb
+        .prepare("INSERT INTO market_data (id, symbol, price, volume_24h) VALUES (?, ?, ?, 0)")
+        .run(crypto.randomUUID(), perpSymbol, 50000);
+    } finally {
+      markDb.close();
+    }
+    record('admin lists a perpetual market for the DEX', true, perpSymbol);
+
+    const perpOpen = await request('POST', '/api/dex/perps', {
+      token,
+      body: { symbol: perpSymbol, side: 'long', size: 1, leverage: 10 },
+    });
+    assert.equal(perpOpen.status, 201, `perp open failed: ${JSON.stringify(perpOpen.json)}`);
+    const perpPositionId = perpOpen.json.position.positionId;
+
+    const badStop = await request('POST', '/api/dex/conditional-orders', {
+      token,
+      body: { positionId: perpPositionId, type: 'stop_loss', quantity: 1, stopPrice: 51000 },
+    });
+    assert.equal(badStop.status, 400, `a stop above a long's mark must be refused, got ${badStop.status}`);
+
+    const stop = await request('POST', '/api/dex/conditional-orders', {
+      token,
+      body: { positionId: perpPositionId, type: 'stop_loss', quantity: 1, stopPrice: 49000 },
+    });
+    assert.equal(stop.status, 201, `stop placement failed: ${JSON.stringify(stop.json)}`);
+    assert.equal(stop.json.order.side, 'sell', 'a long is protected by a sell');
+    assert.equal(stop.json.order.status, 'pending');
+
+    const listBefore = await request('GET', '/api/dex/perps', { token });
+    assert.ok(
+      listBefore.json.conditionalOrders.some((o) => o.orderId === stop.json.order.orderId),
+      'the perps view must list the conditional order',
+    );
+
+    // Move the mark through the stop, then run the keeper: the stop fires and
+    // the position closes with real fund movement.
+    const stopDb = new Database(dbPath);
+    try {
+      stopDb.prepare('UPDATE market_data SET price = ? WHERE symbol = ?').run(48000, perpSymbol);
+    } finally {
+      stopDb.close();
+    }
+    const keeperSecret = 'e2e-keeper-secret-0123456789';
+    const wrongSecret = await fetch(`${base}/api/dex/keeper`, {
+      method: 'POST',
+      headers: { 'x-keeper-secret': 'not-the-secret' },
+    });
+    assert.equal(wrongSecret.status, 401, 'the keeper must refuse a wrong secret');
+    const keeperRun = await fetch(`${base}/api/dex/keeper`, {
+      method: 'POST',
+      headers: { 'x-keeper-secret': keeperSecret },
+    });
+    assert.equal(keeperRun.status, 200, `keeper run failed: ${keeperRun.status}`);
+    const keeperReport = (await keeperRun.json()).report;
+    assert.equal(keeperReport.conditionalOrdersTriggered, 1, 'the stop must fire exactly once');
+    record('a conditional stop is refused above the mark, placed below it, and fired by the keeper', true);
+
+    const afterTrigger = await request('GET', '/api/dex/perps', { token });
+    assert.equal(afterTrigger.json.positions.length, 0, 'the stop must close the position');
+    assert.equal(
+      afterTrigger.json.conditionalOrders.find((o) => o.orderId === stop.json.order.orderId).status,
+      'triggered',
+    );
+    record('the fired stop closed the position and released its margin', true);
+
     // --- Emergency controls ----------------------------------------------
     // A blacklisted token is refused by the swap path even while a pool holds
     // it, and a blacklisted wallet cannot swap at all.
@@ -607,6 +705,11 @@ async function main() {
       ['GET', '/api/dex/intelligence'],
       ['GET', '/api/dex/copy'],
       ['POST', '/api/dex/copy'],
+      ['GET', '/api/dex/conditional-orders'],
+      ['POST', '/api/dex/conditional-orders'],
+      ['DELETE', '/api/dex/conditional-orders'],
+      ['POST', '/api/dex/perps'],
+      ['PATCH', '/api/dex/perps'],
     ]) {
       const response = await request(method, url, method === 'GET' ? {} : { body: {} });
       assert.equal(response.status, 401, `${method} ${url} must require auth, got ${response.status}`);
