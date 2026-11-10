@@ -6,9 +6,12 @@
 package multilang
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,7 +37,7 @@ const (
 	CategoryUltraLowLatency APICategory = "ultra_low_latency" // C++/Rust only
 	CategoryHighPerformance APICategory = "high_performance"  // Go/Rust
 	CategoryStandard        APICategory = "standard"          // Any language
-	CategoryComputeHeavy   APICategory = "compute_heavy"     // Python/Java
+	CategoryComputeHeavy    APICategory = "compute_heavy"     // Python/Java
 )
 
 // LanguageConfig holds configuration for each language backend
@@ -42,24 +45,24 @@ type LanguageConfig struct {
 	Enabled        bool          `json:"enabled"`
 	Endpoint       string        `json:"endpoint"`
 	Timeout        time.Duration `json:"timeout"`
-	MaxRetries    int           `json:"max_retries"`
-	Weight        int           `json:"weight"` // Load balancing weight
+	MaxRetries     int           `json:"max_retries"`
+	Weight         int           `json:"weight"` // Load balancing weight
 	HealthCheckURL string        `json:"health_check_url"`
 }
 
 // APIConfig defines the configuration for each API including available languages
 type APIConfig struct {
-	Name                string                   `json:"name"`
-	Category            APICategory              `json:"category"`
-	PreferredLanguage   Language                 `json:"preferred_language"`
-	AvailableLanguages  map[Language]LanguageConfig `json:"available_languages"`
-	FailoverEnabled    bool                     `json:"failover_enabled"`
-	LoadBalanceEnabled bool                     `json:"load_balance_enabled"`
+	Name               string                      `json:"name"`
+	Category           APICategory                 `json:"category"`
+	PreferredLanguage  Language                    `json:"preferred_language"`
+	AvailableLanguages map[Language]LanguageConfig `json:"available_languages"`
+	FailoverEnabled    bool                        `json:"failover_enabled"`
+	LoadBalanceEnabled bool                        `json:"load_balance_enabled"`
 }
 
 // PerformanceMetrics tracks performance for each language backend
 type PerformanceMetrics struct {
-	TotalRequests    int64     `json:"total_requests"`
+	TotalRequests   int64     `json:"total_requests"`
 	SuccessCount    int64     `json:"success_count"`
 	FailureCount    int64     `json:"failure_count"`
 	TotalLatency    int64     `json:"total_latency_ns"` // nanoseconds
@@ -68,39 +71,39 @@ type PerformanceMetrics struct {
 	LastRequestTime time.Time `json:"last_request_time"`
 	LastError       string    `json:"last_error"`
 	HealthStatus    bool      `json:"health_status"`
-	mu             sync.RWMutex
+	mu              sync.RWMutex
 }
 
 // Router is the main router that manages multi-language API switching
 type Router struct {
-	apis            map[string]*APIConfig
-	metrics         map[string]map[Language]*PerformanceMetrics
-	mu              sync.RWMutex
+	apis                map[string]*APIConfig
+	metrics             map[string]map[Language]*PerformanceMetrics
+	mu                  sync.RWMutex
 	healthCheckInterval time.Duration
-	latencySLA       time.Duration // Service Level Agreement threshold
-	defaultTimeout   time.Duration
+	latencySLA          time.Duration // Service Level Agreement threshold
+	defaultTimeout      time.Duration
 }
 
 // RequestContext holds the context for each request
 type RequestContext struct {
-	RequestID    string                 `json:"request_id"`
-	API          string                 `json:"api"`
-	Language     Language               `json:"language"`
-	StartTime    time.Time              `json:"start_time"`
-	Latency      time.Duration          `json:"latency"`
-	Success      bool                   `json:"success"`
-	Error        string                 `json:"error,omitempty"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	RequestID string                 `json:"request_id"`
+	API       string                 `json:"api"`
+	Language  Language               `json:"language"`
+	StartTime time.Time              `json:"start_time"`
+	Latency   time.Duration          `json:"latency"`
+	Success   bool                   `json:"success"`
+	Error     string                 `json:"error,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // NewRouter creates a new multi-language router
 func NewRouter() *Router {
 	return &Router{
-		apis:              make(map[string]*APIConfig),
-		metrics:           make(map[string]map[Language]*PerformanceMetrics),
+		apis:                make(map[string]*APIConfig),
+		metrics:             make(map[string]map[Language]*PerformanceMetrics),
 		healthCheckInterval: 30 * time.Second,
-		latencySLA:        100 * time.Millisecond,
-		defaultTimeout:    30 * time.Second,
+		latencySLA:          100 * time.Millisecond,
+		defaultTimeout:      30 * time.Second,
 	}
 }
 
@@ -110,12 +113,12 @@ func (r *Router) RegisterAPI(config APIConfig) {
 	defer r.mu.Unlock()
 
 	r.apis[config.Name] = &config
-	
+
 	// Initialize metrics for each language
 	r.metrics[config.Name] = make(map[Language]*PerformanceMetrics)
 	for lang := range config.AvailableLanguages {
 		r.metrics[config.Name][lang] = &PerformanceMetrics{
-			MinLatency: math.MaxInt64,
+			MinLatency:   math.MaxInt64,
 			HealthStatus: true,
 		}
 	}
@@ -173,7 +176,7 @@ func (r *Router) calculateScore(metrics *PerformanceMetrics, config LanguageConf
 	// Calculate average latency
 	avgLatency := float64(atomic.LoadInt64(&metrics.TotalLatency))
 	totalReqs := atomic.LoadInt64(&metrics.TotalRequests)
-	
+
 	if totalReqs > 0 {
 		avgLatency /= float64(totalReqs)
 	} else {
@@ -271,7 +274,7 @@ func (r *Router) RouteRequest(ctx *gin.Context, apiName string, handler func(lan
 		reqCtx.Success = false
 		reqCtx.Error = err.Error()
 		r.RecordRequest(apiName, lang, reqCtx.Latency, false, err.Error())
-		
+
 		// Try failover if enabled
 		r.mu.RLock()
 		api := r.apis[apiName]
@@ -299,23 +302,78 @@ func (r *Router) GetMetrics(apiName string) map[Language]*PerformanceMetrics {
 // HealthCheck performs health checks on all language backends
 func (r *Router) HealthCheck() {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+	targets := make([]healthTarget, 0, len(r.metrics))
 	for apiName, langMetrics := range r.metrics {
+		api := r.apis[apiName]
+		if api == nil {
+			continue
+		}
 		for lang, metrics := range langMetrics {
-			go func(api string, l Language, m *PerformanceMetrics) {
-				// Perform actual health check here
-				// For now, mark as healthy if no recent errors
-				m.mu.Lock()
-				if time.Since(m.LastRequestTime) < 5*time.Minute && m.LastError == "" {
-					m.HealthStatus = true
-				} else if time.Since(m.LastRequestTime) > 5*time.Minute {
-					m.HealthStatus = true // Reset if no recent requests
-				}
-				m.mu.Unlock()
-			}(apiName, lang, metrics)
+			cfg, ok := api.AvailableLanguages[lang]
+			if !ok || !cfg.Enabled {
+				continue
+			}
+			url := cfg.HealthCheckURL
+			if url == "" {
+				url = cfg.Endpoint
+			}
+			if url == "" {
+				continue
+			}
+			targets = append(targets, healthTarget{url: url, metric: metrics})
 		}
 	}
+	r.mu.RUnlock()
+
+	for _, t := range targets {
+		go func(t healthTarget) {
+			healthy := probeEndpoint(t.url)
+			t.metric.mu.Lock()
+			t.metric.HealthStatus = healthy
+			if !healthy {
+				t.metric.LastError = "health check failed: " + t.url
+			}
+			t.metric.mu.Unlock()
+		}(t)
+	}
+}
+
+// healthTarget pairs a backend URL with the metrics it updates.
+type healthTarget struct {
+	url    string
+	metric *PerformanceMetrics
+}
+
+// probeEndpoint reports whether a backend answers a health probe. HTTP and
+// HTTPS endpoints are probed directly; WebSocket endpoints are probed over
+// their plaintext HTTP origin, since the upgrade handshake is not available
+// here. Any transport error, timeout or non-2xx status counts as unhealthy.
+func probeEndpoint(rawURL string) bool {
+	probeURL := rawURL
+	switch {
+	case strings.HasPrefix(rawURL, "http://"), strings.HasPrefix(rawURL, "https://"):
+		// Probe directly.
+	case strings.HasPrefix(rawURL, "ws://"):
+		probeURL = "http://" + strings.TrimPrefix(rawURL, "ws://")
+	case strings.HasPrefix(rawURL, "wss://"):
+		probeURL = "https://" + strings.TrimPrefix(rawURL, "wss://")
+	default:
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
 // StartHealthCheck starts periodic health checks
@@ -345,10 +403,10 @@ func GetRouter() *Router {
 func (r *Router) initializeDefaultAPIs() {
 	// REST API v2 - High performance
 	r.RegisterAPI(APIConfig{
-		Name:              "rest_api_v2",
-		Category:          CategoryHighPerformance,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "rest_api_v2",
+		Category:           CategoryHighPerformance,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {
@@ -368,10 +426,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// WebSocket v2 - High performance
 	r.RegisterAPI(APIConfig{
-		Name:              "websocket_v2",
-		Category:          CategoryHighPerformance,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "websocket_v2",
+		Category:           CategoryHighPerformance,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {
@@ -391,10 +449,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// FIX API - High performance
 	r.RegisterAPI(APIConfig{
-		Name:              "fix_api",
-		Category:          CategoryHighPerformance,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "fix_api",
+		Category:           CategoryHighPerformance,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {
@@ -414,10 +472,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Order Service - High performance
 	r.RegisterAPI(APIConfig{
-		Name:              "order_service",
-		Category:          CategoryHighPerformance,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "order_service",
+		Category:           CategoryHighPerformance,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {
@@ -437,10 +495,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Trading Service - High performance
 	r.RegisterAPI(APIConfig{
-		Name:              "trading_service",
-		Category:          CategoryHighPerformance,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "trading_service",
+		Category:           CategoryHighPerformance,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {
@@ -460,10 +518,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Market Data - High performance
 	r.RegisterAPI(APIConfig{
-		Name:              "marketdata",
-		Category:          CategoryHighPerformance,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "marketdata",
+		Category:           CategoryHighPerformance,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {
@@ -483,10 +541,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Future Trading - High performance
 	r.RegisterAPI(APIConfig{
-		Name:              "future_trading",
-		Category:          CategoryHighPerformance,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "future_trading",
+		Category:           CategoryHighPerformance,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {
@@ -506,10 +564,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Margin Trading - High performance
 	r.RegisterAPI(APIConfig{
-		Name:              "margin_trading",
-		Category:          CategoryHighPerformance,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "margin_trading",
+		Category:           CategoryHighPerformance,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {
@@ -529,10 +587,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// AI Trading - Compute heavy
 	r.RegisterAPI(APIConfig{
-		Name:              "ai_trading",
-		Category:          CategoryComputeHeavy,
-		PreferredLanguage: LanguagePython,
-		FailoverEnabled:   true,
+		Name:               "ai_trading",
+		Category:           CategoryComputeHeavy,
+		PreferredLanguage:  LanguagePython,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: false,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguagePython: {
@@ -552,10 +610,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Predictive Analytics - Compute heavy
 	r.RegisterAPI(APIConfig{
-		Name:              "predictive_analytics",
-		Category:          CategoryComputeHeavy,
-		PreferredLanguage: LanguagePython,
-		FailoverEnabled:   true,
+		Name:               "predictive_analytics",
+		Category:           CategoryComputeHeavy,
+		PreferredLanguage:  LanguagePython,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: false,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguagePython: {
@@ -575,10 +633,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Banking Integration - Enterprise
 	r.RegisterAPI(APIConfig{
-		Name:              "banking_integration",
-		Category:          CategoryStandard,
-		PreferredLanguage: LanguageJava,
-		FailoverEnabled:   true,
+		Name:               "banking_integration",
+		Category:           CategoryStandard,
+		PreferredLanguage:  LanguageJava,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: false,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageJava: {
@@ -598,10 +656,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Compliance Reporting - Enterprise
 	r.RegisterAPI(APIConfig{
-		Name:              "compliance_reporting",
-		Category:          CategoryStandard,
-		PreferredLanguage: LanguageJava,
-		FailoverEnabled:   true,
+		Name:               "compliance_reporting",
+		Category:           CategoryStandard,
+		PreferredLanguage:  LanguageJava,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: false,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageJava: {
@@ -621,10 +679,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Custody Service - Ultra-low latency (Rust only for safety)
 	r.RegisterAPI(APIConfig{
-		Name:              "custody_service",
-		Category:          CategoryUltraLowLatency,
-		PreferredLanguage: LanguageRust,
-		FailoverEnabled:   false,
+		Name:               "custody_service",
+		Category:           CategoryUltraLowLatency,
+		PreferredLanguage:  LanguageRust,
+		FailoverEnabled:    false,
 		LoadBalanceEnabled: false,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageRust: {
@@ -638,10 +696,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Matching Engine - Ultra-low latency
 	r.RegisterAPI(APIConfig{
-		Name:              "matching_engine",
-		Category:          CategoryUltraLowLatency,
-		PreferredLanguage: LanguageRust,
-		FailoverEnabled:   false,
+		Name:               "matching_engine",
+		Category:           CategoryUltraLowLatency,
+		PreferredLanguage:  LanguageRust,
+		FailoverEnabled:    false,
 		LoadBalanceEnabled: false,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageRust: {
@@ -655,10 +713,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// P2P Trading - Standard
 	r.RegisterAPI(APIConfig{
-		Name:              "p2p_trading",
-		Category:          CategoryStandard,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "p2p_trading",
+		Category:           CategoryStandard,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {
@@ -678,10 +736,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Payment Gateway - Standard
 	r.RegisterAPI(APIConfig{
-		Name:              "payment_gateway",
-		Category:          CategoryStandard,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "payment_gateway",
+		Category:           CategoryStandard,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {
@@ -701,10 +759,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Wallet Service - Standard
 	r.RegisterAPI(APIConfig{
-		Name:              "wallet_service",
-		Category:          CategoryHighPerformance,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "wallet_service",
+		Category:           CategoryHighPerformance,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {
@@ -724,10 +782,10 @@ func (r *Router) initializeDefaultAPIs() {
 
 	// Staking - Standard
 	r.RegisterAPI(APIConfig{
-		Name:              "staking",
-		Category:          CategoryStandard,
-		PreferredLanguage: LanguageGo,
-		FailoverEnabled:   true,
+		Name:               "staking",
+		Category:           CategoryStandard,
+		PreferredLanguage:  LanguageGo,
+		FailoverEnabled:    true,
 		LoadBalanceEnabled: true,
 		AvailableLanguages: map[Language]LanguageConfig{
 			LanguageGo: {

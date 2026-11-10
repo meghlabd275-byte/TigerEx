@@ -2,7 +2,7 @@
  * TigerEx Trading Service
  * Production-Ready Trading Engine API
  * Supports Spot, Futures, Margin, Options Trading
- * 
+ *
  * @author TigerEx Team
  * @version 3.0.0
  * @date July 2026
@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -31,26 +30,26 @@ import (
 // ============================================================================
 
 type Config struct {
-	MaxOrderValue       float64   `mapstructure:"max_order_value"`
-	MaxLeverage         int       `mapstructure:"max_leverage"`
-	MakerFee            float64   `mapstructure:"maker_fee"`
-	TakerFee            float64   `mapstructure:"taker_fee"`
-	MinOrderValue       float64   `mapstructure:"min_order_value"`
-	PricePrecision      int       `mapstructure:"price_precision"`
-	QuantityPrecision   int       `mapstructure:"quantity_precision"`
-	MaxOrdersPerUser    int       `mapstructure:"max_orders_per_user"`
-	CancelWindowSeconds int       `mapstructure:"cancel_window_seconds"`
+	MaxOrderValue       float64 `mapstructure:"max_order_value"`
+	MaxLeverage         int     `mapstructure:"max_leverage"`
+	MakerFee            float64 `mapstructure:"maker_fee"`
+	TakerFee            float64 `mapstructure:"taker_fee"`
+	MinOrderValue       float64 `mapstructure:"min_order_value"`
+	PricePrecision      int     `mapstructure:"price_precision"`
+	QuantityPrecision   int     `mapstructure:"quantity_precision"`
+	MaxOrdersPerUser    int     `mapstructure:"max_orders_per_user"`
+	CancelWindowSeconds int     `mapstructure:"cancel_window_seconds"`
 }
 
 var DefaultConfig = Config{
-	MaxOrderValue:       10000000,  // $10M
+	MaxOrderValue:       10000000, // $10M
 	MaxLeverage:         125,
-	MakerFee:           0.001,      // 0.1%
-	TakerFee:           0.001,      // 0.1%
-	MinOrderValue:      1.0,        // $1
-	PricePrecision:     8,
-	QuantityPrecision:  8,
-	MaxOrdersPerUser:   100,
+	MakerFee:            0.001, // 0.1%
+	TakerFee:            0.001, // 0.1%
+	MinOrderValue:       1.0,   // $1
+	PricePrecision:      8,
+	QuantityPrecision:   8,
+	MaxOrdersPerUser:    100,
 	CancelWindowSeconds: 60,
 }
 
@@ -83,24 +82,24 @@ const (
 type OrderStatus string
 
 const (
-	OrderStatusPending       OrderStatus = "pending"
-	OrderStatusNew          OrderStatus = "new"
-	OrderStatusPartially    OrderStatus = "partially_filled"
-	OrderStatusFilled       OrderStatus = "filled"
-	OrderStatusCanceled     OrderStatus = "canceled"
-	OrderStatusRejected     OrderStatus = "rejected"
-	OrderStatusExpired      OrderStatus = "expired"
-	OrderStatusTriggered    OrderStatus = "triggered"
+	OrderStatusPending   OrderStatus = "pending"
+	OrderStatusNew       OrderStatus = "new"
+	OrderStatusPartially OrderStatus = "partially_filled"
+	OrderStatusFilled    OrderStatus = "filled"
+	OrderStatusCanceled  OrderStatus = "canceled"
+	OrderStatusRejected  OrderStatus = "rejected"
+	OrderStatusExpired   OrderStatus = "expired"
+	OrderStatusTriggered OrderStatus = "triggered"
 )
 
 type TimeInForce string
 
 const (
-	TimeInForceGTC TimeInForce = "GTC"  // Good Till Cancel
-	TimeInForceIOC TimeInForce = "IOC"  // Immediate Or Cancel
-	TimeInForceFOK TimeInForce = "FOK"  // Fill Or Kill
-	TimeInForceGTX TimeInForce = "GTX"  // Good Till Cross
-	TimeInForceGTT TimeInForce = "GTT"  // Good Till Time
+	TimeInForceGTC TimeInForce = "GTC" // Good Till Cancel
+	TimeInForceIOC TimeInForce = "IOC" // Immediate Or Cancel
+	TimeInForceFOK TimeInForce = "FOK" // Fill Or Kill
+	TimeInForceGTX TimeInForce = "GTX" // Good Till Cross
+	TimeInForceGTT TimeInForce = "GTT" // Good Till Time
 )
 
 type PositionSide string
@@ -115,7 +114,7 @@ type MarginMode string
 
 const (
 	MarginModeIsolated MarginMode = "isolated"
-	MarginModeCross   MarginMode = "cross"
+	MarginModeCross    MarginMode = "cross"
 )
 
 // ============================================================================
@@ -123,196 +122,196 @@ const (
 // ============================================================================
 
 type Order struct {
-	ID              uint64      `json:"id"`
-	OrderID         string      `json:"order_id"`
-	UserID          uint64      `json:"user_id"`
-	Symbol          string      `json:"symbol"`
-	Side            OrderSide   `json:"side"`
-	Type            OrderType   `json:"type"`
-	Status          OrderStatus `json:"status"`
-	PositionSide    PositionSide `json:"position_side"`
-	
+	ID           uint64       `json:"id"`
+	OrderID      string       `json:"order_id"`
+	UserID       uint64       `json:"user_id"`
+	Symbol       string       `json:"symbol"`
+	Side         OrderSide    `json:"side"`
+	Type         OrderType    `json:"type"`
+	Status       OrderStatus  `json:"status"`
+	PositionSide PositionSide `json:"position_side"`
+
 	// Price & Quantity
-	Price           float64     `json:"price"`
-	StopPrice       float64     `json:"stop_price,omitempty"`
-	OriginalQty     float64     `json:"original_quantity"`
-	ExecutedQty     float64     `json:"executed_quantity"`
-	RemainingQty    float64     `json:"remaining_quantity"`
-	IcebergQty      float64     `json:"iceberg_quantity,omitempty"`
-	
+	Price        float64 `json:"price"`
+	StopPrice    float64 `json:"stop_price,omitempty"`
+	OriginalQty  float64 `json:"original_quantity"`
+	ExecutedQty  float64 `json:"executed_quantity"`
+	RemainingQty float64 `json:"remaining_quantity"`
+	IcebergQty   float64 `json:"iceberg_quantity,omitempty"`
+
 	// Average fill price
-	AvgPrice        float64     `json:"avg_price"`
-	
+	AvgPrice float64 `json:"avg_price"`
+
 	// Fees
-	MakerFee        float64     `json:"maker_fee"`
-	TakerFee        float64     `json:"taker_fee"`
-	
+	MakerFee float64 `json:"maker_fee"`
+	TakerFee float64 `json:"taker_fee"`
+
 	// Time settings
-	TimeInForce     TimeInForce `json:"time_in_force"`
-	ExpireTime      *time.Time  `json:"expire_time,omitempty"`
-	
+	TimeInForce TimeInForce `json:"time_in_force"`
+	ExpireTime  *time.Time  `json:"expire_time,omitempty"`
+
 	// Trigger info
-	TriggerPrice    float64     `json:"trigger_price,omitempty"`
-	TriggeredAt     *time.Time  `json:"triggered_at,omitempty"`
-	
+	TriggerPrice float64    `json:"trigger_price,omitempty"`
+	TriggeredAt  *time.Time `json:"triggered_at,omitempty"`
+
 	// OCO/OTO
-	OCOOrderID      string      `json:"oco_order_id,omitempty"`
-	OTOTriggerID    string      `json:"oto_trigger_id,omitempty"`
-	
+	OCOOrderID   string `json:"oco_order_id,omitempty"`
+	OTOTriggerID string `json:"oto_trigger_id,omitempty"`
+
 	// Risk management
-	Leverage        int         `json:"leverage"`
-	MarginMode      MarginMode  `json:"margin_mode"`
-	MarginRequired  float64     `json:"margin_required"`
-	
+	Leverage       int        `json:"leverage"`
+	MarginMode     MarginMode `json:"margin_mode"`
+	MarginRequired float64    `json:"margin_required"`
+
 	// Meta
-	ClientOrderID   string      `json:"client_order_id,omitempty"`
-	ExternalID      string      `json:"external_id,omitempty"`
-	
+	ClientOrderID string `json:"client_order_id,omitempty"`
+	ExternalID    string `json:"external_id,omitempty"`
+
 	// Timestamps
-	CreatedAt       time.Time   `json:"created_at"`
-	UpdatedAt       time.Time   `json:"updated_at"`
-	FilledAt        *time.Time  `json:"filled_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	FilledAt  *time.Time `json:"filled_at,omitempty"`
 }
 
 type Trade struct {
-	ID              uint64      `json:"id"`
-	TradeID         string      `json:"trade_id"`
-	OrderID        string      `json:"order_id"`
-	UserID          uint64      `json:"user_id"`
-	Symbol          string      `json:"symbol"`
-	Side            OrderSide   `json:"side"`
-	
+	ID      uint64    `json:"id"`
+	TradeID string    `json:"trade_id"`
+	OrderID string    `json:"order_id"`
+	UserID  uint64    `json:"user_id"`
+	Symbol  string    `json:"symbol"`
+	Side    OrderSide `json:"side"`
+
 	// Execution
-	Price           float64     `json:"price"`
-	Quantity        float64     `json:"quantity"`
-	Commission      float64     `json:"commission"`
-	CommissionAsset string      `json:"commission_asset"`
-	
+	Price           float64 `json:"price"`
+	Quantity        float64 `json:"quantity"`
+	Commission      float64 `json:"commission"`
+	CommissionAsset string  `json:"commission_asset"`
+
 	// Trade info
-	MakerOrderID    string      `json:"maker_order_id"`
-	TakerOrderID    string      `json:"taker_order_id"`
-	TradeTime       time.Time   `json:"trade_time"`
-	IsMaker         bool        `json:"is_maker"`
+	MakerOrderID string    `json:"maker_order_id"`
+	TakerOrderID string    `json:"taker_order_id"`
+	TradeTime    time.Time `json:"trade_time"`
+	IsMaker      bool      `json:"is_maker"`
 }
 
 type Position struct {
-	ID              uint64        `json:"id"`
-	UserID          uint64        `json:"user_id"`
-	Symbol          string        `json:"symbol"`
-	Side            PositionSide `json:"side"`
-	
+	ID     uint64       `json:"id"`
+	UserID uint64       `json:"user_id"`
+	Symbol string       `json:"symbol"`
+	Side   PositionSide `json:"side"`
+
 	// Position data
-	Size            float64       `json:"size"`
-	EntryPrice      float64       `json:"entry_price"`
-	MarkPrice       float64       `json:"mark_price"`
-	LiquidationPrice float64      `json:"liquidation_price"`
-	
+	Size             float64 `json:"size"`
+	EntryPrice       float64 `json:"entry_price"`
+	MarkPrice        float64 `json:"mark_price"`
+	LiquidationPrice float64 `json:"liquidation_price"`
+
 	// PnL
-	UnrealizedPnL   float64       `json:"unrealized_pnl"`
-	RealizedPnL     float64       `json:"realized_pnl"`
-	
+	UnrealizedPnL float64 `json:"unrealized_pnl"`
+	RealizedPnL   float64 `json:"realized_pnl"`
+
 	// Margin
-	Margin          float64       `json:"margin"`
-	PositionMargin  float64       `json:"position_margin"`
-	MaintenanceMargin float64    `json:"maintenance_margin"`
-	
+	Margin            float64 `json:"margin"`
+	PositionMargin    float64 `json:"position_margin"`
+	MaintenanceMargin float64 `json:"maintenance_margin"`
+
 	// Leverage
-	Leverage        int           `json:"leverage"`
-	MarginMode      MarginMode    `json:"margin_mode"`
-	
+	Leverage   int        `json:"leverage"`
+	MarginMode MarginMode `json:"margin_mode"`
+
 	// Status
-	IsClosed        bool          `json:"is_closed"`
-	
+	IsClosed bool `json:"is_closed"`
+
 	// Timestamps
-	OpenedAt        time.Time     `json:"opened_at"`
-	UpdatedAt       time.Time     `json:"updated_at"`
-	ClosedAt        *time.Time    `json:"closed_at,omitempty"`
+	OpenedAt  time.Time  `json:"opened_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
 }
 
 type Symbol struct {
-	ID              uint64      `json:"id"`
-	Name            string      `json:"name"`
-	BaseAsset       string      `json:"base_asset"`
-	QuoteAsset      string      `json:"quote_asset"`
-	Status          string      `json:"status"`
-	
+	ID         uint64 `json:"id"`
+	Name       string `json:"name"`
+	BaseAsset  string `json:"base_asset"`
+	QuoteAsset string `json:"quote_asset"`
+	Status     string `json:"status"`
+
 	// Precision
-	PricePrecision  int         `json:"price_precision"`
-	QuantityPrecision int       `json:"quantity_precision"`
-	
+	PricePrecision    int `json:"price_precision"`
+	QuantityPrecision int `json:"quantity_precision"`
+
 	// Limits
-	MinPrice        float64     `json:"min_price"`
-	MaxPrice        float64     `json:"max_price"`
-	MinQty          float64     `json:"min_quantity"`
-	MaxQty          float64     `json:"max_quantity"`
-	TickSize        float64     `json:"tick_size"`
-	LotSize         float64     `json:"lot_size"`
-	
+	MinPrice float64 `json:"min_price"`
+	MaxPrice float64 `json:"max_price"`
+	MinQty   float64 `json:"min_quantity"`
+	MaxQty   float64 `json:"max_quantity"`
+	TickSize float64 `json:"tick_size"`
+	LotSize  float64 `json:"lot_size"`
+
 	// Trading rules
-	AllowMargin     bool        `json:"allow_margin"`
-	MaxLeverage     int         `json:"max_leverage"`
-	
+	AllowMargin bool `json:"allow_margin"`
+	MaxLeverage int  `json:"max_leverage"`
+
 	// Fees
-	MakerFee        float64     `json:"maker_fee"`
-	TakerFee        float64     `json:"taker_fee"`
-	
+	MakerFee float64 `json:"maker_fee"`
+	TakerFee float64 `json:"taker_fee"`
+
 	// Market data
-	LastPrice       float64     `json:"last_price"`
-	PriceChange     float64     `json:"price_change"`
-	PriceChangePct  float64     `json:"price_change_pct"`
-	High24h         float64     `json:"high_24h"`
-	Low24h          float64     `json:"low_24h"`
-	Volume24h       float64     `json:"volume_24h"`
-	QuoteVolume24h  float64     `json:"quote_volume_24h"`
-	Trades24h       int64       `json:"trades_24h"`
-	
+	LastPrice      float64 `json:"last_price"`
+	PriceChange    float64 `json:"price_change"`
+	PriceChangePct float64 `json:"price_change_pct"`
+	High24h        float64 `json:"high_24h"`
+	Low24h         float64 `json:"low_24h"`
+	Volume24h      float64 `json:"volume_24h"`
+	QuoteVolume24h float64 `json:"quote_volume_24h"`
+	Trades24h      int64   `json:"trades_24h"`
+
 	// Timestamps
-	CreatedAt       time.Time   `json:"created_at"`
-	UpdatedAt       time.Time   `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type OrderBook struct {
-	Symbol          string      `json:"symbol"`
-	LastUpdateID    int64       `json:"last_update_id"`
-	
+	Symbol       string `json:"symbol"`
+	LastUpdateID int64  `json:"last_update_id"`
+
 	// Bids: [price, quantity]
-	Bids            [][]string `json:"bids"`
-	
+	Bids [][]string `json:"bids"`
+
 	// Asks: [price, quantity]
-	Asks            [][]string `json:"asks"`
+	Asks [][]string `json:"asks"`
 }
 
 type Ticker struct {
-	Symbol          string    `json:"symbol"`
-	Price           float64   `json:"price"`
-	PriceChange     float64   `json:"price_change"`
-	PriceChangePct  float64   `json:"price_change_pct"`
-	High24h         float64   `json:"high_24h"`
-	Low24h          float64   `json:"low_24h"`
-	Volume24h       float64   `json:"volume_24h"`
-	QuoteVolume24h  float64   `json:"quote_volume_24h"`
-	Trades24h       int64     `json:"trades_24h"`
-	
+	Symbol         string  `json:"symbol"`
+	Price          float64 `json:"price"`
+	PriceChange    float64 `json:"price_change"`
+	PriceChangePct float64 `json:"price_change_pct"`
+	High24h        float64 `json:"high_24h"`
+	Low24h         float64 `json:"low_24h"`
+	Volume24h      float64 `json:"volume_24h"`
+	QuoteVolume24h float64 `json:"quote_volume_24h"`
+	Trades24h      int64   `json:"trades_24h"`
+
 	// Bid/Ask
-	BidPrice        float64   `json:"bid_price"`
-	AskPrice        float64   `json:"ask_price"`
-	BidQty          float64   `json:"bid_qty"`
-	AskQty          float64   `json:"ask_qty"`
-	
+	BidPrice float64 `json:"bid_price"`
+	AskPrice float64 `json:"ask_price"`
+	BidQty   float64 `json:"bid_qty"`
+	AskQty   float64 `json:"ask_qty"`
+
 	// Timestamp
-	Timestamp       time.Time `json:"timestamp"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 type Kline struct {
-	OpenTime        int64     `json:"open_time"`
-	Open            float64   `json:"open"`
-	High            float64   `json:"high"`
-	Low             float64   `json:"low"`
-	Close           float64   `json:"close"`
-	Volume          float64   `json:"volume"`
-	CloseTime       int64     `json:"close_time"`
-	QuoteVolume     float64   `json:"quote_volume"`
-	Trades          int64     `json:"trades"`
+	OpenTime    int64   `json:"open_time"`
+	Open        float64 `json:"open"`
+	High        float64 `json:"high"`
+	Low         float64 `json:"low"`
+	Close       float64 `json:"close"`
+	Volume      float64 `json:"volume"`
+	CloseTime   int64   `json:"close_time"`
+	QuoteVolume float64 `json:"quote_volume"`
+	Trades      int64   `json:"trades"`
 }
 
 // ============================================================================
@@ -320,44 +319,44 @@ type Kline struct {
 // ============================================================================
 
 type CreateOrderRequest struct {
-	Symbol          string      `json:"symbol" validate:"required"`
-	Side            OrderSide   `json:"side" validate:"required"`
-	Type            OrderType   `json:"type" validate:"required"`
-	Quantity        float64     `json:"quantity" validate:"required,gt=0"`
-	Price           *float64    `json:"price"`
-	StopPrice       *float64    `json:"stop_price"`
-	TriggerPrice    *float64    `json:"trigger_price"`
-	TimeInForce     TimeInForce `json:"time_in_force"`
-	PositionSide    PositionSide `json:"position_side"`
-	Leverage        int         `json:"leverage"`
-	MarginMode      MarginMode  `json:"margin_mode"`
-	IcebergQty      *float64    `json:"iceberg_qty"`
-	ClientOrderID   string      `json:"client_order_id"`
+	Symbol        string       `json:"symbol" validate:"required"`
+	Side          OrderSide    `json:"side" validate:"required"`
+	Type          OrderType    `json:"type" validate:"required"`
+	Quantity      float64      `json:"quantity" validate:"required,gt=0"`
+	Price         *float64     `json:"price"`
+	StopPrice     *float64     `json:"stop_price"`
+	TriggerPrice  *float64     `json:"trigger_price"`
+	TimeInForce   TimeInForce  `json:"time_in_force"`
+	PositionSide  PositionSide `json:"position_side"`
+	Leverage      int          `json:"leverage"`
+	MarginMode    MarginMode   `json:"margin_mode"`
+	IcebergQty    *float64     `json:"iceberg_qty"`
+	ClientOrderID string       `json:"client_order_id"`
 }
 
 type CancelOrderRequest struct {
-	Symbol      string `json:"symbol" validate:"required"`
-	OrderID    string `json:"order_id" validate:"required"`
+	Symbol  string `json:"symbol" validate:"required"`
+	OrderID string `json:"order_id" validate:"required"`
 }
 
 type CancelAllRequest struct {
-	Symbol  string `json:"symbol"`
+	Symbol string `json:"symbol"`
 }
 
 type QueryOrderRequest struct {
 	Symbol        string `json:"symbol"`
-	OrderID      string `json:"order_id"`
+	OrderID       string `json:"order_id"`
 	ClientOrderID string `json:"client_order_id"`
-	StartTime    int64  `json:"start_time"`
-	EndTime      int64  `json:"end_time"`
-	Limit        int    `json:"limit"`
+	StartTime     int64  `json:"start_time"`
+	EndTime       int64  `json:"end_time"`
+	Limit         int    `json:"limit"`
 }
 
 type OpenOrdersRequest struct {
-	Symbol   string `json:"symbol"`
-	StartTime int64 `json:"start_time"`
-	EndTime   int64 `json:"end_time"`
-	Limit    int    `json:"limit"`
+	Symbol    string `json:"symbol"`
+	StartTime int64  `json:"start_time"`
+	EndTime   int64  `json:"end_time"`
+	Limit     int    `json:"limit"`
 }
 
 type AccountTradeRequest struct {
@@ -369,26 +368,26 @@ type AccountTradeRequest struct {
 }
 
 type CreateOrderResponse struct {
-	Success         bool      `json:"success"`
-	OrderID         string    `json:"order_id,omitempty"`
-	ClientOrderID   string    `json:"client_order_id,omitempty"`
-	TransactionTime int64     `json:"transaction_time"`
-	Price           float64   `json:"price,omitempty"`
-	OrigQty         float64   `json:"orig_qty,omitempty"`
-	ExecutedQty      float64   `json:"executed_qty,omitempty"`
-	Status          string    `json:"status,omitempty"`
-	TimeInForce     string    `json:"time_in_force,omitempty"`
-	Type            string    `json:"type,omitempty"`
-	Side            string    `json:"side,omitempty"`
+	Success         bool    `json:"success"`
+	OrderID         string  `json:"order_id,omitempty"`
+	ClientOrderID   string  `json:"client_order_id,omitempty"`
+	TransactionTime int64   `json:"transaction_time"`
+	Price           float64 `json:"price,omitempty"`
+	OrigQty         float64 `json:"orig_qty,omitempty"`
+	ExecutedQty     float64 `json:"executed_qty,omitempty"`
+	Status          string  `json:"status,omitempty"`
+	TimeInForce     string  `json:"time_in_force,omitempty"`
+	Type            string  `json:"type,omitempty"`
+	Side            string  `json:"side,omitempty"`
 }
 
 type CancelOrderResponse struct {
-	Success       bool     `json:"success"`
-	OrderID       string   `json:"order_id"`
-	ClientOrderID string   `json:"client_order_id,omitempty"`
-	Price         float64  `json:"price,omitempty"`
-	OrigQty       float64  `json:"orig_qty"`
-	ExecutedQty    float64  `json:"executed_qty"`
+	Success       bool    `json:"success"`
+	OrderID       string  `json:"order_id"`
+	ClientOrderID string  `json:"client_order_id,omitempty"`
+	Price         float64 `json:"price,omitempty"`
+	OrigQty       float64 `json:"orig_qty"`
+	ExecutedQty   float64 `json:"executed_qty"`
 }
 
 type QueryOrderResponse struct {
@@ -408,26 +407,26 @@ type AccountTradeResponse struct {
 // ============================================================================
 
 type TradingService struct {
-	config      Config
-	db          *pgxpool.Pool
-	redis       RedisClient
-	orderBooks  map[string]*OrderBookCache
-	positions   map[uint64]map[string]*Position
-	wsHub       *WebSocketHub
-	logger      Logger
+	config     Config
+	db         *pgxpool.Pool
+	redis      RedisClient
+	orderBooks map[string]*OrderBookCache
+	positions  map[uint64]map[string]*Position
+	wsHub      *WebSocketHub
+	logger     Logger
 
 	// Order management
-	orders      map[string]*Order
-	orderMu     sync.RWMutex
-	
+	orders  map[string]*Order
+	orderMu sync.RWMutex
+
 	// Symbol cache
-	symbols     map[string]*Symbol
-	symbolMu     sync.RWMutex
-	
+	symbols  map[string]*Symbol
+	symbolMu sync.RWMutex
+
 	// Market data
-	tickers     map[string]*Ticker
-	tickerMu    sync.RWMutex
-	
+	tickers  map[string]*Ticker
+	tickerMu sync.RWMutex
+
 	// Recent trades
 	recentTrades map[string][]*Trade
 	tradesMu     sync.RWMutex
@@ -461,15 +460,15 @@ type Logger interface {
 type OrderBookCache struct {
 	symbol string
 	mu     sync.RWMutex
-	
+
 	// Price levels: price -> [quantity, orders]
 	bids map[float64]*PriceLevel
 	asks map[float64]*PriceLevel
-	
+
 	// Sorted arrays for quick access
 	sortedBids []float64
 	sortedAsks []float64
-	
+
 	lastUpdateID int64
 }
 
@@ -505,7 +504,7 @@ func (s *TradingService) Initialize(ctx context.Context) error {
 	if err := s.loadSymbols(ctx); err != nil {
 		return fmt.Errorf("failed to load symbols: %w", err)
 	}
-	
+
 	// Initialize order books
 	for symbol := range s.symbols {
 		s.orderBooks[symbol] = &OrderBookCache{
@@ -516,18 +515,18 @@ func (s *TradingService) Initialize(ctx context.Context) error {
 			sortedAsks: make([]float64, 0),
 		}
 	}
-	
+
 	// Load open positions
 	if err := s.loadPositions(ctx); err != nil {
 		return fmt.Errorf("failed to load positions: %w", err)
 	}
-	
+
 	// Start market data feed
 	go s.startMarketDataFeed(ctx)
-	
+
 	// Start order processing
 	go s.processOrders(ctx)
-	
+
 	s.logger.Info("Trading service initialized")
 	return nil
 }
@@ -547,7 +546,7 @@ func (s *TradingService) loadSymbols(ctx context.Context) error {
 		return err
 	}
 	defer rows.Close()
-	
+
 	for rows.Next() {
 		var symbol Symbol
 		err := rows.Scan(
@@ -564,7 +563,7 @@ func (s *TradingService) loadSymbols(ctx context.Context) error {
 		}
 		s.symbols[symbol.Name] = &symbol
 	}
-	
+
 	return rows.Err()
 }
 
@@ -579,7 +578,7 @@ func (s *TradingService) loadPositions(ctx context.Context) error {
 		return err
 	}
 	defer rows.Close()
-	
+
 	for rows.Next() {
 		var pos Position
 		err := rows.Scan(
@@ -590,13 +589,13 @@ func (s *TradingService) loadPositions(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		
+
 		if s.positions[pos.UserID] == nil {
 			s.positions[pos.UserID] = make(map[string]*Position)
 		}
 		s.positions[pos.UserID][pos.Symbol] = &pos
 	}
-	
+
 	return rows.Err()
 }
 
@@ -614,46 +613,46 @@ func (s *TradingService) CancelOrder(ctx context.Context, userID uint64, req *Ca
 	s.orderMu.RLock()
 	order, ok := s.orders[req.OrderID]
 	s.orderMu.RUnlock()
-	
+
 	if !ok {
 		return &CancelOrderResponse{Success: false}, errors.New("order not found")
 	}
-	
+
 	if order.UserID != userID {
 		return &CancelOrderResponse{Success: false}, errors.New("unauthorized")
 	}
-	
+
 	if order.Status != OrderStatusNew && order.Status != OrderStatusPartially {
 		return &CancelOrderResponse{Success: false}, fmt.Errorf("order cannot be canceled in status: %s", order.Status)
 	}
-	
+
 	// Check cancel window
 	if time.Since(order.CreatedAt) > time.Duration(s.config.CancelWindowSeconds)*time.Second {
 		return &CancelOrderResponse{Success: false}, errors.New("cancel window expired")
 	}
-	
+
 	// Update order status
 	order.Status = OrderStatusCanceled
 	order.UpdatedAt = time.Now()
-	
+
 	// Update in database
 	if err := s.updateOrderStatus(ctx, order); err != nil {
 		return &CancelOrderResponse{Success: false}, err
 	}
-	
+
 	// Remove from order book if present
 	s.removeFromOrderBook(ctx, order)
-	
+
 	// Publish cancel event
 	s.publishOrderEvent("order_canceled", order)
-	
+
 	return &CancelOrderResponse{
 		Success:       true,
 		OrderID:       order.OrderID,
 		ClientOrderID: order.ClientOrderID,
 		Price:         order.Price,
 		OrigQty:       order.OriginalQty,
-		ExecutedQty:    order.ExecutedQty,
+		ExecutedQty:   order.ExecutedQty,
 	}, nil
 }
 
@@ -668,26 +667,26 @@ func (s *TradingService) CancelAllOrders(ctx context.Context, userID uint64, req
 		}
 	}
 	s.orderMu.RUnlock()
-	
+
 	var responses []CancelOrderResponse
 	for _, order := range ordersToCancel {
 		req := &CancelOrderRequest{
-			Symbol:   order.Symbol,
-			OrderID:  order.OrderID,
+			Symbol:  order.Symbol,
+			OrderID: order.OrderID,
 		}
 		resp, err := s.CancelOrder(ctx, userID, req)
 		if err == nil {
 			responses = append(responses, *resp)
 		}
 	}
-	
+
 	return responses, nil
 }
 
 func (s *TradingService) QueryOrder(ctx context.Context, userID uint64, req *QueryOrderRequest) (*QueryOrderResponse, error) {
 	s.orderMu.RLock()
 	defer s.orderMu.RUnlock()
-	
+
 	var order *Order
 	if req.OrderID != "" {
 		order = s.orders[req.OrderID]
@@ -699,7 +698,7 @@ func (s *TradingService) QueryOrder(ctx context.Context, userID uint64, req *Que
 			}
 		}
 	}
-	
+
 	if order == nil {
 		// Try database
 		order, err := s.getOrderFromDB(ctx, req.OrderID)
@@ -708,11 +707,11 @@ func (s *TradingService) QueryOrder(ctx context.Context, userID uint64, req *Que
 		}
 		return &QueryOrderResponse{Order: order}, nil
 	}
-	
+
 	if order.UserID != userID {
 		return &QueryOrderResponse{}, errors.New("unauthorized")
 	}
-	
+
 	return &QueryOrderResponse{Order: order}, nil
 }
 
@@ -729,13 +728,13 @@ func (s *TradingService) GetOpenOrders(ctx context.Context, userID uint64, req *
 		}
 	}
 	s.orderMu.RUnlock()
-	
+
 	// Also fetch from database
 	dbOrders, err := s.getOpenOrdersFromDB(ctx, userID, req.Symbol, req.StartTime, req.EndTime, req.Limit)
 	if err == nil {
 		orders = append(orders, dbOrders...)
 	}
-	
+
 	// Remove duplicates
 	seen := make(map[string]bool)
 	var uniqueOrders []Order
@@ -745,7 +744,7 @@ func (s *TradingService) GetOpenOrders(ctx context.Context, userID uint64, req *
 			uniqueOrders = append(uniqueOrders, o)
 		}
 	}
-	
+
 	return &OpenOrdersResponse{Orders: uniqueOrders}, nil
 }
 
@@ -754,7 +753,7 @@ func (s *TradingService) GetAccountTrades(ctx context.Context, userID uint64, re
 	if err != nil {
 		return &AccountTradeResponse{Trades: []Trade{}}, err
 	}
-	
+
 	return &AccountTradeResponse{Trades: trades}, nil
 }
 
@@ -765,13 +764,13 @@ func (s *TradingService) GetAccountTrades(ctx context.Context, userID uint64, re
 func (s *TradingService) GetPosition(ctx context.Context, userID uint64, symbol string) (*Position, error) {
 	s.positionsMu.RLock()
 	defer s.positionsMu.RUnlock()
-	
+
 	if userPositions, ok := s.positions[userID]; ok {
 		if pos, ok := userPositions[symbol]; ok {
 			return pos, nil
 		}
 	}
-	
+
 	// Try database
 	return s.getPositionFromDB(ctx, userID, symbol)
 }
@@ -787,13 +786,13 @@ func (s *TradingService) GetAllPositions(ctx context.Context, userID uint64) ([]
 		}
 	}
 	s.positionsMu.RUnlock()
-	
+
 	// Also fetch from database
 	dbPositions, err := s.getAllPositionsFromDB(ctx, userID)
 	if err == nil {
 		positions = append(positions, dbPositions...)
 	}
-	
+
 	return positions, nil
 }
 
@@ -802,11 +801,11 @@ func (s *TradingService) SetLeverage(ctx context.Context, userID uint64, symbol 
 	if !ok {
 		return errors.New("invalid symbol")
 	}
-	
+
 	if leverage < 1 || leverage > symbolInfo.MaxLeverage {
 		return fmt.Errorf("leverage must be between 1 and %d", symbolInfo.MaxLeverage)
 	}
-	
+
 	// Save leverage preference
 	return s.saveLeveragePreference(ctx, userID, symbol, leverage)
 }
@@ -822,11 +821,11 @@ func (s *TradingService) SetMarginMode(ctx context.Context, userID uint64, symbo
 func (s *TradingService) GetTicker(ctx context.Context, symbol string) (*Ticker, error) {
 	s.tickerMu.RLock()
 	defer s.tickerMu.RUnlock()
-	
+
 	if ticker, ok := s.tickers[symbol]; ok {
 		return ticker, nil
 	}
-	
+
 	// Try to get from Redis cache
 	cached, err := s.redis.Get(ctx, fmt.Sprintf("ticker:%s", symbol))
 	if err == nil {
@@ -835,7 +834,7 @@ func (s *TradingService) GetTicker(ctx context.Context, symbol string) (*Ticker,
 			return &ticker, nil
 		}
 	}
-	
+
 	// Get from database
 	return s.getTickerFromDB(ctx, symbol)
 }
@@ -844,29 +843,29 @@ func (s *TradingService) GetOrderBook(ctx context.Context, symbol string, limit 
 	if limit <= 0 || limit > 100 {
 		limit = 100
 	}
-	
+
 	s.orderMu.RLock()
 	book, ok := s.orderBooks[symbol]
 	s.orderMu.RUnlock()
-	
+
 	if !ok {
 		return &OrderBook{
 			Symbol: symbol,
-			Bids:    [][]string{},
-			Asks:    [][]string{},
+			Bids:   [][]string{},
+			Asks:   [][]string{},
 		}, nil
 	}
-	
+
 	book.mu.RLock()
 	defer book.mu.RUnlock()
-	
+
 	result := &OrderBook{
 		Symbol:       symbol,
 		LastUpdateID: book.lastUpdateID,
 		Bids:         make([][]string, 0, limit),
 		Asks:         make([][]string, 0, limit),
 	}
-	
+
 	// Get top N bids (highest first)
 	sort.Sort(sort.Reverse(sort.Float64Slice(book.sortedBids)))
 	for i := 0; i < len(book.sortedBids) && i < limit; i++ {
@@ -877,7 +876,7 @@ func (s *TradingService) GetOrderBook(ctx context.Context, symbol string, limit 
 			strconv.FormatFloat(level.Quantity, 'f', 8, 64),
 		})
 	}
-	
+
 	// Get top N asks (lowest first)
 	sort.Float64s(book.sortedAsks)
 	for i := 0; i < len(book.sortedAsks) && i < limit; i++ {
@@ -888,7 +887,7 @@ func (s *TradingService) GetOrderBook(ctx context.Context, symbol string, limit 
 			strconv.FormatFloat(level.Quantity, 'f', 8, 64),
 		})
 	}
-	
+
 	return result, nil
 }
 
@@ -896,7 +895,7 @@ func (s *TradingService) GetKlines(ctx context.Context, symbol string, interval 
 	if limit <= 0 || limit > 1000 {
 		limit = 500
 	}
-	
+
 	// Try Redis cache first
 	cacheKey := fmt.Sprintf("klines:%s:%s:%d:%d:%d", symbol, interval, startTime, endTime, limit)
 	cached, err := s.redis.Get(ctx, cacheKey)
@@ -906,19 +905,19 @@ func (s *TradingService) GetKlines(ctx context.Context, symbol string, interval 
 			return klines, nil
 		}
 	}
-	
+
 	// Get from database
 	klines, err := s.getKlinesFromDB(ctx, symbol, interval, startTime, endTime, limit)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Cache for 5 seconds
 	if len(klines) > 0 {
 		data, _ := json.Marshal(klines)
 		s.redis.Set(ctx, cacheKey, string(data), 5*time.Second)
 	}
-	
+
 	return klines, nil
 }
 
@@ -926,11 +925,11 @@ func (s *TradingService) GetRecentTrades(ctx context.Context, symbol string, lim
 	if limit <= 0 || limit > 1000 {
 		limit = 500
 	}
-	
+
 	s.tradesMu.RLock()
 	if trades, ok := s.recentTrades[symbol]; ok {
 		s.tradesMu.RUnlock()
-		
+
 		start := 0
 		if len(trades) > limit {
 			start = len(trades) - limit
@@ -942,7 +941,7 @@ func (s *TradingService) GetRecentTrades(ctx context.Context, symbol string, lim
 		return out, nil
 	}
 	s.tradesMu.RUnlock()
-	
+
 	return s.getRecentTradesFromDB(ctx, symbol, limit)
 }
 
@@ -971,54 +970,17 @@ func (s *TradingService) validateOrderType(orderType OrderType, price *float64) 
 	}
 }
 
-func (s *TradingService) processMarketOrder(ctx context.Context, order *Order) {
-	// Get current market price
-	symbol, ok := s.symbols[order.Symbol]
-	if !ok {
-		order.Status = OrderStatusRejected
-		return
-	}
-	
-	marketPrice := symbol.LastPrice
-	order.Price = marketPrice
-	
-	// Execute at market price
-	order.Status = OrderStatusFilled
-	order.ExecutedQty = order.OriginalQty
-	order.RemainingQty = 0
-	order.AvgPrice = marketPrice
-	order.FilledAt = &order.UpdatedAt
-	
-	// Calculate fees
-	orderValue := order.ExecutedQty * order.AvgPrice
-	order.TakerFee = orderValue * s.config.TakerFee
-	
-	// Update in database
-	if err := s.updateOrderStatus(ctx, order); err != nil {
-		s.logger.Error("Failed to update market order", "error", err)
-	}
-	
-	// Create trade record
-	s.createTrade(ctx, order)
-	
-	// Update position
-	s.updatePosition(ctx, order)
-	
-	// Publish fill event
-	s.publishOrderEvent("order_filled", order)
-}
-
 func (s *TradingService) addToOrderBook(ctx context.Context, order *Order) {
 	book, ok := s.orderBooks[order.Symbol]
 	if !ok {
 		return
 	}
-	
+
 	book.mu.Lock()
 	defer book.mu.Unlock()
-	
+
 	price := order.Price
-	
+
 	if order.Side == OrderSideBuy {
 		if book.bids[price] == nil {
 			book.bids[price] = &PriceLevel{Quantity: 0, Orders: 0}
@@ -1034,9 +996,9 @@ func (s *TradingService) addToOrderBook(ctx context.Context, order *Order) {
 		book.asks[price].Quantity += order.RemainingQty
 		book.asks[price].Orders++
 	}
-	
+
 	book.lastUpdateID++
-	
+
 	// Update order status
 	order.Status = OrderStatusNew
 	s.updateOrderStatus(ctx, order)
@@ -1047,12 +1009,12 @@ func (s *TradingService) removeFromOrderBook(ctx context.Context, order *Order) 
 	if !ok {
 		return
 	}
-	
+
 	book.mu.Lock()
 	defer book.mu.Unlock()
-	
+
 	price := order.Price
-	
+
 	if order.Side == OrderSideBuy {
 		if level, ok := book.bids[price]; ok {
 			level.Quantity -= order.RemainingQty
@@ -1082,138 +1044,9 @@ func (s *TradingService) removeFromOrderBook(ctx context.Context, order *Order) 
 			}
 		}
 	}
-	
+
 	book.lastUpdateID++
 }
-
-func (s *TradingService) watchTriggerOrder(ctx context.Context, order *Order) {
-	// In production, this would watch price feeds
-	// For now, just mark as triggered when price is hit
-	ticker, err := s.GetTicker(ctx, order.Symbol)
-	if err != nil {
-		return
-	}
-	
-	shouldTrigger := false
-	if order.Type == OrderTypeStopLoss {
-		if order.Side == OrderSideBuy && ticker.Price >= order.TriggerPrice {
-			shouldTrigger = true
-		} else if order.Side == OrderSideSell && ticker.Price <= order.TriggerPrice {
-			shouldTrigger = true
-		}
-	} else if order.Type == OrderTypeTakeProfit {
-		if order.Side == OrderSideBuy && ticker.Price <= order.TriggerPrice {
-			shouldTrigger = true
-		} else if order.Side == OrderSideSell && ticker.Price >= order.TriggerPrice {
-			shouldTrigger = true
-		}
-	}
-	
-	if shouldTrigger {
-		order.Status = OrderStatusTriggered
-		order.TriggeredAt = &order.UpdatedAt
-		s.updateOrderStatus(ctx, order)
-		
-		// Process as market order
-		go s.processMarketOrder(ctx, order)
-	}
-}
-
-func (s *TradingService) createTrade(ctx context.Context, order *Order) {
-	trade := &Trade{
-		ID:              generateTradeIDNumber(),
-		TradeID:         generateTradeID(order.UserID, order.Symbol),
-		OrderID:         order.OrderID,
-		UserID:          order.UserID,
-		Symbol:          order.Symbol,
-		Side:            order.Side,
-		Price:           order.AvgPrice,
-		Quantity:        order.ExecutedQty,
-		Commission:      order.TakerFee,
-		CommissionAsset: strings.Split(order.Symbol, "/")[1],
-		TradeTime:       time.Now(),
-		IsMaker:         false,
-	}
-	
-	// Save trade to database
-	if err := s.saveTrade(ctx, trade); err != nil {
-		s.logger.Error("Failed to save trade", "error", err)
-	}
-	
-	// Add to recent trades
-	s.tradesMu.Lock()
-	if s.recentTrades[order.Symbol] == nil {
-		s.recentTrades[order.Symbol] = make([]*Trade, 0, 1000)
-	}
-	s.recentTrades[order.Symbol] = append(s.recentTrades[order.Symbol], trade)
-	// Keep only last 1000 trades
-	if len(s.recentTrades[order.Symbol]) > 1000 {
-		s.recentTrades[order.Symbol] = s.recentTrades[order.Symbol][len(s.recentTrades[order.Symbol])-1000:]
-	}
-	s.tradesMu.Unlock()
-	
-	// Publish trade event
-	s.publishTradeEvent(trade)
-}
-
-func (s *TradingService) updatePosition(ctx context.Context, order *Order) {
-	s.positionsMu.Lock()
-	defer s.positionsMu.Unlock()
-	
-	if s.positions[order.UserID] == nil {
-		s.positions[order.UserID] = make(map[string]*Position)
-	}
-	
-	pos, ok := s.positions[order.UserID][order.Symbol]
-	
-	if !ok {
-		// Create new position
-		side := PositionSideLong
-		if order.Side == OrderSideSell {
-			side = PositionSideShort
-		}
-		
-		pos = &Position{
-			UserID:      order.UserID,
-			Symbol:      order.Symbol,
-			Side:        side,
-			Size:        order.ExecutedQty,
-			EntryPrice:  order.AvgPrice,
-			Margin:      order.MarginRequired,
-			Leverage:    order.Leverage,
-			MarginMode:  order.MarginMode,
-			OpenedAt:    time.Now(),
-			UpdatedAt:   time.Now(),
-		}
-		s.positions[order.UserID][order.Symbol] = pos
-	} else {
-		// Update existing position
-		// Calculate new average price
-		totalValue := (pos.Size * pos.EntryPrice) + (order.ExecutedQty * order.AvgPrice)
-		pos.Size += order.ExecutedQty
-		if pos.Size > 0 {
-			pos.EntryPrice = totalValue / pos.Size
-		}
-		pos.Margin += order.MarginRequired
-		pos.UpdatedAt = time.Now()
-		
-		// If position closed
-		if pos.Size <= 0 {
-			pos.IsClosed = true
-			now := time.Now()
-			pos.ClosedAt = &now
-		}
-	}
-	
-	// Save to database
-	if err := s.savePosition(ctx, pos); err != nil {
-		s.logger.Error("Failed to save position", "error", err)
-	}
-}
-
-// ============================================================================
-// MARKET DATA FEED
-// ============================================================================
 
 func (s *TradingService) startMarketDataFeed(ctx context.Context) {
 	// Market data must come from an explicitly configured, monitored provider adapter.
@@ -1250,29 +1083,17 @@ func (s *TradingService) processOrders(ctx context.Context) {
 type WebSocketHub struct {
 	clients    map[*websocket.Conn]bool
 	broadcast  chan []byte
-	register  chan *websocket.Conn
+	register   chan *websocket.Conn
 	unregister chan *websocket.Conn
 }
 
 func (s *TradingService) publishOrderEvent(event string, order *Order) {
 	data, _ := json.Marshal(map[string]interface{}{
-		"event":  event,
+		"event": event,
 		"data":  order,
 	})
 	s.wsHub.broadcast <- data
 }
-
-func (s *TradingService) publishTradeEvent(trade *Trade) {
-	data, _ := json.Marshal(map[string]interface{}{
-		"event":  "trade",
-		"data":  trade,
-	})
-	s.wsHub.broadcast <- data
-}
-
-// ============================================================================
-// DATABASE HELPERS
-// ============================================================================
 
 func (s *TradingService) saveOrder(ctx context.Context, order *Order) error {
 	_, err := s.db.Exec(ctx, `
@@ -1292,7 +1113,7 @@ func (s *TradingService) saveOrder(ctx context.Context, order *Order) error {
 		order.RemainingQty, order.AvgPrice, order.MakerFee, order.TakerFee,
 		order.TimeInForce, order.Leverage, order.MarginMode, order.MarginRequired,
 		order.ClientOrderID, order.CreatedAt, order.UpdatedAt)
-	
+
 	return err
 }
 
@@ -1302,7 +1123,7 @@ func (s *TradingService) updateOrderStatus(ctx context.Context, order *Order) er
 		SET status = $1, executed_quantity = $2, avg_price = $3, updated_at = $4, filled_at = $5
 		WHERE order_id = $6
 	`, order.Status, order.ExecutedQty, order.AvgPrice, order.UpdatedAt, order.FilledAt, order.OrderID)
-	
+
 	return err
 }
 
@@ -1320,7 +1141,7 @@ func (s *TradingService) getOrderFromDB(ctx context.Context, orderID string) (*O
 		&order.RemainingQty, &order.AvgPrice, &order.TimeInForce, &order.Leverage, &order.MarginMode,
 		&order.MarginRequired, &order.ClientOrderID, &order.CreatedAt, &order.UpdatedAt, &order.FilledAt,
 	)
-	
+
 	return &order, err
 }
 
@@ -1334,31 +1155,31 @@ func (s *TradingService) getOpenOrdersFromDB(ctx context.Context, userID uint64,
 		WHERE user_id = $1 AND status IN ('new', 'partially_filled', 'pending')
 	`
 	args := []interface{}{userID}
-	
+
 	if symbol != "" {
 		query += " AND symbol = $2"
 		args = append(args, symbol)
 	}
-	
+
 	if startTime > 0 {
 		query += fmt.Sprintf(" AND created_at >= $%d", len(args)+1)
 		args = append(args, startTime)
 	}
-	
+
 	if endTime > 0 {
 		query += fmt.Sprintf(" AND created_at <= $%d", len(args)+1)
 		args = append(args, endTime)
 	}
-	
+
 	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", len(args)+1)
 	args = append(args, limit)
-	
+
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var orders []Order
 	for rows.Next() {
 		var order Order
@@ -1373,21 +1194,8 @@ func (s *TradingService) getOpenOrdersFromDB(ctx context.Context, userID uint64,
 		}
 		orders = append(orders, order)
 	}
-	
-	return orders, rows.Err()
-}
 
-func (s *TradingService) saveTrade(ctx context.Context, trade *Trade) error {
-	_, err := s.db.Exec(ctx, `
-		INSERT INTO trades (trade_id, order_id, user_id, symbol, side, price, quantity,
-		                   commission, commission_asset, maker_order_id, taker_order_id,
-		                   trade_time, is_maker)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-	`, trade.TradeID, trade.OrderID, trade.UserID, trade.Symbol, trade.Side, trade.Price, trade.Quantity,
-		trade.Commission, trade.CommissionAsset, trade.MakerOrderID, trade.TakerOrderID,
-		trade.TradeTime, trade.IsMaker)
-	
-	return err
+	return orders, rows.Err()
 }
 
 func (s *TradingService) getTradesFromDB(ctx context.Context, userID uint64, symbol string, startTime, endTime, fromID int64, limit int) ([]Trade, error) {
@@ -1399,36 +1207,36 @@ func (s *TradingService) getTradesFromDB(ctx context.Context, userID uint64, sym
 		WHERE user_id = $1
 	`
 	args := []interface{}{userID}
-	
+
 	if symbol != "" {
 		query += fmt.Sprintf(" AND symbol = $%d", len(args)+1)
 		args = append(args, symbol)
 	}
-	
+
 	if fromID > 0 {
 		query += fmt.Sprintf(" AND id > $%d", len(args)+1)
 		args = append(args, fromID)
 	}
-	
+
 	if startTime > 0 {
 		query += fmt.Sprintf(" AND trade_time >= $%d", len(args)+1)
 		args = append(args, startTime)
 	}
-	
+
 	if endTime > 0 {
 		query += fmt.Sprintf(" AND trade_time <= $%d", len(args)+1)
 		args = append(args, endTime)
 	}
-	
+
 	query += fmt.Sprintf(" ORDER BY trade_time DESC LIMIT $%d", len(args)+1)
 	args = append(args, limit)
-	
+
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var trades []Trade
 	for rows.Next() {
 		var trade Trade
@@ -1442,7 +1250,7 @@ func (s *TradingService) getTradesFromDB(ctx context.Context, userID uint64, sym
 		}
 		trades = append(trades, trade)
 	}
-	
+
 	return trades, rows.Err()
 }
 
@@ -1460,7 +1268,7 @@ func (s *TradingService) getRecentTradesFromDB(ctx context.Context, symbol strin
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var trades []Trade
 	for rows.Next() {
 		var trade Trade
@@ -1474,7 +1282,7 @@ func (s *TradingService) getRecentTradesFromDB(ctx context.Context, symbol strin
 		}
 		trades = append(trades, trade)
 	}
-	
+
 	return trades, rows.Err()
 }
 
@@ -1498,7 +1306,7 @@ func (s *TradingService) savePosition(ctx context.Context, pos *Position) error 
 		pos.LiquidationPrice, pos.UnrealizedPnL, pos.RealizedPnL, pos.Margin,
 		pos.PositionMargin, pos.MaintenanceMargin, pos.Leverage, pos.MarginMode,
 		pos.IsClosed, pos.OpenedAt, pos.UpdatedAt, pos.ClosedAt)
-	
+
 	return err
 }
 
@@ -1517,7 +1325,7 @@ func (s *TradingService) getPositionFromDB(ctx context.Context, userID uint64, s
 		&pos.PositionMargin, &pos.MaintenanceMargin, &pos.Leverage, &pos.MarginMode,
 		&pos.IsClosed, &pos.OpenedAt, &pos.UpdatedAt, &pos.ClosedAt,
 	)
-	
+
 	return &pos, err
 }
 
@@ -1534,7 +1342,7 @@ func (s *TradingService) getAllPositionsFromDB(ctx context.Context, userID uint6
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var positions []Position
 	for rows.Next() {
 		var pos Position
@@ -1549,7 +1357,7 @@ func (s *TradingService) getAllPositionsFromDB(ctx context.Context, userID uint6
 		}
 		positions = append(positions, pos)
 	}
-	
+
 	return positions, rows.Err()
 }
 
@@ -1565,7 +1373,7 @@ func (s *TradingService) getTickerFromDB(ctx context.Context, symbol string) (*T
 		&ticker.High24h, &ticker.Low24h, &ticker.Volume24h, &ticker.QuoteVolume24h, &ticker.Trades24h,
 		&ticker.BidPrice, &ticker.AskPrice, &ticker.BidQty, &ticker.AskQty,
 	)
-	
+
 	if err == sql.ErrNoRows {
 		// Try from symbols table
 		err = s.db.QueryRow(ctx, `
@@ -1580,7 +1388,7 @@ func (s *TradingService) getTickerFromDB(ctx context.Context, symbol string) (*T
 			return nil, err
 		}
 	}
-	
+
 	ticker.Timestamp = time.Now()
 	return &ticker, err
 }
@@ -1599,7 +1407,7 @@ func (s *TradingService) getKlinesFromDB(ctx context.Context, symbol string, int
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var klines []Kline
 	for rows.Next() {
 		var kline Kline
@@ -1612,12 +1420,12 @@ func (s *TradingService) getKlinesFromDB(ctx context.Context, symbol string, int
 		}
 		klines = append(klines, kline)
 	}
-	
+
 	// Reverse to get chronological order
 	for i, j := 0, len(klines)-1; i < j; i, j = i+1, j-1 {
 		klines[i], klines[j] = klines[j], klines[i]
 	}
-	
+
 	return klines, rows.Err()
 }
 
@@ -1627,7 +1435,7 @@ func (s *TradingService) saveLeveragePreference(ctx context.Context, userID uint
 		VALUES ($1, $2, $3)
 		ON CONFLICT (user_id, symbol) DO UPDATE SET leverage = EXCLUDED.leverage
 	`, userID, symbol, leverage)
-	
+
 	return err
 }
 
@@ -1637,7 +1445,7 @@ func (s *TradingService) saveMarginModePreference(ctx context.Context, userID ui
 		VALUES ($1, $2, $3)
 		ON CONFLICT (user_id, symbol) DO UPDATE SET margin_mode = EXCLUDED.margin_mode
 	`, userID, symbol, mode)
-	
+
 	return err
 }
 
