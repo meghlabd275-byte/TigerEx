@@ -104,7 +104,7 @@ contract TigerSwapStaking {
     function stake(uint256 _amount) external nonReentrant updateReward(msg.sender) {
         require(_amount > 0, "TigerSwap: CANNOT_STAKE_ZERO");
         
-        stakingToken.transferFrom(msg.sender, address(this), _amount);
+        require(stakingToken.transferFrom(msg.sender, address(this), _amount), "TigerSwap: TRANSFER_FAILED");
         balanceOf[msg.sender] += _amount;
         totalSupply += _amount;
         
@@ -121,7 +121,7 @@ contract TigerSwapStaking {
         
         balanceOf[msg.sender] -= _amount;
         totalSupply -= _amount;
-        stakingToken.transfer(msg.sender, _amount);
+        require(stakingToken.transfer(msg.sender, _amount), "TigerSwap: TRANSFER_FAILED");
         
         emit Withdrawn(msg.sender, _amount);
     }
@@ -134,7 +134,7 @@ contract TigerSwapStaking {
         require(reward > 0, "TigerSwap: NO_REWARD");
         
         rewards[msg.sender] = 0;
-        rewardToken.transfer(msg.sender, reward);
+        require(rewardToken.transfer(msg.sender, reward), "TigerSwap: TRANSFER_FAILED");
         
         emit RewardClaimed(msg.sender, reward);
     }

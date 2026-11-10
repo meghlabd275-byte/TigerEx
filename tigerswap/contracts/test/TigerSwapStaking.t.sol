@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "../TigerSwapStaking.sol";
 import "./TestERC20.sol";
+import "./FalseReturnERC20.sol";
 
 contract TigerSwapStakingTest is Test {
     TigerSwapStaking public staking;
@@ -294,5 +295,45 @@ contract TigerSwapStakingTest is Test {
 
         // The whole reward is spread evenly across the duration.
         assertEq(staking.rewardRate(), TOTAL_REWARD / DURATION, "rate spread over the duration");
+    }
+
+    /// A token that returns false instead of reverting must not be able to
+    /// inflate a staker's balance: the transfer result is now checked, so a
+    /// failed stake reverts instead of crediting phantom tokens.
+    function testStakeRejectsFalseReturningToken() public {
+        FalseReturnERC20 weird = new FalseReturnERC20("WEIRD", "WRD");
+        TigerSwapStaking s2 = new TigerSwapStaking(address(weird), address(reward));
+
+        weird.mint(alice, 1_000e18);
+        vm.prank(alice);
+        weird.approve(address(s2), type(uint256).max);
+
+        // Alice holds only 1,000, so a 2,000 stake must fail, not silently
+        // credit her balance with tokens the contract never received.
+        vm.prank(alice);
+        vm.expectRevert("TigerSwap: TRANSFER_FAILED");
+        s2.stake(2_000e18);
+        assertEq(s2.balanceOf(alice), 0, "no phantom balance");
+    }
+
+    function testWithdrawRejectsFalseReturningToken() public {
+        FalseReturnERC20 weird = new FalseReturnERC20("WEIRD", "WRD");
+        TigerSwapStaking s2 = new TigerSwapStaking(address(weird), address(reward));
+
+        weird.mint(alice, 1_000e18);
+        vm.prank(alice);
+        weird.approve(address(s2), type(uint256).max);
+        vm.prank(alice);
+        s2.stake(1_000e18);
+
+        // Drain the contract's tokens so the payout cannot be honoured; the
+        // withdrawal must revert rather than zero the staker's balance for free.
+        vm.prank(address(s2));
+        weird.transfer(stranger, 1_000e18);
+
+        vm.prank(alice);
+        vm.expectRevert("TigerSwap: TRANSFER_FAILED");
+        s2.withdraw(1_000e18);
+        assertEq(s2.balanceOf(alice), 1_000e18, "balance preserved on failed transfer");
     }
 }
