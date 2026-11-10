@@ -156,4 +156,25 @@ contract BridgeTest is Test {
         assertEq(token.balanceOf(treasury), 5e18);
         assertEq(bridge.collectedFees(address(token)), 0);
     }
+
+    /// A bridge deployed without a threshold must not accept an empty signature
+    /// set. Previously `validatorThreshold` defaulted to 0 and `valid >= 0` was
+    /// always true, so anyone could release the locked supply with no
+    /// signatures at all.
+    function testInboundFailsClosedWhenThresholdUnset() public {
+        TigerSwapBridge fresh = new TigerSwapBridge(LOCAL_CHAIN);
+        fresh.enableChain(REMOTE_CHAIN, true);
+        fresh.whitelistToken(address(token), true);
+        assertEq(fresh.validatorThreshold(), 0, "threshold starts unset");
+
+        TigerSwapBridge.BridgeMessage memory m = _message(5_000e18);
+        vm.expectRevert(bytes("TigerSwap: THRESHOLD_NOT_SET"));
+        fresh.completeBridge(m, "");
+    }
+
+    function testInboundRejectsEmptySignatures() public {
+        TigerSwapBridge.BridgeMessage memory m = _message(5_000e18);
+        vm.expectRevert(bytes("TigerSwap: INSUFFICIENT_SIGNATURES"));
+        bridge.completeBridge(m, "");
+    }
 }

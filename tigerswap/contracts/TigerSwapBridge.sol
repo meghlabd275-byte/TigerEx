@@ -167,6 +167,9 @@ contract TigerSwapBridge {
         require(message.receiver != address(0), "TigerSwap: ZERO_RECEIVER");
         require(message.amount > 0, "TigerSwap: ZERO_AMOUNT");
         require(!processedMessages[message.messageId], "TigerSwap: MESSAGE_ALREADY_PROCESSED");
+        // Fail closed: an unset threshold would otherwise accept an empty
+        // signature set, letting anyone release the locked supply.
+        require(validatorThreshold > 0, "TigerSwap: THRESHOLD_NOT_SET");
 
         bytes32 payloadHash = keccak256(abi.encode(
             message.messageId,
