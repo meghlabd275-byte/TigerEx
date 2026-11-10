@@ -5,7 +5,7 @@ import { Loader2, RefreshCw } from 'lucide-react';
 import { DexShell, Panel, TableWrap, Th, Td } from '@/components/dex/DexShell';
 import { useApiResource } from '@/lib/useApiResource';
 import { apiRequest } from '@/lib/api/client-request';
-import { formatNumber, formatPercent } from '@/lib/dex/format';
+import { formatAmount, formatNumber, formatPercent } from '@/lib/dex/format';
 
 interface Assessment {
   score: number;
@@ -31,11 +31,19 @@ interface Batch {
   entries: Array<{ orderId: string; commitment: string; sequence: number; status: string }>;
 }
 
+interface Settlement {
+  batchId: string;
+  settled: number;
+  failed: number;
+  results: Array<{ orderId: string; status: string; amountOut?: number; reason?: string }>;
+}
+
 export default function DexMevPage() {
   const [form, setForm] = useState({ tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: '1000' });
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [order, setOrder] = useState<PrivateOrder | null>(null);
   const [batch, setBatch] = useState<Batch | null>(null);
+  const [settlement, setSettlement] = useState<Settlement | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const scan = useApiResource<{ scan: { detected: boolean; attackers: string[]; victim: string | null; observations: number } }>(
@@ -44,7 +52,7 @@ export default function DexMevPage() {
 
   const query = new URLSearchParams(form).toString();
 
-  const run = async (kind: 'assess' | 'submit' | 'reveal') => {
+  const run = async (kind: 'assess' | 'submit' | 'reveal' | 'settle') => {
     setBusy(kind);
     setMessage(null);
     try {
@@ -59,9 +67,23 @@ export default function DexMevPage() {
         setOrder(result.order);
         setMessage({ ok: true, text: 'Order committed to the private path.' });
       } else if (kind === 'reveal' && order) {
-        const result = await apiRequest<{ batch: Batch }>('/api/dex/mev', { method: 'PUT', body: { batchId: order.batchId } });
+        const result = await apiRequest<{ batch: Batch }>('/api/dex/mev', {
+          method: 'PUT',
+          body: { batchId: order.batchId, action: 'reveal' },
+        });
         setBatch(result.batch);
-        setMessage({ ok: true, text: 'Batch revealed; its orders are now ordered and settled.' });
+        setSettlement(null);
+        setMessage({ ok: true, text: 'Batch revealed; its order is now fixed and can be settled.' });
+      } else if (kind === 'settle' && batch) {
+        const result = await apiRequest<{ settlement: Settlement }>('/api/dex/mev', {
+          method: 'PUT',
+          body: { batchId: batch.batchId, action: 'settle' },
+        });
+        setSettlement(result.settlement);
+        setMessage({
+          ok: result.settlement.failed === 0,
+          text: `${result.settlement.settled} order(s) settled, ${result.settlement.failed} failed.`,
+        });
       }
     } catch (error) {
       setMessage({ ok: false, text: error instanceof Error ? error.message : 'The request was refused.' });
@@ -210,6 +232,29 @@ export default function DexMevPage() {
               ))}
             </tbody>
           </TableWrap>
+        )}
+        {batch && (
+          <button
+            onClick={() => run('settle')}
+            disabled={busy !== null || batch.entries.every((entry) => entry.status !== 'revealed')}
+            className="mt-3 inline-flex items-center gap-1 rounded-md bg-orange-600 px-3 py-2 text-white hover:bg-orange-700 disabled:opacity-40"
+          >
+            {busy === 'settle' && <Loader2 className="h-4 w-4 animate-spin" />} Settle batch
+          </button>
+        )}
+        {settlement && (
+          <div className="mt-3 text-sm">
+            <p>
+              {settlement.settled} settled, {settlement.failed} failed.
+            </p>
+            {settlement.results.map((result) => (
+              <p key={result.orderId} className="text-gray-500 dark:text-slate-400">
+                {result.orderId}: {result.status}
+                {result.amountOut !== undefined ? ` — received ${formatAmount(result.amountOut)}` : ''}
+                {result.reason ? ` — ${result.reason}` : ''}
+              </p>
+            ))}
+          </div>
         )}
       </Panel>
 

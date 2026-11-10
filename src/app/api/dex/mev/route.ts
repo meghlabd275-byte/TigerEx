@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/db/session';
 import { enforceRequestGuards, readJson, fail, NO_STORE } from '@/lib/api/route-guards';
-import { assessSwapRisk, submitPrivateOrder, revealBatch, scanRecentSandwiches } from '@/lib/dex/mev-service';
+import { assessSwapRisk, submitPrivateOrder, revealBatch, settleBatch, scanRecentSandwiches } from '@/lib/dex/mev-service';
 import { dexFailure } from '@/lib/dex/route-helpers';
 
 export const dynamic = 'force-dynamic';
@@ -12,7 +12,8 @@ export const dynamic = 'force-dynamic';
  * `GET` scores a pending swap against the venue's real pools, or returns the
  * recent sandwich scan. `POST` submits a swap to the private order path, which
  * stores a commitment rather than the plaintext so a searcher reading the
- * pending set learns nothing. `PUT` reveals a batch so its orders can settle.
+ * pending set learns nothing. `PUT` reveals a batch, fixing its order, then
+ * settles it through the same swap path the public flow uses.
  */
 export async function GET(request: NextRequest) {
   const auth = await requireSession(request);
@@ -68,8 +69,16 @@ export async function PUT(request: NextRequest) {
 
   const body = await readJson(request);
   const batchId = String(body?.batchId ?? request.nextUrl.searchParams.get('batchId') ?? '');
+  // A batch is revealed and then settled: reveal fixes the order, settle runs
+  // the swaps. A batch cannot be settled without being revealed first, because
+  // the reveal is what publishes the commitment and freezes the sequence.
+  const action = String(body?.action ?? request.nextUrl.searchParams.get('action') ?? 'reveal').toLowerCase();
   try {
     if (!batchId) return fail('INVALID_BATCH', 'batchId is required');
+    if (action === 'settle') {
+      return NextResponse.json({ success: true, settlement: settleBatch(batchId) }, { headers: NO_STORE });
+    }
+    if (action !== 'reveal') return fail('INVALID_ACTION', 'action must be reveal or settle');
     return NextResponse.json({ success: true, batch: revealBatch(batchId) }, { headers: NO_STORE });
   } catch (error) {
     return dexFailure(error);

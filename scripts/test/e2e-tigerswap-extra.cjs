@@ -424,11 +424,37 @@ async function main() {
 
     const reveal = await request('PUT', '/api/dex/mev', {
       token,
-      body: { batchId: privateOrder.json.order.batchId },
+      body: { batchId: privateOrder.json.order.batchId, action: 'reveal' },
     });
     assert.equal(reveal.status, 200, `reveal failed: ${JSON.stringify(reveal.json)}`);
     assert.ok(reveal.json.batch.entries.length >= 1, 'the batch must expose its entries');
     record('the private batch reveals in commit order', true);
+
+    // The batch settles through the same swap path the public flow uses, and a
+    // settled batch must not be replayable: re-revealing or re-settling it would
+    // trade the same order twice.
+    const portfolioBefore = await request('GET', '/api/dex/portfolio', { token });
+    assert.equal(portfolioBefore.status, 200, `portfolio read failed: ${JSON.stringify(portfolioBefore.json)}`);
+    const rusdBefore = portfolioBefore.json.holdings.find((h) => h.currency === 'RUSD')?.available ?? 0;
+
+    const settlement = await request('PUT', '/api/dex/mev', {
+      token,
+      body: { batchId: privateOrder.json.order.batchId, action: 'settle' },
+    });
+    assert.equal(settlement.status, 200, `settle failed: ${JSON.stringify(settlement.json)}`);
+    assert.equal(settlement.json.settlement.settled, 1, 'the committed order must settle');
+    assert.equal(settlement.json.settlement.failed, 0);
+
+    const portfolioAfter = await request('GET', '/api/dex/portfolio', { token });
+    const rusdAfter = portfolioAfter.json.holdings.find((h) => h.currency === 'RUSD')?.available ?? 0;
+    assert.ok(rusdAfter < rusdBefore, 'settling a private order must spend the input token');
+
+    const replay = await request('PUT', '/api/dex/mev', {
+      token,
+      body: { batchId: privateOrder.json.order.batchId, action: 'settle' },
+    });
+    assert.equal(replay.status, 409, 'a settled batch must not settle twice');
+    record('a private batch settles once and cannot be replayed', true, `spent ${(rusdBefore - rusdAfter).toFixed(2)} RUSD`);
 
     const sandwich = await request('GET', '/api/dex/mev?scan=sandwich', { token });
     assert.equal(sandwich.status, 200, `sandwich scan failed: ${JSON.stringify(sandwich.json)}`);

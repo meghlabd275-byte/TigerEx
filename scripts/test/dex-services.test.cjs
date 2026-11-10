@@ -34,6 +34,7 @@ const { supply, borrow, repay, withdrawSupply, flashLoan, listLendingMarkets, ac
 const { contribute, claimRaise, launchEscrowAccount, listNft, buyNft, initiateBridge, releaseBridge } = require('../../.test-build/launch-service.js');
 const { settleDueLimitOrders, runDueDcaPlans, runDueTwapPlans, runPerpCycle, runKeeperCycle } = require('../../.test-build/keeper.js');
 const { scanCopySwaps, mirrorCopySwaps, copyMirrors, runDexCopySweep } = require('../../.test-build/copy-service.js');
+const { submitPrivateOrder, revealBatch, settleBatch, privateBatch } = require('../../.test-build/mev-service.js');
 
 const db = getDb();
 
@@ -1337,4 +1338,61 @@ test('listPools reports the pools that exist with their reserves', () => {
 test('mark price falls back to the venue price when the oracle has no sources', () => {
   const symbol = listPerp('LTCX', 90);
   assert.equal(markPrice(symbol), 90);
+});
+
+
+// ---------------------------------------------------------------------------
+// MEV private order flow
+// ---------------------------------------------------------------------------
+
+test('a revealed private batch settles through the public swap path', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 100_000);
+  createPool('v2', ['RUSD', 'TGR'], { RUSD: 1_000_000, TGR: 1_000_000 });
+
+  // A distinct commit window keeps this batch isolated from the other tests.
+  // The order is committed, not traded: a commitment must not move a balance.
+  const order = submitPrivateOrder({ userId: user, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000, windowSeconds: 3607 });
+  assert.equal(order.status, 'committed');
+  assert.equal(availableBalance(user, 'RUSD'), 100_000, 'committing must not spend the input');
+  assert.equal(availableBalance(user, 'TGR'), 0);
+
+  revealBatch(order.batchId);
+  const revealed = privateBatch(order.batchId).entries[0];
+  assert.equal(revealed.status, 'revealed');
+
+  const settlement = settleBatch(order.batchId);
+  assert.equal(settlement.settled, 1);
+  assert.equal(settlement.failed, 0);
+  assert.ok(settlement.results[0].amountOut > 0, 'a settled order must receive output');
+
+  // The swap really moved: input spent and output credited.
+  assert.equal(availableBalance(user, 'RUSD'), 99_000);
+  assert.ok(availableBalance(user, 'TGR') > 0, 'the settled order must be credited its output');
+  assert.equal(privateBatch(order.batchId).entries[0].status, 'settled');
+});
+
+test('a private batch must be revealed before it can settle', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 100_000);
+  createPool('v2', ['RUSD', 'TGR'], { RUSD: 1_000_000, TGR: 1_000_000 });
+  const order = submitPrivateOrder({ userId: user, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000, windowSeconds: 3613 });
+  assert.throws(() => settleBatch(order.batchId), /no revealed orders/);
+});
+
+test('an order whose input was spent before settlement fails without reverting the batch', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 1000);
+  createPool('v2', ['RUSD', 'TGR'], { RUSD: 1_000_000, TGR: 1_000_000 });
+  const order = submitPrivateOrder({ userId: user, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000, windowSeconds: 3617 });
+  revealBatch(order.batchId);
+  // Spend the balance elsewhere between reveal and settle, the way a second
+  // order from the same account would.
+  executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1000 });
+
+  const settlement = settleBatch(order.batchId);
+  assert.equal(settlement.settled, 0);
+  assert.equal(settlement.failed, 1);
+  assert.ok(settlement.results[0].reason, 'a failed order must carry the refusal reason');
+  assert.equal(privateBatch(order.batchId).entries[0].status, 'failed');
 });

@@ -14,7 +14,7 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { DexError, dexSetting, dexSettingBool, assertDexOpen } from '@/lib/dex/pool-service';
-import { quoteSwap } from '@/lib/dex/swap-service';
+import { quoteSwap, executeSwap } from '@/lib/dex/swap-service';
 import {
   scoreImpact,
   detectSandwich,
@@ -173,6 +173,21 @@ export interface BatchView {
   }>;
 }
 
+export interface BatchSettlement {
+  batchId: string;
+  settled: number;
+  failed: number;
+  results: Array<{
+    orderId: string;
+    status: 'settled' | 'failed';
+    tokenIn: string;
+    tokenOut: string;
+    amountIn: number;
+    amountOut?: number;
+    reason?: string;
+  }>;
+}
+
 /** The committed orders of a batch, in the order they will be revealed. */
 export function privateBatch(batchId: string): BatchView {
   const rows = getDb()
@@ -205,9 +220,9 @@ export function revealBatch(batchId: string): BatchView {
   assertDexOpen('dex');
   const db = getDb();
   const rows = db
-    .prepare('SELECT order_id, committed_at FROM dex_private_orders WHERE batch_id = ?')
+    .prepare("SELECT order_id, committed_at FROM dex_private_orders WHERE batch_id = ? AND status = 'committed'")
     .all(batchId) as Array<{ order_id: string; committed_at: number }>;
-  if (rows.length === 0) throw new DexError('UNKNOWN_BATCH', `batch ${batchId} has no orders`, 404);
+  if (rows.length === 0) throw new DexError('UNKNOWN_BATCH', `batch ${batchId} has no committed orders`, 404);
 
   // The ordering rule is applied here as the authority, not merely for display.
   const plan = orderPrivateFlow(
@@ -215,12 +230,74 @@ export function revealBatch(batchId: string): BatchView {
     batchId,
   );
 
+  // Only committed rows are revealed. Re-revealing a batch must not drag a
+  // settled order back into the settleable set, or the same private order would
+  // trade twice.
   db.transaction(() => {
-    const update = db.prepare("UPDATE dex_private_orders SET status = 'revealed', sequence = ? WHERE order_id = ?");
+    const update = db.prepare(
+      "UPDATE dex_private_orders SET status = 'revealed', sequence = ? WHERE order_id = ? AND status = 'committed'",
+    );
     for (const entry of plan.entries) update.run(entry.sequence, entry.orderId);
   })();
 
   return privateBatch(batchId);
+}
+
+/**
+ * Settle every revealed order in a batch, in the batch's fixed order.
+ *
+ * A revealed order has a public commitment but is still only a commitment: the
+ * batch is what turns it into trades. Settlement runs through the same
+ * `executeSwap` the public path uses, so a private order pays the same fees and
+ * moves the same pools as a public one — the private path buys ordering, not a
+ * price. Each order settles in its own transaction, so one order that fails
+ * (a balance spent elsewhere, a pool paused mid-batch) is recorded as `failed`
+ * rather than reverting the orders around it.
+ */
+export function settleBatch(batchId: string): BatchSettlement {
+  assertDexOpen('dex');
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM dex_private_orders WHERE batch_id = ? AND status = 'revealed' ORDER BY sequence ASC")
+    .all(batchId) as PrivateOrderRow[];
+  if (rows.length === 0) {
+    throw new DexError('NOTHING_TO_SETTLE', `batch ${batchId} has no revealed orders`, 409);
+  }
+
+  const results: BatchSettlement['results'] = [];
+  for (const row of rows) {
+    try {
+      const swap = executeSwap({
+        userId: row.user_id,
+        tokenIn: row.token_in,
+        tokenOut: row.token_out,
+        amountIn: row.amount_in,
+      });
+      db.prepare("UPDATE dex_private_orders SET status = 'settled' WHERE order_id = ?").run(row.order_id);
+      results.push({
+        orderId: row.order_id,
+        status: 'settled',
+        tokenIn: row.token_in,
+        tokenOut: row.token_out,
+        amountIn: row.amount_in,
+        amountOut: swap.amountOut,
+      });
+    } catch (error) {
+      const dexError = error as { code?: string; message?: string };
+      db.prepare("UPDATE dex_private_orders SET status = 'failed' WHERE order_id = ?").run(row.order_id);
+      results.push({
+        orderId: row.order_id,
+        status: 'failed',
+        tokenIn: row.token_in,
+        tokenOut: row.token_out,
+        amountIn: row.amount_in,
+        reason: dexError.message ?? 'the swap was refused',
+      });
+    }
+  }
+
+  const settled = results.filter((entry) => entry.status === 'settled').length;
+  return { batchId, settled, failed: results.length - settled, results };
 }
 
 /**
