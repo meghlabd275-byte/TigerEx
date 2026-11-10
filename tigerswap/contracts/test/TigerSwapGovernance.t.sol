@@ -249,4 +249,83 @@ contract TigerSwapGovernanceTest is Test {
         gov.setVotingDelay(1234);
         assertEq(gov.votingDelay(), 1234, "new owner can administer");
     }
+
+    /// @dev Vote a proposal through and queue it, advancing past the timelock.
+    function _queuedProposal() internal returns (uint256 id) {
+        id = _activeProposal();
+        vm.prank(alice);
+        gov.castVote(id, true);
+        // Past the end of the voting window, so the proposal has succeeded.
+        vm.roll(block.number + (gov.votingPeriod() / 12) + 1);
+        gov.queueProposal(id);
+        vm.warp(block.timestamp + gov.queuePeriod());
+    }
+
+    /// Execution must actually perform the encoded call. The previous encoding
+    /// passed the raw argument blob as a single argument, so every execution
+    /// reverted; no test covered the path until now.
+    function testExecuteProposalPerformsTheCall() public {
+        tgr.mint(address(gov), 1_000e18);
+        uint256 aliceBefore = tgr.balanceOf(alice);
+
+        uint256 id = _queuedProposal();
+        gov.executeProposal(id);
+
+        assertEq(tgr.balanceOf(alice), aliceBefore + 1, "transfer executed");
+        assertEq(
+            uint256(gov.state(id)),
+            uint256(TigerSwapGovernance.ProposalState.Executed),
+            "state is Executed"
+        );
+    }
+
+    function testExecuteProposalCannotRunTwice() public {
+        tgr.mint(address(gov), 1_000e18);
+        uint256 id = _queuedProposal();
+        gov.executeProposal(id);
+
+        vm.expectRevert("TigerSwap: NOT_QUEUED");
+        gov.executeProposal(id);
+    }
+
+    function testExecuteBeforeTimelockReverts() public {
+        uint256 id = _activeProposal();
+        vm.prank(alice);
+        gov.castVote(id, true);
+        vm.roll(block.number + (gov.votingPeriod() / 12) + 1);
+        gov.queueProposal(id);
+
+        // The queue period has not elapsed yet.
+        vm.expectRevert("TigerSwap: TOO_EARLY");
+        gov.executeProposal(id);
+    }
+
+    /// A blank signature forwards the calldata verbatim, so a proposal can send
+    /// native value with no function selector.
+    function testExecuteProposalForwardsValueWithBlankSignature() public {
+        vm.deal(address(gov), 1 ether);
+
+        address[] memory targets = new address[](1);
+        targets[0] = bob;
+        uint256[] memory values = new uint256[](1);
+        values[0] = 1 ether;
+        string[] memory signatures = new string[](1);
+        signatures[0] = "";
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = "";
+
+        vm.prank(alice);
+        uint256 id = gov.propose(targets, values, signatures, calldatas, "pay bob");
+        vm.roll(block.number + (gov.votingDelay() / 12) + 1);
+        vm.prank(alice);
+        gov.castVote(id, true);
+        vm.roll(block.number + (gov.votingPeriod() / 12) + 1);
+        gov.queueProposal(id);
+        vm.warp(block.timestamp + gov.queuePeriod());
+
+        uint256 bobBefore = bob.balance;
+        gov.executeProposal(id);
+
+        assertEq(bob.balance, bobBefore + 1 ether, "value forwarded");
+    }
 }

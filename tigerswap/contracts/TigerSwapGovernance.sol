@@ -188,9 +188,14 @@ contract TigerSwapGovernance {
         proposal.executed = true;
         
         for (uint256 i = 0; i < proposal.targets.length; i++) {
-            (bool success, ) = proposal.targets[i].call{value: proposal.values[i]}(
-                abi.encodePacked(abi.encodeWithSignature(proposal.signatures[i], proposal.calldatas[i]))
-            );
+            // `calldatas[i]` is already ABI-encoded arguments; prefix the 4-byte
+            // selector to build the full call data. A blank signature forwards
+            // `calldatas[i]` verbatim (e.g. a plain value transfer).
+            bytes memory callData = bytes(proposal.signatures[i]).length == 0
+                ? proposal.calldatas[i]
+                : abi.encodePacked(bytes4(keccak256(bytes(proposal.signatures[i]))), proposal.calldatas[i]);
+
+            (bool success, ) = proposal.targets[i].call{value: proposal.values[i]}(callData);
             require(success, "TigerSwap: CALL_FAILED");
         }
         

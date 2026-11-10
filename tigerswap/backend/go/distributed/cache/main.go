@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -285,7 +286,50 @@ func (p *WSPool) Run() {
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  256,
 	WriteBufferSize: 256,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	// Reject cross-site upgrades. With no allowlist configured only same-host
+	// requests are accepted, so a random page cannot open a socket here.
+	CheckOrigin: checkOrigin,
+}
+
+// checkOrigin enforces the same-origin policy on WebSocket upgrades, honouring
+// a TIGEREX_WS_ALLOWED_ORIGINS allowlist when one is set.
+func checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true // non-browser client (no Origin header)
+	}
+	allowed := splitCSV(os.Getenv("TIGEREX_WS_ALLOWED_ORIGINS"))
+	if len(allowed) == 0 {
+		return sameHost(origin, r.Host)
+	}
+	for _, candidate := range allowed {
+		if origin == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// sameHost reports whether an Origin header refers to the request's own host.
+func sameHost(origin, host string) bool {
+	origin = strings.TrimPrefix(strings.TrimPrefix(origin, "http://"), "https://")
+	origin = strings.TrimSuffix(origin, "/")
+	return strings.EqualFold(origin, host)
+}
+
+// splitCSV splits a comma-separated list, dropping empty entries.
+func splitCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ============== HANDLERS ==============
