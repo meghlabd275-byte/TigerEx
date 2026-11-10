@@ -20,6 +20,7 @@ interface FarmsResponse {
     apr: number;
     total_staked: number;
     boost_multiplier: number;
+    vetgr: number;
     status: string;
   }>;
   gauges: Array<{ gauge_id: string; pool_id: string; weight: number; emission_bps: number; status: string }>;
@@ -32,6 +33,7 @@ const EMPTY = {
   rewardToken: 'TGR',
   rewardRate: '1',
   boostMultiplier: '1',
+  vetgr: false,
   startAt: '',
   endAt: '',
 };
@@ -60,6 +62,7 @@ export default function AdminDexFarmsPage() {
           rewardToken: form.rewardToken,
           rewardRate: Number(form.rewardRate),
           boostMultiplier: Number(form.boostMultiplier),
+          vetgr: form.vetgr,
           startAt: form.startAt || undefined,
           endAt: form.endAt || undefined,
         },
@@ -145,7 +148,15 @@ export default function AdminDexFarmsPage() {
           </select>
           <Field label="Reward token" value={form.rewardToken} onChange={(value) => setForm((f) => ({ ...f, rewardToken: value.toUpperCase() }))} />
           <Field label="Reward rate (per second)" type="number" value={form.rewardRate} onChange={(value) => setForm((f) => ({ ...f, rewardRate: value }))} />
-          <Field label="Boost multiplier (1–10)" type="number" value={form.boostMultiplier} onChange={(value) => setForm((f) => ({ ...f, boostMultiplier: value }))} />
+          <Field label="Boost multiplier (1–10, 2.5 max when boosted)" type="number" value={form.boostMultiplier} onChange={(value) => setForm((f) => ({ ...f, boostMultiplier: value }))} />
+          <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-slate-200">
+            <input
+              type="checkbox"
+              checked={form.vetgr}
+              onChange={(event) => setForm((f) => ({ ...f, vetgr: event.target.checked }))}
+            />
+            Split rewards by veTGR-boosted weight
+          </label>
           <Field label="Start (optional, ISO date)" value={form.startAt} onChange={(value) => setForm((f) => ({ ...f, startAt: value }))} />
           <Field label="End (optional, ISO date)" value={form.endAt} onChange={(value) => setForm((f) => ({ ...f, endAt: value }))} />
           <button

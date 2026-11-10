@@ -26,6 +26,7 @@ import {
   accrueFarm,
   pendingFarmRewards,
   rewardDebtFor,
+  farmWeight,
   veVotingPower,
   veUnlockAt,
   gaugeEmission,
@@ -42,6 +43,7 @@ interface FarmRow {
   apr: number;
   total_staked: number;
   boost_multiplier: number;
+  vetgr: number;
   start_at: string | null;
   end_at: string | null;
   status: string;
@@ -58,21 +60,63 @@ function nowMs(): number {
   return Date.now();
 }
 
-/** The farm's accumulator advanced to now, using the pool's staked total. */
-function currentFarmState(farm: FarmRow) {
-  const stakeRow = getDb()
-    .prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM dex_farm_stakes WHERE farm_id = ?')
+/** The veTGR balance a user currently holds, as a lock's voting power. */
+function vetgrBalance(userId: string): number {
+  const lock = getDb()
+    .prepare('SELECT voting_power, unlock_at FROM dex_ve_locks WHERE user_id = ?')
+    .get(userId) as { voting_power: number; unlock_at: string } | undefined;
+  if (!lock) return 0;
+  const unlock = parseUtcTimestamp(lock.unlock_at);
+  if (Number.isFinite(unlock) && unlock <= Date.now()) return 0;
+  return Number(lock.voting_power) || 0;
+}
+
+/** The total veTGR outstanding, which sets each holder's share of the boost. */
+function totalVetgr(): number {
+  const row = getDb()
+    .prepare("SELECT COALESCE(SUM(voting_power), 0) AS total FROM dex_ve_locks WHERE unlock_at > datetime('now')")
+    .get() as { total: number };
+  return Number(row.total) || 0;
+}
+
+/**
+ * The weight a stake carries in a farm's reward split.
+ *
+ * A boosted farm splits its emission by weight, so a position holding veTGR
+ * earns a larger share of the same fixed emission; the weight is the raw stake
+ * scaled by the position's boost. A farm with boosting off uses the raw stake.
+ */
+function stakeWeight(farm: FarmRow, userId: string, amount: number): number {
+  if (!Number(farm.vetgr)) return amount;
+  return farmWeight(amount, vetgrBalance(userId), totalVetgr(), Number(farm.boost_multiplier) || 2.5);
+}
+
+/** The farm's total weight, the denominator of the reward split. */
+function totalFarmWeight(farm: FarmRow): number {
+  if (!Number(farm.vetgr)) {
+    const row = getDb()
+      .prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM dex_farm_stakes WHERE farm_id = ?')
+      .get(farm.farm_id) as { total: number };
+    return Number(row.total) || 0;
+  }
+  const row = getDb()
+    .prepare('SELECT COALESCE(SUM(weighted_weight), 0) AS total FROM dex_farm_stakes WHERE farm_id = ?')
     .get(farm.farm_id) as { total: number };
+  return Number(row.total) || 0;
+}
+
+/** The farm's accumulator advanced to now, split by its total weight. */
+function currentFarmState(farm: FarmRow) {
   const meta = getDb()
     .prepare('SELECT acc_reward_per_share, last_update FROM dex_farm_meta WHERE farm_id = ?')
     .get(farm.farm_id) as { acc_reward_per_share: number; last_update: number } | undefined;
   const base = {
     accRewardPerShare: Number(meta?.acc_reward_per_share) || 0,
-    totalStaked: Number(stakeRow.total) || 0,
+    totalStaked: Number(farm.total_staked) || 0,
     rewardRate: Number(farm.reward_rate),
     lastUpdate: Number(meta?.last_update) || nowMs(),
   };
-  return accrueFarm(base, nowMs());
+  return accrueFarm(base, nowMs(), totalFarmWeight(farm));
 }
 
 function persistFarmMeta(farmId: string, state: { accRewardPerShare: number; lastUpdate: number }): void {
@@ -123,15 +167,17 @@ interface RewardSettlement {
  *
  * The debt is advanced only by what was paid, so any shortfall stays pending and
  * is paid once the fund is refilled; a shortfall is never silently forgiven.
+ * The weight is the stake's boosted weight, the same figure the accumulator was
+ * advanced by, so the pending reward is what the position actually earned.
  */
 function settleFarmReward(
   userId: string,
   farm: FarmRow,
-  stakeAmount: number,
+  weight: number,
   rewardDebt: number,
   accRewardPerShare: number,
 ): RewardSettlement {
-  const pending = pendingFarmRewards(stakeAmount, accRewardPerShare, rewardDebt);
+  const pending = pendingFarmRewards(weight, accRewardPerShare, rewardDebt);
   const payable = Math.max(0, Math.min(pending, rewardFundBalance(farm.reward_token)));
   if (payable > 0) {
     debitRewardFund(farm.reward_token, payable);
@@ -139,7 +185,7 @@ function settleFarmReward(
     recordTransaction(userId, 'dex_farm_reward', farm.reward_token, payable, 0, 'completed', `farm ${farm.farm_id}`);
   }
   const unpaid = pending - payable;
-  return { payable, unpaid, debt: rewardDebtFor(stakeAmount, accRewardPerShare) - unpaid };
+  return { payable, unpaid, debt: rewardDebtFor(weight, accRewardPerShare) - unpaid };
 }
 
 export interface StakeResult {
@@ -175,30 +221,39 @@ export function stakeFarm(userId: string, farmId: string, amount: number): Stake
 
   const stake = getDb()
     .prepare('SELECT * FROM dex_farm_stakes WHERE farm_id = ? AND user_id = ?')
-    .get(farmId, userId) as { stake_id: string; amount: number; reward_debt: number } | undefined;
+    .get(farmId, userId) as
+    | { stake_id: string; amount: number; reward_debt: number; weighted_weight: number }
+    | undefined;
 
   const result = getDb().transaction(() => {
     const state = currentFarmState(farm);
     const newAmount = (Number(stake?.amount) || 0) + amount;
+    const newWeight = stakeWeight(farm, userId, newAmount);
 
     lockAvailable(userId, lpToken, amount);
     recordTransaction(userId, 'dex_farm_stake', lpToken, amount, 0, 'completed', `farm ${farmId}`);
 
     // Rewards earned before this deposit are settled first, paid from the farm's
     // reward fund; a shortfall stays pending rather than being minted, so the
-    // new stake's debt is reduced by whatever could not be paid.
+    // new stake's debt is reduced by whatever could not be paid. The weight used
+    // is the one the stake was last accounted at, not the new one, so the boost
+    // from the new deposit cannot retroactively boost rewards already earned.
     const settlement = stake
-      ? settleFarmReward(userId, farm, Number(stake.amount), Number(stake.reward_debt), state.accRewardPerShare)
+      ? settleFarmReward(userId, farm, Number(stake.weighted_weight) || Number(stake.amount), Number(stake.reward_debt), state.accRewardPerShare)
       : { payable: 0, unpaid: 0, debt: 0 };
-    const debt = rewardDebtFor(newAmount, state.accRewardPerShare) - settlement.unpaid;
+    const debt = rewardDebtFor(newWeight, state.accRewardPerShare) - settlement.unpaid;
     if (stake) {
       getDb()
-        .prepare("UPDATE dex_farm_stakes SET amount = ?, reward_debt = ?, updated_at = datetime('now') WHERE stake_id = ?")
-        .run(newAmount, debt, stake.stake_id);
+        .prepare(
+          "UPDATE dex_farm_stakes SET amount = ?, reward_debt = ?, weighted_weight = ?, updated_at = datetime('now') WHERE stake_id = ?",
+        )
+        .run(newAmount, debt, newWeight, stake.stake_id);
     } else {
       getDb()
-        .prepare('INSERT INTO dex_farm_stakes (stake_id, farm_id, user_id, amount, reward_debt) VALUES (?, ?, ?, ?, ?)')
-        .run(generateId(), farmId, userId, newAmount, debt);
+        .prepare(
+          'INSERT INTO dex_farm_stakes (stake_id, farm_id, user_id, amount, reward_debt, weighted_weight) VALUES (?, ?, ?, ?, ?, ?)',
+        )
+        .run(generateId(), farmId, userId, newAmount, debt, newWeight);
     }
     persistFarmMeta(farmId, state);
     getDb()
@@ -224,7 +279,9 @@ export function unstakeFarm(userId: string, farmId: string, amount: number): Uns
   assertNotBlacklisted([{ kind: 'wallet', value: userId }]);
   const stake = getDb()
     .prepare('SELECT * FROM dex_farm_stakes WHERE farm_id = ? AND user_id = ?')
-    .get(farmId, userId) as { stake_id: string; amount: number; reward_debt: number } | undefined;
+    .get(farmId, userId) as
+    | { stake_id: string; amount: number; reward_debt: number; weighted_weight: number }
+    | undefined;
   if (!stake) throw new DexError('NO_STAKE', 'no stake in this farm', 404);
   if (amount > stake.amount + 1e-9) throw new DexError('INSUFFICIENT_STAKE', 'amount exceeds the stake', 400);
 
@@ -237,21 +294,32 @@ export function unstakeFarm(userId: string, farmId: string, amount: number): Uns
   const result = getDb().transaction(() => {
     const state = currentFarmState(farm);
     const remaining = stake.amount - amount;
+    const remainingWeight = stakeWeight(farm, userId, remaining);
 
     unlockAvailable(userId, lpToken, amount);
     recordTransaction(userId, 'dex_farm_unstake', lpToken, amount, 0, 'completed', `farm ${farmId}`);
 
     // Settle the earned rewards out of the fund; an unfunded shortfall is
     // dropped, because a position that is leaving the farm holds no claim on
-    // rewards the protocol never set aside.
-    const settlement = settleFarmReward(userId, farm, stake.amount, stake.reward_debt, state.accRewardPerShare);
+    // rewards the protocol never set aside. The weight is the one the stake was
+    // last accounted at, so the withdrawal cannot retroactively change what it
+    // already earned.
+    const settlement = settleFarmReward(
+      userId,
+      farm,
+      Number(stake.weighted_weight) || Number(stake.amount),
+      stake.reward_debt,
+      state.accRewardPerShare,
+    );
 
     if (remaining <= 1e-12) {
       getDb().prepare('DELETE FROM dex_farm_stakes WHERE stake_id = ?').run(stake.stake_id);
     } else {
       getDb()
-        .prepare("UPDATE dex_farm_stakes SET amount = ?, reward_debt = ?, updated_at = datetime('now') WHERE stake_id = ?")
-        .run(remaining, rewardDebtFor(remaining, state.accRewardPerShare), stake.stake_id);
+        .prepare(
+          "UPDATE dex_farm_stakes SET amount = ?, reward_debt = ?, weighted_weight = ?, updated_at = datetime('now') WHERE stake_id = ?",
+        )
+        .run(remaining, rewardDebtFor(remainingWeight, state.accRewardPerShare), remainingWeight, stake.stake_id);
     }
     persistFarmMeta(farmId, state);
     getDb()
@@ -270,12 +338,20 @@ export function claimFarm(userId: string, farmId: string): number {
   assertNotBlacklisted([{ kind: 'wallet', value: userId }]);
   const stake = getDb()
     .prepare('SELECT * FROM dex_farm_stakes WHERE farm_id = ? AND user_id = ?')
-    .get(farmId, userId) as { stake_id: string; amount: number; reward_debt: number } | undefined;
+    .get(farmId, userId) as
+    | { stake_id: string; amount: number; reward_debt: number; weighted_weight: number }
+    | undefined;
   if (!stake) throw new DexError('NO_STAKE', 'no stake in this farm', 404);
 
   return getDb().transaction(() => {
     const state = currentFarmState(farm);
-    const settlement = settleFarmReward(userId, farm, stake.amount, stake.reward_debt, state.accRewardPerShare);
+    const settlement = settleFarmReward(
+      userId,
+      farm,
+      Number(stake.weighted_weight) || Number(stake.amount),
+      stake.reward_debt,
+      state.accRewardPerShare,
+    );
     if (settlement.payable <= 0 && settlement.unpaid <= 0) return 0;
     getDb()
       .prepare("UPDATE dex_farm_stakes SET reward_debt = ?, updated_at = datetime('now') WHERE stake_id = ?")
@@ -289,7 +365,7 @@ export function claimFarm(userId: string, farmId: string): number {
 export function farmPositions(userId: string): Array<Record<string, unknown>> {
   const rows = getDb()
     .prepare(
-      `SELECT s.*, f.name, f.reward_token, f.reward_rate, f.apr, f.boost_multiplier, f.status AS farm_status, f.pool_id
+      `SELECT s.*, f.name, f.reward_token, f.reward_rate, f.apr, f.boost_multiplier, f.vetgr, f.status AS farm_status, f.pool_id
          FROM dex_farm_stakes s JOIN dex_farms f ON f.farm_id = s.farm_id
         WHERE s.user_id = ?`,
     )
@@ -297,14 +373,21 @@ export function farmPositions(userId: string): Array<Record<string, unknown>> {
   return rows.map((row) => {
     const farm = loadFarmRow(String(row.farm_id));
     const state = farm ? currentFarmState(farm) : null;
+    // The weight is what the accumulator was advanced by, so it is the figure
+    // the pending reward is computed from; the raw stake is shown alongside it.
+    const weight = Number(row.weighted_weight) || Number(row.amount);
     const pending = state
-      ? pendingFarmRewards(Number(row.amount), state.accRewardPerShare, Number(row.reward_debt))
+      ? pendingFarmRewards(weight, state.accRewardPerShare, Number(row.reward_debt))
       : 0;
+    const boost = Number(row.amount) > 0 ? weight / Number(row.amount) : 1;
     return {
       farmId: row.farm_id,
       name: row.name,
       poolId: row.pool_id,
       staked: row.amount,
+      weight,
+      boost,
+      boosted: Boolean(Number(row.vetgr)),
       pendingRewards: pending,
       rewardToken: row.reward_token,
       apr: row.apr,

@@ -378,6 +378,8 @@ export interface FarmInput {
   rewardToken: string;
   rewardRate: number;
   boostMultiplier: number;
+  /** Whether the farm splits its emission by veTGR-boosted weight. */
+  vetgr: boolean;
   startAt: string | null;
   endAt: string | null;
   status: string;
@@ -402,6 +404,13 @@ export function validateFarmInput(body: Record<string, unknown>): Validation<Far
     return { error: 'boostMultiplier must be between 1 and 10' };
   }
 
+  // A boosted farm caps the boost at the farm's multiplier, so a value above the
+  // published ceiling would be a promise the accounting cannot honour.
+  const vetgr = body.vetgr === true || body.vetgr === 'true' || body.vetgr === 1;
+  if (vetgr && (boostMultiplier < 1 || boostMultiplier > 2.5)) {
+    return { error: 'a veTGR-boosted farm must cap boostMultiplier at 2.5' };
+  }
+
   const startAt = body.startAt ? new Date(String(body.startAt)) : null;
   const endAt = body.endAt ? new Date(String(body.endAt)) : null;
   if (startAt && Number.isNaN(startAt.getTime())) return { error: 'startAt must be a valid date' };
@@ -422,6 +431,7 @@ export function validateFarmInput(body: Record<string, unknown>): Validation<Far
       rewardToken,
       rewardRate,
       boostMultiplier,
+      vetgr,
       startAt: startAt ? startAt.toISOString() : null,
       endAt: endAt ? endAt.toISOString() : null,
       status,

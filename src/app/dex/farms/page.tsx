@@ -17,6 +17,7 @@ interface FarmsResponse {
     apr: number;
     total_staked: number;
     boost_multiplier: number;
+    vetgr: number;
     status: string;
   }>;
   positions: Array<{
@@ -24,6 +25,9 @@ interface FarmsResponse {
     name: string;
     poolId: string;
     staked: number;
+    weight: number;
+    boost: number;
+    boosted: boolean;
     pendingRewards: number;
     rewardToken: string;
     apr: number;
@@ -103,6 +107,7 @@ export default function DexFarmsPage() {
                 <Th>Pool</Th>
                 <Th>Reward</Th>
                 <Th right>APR</Th>
+                <Th right>Boost</Th>
                 <Th right>Total staked</Th>
                 <Th right>Stake amount</Th>
                 <Th right>Action</Th>
@@ -118,6 +123,7 @@ export default function DexFarmsPage() {
                   <Td>{shortenId(farm.pool_id)}</Td>
                   <Td>{farm.reward_token}</Td>
                   <Td right>{formatNumber(farm.apr, 2)}%</Td>
+                  <Td right>{farm.vetgr ? `veTGR up to ${formatNumber(farm.boost_multiplier, 2)}x` : 'None'}</Td>
                   <Td right>{formatAmount(farm.total_staked)}</Td>
                   <Td right>
                     <input
@@ -163,6 +169,7 @@ export default function DexFarmsPage() {
               <tr>
                 <Th>Farm</Th>
                 <Th right>Staked</Th>
+                <Th right>Weight</Th>
                 <Th right>Pending rewards</Th>
                 <Th right>APR</Th>
                 <Th right>Action</Th>
@@ -173,6 +180,12 @@ export default function DexFarmsPage() {
                 <tr key={position.farmId}>
                   <Td>{position.name}</Td>
                   <Td right>{formatAmount(position.staked)}</Td>
+                  <Td right>
+                    {formatAmount(position.weight)}
+                    {position.boosted && position.boost > 1 && (
+                      <span className="ml-2 text-xs text-orange-600 dark:text-orange-400">{formatNumber(position.boost, 2)}x</span>
+                    )}
+                  </Td>
                   <Td right>
                     {formatAmount(position.pendingRewards)} {position.rewardToken}
                   </Td>

@@ -363,6 +363,50 @@ async function main() {
     assert.ok(lp.divergenceLoss === null || lp.divergenceLoss <= 0, 'divergence loss is never positive');
     record('the position reports value, fee rate and divergence loss', true, `value ${lp.valueUsd.toFixed(2)}`);
 
+    // --- veTGR farm boost --------------------------------------------------
+    // A boosted farm splits a fixed emission by veTGR-weighted stake, so a
+    // holder with veTGR earns more of the same emission than a plain staker.
+    const boostedFarm = await request('POST', '/api/admin/dex/farms', {
+      token: adminToken,
+      body: { name: `Boosted ${Date.now()}`, poolId, rewardToken: 'RUSD', rewardRate: 1, boostMultiplier: 2.5, vetgr: true },
+    });
+    assert.equal(boostedFarm.status, 201, `boosted farm failed: ${JSON.stringify(boostedFarm.json)}`);
+    const boostedFarmId = boostedFarm.json.farmId;
+
+    // A boosted farm must not promise a boost above the published ceiling.
+    const overBoost = await request('POST', '/api/admin/dex/farms', {
+      token: adminToken,
+      body: { name: `Overboost ${Date.now()}`, poolId, rewardToken: 'RUSD', rewardRate: 1, boostMultiplier: 5, vetgr: true },
+    });
+    assert.equal(overBoost.status, 400, 'a veTGR farm must reject a boost above 2.5x');
+
+    await request('POST', '/api/admin/dex/farms', {
+      token: adminToken,
+      body: { action: 'fund-rewards', asset: 'RUSD', amount: 100_000 },
+    });
+
+    // The trader locks TGR for the maximum term, which is full voting power.
+    const lock = await request('POST', '/api/dex/veTGR', { token, body: { amount: 10_000, lockDays: 1460 } });
+    assert.equal(lock.status, 201, `veTGR lock failed: ${JSON.stringify(lock.json)}`);
+    assert.ok(lock.json.lock.votingPower > 0, 'a lock must carry voting power');
+
+    const held = await request('GET', '/api/dex/liquidity', { token });
+    assert.equal(held.status, 200, `liquidity read failed: ${JSON.stringify(held.json)}`);
+    const heldPosition = held.json.positions.find((entry) => entry.poolId === poolId);
+    assert.ok(heldPosition && heldPosition.liquidity > 0, 'the provider must hold LP tokens to stake');
+    const lpAmount = heldPosition.liquidity;
+
+    const farmStake = await request('POST', '/api/dex/farms', { token, body: { action: 'stake', farmId: boostedFarmId, amount: lpAmount } });
+    assert.equal(farmStake.status, 201, `farm stake failed: ${JSON.stringify(farmStake.json)}`);
+
+    const boostView = await request('GET', '/api/dex/farms', { token });
+    assert.equal(boostView.status, 200, `farm view failed: ${JSON.stringify(boostView.json)}`);
+    const boostedPosition = boostView.json.positions.find((entry) => entry.farmId === boostedFarmId);
+    assert.ok(boostedPosition, 'the staked position must be listed');
+    assert.ok(boostedPosition.weight > boostedPosition.staked, 'veTGR must raise the position weight above the raw stake');
+    assert.ok(boostedPosition.boost > 1, 'the reported boost must exceed 1x');
+    record('veTGR boosts a farm position above its raw stake', true, `weight ${boostedPosition.weight.toFixed(2)} vs stake ${boostedPosition.staked.toFixed(2)}`);
+
     // --- MEV protection ---------------------------------------------------
     const assessment = await request('GET', '/api/dex/mev?tokenIn=RUSD&tokenOut=TGR&amountIn=1000', { token });
     assert.equal(assessment.status, 200, `mev assess failed: ${JSON.stringify(assessment.json)}`);

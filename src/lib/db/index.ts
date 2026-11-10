@@ -1529,6 +1529,7 @@ function initializeSchema() {
       apr REAL NOT NULL DEFAULT 0,
       total_staked REAL NOT NULL DEFAULT 0,
       boost_multiplier REAL NOT NULL DEFAULT 1,
+      vetgr INTEGER NOT NULL DEFAULT 0,
       start_at TEXT,
       end_at TEXT,
       status TEXT NOT NULL DEFAULT 'active',
@@ -1548,6 +1549,7 @@ function initializeSchema() {
       user_id TEXT NOT NULL,
       amount REAL NOT NULL DEFAULT 0,
       reward_debt REAL NOT NULL DEFAULT 0,
+      weighted_weight REAL NOT NULL DEFAULT 0,
       pending_rewards REAL NOT NULL DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
@@ -2120,6 +2122,12 @@ function applyColumnMigrations(database: Database.Database) {
     // matured contract without a user action. An option with no expiry would
     // stay open forever and its reservation would never be released.
     { table: 'dex_option_positions', column: 'expires_at', definition: 'TEXT' },
+    // A boosted farm splits its emission by weight rather than by raw stake, so
+    // each stake caches the weight it was last accounted at and the farm caches
+    // the total. Both are needed to rescale the accumulator when a veTGR balance
+    // changes without minting or confiscating rewards.
+    { table: 'dex_farms', column: 'vetgr', definition: 'INTEGER NOT NULL DEFAULT 0' },
+    { table: 'dex_farm_stakes', column: 'weighted_weight', definition: 'REAL NOT NULL DEFAULT 0' },
   ];
 
   for (const { table, column, definition } of migrations) {

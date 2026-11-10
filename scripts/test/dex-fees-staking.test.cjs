@@ -25,6 +25,7 @@ const {
   veVotingPowerAt,
   veUnlockAt,
   farmBoost,
+  farmWeight,
   accrueFarm,
   pendingFarmRewards,
   rewardDebtFor,
@@ -96,6 +97,32 @@ test('farm accrual distributes rewards per staked unit', () => {
   const state = { accRewardPerShare: 0, totalStaked: 100, rewardRate: 1, lastUpdate: 0 };
   const next = accrueFarm(state, 10);
   assert.ok(Math.abs(next.accRewardPerShare - (10 * 1e12) / 100) < 1e-3);
+});
+
+test('a boosted farm splits the emission by weight, not by raw stake', () => {
+  // Two stakers with the same stake, but one holds all the veTGR and so carries
+  // the full boost. The emission is fixed, so the boosted staker takes a larger
+  // share of it and the plain staker a smaller one.
+  const plain = farmWeight(100, 0, 1000);
+  const boosted = farmWeight(100, 1000, 1000);
+  assert.equal(plain, 100);
+  assert.ok(boosted > plain, 'veTGR must raise the weight');
+
+  const state = { accRewardPerShare: 0, totalStaked: 200, rewardRate: 100, lastUpdate: 0 };
+  const advanced = accrueFarm(state, 1, plain + boosted);
+  const plainPending = pendingFarmRewards(plain, advanced.accRewardPerShare, 0);
+  const boostedPending = pendingFarmRewards(boosted, advanced.accRewardPerShare, 0);
+  assert.ok(boostedPending > plainPending, 'the boosted staker earns more of the same emission');
+  // The two shares together are exactly the emission, so a boost redistributes
+  // rather than mints.
+  assert.ok(Math.abs(plainPending + boostedPending - 100) < 1e-6);
+});
+
+test('a farm with no weight accrues nothing rather than dividing by zero', () => {
+  const state = { accRewardPerShare: 5, totalStaked: 0, rewardRate: 1, lastUpdate: 0 };
+  const next = accrueFarm(state, 10, 0);
+  assert.equal(next.accRewardPerShare, 5);
+  assert.equal(next.lastUpdate, 10);
 });
 
 test('a late staker earns nothing for time before joining', () => {

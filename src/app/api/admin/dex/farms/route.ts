@@ -67,9 +67,9 @@ export async function POST(request: NextRequest) {
   const farmId = generateId();
   db.transaction(() => {
     db.prepare(
-      `INSERT INTO dex_farms (farm_id, name, pool_id, reward_token, reward_rate, boost_multiplier, start_at, end_at, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(farmId, farm.name, farm.poolId, farm.rewardToken, farm.rewardRate, farm.boostMultiplier, farm.startAt, farm.endAt, farm.status);
+      `INSERT INTO dex_farms (farm_id, name, pool_id, reward_token, reward_rate, boost_multiplier, vetgr, start_at, end_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(farmId, farm.name, farm.poolId, farm.rewardToken, farm.rewardRate, farm.boostMultiplier, farm.vetgr ? 1 : 0, farm.startAt, farm.endAt, farm.status);
     db.prepare('INSERT OR IGNORE INTO dex_gauges (gauge_id, pool_id) VALUES (?, ?)').run(generateId(), farm.poolId);
   })();
   recomputeGaugeWeights();

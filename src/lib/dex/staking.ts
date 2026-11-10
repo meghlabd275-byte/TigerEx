@@ -87,6 +87,23 @@ export function farmBoost(positionValue: number, vetgrBalance: number, totalVetg
   return 1 + (maxBoost - 1) * share;
 }
 
+/**
+ * A stake's weight in a boosted farm.
+ *
+ * Rewards are split by weight rather than by raw stake, so a position holding
+ * veTGR earns a larger share of the same emission. The farm's total emission is
+ * fixed, so a boost redistributes rewards toward veTGR holders instead of
+ * creating new ones. A position with no veTGR keeps its raw stake as its weight.
+ */
+export function farmWeight(
+  stakeAmount: number,
+  vetgrBalance: number,
+  totalVetgr: number,
+  maxBoost = 2.5,
+): number {
+  return stakeAmount * farmBoost(stakeAmount, vetgrBalance, totalVetgr, maxBoost);
+}
+
 // ============================================================================
 // Farm accounting (MasterChef reward-per-share)
 // ============================================================================
@@ -111,46 +128,60 @@ export const ACC_PRECISION = 1e12;
  * When the farm holds no stake the rewards that would have been emitted are
  * simply not distributed; the accumulator is left unchanged so the next staker
  * cannot retroactively claim them.
+ *
+ * `totalWeight` is the sum of the stakes' weights. A boosted farm passes the
+ * weighted total so the emission is split by weight; a farm with no boosts
+ * passes the raw stake total and the two are the same. A zero weight means
+ * nothing is staked, so the accrual is skipped rather than dividing by zero.
  */
-export function accrueFarm(state: FarmState, now: number): FarmState {
+export function accrueFarm(state: FarmState, now: number, totalWeight = state.totalStaked): FarmState {
   if (!Number.isFinite(now) || now < state.lastUpdate) {
     throw new AmmError('INVALID_TIME', 'now must not precede the last update');
   }
   if (state.totalStaked < 0 || !Number.isFinite(state.totalStaked)) {
     throw new AmmError('INVALID_STAKE', 'totalStaked must not be negative');
   }
-  if (state.totalStaked === 0) {
+  if (!Number.isFinite(totalWeight) || totalWeight < 0) {
+    throw new AmmError('INVALID_WEIGHT', 'totalWeight must not be negative');
+  }
+  if (totalWeight === 0) {
     return { ...state, lastUpdate: now };
   }
   const elapsed = now - state.lastUpdate;
   const reward = state.rewardRate * elapsed;
   return {
     ...state,
-    accRewardPerShare: state.accRewardPerShare + (reward * ACC_PRECISION) / state.totalStaked,
+    accRewardPerShare: state.accRewardPerShare + (reward * ACC_PRECISION) / totalWeight,
     lastUpdate: now,
   };
 }
 
-/** Rewards a position has earned since its `rewardDebt` was set. */
+/**
+ * Rewards a position has earned since its `rewardDebt` was set.
+ *
+ * `weight` is the stake's boosted weight, the same figure the accumulator was
+ * advanced by; passing the raw stake in a boosted farm would understate what the
+ * position earned.
+ */
 export function pendingFarmRewards(
-  amount: number,
+  weight: number,
   accRewardPerShare: number,
   rewardDebt: number,
 ): number {
-  if (!Number.isFinite(amount) || amount < 0) {
-    throw new AmmError('INVALID_AMOUNT', 'stake amount must not be negative');
+  if (!Number.isFinite(weight) || weight < 0) {
+    throw new AmmError('INVALID_AMOUNT', 'stake weight must not be negative');
   }
-  const accrued = (amount * accRewardPerShare) / ACC_PRECISION;
+  const accrued = (weight * accRewardPerShare) / ACC_PRECISION;
   const pending = accrued - rewardDebt;
   return pending > 0 ? pending : 0;
 }
 
-/** The `rewardDebt` a stake of `amount` owes at the current accumulator. */
-export function rewardDebtFor(amount: number, accRewardPerShare: number): number {
-  if (!Number.isFinite(amount) || amount < 0) {
-    throw new AmmError('INVALID_AMOUNT', 'stake amount must not be negative');
+/** The `rewardDebt` a stake of `weight` owes at the current accumulator. */
+export function rewardDebtFor(weight: number, accRewardPerShare: number): number {
+  if (!Number.isFinite(weight) || weight < 0) {
+    throw new AmmError('INVALID_AMOUNT', 'stake weight must not be negative');
   }
-  return (amount * accRewardPerShare) / ACC_PRECISION;
+  return (weight * accRewardPerShare) / ACC_PRECISION;
 }
 
 export interface FarmDepositResult {
