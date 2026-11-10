@@ -21,7 +21,7 @@ process.env.ENCRYPTION_KEY = 'test-encryption-key-0123456789abcdef0123456789';
 const { getDb, generateId, hashPassword } = require('../../.test-build/index.js');
 const { availableBalance } = require('../../.test-build/ledger.js');
 const { AmmError } = require('../../.test-build/amm.js');
-const { DexError } = require('../../.test-build/pool-service.js');
+const { DexError, fundBalance } = require('../../.test-build/pool-service.js');
 const {
   optionPremium,
   maxPayout,
@@ -163,6 +163,37 @@ test('a pool writes a covered call, moving the premium in and reserving the cap'
   // The premium and fee the buyer paid became pool collateral.
   assert.ok(Math.abs(stored.collateral - (1_000 + result.totalCost)) < 1e-9);
   assert.equal(stored.freeCollateral, stored.collateral - 100);
+  // The mirror is backed by real value in the pool's collateral account, so the
+  // pool can actually pay a winning option rather than minting the payout.
+  assert.ok(
+    Math.abs(fundBalance(`dex_option_pool:${pool.pool_id}`, 'RUSD') - stored.collateral) < 1e-9,
+    'the collateral account must hold exactly what the mirror claims',
+  );
+});
+
+test('a payout fails closed when the pool has no collateral to pay with', () => {
+  const userId = seedUser();
+  credit(userId, 'RUSD', 10_000);
+  listSpot('GHOSTCO', 100);
+
+  const pool = createOptionPool({ underlying: 'GHOSTCO', settlementAsset: 'RUSD', volatility: 0.5 });
+  fundOptionPool(pool.pool_id, 1_000);
+  const buy = buyOption({ userId, poolId: pool.pool_id, type: 'call', strike: 100, capPrice: 150, quantity: 1 });
+
+  // Simulate collateral leaving the account without the mirror being updated:
+  // settlement must refuse rather than credit a payout nobody funded.
+  db.prepare(
+    "UPDATE treasury_accounts SET balance = 0 WHERE network = 'TIGEREX' AND account_type = ?",
+  ).run(`dex_option_pool:${pool.pool_id}`);
+  db.prepare('UPDATE market_data SET price = 130 WHERE symbol = ?').run('GHOSTCO/RUSD');
+
+  const before = availableBalance(userId, 'RUSD');
+  assert.throws(
+    () => settleOption(userId, buy.positionId),
+    (error) => error instanceof DexError && error.code === 'REWARD_FUND_EMPTY',
+  );
+  assert.equal(availableBalance(userId, 'RUSD'), before, 'no payout may be credited');
+  assert.equal(optionPositions(userId).find((row) => row.positionId === buy.positionId).status, 'open');
 });
 
 test('a pool refuses a write it cannot back out of its free collateral', () => {

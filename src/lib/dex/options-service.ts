@@ -14,7 +14,7 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { debitAvailable, creditAvailable, covers, availableBalance, recordTransaction } from '@/lib/db/ledger';
-import { DexError, dexSetting, recordDexRevenue, assertDexOpen, assertNotBlacklisted } from '@/lib/dex/pool-service';
+import { DexError, dexSetting, recordDexRevenue, assertDexOpen, assertNotBlacklisted, creditFund, debitFund, fundBalance } from '@/lib/dex/pool-service';
 import { applySchedule } from '@/lib/dex/fee-engine';
 import { markPrice } from '@/lib/dex/perps-service';
 import { priceInQuote } from '@/lib/trading/valuation';
@@ -60,6 +60,23 @@ function loadPool(poolId: string): OptionPoolRow {
   const row = getDb().prepare('SELECT * FROM dex_option_pools WHERE pool_id = ?').get(poolId) as OptionPoolRow | undefined;
   if (!row) throw new DexError('UNKNOWN_POOL', `option pool ${poolId} does not exist`, 404);
   return row;
+}
+
+/**
+ * The account that holds an option pool's collateral.
+ *
+ * The pool pays its payouts out of this account, so the collateral figure in
+ * `dex_option_pools` is a mirror of real value that was moved in rather than a
+ * number the venue can mint. A payout therefore fails closed when the account
+ * is short, exactly as a perp pool payout does.
+ */
+function collateralAccount(poolId: string): string {
+  return `dex_option_pool:${poolId}`;
+}
+
+/** Collateral that is not reserved, from the mirror and the real account. */
+function freeCollateral(pool: OptionPoolRow): number {
+  return Math.max(0, fundBalance(collateralAccount(pool.pool_id), pool.settlement_asset) - pool.reserved);
 }
 
 /** The spot of an underlying, in the pool's settlement asset. */
@@ -108,14 +125,19 @@ export function createOptionPool(request: CreateOptionPoolRequest): OptionPoolRo
   }
 
   const poolId = generateId();
-  getDb()
-    .prepare(
-      `INSERT INTO dex_option_pools
-         (pool_id, underlying, settlement_asset, collateral, reserved, fee_bps, volatility, risk_free_rate, status)
-       VALUES (?, ?, ?, ?, 0, ?, ?, ?, 'active')`,
-    )
-    .run(poolId, underlying, settlement, collateral, feeBps, volatility, riskFreeRate);
-  return loadPool(poolId);
+  return getDb().transaction(() => {
+    getDb()
+      .prepare(
+        `INSERT INTO dex_option_pools
+           (pool_id, underlying, settlement_asset, collateral, reserved, fee_bps, volatility, risk_free_rate, status)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, 'active')`,
+      )
+      .run(poolId, underlying, settlement, collateral, feeBps, volatility, riskFreeRate);
+    // Seed collateral is a real transfer into the pool's account, so the mirror
+    // never overstates what the pool can actually pay.
+    if (collateral > 0) creditFund(collateralAccount(poolId), settlement, collateral);
+    return loadPool(poolId);
+  })() as OptionPoolRow;
 }
 
 /** Every option pool with its free collateral. */
@@ -127,7 +149,7 @@ export function listOptionPools(): Array<Record<string, unknown>> {
     settlementAsset: row.settlement_asset,
     collateral: row.collateral,
     reserved: row.reserved,
-    freeCollateral: Math.max(0, row.collateral - row.reserved),
+    freeCollateral: freeCollateral(row),
     feeBps: row.fee_bps,
     volatility: row.volatility,
     riskFreeRate: row.risk_free_rate,
@@ -139,10 +161,13 @@ export function listOptionPools(): Array<Record<string, unknown>> {
 export function fundOptionPool(poolId: string, amount: number): OptionPoolRow {
   if (!Number.isFinite(amount) || amount <= 0) throw new DexError('INVALID_AMOUNT', 'amount must be positive', 400);
   const pool = loadPool(poolId);
-  getDb()
-    .prepare("UPDATE dex_option_pools SET collateral = collateral + ?, updated_at = datetime('now') WHERE pool_id = ?")
-    .run(amount, pool.pool_id);
-  return loadPool(poolId);
+  return getDb().transaction(() => {
+    creditFund(collateralAccount(pool.pool_id), pool.settlement_asset, amount);
+    getDb()
+      .prepare("UPDATE dex_option_pools SET collateral = collateral + ?, updated_at = datetime('now') WHERE pool_id = ?")
+      .run(amount, pool.pool_id);
+    return loadPool(poolId);
+  })() as OptionPoolRow;
 }
 
 export interface BuyOptionRequest {
@@ -218,7 +243,7 @@ export function buyOption(request: BuyOptionRequest): BuyOptionResult {
 
   const contractSize = 1;
   const feeRate = pool.fee_bps / 10_000;
-  const free = Math.max(0, pool.collateral - pool.reserved);
+  const free = freeCollateral(pool);
 
   const quote = buyQuote({
     type: request.type,
@@ -242,9 +267,12 @@ export function buyOption(request: BuyOptionRequest): BuyOptionResult {
   const positionId = generateId();
   return getDb().transaction(() => {
     // The premium and fee leave the buyer and become pool collateral, so the
-    // pool's ability to pay grows with what it writes.
+    // pool's ability to pay grows with what it writes. The fee is a real
+    // transfer into the collateral account; it is distributed to the revenue
+    // ledger as a claim on that account, never credited twice.
     debitAvailable(request.userId, settlement, quote.totalCost);
     recordTransaction(request.userId, 'dex_option_buy', settlement, quote.premium, quote.fee, 'completed', `option ${positionId}`);
+    creditFund(collateralAccount(pool.pool_id), settlement, quote.totalCost);
 
     getDb()
       .prepare(
@@ -394,12 +422,15 @@ function settlePositionRow(position: OptionPositionRow): SettleOptionResult {
   }
 
   return getDb().transaction(() => {
-    if (payout > 0) creditAvailable(position.user_id, pool.settlement_asset, payout);
+    // The payout leaves the pool's real collateral account, so a pool that
+    // cannot cover its liability fails closed here rather than minting the
+    // difference; the unused reservation becomes free again.
+    if (payout > 0) {
+      debitFund(collateralAccount(pool.pool_id), pool.settlement_asset, payout);
+      creditAvailable(position.user_id, pool.settlement_asset, payout);
+    }
     recordTransaction(position.user_id, 'dex_option_settle', pool.settlement_asset, payout, 0, 'completed', `option ${position.position_id}`);
 
-    // The payout leaves the pool's collateral; the unused reservation becomes
-    // free again. A payout is always inside the reserve, so collateral stays
-    // non-negative.
     getDb()
       .prepare(
         `UPDATE dex_option_pools
