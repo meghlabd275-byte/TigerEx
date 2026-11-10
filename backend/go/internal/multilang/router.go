@@ -74,6 +74,45 @@ type PerformanceMetrics struct {
 	mu              sync.RWMutex
 }
 
+// MetricsSnapshot is a consistent copy of a backend's metrics, safe to read
+// without holding the lock. Counters are read atomically and the mutable
+// fields under the mutex, so a snapshot never races a concurrent update.
+type MetricsSnapshot struct {
+	TotalRequests   int64     `json:"total_requests"`
+	SuccessCount    int64     `json:"success_count"`
+	FailureCount    int64     `json:"failure_count"`
+	AvgLatencyNs    int64     `json:"avg_latency_ns"`
+	MinLatency      int64     `json:"min_latency_ns"`
+	MaxLatency      int64     `json:"max_latency_ns"`
+	LastRequestTime time.Time `json:"last_request_time"`
+	LastError       string    `json:"last_error"`
+	HealthStatus    bool      `json:"health_status"`
+}
+
+// Snapshot returns a point-in-time copy of the metrics.
+func (m *PerformanceMetrics) Snapshot() MetricsSnapshot {
+	total := atomic.LoadInt64(&m.TotalRequests)
+	latency := atomic.LoadInt64(&m.TotalLatency)
+	var avg int64
+	if total > 0 {
+		avg = latency / total
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return MetricsSnapshot{
+		TotalRequests:   total,
+		SuccessCount:    atomic.LoadInt64(&m.SuccessCount),
+		FailureCount:    atomic.LoadInt64(&m.FailureCount),
+		AvgLatencyNs:    avg,
+		MinLatency:      atomic.LoadInt64(&m.MinLatency),
+		MaxLatency:      atomic.LoadInt64(&m.MaxLatency),
+		LastRequestTime: m.LastRequestTime,
+		LastError:       m.LastError,
+		HealthStatus:    m.HealthStatus,
+	}
+}
+
 // Router is the main router that manages multi-language API switching
 type Router struct {
 	apis                map[string]*APIConfig
@@ -169,7 +208,10 @@ func (r *Router) GetBestLanguage(apiName string) (Language, error) {
 
 // calculateScore calculates a performance score for a language backend
 func (r *Router) calculateScore(metrics *PerformanceMetrics, config LanguageConfig) float64 {
-	if !metrics.HealthStatus {
+	metrics.mu.RLock()
+	healthy := metrics.HealthStatus
+	metrics.mu.RUnlock()
+	if !healthy {
 		return -1
 	}
 
@@ -238,6 +280,7 @@ func (r *Router) RecordRequest(apiName string, lang Language, latency time.Durat
 		}
 	}
 
+	metrics.mu.Lock()
 	metrics.LastRequestTime = time.Now()
 	if err != "" {
 		metrics.LastError = err
@@ -245,6 +288,7 @@ func (r *Router) RecordRequest(apiName string, lang Language, latency time.Durat
 	} else {
 		metrics.HealthStatus = true
 	}
+	metrics.mu.Unlock()
 }
 
 // RouteRequest routes a request to the best available backend
@@ -292,11 +336,17 @@ func (r *Router) RouteRequest(ctx *gin.Context, apiName string, handler func(lan
 	r.RecordRequest(apiName, lang, reqCtx.Latency, true, "")
 }
 
-// GetMetrics returns the performance metrics for all languages of an API
-func (r *Router) GetMetrics(apiName string) map[Language]*PerformanceMetrics {
+// GetMetrics returns a consistent snapshot of the metrics for all languages
+// of an API. Returning copies keeps the counters race-free for readers.
+func (r *Router) GetMetrics(apiName string) map[Language]MetricsSnapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.metrics[apiName]
+
+	out := make(map[Language]MetricsSnapshot, len(r.metrics[apiName]))
+	for lang, m := range r.metrics[apiName] {
+		out[lang] = m.Snapshot()
+	}
+	return out
 }
 
 // HealthCheck performs health checks on all language backends

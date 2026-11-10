@@ -69,11 +69,7 @@ func TestHealthCheckMarksUnreachableBackendUnhealthy(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		m := router.GetMetrics("probe_api")[LanguageGo]
-		m.mu.RLock()
-		status := m.HealthStatus
-		m.mu.RUnlock()
-		if !status {
+		if !router.GetMetrics("probe_api")[LanguageGo].HealthStatus {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -99,7 +95,7 @@ func TestHealthCheckMarksReachableBackendHealthy(t *testing.T) {
 
 	// Force the metric unhealthy first so the assertion proves the probe
 	// flipped it back, not that it started healthy.
-	m := router.GetMetrics("live_api")[LanguageGo]
+	m := router.metrics["live_api"][LanguageGo]
 	m.mu.Lock()
 	m.HealthStatus = false
 	m.mu.Unlock()
@@ -108,13 +104,88 @@ func TestHealthCheckMarksReachableBackendHealthy(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		m.mu.RLock()
-		status := m.HealthStatus
-		m.mu.RUnlock()
-		if status {
+		if router.GetMetrics("live_api")[LanguageGo].HealthStatus {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("reachable backend was not marked healthy")
+}
+
+func TestRecordRequestSnapshotReportsAggregates(t *testing.T) {
+	router := NewRouter()
+	router.RegisterAPI(APIConfig{
+		Name:              "agg_api",
+		Category:          CategoryHighPerformance,
+		PreferredLanguage: LanguageGo,
+		AvailableLanguages: map[Language]LanguageConfig{
+			LanguageGo: {Enabled: true, Endpoint: "http://localhost:9999"},
+		},
+	})
+
+	router.RecordRequest("agg_api", LanguageGo, 10*time.Millisecond, true, "")
+	router.RecordRequest("agg_api", LanguageGo, 30*time.Millisecond, true, "")
+	router.RecordRequest("agg_api", LanguageGo, 20*time.Millisecond, false, "boom")
+
+	snap := router.GetMetrics("agg_api")[LanguageGo]
+	if snap.TotalRequests != 3 || snap.SuccessCount != 2 || snap.FailureCount != 1 {
+		t.Fatalf("counters wrong: %+v", snap)
+	}
+	if snap.AvgLatencyNs != int64(20*time.Millisecond) {
+		t.Fatalf("avg latency = %d, want %d", snap.AvgLatencyNs, int64(20*time.Millisecond))
+	}
+	if snap.MinLatency != int64(10*time.Millisecond) || snap.MaxLatency != int64(30*time.Millisecond) {
+		t.Fatalf("min/max wrong: %+v", snap)
+	}
+	if snap.HealthStatus {
+		t.Fatal("a failed request must mark the backend unhealthy")
+	}
+	if snap.LastError != "boom" {
+		t.Fatalf("last error = %q, want boom", snap.LastError)
+	}
+}
+
+func TestHealthCheckHandlerReportsDegradedWhenBackendDown(t *testing.T) {
+	router := NewRouter()
+	router.RegisterAPI(APIConfig{
+		Name:              "down_api",
+		Category:          CategoryHighPerformance,
+		PreferredLanguage: LanguageGo,
+		AvailableLanguages: map[Language]LanguageConfig{
+			LanguageGo: {Enabled: true, Endpoint: "http://127.0.0.1:1"},
+		},
+	})
+
+	// A failed probe/request must surface as degraded, not as a false "healthy".
+	router.RecordRequest("down_api", LanguageGo, time.Millisecond, false, "unreachable")
+
+	payload, code := healthPayload(router)
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("status code = %d, want 503", code)
+	}
+	if payload["status"] != "degraded" {
+		t.Fatalf("status = %v, want degraded", payload["status"])
+	}
+}
+
+func TestHealthCheckHandlerHealthyWhenAllBackendsUp(t *testing.T) {
+	router := NewRouter()
+	router.RegisterAPI(APIConfig{
+		Name:              "up_api",
+		Category:          CategoryHighPerformance,
+		PreferredLanguage: LanguageGo,
+		AvailableLanguages: map[Language]LanguageConfig{
+			LanguageGo: {Enabled: true, Endpoint: "http://localhost:9999"},
+		},
+	})
+
+	router.RecordRequest("up_api", LanguageGo, time.Millisecond, true, "")
+
+	payload, code := healthPayload(router)
+	if code != http.StatusOK {
+		t.Fatalf("status code = %d, want 200", code)
+	}
+	if payload["status"] != "healthy" {
+		t.Fatalf("status = %v, want healthy", payload["status"])
+	}
 }

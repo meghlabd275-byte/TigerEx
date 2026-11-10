@@ -83,13 +83,22 @@ func (h *WalletHandler) GetBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, asset := r.URL.Query().Get("user_id"), r.URL.Query().Get("token")
-	if userID == "" || asset == "" {
-		WriteError(w, http.StatusBadRequest, "MISSING_PARAMS", "user_id and token are required")
+	// The account is taken from the authenticated session, never from a
+	// caller-supplied user_id. Trusting the query parameter let any caller read
+	// another account's balance.
+	userID, ok := GetUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication required")
 		return
 	}
 
-	bal, err := h.service.GetBalance(r.Context(), userID, asset)
+	asset := r.URL.Query().Get("token")
+	if asset == "" {
+		WriteError(w, http.StatusBadRequest, "MISSING_PARAMS", "token is required")
+		return
+	}
+
+	bal, err := h.service.GetBalance(r.Context(), userID.String(), asset)
 	if err != nil {
 		if errors.Is(err, wallet.ErrCustodyUnavailable) {
 			writeCustodyUnavailable(w)
@@ -102,20 +111,20 @@ func (h *WalletHandler) GetBalance(w http.ResponseWriter, r *http.Request) {
 	WriteSuccess(w, bal)
 }
 
-// GetAllBalances returns every wallet for a user, or fails closed.
+// GetAllBalances returns every wallet for the authenticated user, or fails closed.
 func (h *WalletHandler) GetAllBalances(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
 		return
 	}
 
-	userID := r.URL.Query().Get("user_id")
-	if userID == "" {
-		WriteError(w, http.StatusBadRequest, "MISSING_PARAMS", "user_id is required")
+	userID, ok := GetUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication required")
 		return
 	}
 
-	wallets, err := h.service.GetWallets(r.Context(), userID)
+	wallets, err := h.service.GetWallets(r.Context(), userID.String())
 	if err != nil {
 		if errors.Is(err, wallet.ErrCustodyUnavailable) {
 			writeCustodyUnavailable(w)

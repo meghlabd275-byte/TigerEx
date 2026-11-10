@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -102,11 +103,29 @@ func GetToken(r *http.Request) string {
 	return ""
 }
 
-// GetUserID returns user ID from context
+// userIDContextKey is the private context key under which the authentication
+// middleware stores the authenticated user's id. The zero-size struct type
+// keeps the key unexported and collision-free.
+type userIDContextKey struct{}
+
+// WithUserID returns a copy of ctx carrying the authenticated user id. The
+// authentication middleware calls this after verifying a session token;
+// handlers read it with GetUserID instead of trusting a request field.
+func WithUserID(ctx context.Context, userID uuid.UUID) context.Context {
+	return context.WithValue(ctx, userIDContextKey{}, userID)
+}
+
+// GetUserID returns the authenticated user id from the request context.
+//
+// It reads the value the authentication middleware stored, never a header or
+// query parameter, so a caller cannot act as another user by supplying an id.
+// A request that did not pass through authentication yields false.
 func GetUserID(r *http.Request) (uuid.UUID, bool) {
-	// In production, extract from JWT token
-	// For now, return false
-	return uuid.Nil, false
+	userID, ok := r.Context().Value(userIDContextKey{}).(uuid.UUID)
+	if !ok || userID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	return userID, true
 }
 
 // GetUserIDFromContext returns user ID from context

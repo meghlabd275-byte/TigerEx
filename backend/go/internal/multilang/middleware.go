@@ -15,11 +15,11 @@ import (
 // Middleware returns a Gin middleware for multi-language routing
 func Middleware() gin.HandlerFunc {
 	router := GetRouter()
-	
+
 	return func(c *gin.Context) {
 		// Extract API name from the path
 		apiName := extractAPIName(c.Request.URL.Path)
-		
+
 		if apiName == "" {
 			c.Next()
 			return
@@ -34,7 +34,7 @@ func Middleware() gin.HandlerFunc {
 
 		// Route the request
 		start := time.Now()
-		
+
 		lang, err := router.GetBestLanguage(apiName)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -53,12 +53,12 @@ func Middleware() gin.HandlerFunc {
 		// Record metrics
 		latency := time.Since(start)
 		success := c.Writer.Status() < 400
-		
+
 		var errMsg string
 		if !success {
 			errMsg = c.Errors.ByType(gin.ErrorTypePrivate).String()
 		}
-		
+
 		router.RecordRequest(apiName, lang, latency, success, errMsg)
 	}
 }
@@ -66,7 +66,7 @@ func Middleware() gin.HandlerFunc {
 // APIMiddlewareHandler handles API requests using the multi-language router
 func APIMiddlewareHandler(apiName string) gin.HandlerFunc {
 	router := GetRouter()
-	
+
 	return func(c *gin.Context) {
 		lang, err := router.GetBestLanguage(apiName)
 		if err != nil {
@@ -84,45 +84,69 @@ func APIMiddlewareHandler(apiName string) gin.HandlerFunc {
 	}
 }
 
+// healthPayload builds the health response body and HTTP status for a router.
+// The overall status is derived from the backends: a backend whose last probe
+// or request failed makes the exchange degraded, and an all-down router does
+// not report "healthy". Extracted from the handler so it can be tested.
+func healthPayload(router *Router) (map[string]interface{}, int) {
+	apis := router.ListAPIs()
+
+	healthData := make(map[string]interface{})
+	healthData["timestamp"] = time.Now().Unix()
+	apisHealth := make(map[string]interface{})
+
+	allHealthy := true
+	anyBackend := false
+
+	for _, apiName := range apis {
+		metrics := router.GetMetrics(apiName)
+		apiHealth := make(map[string]interface{})
+
+		for lang, m := range metrics {
+			anyBackend = true
+			if !m.HealthStatus {
+				allHealthy = false
+			}
+			apiHealth[string(lang)] = map[string]interface{}{
+				"healthy":   m.HealthStatus,
+				"total_req": m.TotalRequests,
+				"success":   m.SuccessCount,
+				"failures":  m.FailureCount,
+			}
+		}
+
+		apisHealth[apiName] = apiHealth
+	}
+
+	status := "healthy"
+	code := http.StatusOK
+	if anyBackend && !allHealthy {
+		status = "degraded"
+		code = http.StatusServiceUnavailable
+	}
+
+	healthData["status"] = status
+	healthData["apis"] = apisHealth
+	return healthData, code
+}
+
 // HealthCheckHandler returns a handler for health checks
 func HealthCheckHandler() gin.HandlerFunc {
 	router := GetRouter()
-	
+
 	return func(c *gin.Context) {
-		apis := router.ListAPIs()
-		
-		healthData := make(map[string]interface{})
-		healthData["status"] = "healthy"
-		healthData["timestamp"] = time.Now().Unix()
-		healthData["apis"] = make(map[string]interface{})
-		
-		for _, apiName := range apis {
-			metrics := router.GetMetrics(apiName)
-			apiHealth := make(map[string]interface{})
-			
-			for lang, m := range metrics {
-				apiHealth[string(lang)] = map[string]interface{}{
-					"healthy":    m.HealthStatus,
-					"total_req":  m.TotalRequests,
-					"success":    m.SuccessCount,
-					"failures":   m.FailureCount,
-				}
-			}
-			
-			healthData["apis"].(map[string]interface{})[apiName] = apiHealth
-		}
-		
-		c.JSON(http.StatusOK, healthData)
+		payload, code := healthPayload(router)
+		c.JSON(code, payload)
 	}
 }
 
 // MetricsHandler returns a handler for viewing metrics
 func MetricsHandler() gin.HandlerFunc {
 	router := GetRouter()
-	
+
 	return func(c *gin.Context) {
 		apiName := c.Query("api")
-		
+
 		if apiName != "" {
 			metrics := router.GetMetrics(apiName)
 			c.JSON(http.StatusOK, gin.H{
@@ -131,15 +155,15 @@ func MetricsHandler() gin.HandlerFunc {
 			})
 			return
 		}
-		
+
 		// Return all metrics
 		apis := router.ListAPIs()
-		allMetrics := make(map[string]map[Language]*PerformanceMetrics)
-		
+		allMetrics := make(map[string]map[Language]MetricsSnapshot)
+
 		for _, name := range apis {
 			allMetrics[name] = router.GetMetrics(name)
 		}
-		
+
 		c.JSON(http.StatusOK, gin.H{
 			"metrics": allMetrics,
 		})
@@ -151,14 +175,14 @@ func SwitchLanguageHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		apiName := c.Param("api")
 		language := c.Param("language")
-		
+
 		if apiName == "" || language == "" {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "Missing api or language parameter",
 			})
 			return
 		}
-		
+
 		router := GetRouter()
 		config, err := router.GetAPIConfig(apiName)
 		if err != nil {
@@ -167,7 +191,7 @@ func SwitchLanguageHandler() gin.HandlerFunc {
 			})
 			return
 		}
-		
+
 		// Check if language is available
 		langConfig, ok := config.AvailableLanguages[Language(language)]
 		if !ok {
@@ -176,19 +200,19 @@ func SwitchLanguageHandler() gin.HandlerFunc {
 			})
 			return
 		}
-		
+
 		if !langConfig.Enabled {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "Language is currently disabled",
 			})
 			return
 		}
-		
+
 		c.JSON(http.StatusOK, gin.H{
-			"message":       "Language switched successfully",
-			"api":           apiName,
-			"language":      language,
-			"endpoint":      langConfig.Endpoint,
+			"message":  "Language switched successfully",
+			"api":      apiName,
+			"language": language,
+			"endpoint": langConfig.Endpoint,
 		})
 	}
 }
@@ -197,7 +221,7 @@ func SwitchLanguageHandler() gin.HandlerFunc {
 func extractAPIName(path string) string {
 	// Remove leading slash
 	path = strings.TrimPrefix(path, "/")
-	
+
 	// Common API path patterns
 	paths := []string{
 		"api/v2/",
@@ -207,7 +231,7 @@ func extractAPIName(path string) string {
 		"fix/",
 		"api/",
 	}
-	
+
 	for _, p := range paths {
 		if strings.HasPrefix(path, p) {
 			// Get the next segment
@@ -218,7 +242,7 @@ func extractAPIName(path string) string {
 			}
 		}
 	}
-	
+
 	// Check for known API names in path
 	knownAPIs := []string{
 		"rest_api_v2", "websocket_v2", "fix_api", "order_service",
@@ -227,39 +251,39 @@ func extractAPIName(path string) string {
 		"compliance_reporting", "custody_service", "matching_engine",
 		"p2p_trading", "payment_gateway", "wallet_service", "staking",
 	}
-	
+
 	for _, api := range knownAPIs {
 		if strings.Contains(path, api) {
 			return api
 		}
 	}
-	
+
 	return ""
 }
 
 // RegisterRoutes registers the multi-language router routes
 func RegisterRoutes(r *gin.Engine) {
 	router := GetRouter()
-	
+
 	// Health check endpoint
 	r.GET("/health", HealthCheckHandler())
-	
+
 	// Metrics endpoint
 	r.GET("/metrics", MetricsHandler())
-	
+
 	// Manual language switch endpoint
 	r.POST("/api/:api/switch/:language", SwitchLanguageHandler())
-	
+
 	// API info endpoint
 	r.GET("/api/info", func(c *gin.Context) {
 		apis := router.ListAPIs()
 		apiInfo := make([]map[string]interface{}, 0)
-		
+
 		for _, name := range apis {
 			config, _ := router.GetAPIConfig(name)
 			if config != nil {
 				apiInfo = append(apiInfo, map[string]interface{}{
-					"name":                config.Name,
+					"name":               config.Name,
 					"category":           config.Category,
 					"preferred_language": config.PreferredLanguage,
 					"failover_enabled":   config.FailoverEnabled,
@@ -274,12 +298,12 @@ func RegisterRoutes(r *gin.Engine) {
 				})
 			}
 		}
-		
+
 		c.JSON(http.StatusOK, gin.H{
 			"apis": apiInfo,
 		})
 	})
-	
+
 	// Start health check background job
 	router.StartHealthCheck()
 }
