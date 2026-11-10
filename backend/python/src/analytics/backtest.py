@@ -176,7 +176,11 @@ class TechnicalIndicators:
             gains.append(max(change, 0))
             losses.append(max(-change, 0))
         
-        rsi_values = [None]
+        # The first `period` bars have no complete lookback, so they are None and
+        # the computed values line up with the bars they describe. The previous
+        # version padded the *end* with Nones, so the most recent RSI - the one
+        # every strategy reads via rsi(...)[-1] - was always None.
+        rsi_values: List[Optional[float]] = [None] * period
         for i in range(period, len(gains) + 1):
             avg_gain = sum(gains[i-period:i]) / period
             avg_loss = sum(losses[i-period:i]) / period
@@ -187,7 +191,7 @@ class TechnicalIndicators:
                 rsi = 100 - (100 / (1 + rs))
                 rsi_values.append(round(rsi, 2))
         
-        return (rsi_values + [None] * period)[:len(prices)]
+        return rsi_values
 
 class StrategyTemplates:
     @staticmethod
@@ -237,9 +241,24 @@ class AnalyticsReporting:
             'active_users': active_users,
         }
 
-if __name__ == "__main__":
-    print("TigerEx Analytics Module")
+def _self_test() -> None:
     prices = [100 + i * 0.5 for i in range(100)]
     engine = BacktestEngine(100000)
     result = engine.run(prices, StrategyTemplates.moving_average_crossover)
-    print(f"Trades: {result.total_trades}, Win Rate: {result.win_rate:.1%}, PnL: ${result.total_pnl:.2f}")
+    assert result.total_trades >= 1, result
+    assert result.winning_trades + result.losing_trades == result.total_trades
+    assert 0.0 <= result.win_rate <= 1.0
+
+    # The latest RSI of a strictly rising series is 100 and is not None; the
+    # rsi_strategy depends on rsi(...)[-1] being populated.
+    rsi = TechnicalIndicators.rsi(prices)
+    assert len(rsi) == len(prices)
+    assert rsi[-1] == 100.0, rsi[-3:]
+    assert rsi[0] is None and rsi[13] is None
+    assert StrategyTemplates.rsi_strategy(prices, 0.0, 0.0) == 'sell'
+
+    print("backtest self-test passed")
+
+
+if __name__ == "__main__":
+    _self_test()

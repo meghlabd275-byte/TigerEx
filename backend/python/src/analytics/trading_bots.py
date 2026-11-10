@@ -187,7 +187,11 @@ class TechnicalIndicators:
             gains.append(max(change, 0))
             losses.append(max(-change, 0))
         
-        rsi_values = [None]
+        # The first `period` bars have no complete lookback, so they are None and
+        # the computed values line up with the bars they describe. The previous
+        # version padded the *end* with Nones, so the most recent RSI - the one
+        # every strategy reads via rsi(...)[-1] - was always None.
+        rsi_values: List[Optional[float]] = [None] * period
         for i in range(period, len(gains) + 1):
             avg_gain = sum(gains[i-period:i]) / period
             avg_loss = sum(losses[i-period:i]) / period
@@ -198,7 +202,7 @@ class TechnicalIndicators:
                 rsi = 100 - (100 / (1 + rs))
                 rsi_values.append(round(rsi, 2))
         
-        return (rsi_values + [None] * period)[:len(prices)]
+        return rsi_values
     
     @staticmethod
     def macd(prices: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[List[float], List[float], List[float]]:
@@ -404,19 +408,72 @@ class AnalyticsReporting:
 # MAIN
 # ============================================================================
 
-if __name__ == "__main__":
-    print("TigerEx Analytics Module - Python")
-    
-    # Test backtest
+def _self_test() -> None:
+    # A monotonically rising series: the fast average leads the slow one, so the
+    # strategy opens a long and marks a profit. Asserted, not merely printed.
     prices = [100 + i * 0.5 for i in range(100)]
     engine = BacktestEngine(100000)
     result = engine.run(prices, StrategyTemplates.moving_average_crossover)
-    
-    print(f"Trades: {result.total_trades}")
-    print(f"Win Rate: {result.win_rate:.1%}")
-    print(f"PnL: ${result.total_pnl:.2f}")
-    print(f"Max Drawdown: {result.max_drawdown:.1f}%")
-    
-    # Test RSI
-    rsi = TechnicalIndicators.rsi(prices)
-    print(f"Latest RSI: {rsi[-1]}")
+    assert result.total_trades >= 1, result
+    assert result.total_pnl > 0, result
+    assert result.winning_trades + result.losing_trades == result.total_trades
+    assert 0.0 <= result.win_rate <= 1.0
+
+    # Deterministic accounting: a long opened at 100 and closed at 90 loses,
+    # a short opened at 100 and closed at 90 gains. The strategy is scripted so
+    # the fills are known exactly.
+    def scripted(signals):
+        steps = iter(signals)
+
+        def strategy(_prices, _position, _balance):
+            return next(steps, 'hold')
+
+        return strategy
+
+    long_engine = BacktestEngine(100_000.0)
+    long_result = long_engine.run([100.0, 90.0], scripted(['buy', 'close']))
+    assert long_result.total_pnl < 0, long_result
+
+    short_engine = BacktestEngine(100_000.0)
+    short_result = short_engine.run([100.0, 90.0], scripted(['sell', 'close']))
+    assert short_result.total_pnl > 0, short_result
+
+    # RSI of a strictly rising series pins at 100.
+    assert TechnicalIndicators.rsi(prices)[-1] == 100.0
+
+    # The market maker must quote a positive, uncrossed book and skew with
+    # inventory.
+    mm = MarketMakerBot(spread_percent=0.001, inventory_skew=0.01, order_size=1.0)
+    bid, ask = mm.quote(50_000.0, inventory_position=10.0)
+    assert bid['price'] < ask['price'] and bid['price'] > 0
+    skewed_bid, _ = mm.quote(50_000.0, inventory_position=-10.0)
+    assert skewed_bid['price'] > bid['price']
+
+    # Arbitrage only fires above the configured spread.
+    arb = ArbitrageBot()
+    arb.add_exchange('a', 100.0)
+    arb.add_exchange('b', 100.1)
+    assert arb.find_arbitrage() is None
+    arb.add_exchange('b', 101.0)
+    opportunity = arb.find_arbitrage()
+    assert opportunity['buy_exchange'] == 'a' and opportunity['sell_exchange'] == 'b'
+
+    # Grid levels are ordered and alternate sides around the centre.
+    grid = GridTradingBot(grid_levels=10, grid_spacing_percent=1.0).generate_grid(100.0)
+    assert len(grid) == 11
+    assert grid[0]['type'] == 'buy' and grid[-1]['type'] == 'sell'
+    assert grid[0]['price'] < 100.0 < grid[-1]['price']
+
+    # Reporting fails closed on an inconsistent maker/taker split.
+    try:
+        AnalyticsReporting.generate_daily_report(
+            '2024-01-01', 1000.0, 10, 1.0, 5, 1.0, 400.0, 500.0)
+        raise AssertionError("inconsistent maker/taker split must be rejected")
+    except ValueError:
+        pass
+
+    print("trading bots self-test passed")
+
+
+if __name__ == "__main__":
+    _self_test()
