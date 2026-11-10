@@ -568,6 +568,77 @@ async function main() {
     );
     record('the fired stop closed the position and released its margin', true);
 
+    // --- Options AMM ------------------------------------------------------
+    // The admin creates a collateral pool for an underlying, funds it from the
+    // treasury, and a trader buys a call. The pool reserves the worst-case
+    // payout, so a trade it cannot back must be refused, and settlement pays the
+    // intrinsic value out of the reserved collateral.
+    const optUnderlying = `OPTCO${Date.now() % 100000}`;
+    const optDb = new Database(dbPath);
+    try {
+      optDb
+        .prepare("INSERT INTO market_data (id, symbol, price, volume_24h) VALUES (?, ?, ?, 0)")
+        .run(crypto.randomUUID(), `${optUnderlying}/RUSD`, 100);
+    } finally {
+      optDb.close();
+    }
+    const optPool = await request('POST', '/api/admin/dex/options', {
+      token: adminToken,
+      body: { underlying: optUnderlying, settlementAsset: 'RUSD', volatility: 0.5, feeBps: 50 },
+    });
+    assert.equal(optPool.status, 201, `option pool create failed: ${JSON.stringify(optPool.json)}`);
+    const optPoolId = optPool.json.pool.poolId;
+    record('admin creates an options pool', true, optPoolId);
+
+    const optFund = await request('PUT', '/api/admin/dex/options', {
+      token: adminToken,
+      body: { poolId: optPoolId, amount: 1000 },
+    });
+    assert.equal(optFund.status, 200, `option pool funding failed: ${JSON.stringify(optFund.json)}`);
+    assert.equal(optFund.json.pool.collateral, 1000, 'the treasury collateral must land in the pool');
+    record('admin funds the options pool', true);
+
+    const optBuy = await request('POST', '/api/dex/options', {
+      token,
+      body: { poolId: optPoolId, type: 'call', strike: 100, capPrice: 150, quantity: 1 },
+    });
+    assert.equal(optBuy.status, 201, `option buy failed: ${JSON.stringify(optBuy.json)}`);
+    const optPositionId = optBuy.json.option.positionId;
+    assert.ok(optBuy.json.option.premium > 0, 'the premium must be a real model price');
+    assert.equal(optBuy.json.option.reserved, 50, 'a call capped at 150 over a 100 strike reserves 50');
+    record('a trader buys a call and the pool reserves the cap', true, `premium ${optBuy.json.option.premium.toFixed(4)}`);
+
+    // A put over a 100 strike reserves the full strike per contract. The pool
+    // holds about 956 of free collateral, so a 100-lot put (a 10,000 reserve)
+    // must be refused.
+    const optRefused = await request('POST', '/api/dex/options', {
+      token,
+      body: { poolId: optPoolId, type: 'put', strike: 100, quantity: 100 },
+    });
+    assert.equal(optRefused.status, 400, `an unreservable write must be refused, got ${optRefused.status}`);
+    record('the pool refuses a write it cannot back', true);
+
+    // Move the spot up so the call finishes in the money, then settle.
+    const settleDb = new Database(dbPath);
+    try {
+      settleDb.prepare('UPDATE market_data SET price = ? WHERE symbol = ?').run(130, `${optUnderlying}/RUSD`);
+    } finally {
+      settleDb.close();
+    }
+    const optSettle = await request('DELETE', '/api/dex/options', {
+      token,
+      body: { positionId: optPositionId },
+    });
+    assert.equal(optSettle.status, 200, `option settle failed: ${JSON.stringify(optSettle.json)}`);
+    assert.ok(Math.abs(optSettle.json.settlement.payout - 30) < 1e-6, 'a 130 spot over a 100 strike pays 30');
+    record('a call settles at its intrinsic value', true, `payout ${optSettle.json.settlement.payout}`);
+
+    const optAfter = await request('GET', '/api/dex/options', { token });
+    const settled = optAfter.json.positions.find((p) => p.positionId === optPositionId);
+    assert.equal(settled.status, 'settled', 'the position must be settled');
+    assert.equal(optAfter.json.pools.find((p) => p.poolId === optPoolId).reserved, 0, 'the reservation must be released');
+    record('settlement released the unused reserve', true);
+
     // --- Emergency controls ----------------------------------------------
     // A blacklisted token is refused by the swap path even while a pool holds
     // it, and a blacklisted wallet cannot swap at all.
@@ -708,6 +779,9 @@ async function main() {
       ['GET', '/api/dex/conditional-orders'],
       ['POST', '/api/dex/conditional-orders'],
       ['DELETE', '/api/dex/conditional-orders'],
+      ['GET', '/api/dex/options'],
+      ['POST', '/api/dex/options'],
+      ['DELETE', '/api/dex/options'],
       ['POST', '/api/dex/perps'],
       ['PATCH', '/api/dex/perps'],
     ]) {
@@ -735,6 +809,11 @@ async function main() {
     assert.ok(
       riskGuard.status === 401 || riskGuard.status === 403,
       `a trader token must not open the risk admin route, got ${riskGuard.status}`,
+    );
+    const optionGuard = await request('GET', '/api/admin/dex/options', { token });
+    assert.ok(
+      optionGuard.status === 401 || optionGuard.status === 403,
+      `a trader token must not open the options admin route, got ${optionGuard.status}`,
     );
     record('admin routes reject a trader token', true, `status ${adminGuard.status}`);
   } finally {

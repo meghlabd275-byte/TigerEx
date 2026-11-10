@@ -12,6 +12,7 @@ const NAV: Array<{ name: string; href: string }> = [
   { name: 'Vaults', href: '/admin/dex/vaults' },
   { name: 'Liquid staking', href: '/admin/dex/liquid-staking' },
   { name: 'Perps & funding', href: '/admin/dex/perps' },
+  { name: 'Options pools', href: '/admin/dex/options' },
   { name: 'Margin markets', href: '/admin/dex/margin' },
   { name: 'Hooks', href: '/admin/dex/hooks' },
   { name: 'Bots', href: '/admin/dex/bots' },

@@ -1801,6 +1801,51 @@ function initializeSchema() {
       UNIQUE(market_id, user_id)
     );
 
+    -- TigerSwap options AMM. One row per pool, which writes cash-settled
+    -- options against a single underlying and holds the settlement collateral
+    -- that backs every written contract. The reserved figure is the worst-case
+    -- payout of the options currently open, so the free collateral is
+    -- collateral minus reserved and a write is refused when it cannot be
+    -- reserved.
+    CREATE TABLE IF NOT EXISTS dex_option_pools (
+      pool_id TEXT PRIMARY KEY,
+      underlying TEXT NOT NULL,
+      settlement_asset TEXT NOT NULL,
+      collateral REAL NOT NULL DEFAULT 0,
+      reserved REAL NOT NULL DEFAULT 0,
+      fee_bps INTEGER NOT NULL DEFAULT 50,
+      volatility REAL NOT NULL,
+      risk_free_rate REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- A written option position. The pool is the writer, so the reserved column
+    -- is the collateral this contract ties up until it is closed or settled.
+    CREATE TABLE IF NOT EXISTS dex_option_positions (
+      position_id TEXT PRIMARY KEY,
+      pool_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      underlying TEXT NOT NULL,
+      option_type TEXT NOT NULL,
+      strike REAL NOT NULL,
+      cap_price REAL NOT NULL,
+      contract_size REAL NOT NULL,
+      quantity REAL NOT NULL,
+      premium REAL NOT NULL,
+      fee REAL NOT NULL,
+      reserved REAL NOT NULL,
+      max_payout REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      opened_at TEXT DEFAULT (datetime('now')),
+      settled_at TEXT,
+      settlement_price REAL,
+      payout REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_dex_option_positions_user ON dex_option_positions(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_dex_option_positions_pool ON dex_option_positions(pool_id, status);
+
     CREATE TABLE IF NOT EXISTS dex_blacklist (
       entry_id TEXT PRIMARY KEY,
       kind TEXT NOT NULL,

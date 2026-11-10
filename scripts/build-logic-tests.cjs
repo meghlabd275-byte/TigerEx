@@ -90,6 +90,7 @@ const MODULES = [
   'src/lib/dex/staking.ts',
   'src/lib/dex/perps.ts',
   'src/lib/dex/conditional.ts',
+  'src/lib/dex/options.ts',
   'src/lib/dex/margin.ts',
   'src/lib/dex/launchpad.ts',
   'src/lib/dex/bots.ts',
@@ -117,6 +118,7 @@ const MODULES = [
   'src/lib/dex/bot-service.ts',
   'src/lib/dex/copy-service.ts',
   'src/lib/dex/intelligence.ts',
+  'src/lib/dex/options-service.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });
