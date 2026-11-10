@@ -565,7 +565,10 @@ func (s *AuthService) Register(ctx context.Context, req *RegisterRequest) (*User
 	username := s.generateUsername(detection)
 
 	// Generate referral code
-	referralCode := s.generateReferralCode()
+	referralCode, err := s.generateReferralCode()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate referral code: %w", err)
+	}
 
 	// Create user
 	user := &User{
@@ -1327,10 +1330,15 @@ func (s *AuthService) generateUsername(detection *CredentialDetection) string {
 	return fmt.Sprintf("user%d", time.Now().UnixNano()%10000000)
 }
 
-func (s *AuthService) generateReferralCode() string {
+// generateReferralCode returns a random referral code. The error from the
+// CSPRNG is propagated rather than ignored: a code derived from a partially
+// filled buffer would be predictable and could collide with an existing code.
+func (s *AuthService) generateReferralCode() (string, error) {
 	b := make([]byte, 8)
-	rand.Read(b)
-	return hex.EncodeToString(b)[:8]
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b)[:8], nil
 }
 
 // generateBackupCodes returns the plaintext codes to show the user once, and
