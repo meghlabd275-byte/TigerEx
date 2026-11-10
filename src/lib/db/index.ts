@@ -953,6 +953,11 @@ function initializeSchema() {
       max_amount REAL,
       cap REAL,
       status TEXT NOT NULL DEFAULT 'active',
+      -- Structured parameters for the products that convert or pay a
+      -- conditional yield (dual investment, shark fin). Held as JSON so the
+      -- settlement engine reads the same terms the admin wrote, and a product
+      -- of a plain type simply leaves it null.
+      params TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_earn_products_type ON earn_products(product_type);
@@ -2128,6 +2133,10 @@ function applyColumnMigrations(database: Database.Database) {
     // changes without minting or confiscating rewards.
     { table: 'dex_farms', column: 'vetgr', definition: 'INTEGER NOT NULL DEFAULT 0' },
     { table: 'dex_farm_stakes', column: 'weighted_weight', definition: 'REAL NOT NULL DEFAULT 0' },
+    // Structured product terms (dual investment strike/direction, shark fin
+    // bounds) so a database created before the column settles from the same
+    // parameters the admin wrote.
+    { table: 'earn_products', column: 'params', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {

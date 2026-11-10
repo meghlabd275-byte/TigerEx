@@ -216,6 +216,23 @@ test('an inverted shark fin range is refused', () => {
   assert.ok('error' in earn.settleSharkFin({ amount: 1000, minYield: 0.5, maxYield: 0.1, lowerBound: 90, upperBound: 110, settlementPrice: 100 }));
 });
 
+test('dual-investment terms are validated before a product can be listed', () => {
+  const ok = earn.validateDualTerms({ underlying: 'btc', strike: 40000, direction: 'buy_low' });
+  assert.ok(!('error' in ok));
+  assert.equal(ok.underlying, 'BTC');
+  assert.equal(ok.direction, 'buy_low');
+  assert.ok('error' in earn.validateDualTerms({ underlying: 'BTC', strike: 0, direction: 'buy_low' }));
+  assert.ok('error' in earn.validateDualTerms({ underlying: 'BTC', strike: 1, direction: 'sideways' }));
+  assert.ok('error' in earn.validateDualTerms({ strike: 1, direction: 'buy_low' }));
+});
+
+test('shark-fin terms are validated before a product can be listed', () => {
+  const ok = earn.validateSharkTerms({ underlying: 'ETH', lowerBound: 90, upperBound: 110, minYield: 0.01, maxYield: 0.2 });
+  assert.ok(!('error' in ok));
+  assert.ok('error' in earn.validateSharkTerms({ underlying: 'ETH', lowerBound: 110, upperBound: 90, minYield: 0.01, maxYield: 0.2 }));
+  assert.ok('error' in earn.validateSharkTerms({ underlying: 'ETH', lowerBound: 90, upperBound: 110, minYield: 0.5, maxYield: 0.1 }));
+});
+
 test('launchpool rewards split by stake weight and refuse a zero total', () => {
   assert.equal(earn.launchpoolReward(50, 100, 1000), 500);
   assert.equal(earn.launchpoolReward(50, 0, 1000), 0);

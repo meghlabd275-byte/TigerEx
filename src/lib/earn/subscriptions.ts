@@ -20,8 +20,23 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { parseUtcTimestamp } from '@/lib/trading/candles';
-import { lockAvailable, unlockAvailable, creditAvailable, recordTransaction, LedgerError } from '@/lib/db/ledger';
-import { accrueForProduct, lockedRedeemable } from '@/lib/earn/products';
+import {
+  lockAvailable,
+  unlockAvailable,
+  consumeLocked,
+  creditAvailable,
+  recordTransaction,
+  LedgerError,
+} from '@/lib/db/ledger';
+import {
+  accrueForProduct,
+  lockedRedeemable,
+  settleDualInvestment,
+  settleSharkFin,
+  validateDualTerms,
+  validateSharkTerms,
+} from '@/lib/earn/products';
+import { usdPrice } from '@/lib/db/portfolio';
 import { creditFund, fundBalance, debitFund } from '@/lib/dex/pool-service';
 
 export class SubscriptionError extends Error {
@@ -63,6 +78,20 @@ export interface EarnProductRow {
   max_amount: number | null;
   cap: number | null;
   status: string;
+  /** Structured terms for dual investment / shark fin, as a JSON string. */
+  params: string | null;
+}
+
+/** Parse a product's structured-terms JSON, returning an empty object when absent. */
+function parseProductTerms(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw !== 'string' || raw.trim() === '') return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
 
 /** Active earn products, optionally filtered by product type. */
@@ -136,6 +165,21 @@ export function subscribe(input: SubscribeInput): SubscriptionResult {
   const subscriptionId = generateId();
   const maturesAt = durationDays === null ? null : new Date(Date.now() + durationDays * 86400_000).toISOString();
 
+  // A structured product (dual investment, shark fin) only settles against the
+  // terms its admin wrote. Refuse a subscription to one whose terms are missing
+  // or malformed rather than accepting principal it could never settle.
+  if (product.product_type === 'dual_investment' || product.product_type === 'shark_fin') {
+    if (durationDays === null || durationDays <= 0) {
+      throw new SubscriptionError('INVALID_PRODUCT', 'This product requires a term in days', 409);
+    }
+    const terms = parseProductTerms(product.params);
+    const valid =
+      product.product_type === 'dual_investment' ? validateDualTerms(terms) : validateSharkTerms(terms);
+    if ('error' in valid) {
+      throw new SubscriptionError('INVALID_PRODUCT', `This product's terms are invalid: ${valid.error}`, 409);
+    }
+  }
+
   db.transaction(() => {
     lockAvailable(input.userId, product.asset, amount);
     db.prepare(
@@ -177,7 +221,7 @@ export function redeem(userId: string, subscriptionId: string): RedeemResult {
   const row = db
     .prepare(
       `SELECT s.subscription_id, s.amount, s.status, s.started_at, s.matures_at,
-              p.asset, p.apy, p.duration_days, p.product_type
+              p.asset, p.apy, p.duration_days, p.product_type, p.params
          FROM earn_subscriptions s JOIN earn_products p ON p.product_id = s.product_id
         WHERE s.subscription_id = ? AND s.user_id = ?`,
     )
@@ -192,6 +236,7 @@ export function redeem(userId: string, subscriptionId: string): RedeemResult {
         apy: number;
         duration_days: number | null;
         product_type: string;
+        params: string | null;
       }
     | undefined;
   if (!row) throw new SubscriptionError('NOT_FOUND', 'No such subscription for this account', 404);
@@ -204,6 +249,13 @@ export function redeem(userId: string, subscriptionId: string): RedeemResult {
 
   if (durationDays !== null && durationDays > 0 && !lockedRedeemable(startedNs, durationDays, nowNs)) {
     throw new SubscriptionError('LOCKED', 'This subscription is still locked', 409);
+  }
+
+  // A dual-investment or shark-fin product settles against the observed spot at
+  // maturity, not a simple interest accrual. When the underlying has no listed
+  // price the redemption is refused and retried, rather than settled on a guess.
+  if (row.product_type === 'dual_investment' || row.product_type === 'shark_fin') {
+    return redeemStructured(userId, id, row, durationDays, startedNs, nowNs);
   }
 
   const reward = accrueForProduct(principal, Number(row.apy) || 0, nowNs - startedNs, row.product_type);
@@ -223,6 +275,148 @@ export function redeem(userId: string, subscriptionId: string): RedeemResult {
   })();
 
   return { subscriptionId: id, asset: row.asset, principal, reward, total: principal + reward };
+}
+
+interface StructuredRow {
+  subscription_id: string;
+  amount: number;
+  asset: string;
+  apy: number;
+  product_type: string;
+  params: string | null;
+}
+
+/**
+ * Settle a dual-investment or shark-fin subscription at maturity.
+ *
+ * The payoff comes from the pure `settleDualInvestment` / `settleSharkFin`
+ * functions, which read the same terms the admin wrote. The settlement price is
+ * the venue's own listed spot for the underlying, so the figure is observed
+ * rather than invented; when the underlying has no price the redemption is
+ * refused and can be retried, never settled on a guess.
+ *
+ * The locked principal is returned to the user (quote-settled) or consumed to
+ * buy the base asset (base-settled), and only the venue's contribution — the
+ * yield, or the converted principal — is drawn from the reward account for the
+ * payout asset. A shortfall fails closed and leaves the subscription active.
+ */
+function redeemStructured(
+  userId: string,
+  id: string,
+  row: StructuredRow,
+  durationDays: number | null,
+  startedNs: number,
+  nowNs: number,
+): RedeemResult {
+  if (durationDays === null || durationDays <= 0) {
+    throw new SubscriptionError('INVALID_PRODUCT', 'This product has no term to settle against', 409);
+  }
+  if (!lockedRedeemable(startedNs, durationDays, nowNs)) {
+    throw new SubscriptionError('LOCKED', 'This subscription is still locked', 409);
+  }
+
+  const terms = parseProductTerms(row.params);
+  const principal = Number(row.amount) || 0;
+
+  let payoutAsset: string;
+  let rewardAsset: string;
+  let rewardAmount: number;
+  let unlockPrincipal: boolean;
+  let yieldAmount: number;
+
+  if (row.product_type === 'dual_investment') {
+    const valid = validateDualTerms(terms);
+    if ('error' in valid) {
+      throw new SubscriptionError('INVALID_PRODUCT', `This product's terms are invalid: ${valid.error}`, 409);
+    }
+    const settlementPrice = usdPrice(valid.underlying);
+    if (settlementPrice === null || settlementPrice <= 0) {
+      throw new SubscriptionError('NO_SETTLEMENT_PRICE', `No settlement price for ${valid.underlying}`, 503);
+    }
+    const result = settleDualInvestment({
+      amount: principal,
+      apy: Number(row.apy) || 0,
+      strike: valid.strike,
+      settlementPrice,
+      direction: valid.direction,
+      termDays: durationDays,
+    });
+    if ('error' in result) throw new SubscriptionError('INVALID_PRODUCT', result.error, 409);
+
+    yieldAmount = result.reward;
+    if (result.settlementAsset === 'base') {
+      // The quote principal is consumed to buy the base at the strike; the base
+      // payout is supplied by the venue's reward account for that asset.
+      payoutAsset = valid.underlying;
+      rewardAsset = valid.underlying;
+      rewardAmount = result.payout;
+      unlockPrincipal = false;
+    } else {
+      payoutAsset = row.asset;
+      rewardAsset = row.asset;
+      rewardAmount = result.reward;
+      unlockPrincipal = true;
+    }
+  } else {
+    const valid = validateSharkTerms(terms);
+    if ('error' in valid) {
+      throw new SubscriptionError('INVALID_PRODUCT', `This product's terms are invalid: ${valid.error}`, 409);
+    }
+    const settlementPrice = usdPrice(valid.underlying);
+    if (settlementPrice === null || settlementPrice <= 0) {
+      throw new SubscriptionError('NO_SETTLEMENT_PRICE', `No settlement price for ${valid.underlying}`, 503);
+    }
+    const result = settleSharkFin({
+      amount: principal,
+      minYield: valid.minYield,
+      maxYield: valid.maxYield,
+      lowerBound: valid.lowerBound,
+      upperBound: valid.upperBound,
+      settlementPrice,
+    });
+    if ('error' in result) throw new SubscriptionError('INVALID_PRODUCT', result.error, 409);
+
+    yieldAmount = result.payout - principal;
+    // Principal is protected, so it is always returned and only the yield is
+    // drawn from the reward account.
+    payoutAsset = row.asset;
+    rewardAsset = row.asset;
+    rewardAmount = yieldAmount;
+    unlockPrincipal = true;
+  }
+
+  const db = getDb();
+  let payable = 0;
+  db.transaction(() => {
+    if (unlockPrincipal) unlockAvailable(userId, row.asset, principal);
+    else consumeLocked(userId, row.asset, principal);
+
+    payable = Math.min(Math.max(rewardAmount, 0), fundBalance(EARN_REWARD_FUND, rewardAsset));
+    if (payable > 0) {
+      debitFund(EARN_REWARD_FUND, rewardAsset, payable);
+      creditAvailable(userId, payoutAsset, payable);
+    }
+    recordTransaction(
+      userId,
+      row.product_type === 'dual_investment' ? 'dual_investment_settle' : 'shark_fin_settle',
+      payoutAsset,
+      (unlockPrincipal ? principal : 0) + payable,
+      0,
+      'completed',
+      `settle ${row.product_type} ${id}`,
+    );
+    db.prepare(
+      "UPDATE earn_subscriptions SET status = 'redeemed', accrued_reward = ?, redeemed_at = datetime('now') WHERE subscription_id = ?",
+    ).run(yieldAmount, id);
+  })();
+
+  return {
+    subscriptionId: id,
+    asset: payoutAsset,
+    principal,
+    reward: yieldAmount,
+    total: (unlockPrincipal ? principal : 0) + payable,
+  };
 }
 
 export { LedgerError };

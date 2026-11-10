@@ -195,3 +195,56 @@ export function launchpoolReward(
   if (!Number.isFinite(rewardPool) || rewardPool <= 0) return 0;
   return (stake / totalStake) * rewardPool;
 }
+
+export interface DualInvestmentTerms {
+  /** Asset whose spot at settlement decides conversion, e.g. BTC. */
+  underlying: string;
+  /** Strike the settlement price is compared against. */
+  strike: number;
+  /** Buy-low converts to base below the strike; sell-high above it. */
+  direction: 'buy_low' | 'sell_high';
+}
+
+export interface SharkFinTerms {
+  underlying: string;
+  lowerBound: number;
+  upperBound: number;
+  minYield: number;
+  maxYield: number;
+}
+
+function underlyingAsset(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const asset = value.trim().toUpperCase();
+  return /^[A-Z0-9]{2,15}$/.test(asset) ? asset : null;
+}
+
+/** Validate the structured terms of a dual-investment product, or report why not. */
+export function validateDualTerms(params: Record<string, unknown>): DualInvestmentTerms | { error: string } {
+  const underlying = underlyingAsset(params.underlying);
+  if (!underlying) return { error: 'underlying must be an asset symbol such as BTC' };
+  const strike = Number(params.strike);
+  if (!Number.isFinite(strike) || strike <= 0) return { error: 'strike must be a positive number' };
+  const direction = params.direction === 'sell_high' ? 'sell_high' : params.direction === 'buy_low' ? 'buy_low' : null;
+  if (direction === null) return { error: 'direction must be buy_low or sell_high' };
+  return { underlying, strike, direction };
+}
+
+/** Validate the structured terms of a shark-fin product, or report why not. */
+export function validateSharkTerms(params: Record<string, unknown>): SharkFinTerms | { error: string } {
+  const underlying = underlyingAsset(params.underlying);
+  if (!underlying) return { error: 'underlying must be an asset symbol such as BTC' };
+  const lowerBound = Number(params.lowerBound);
+  const upperBound = Number(params.upperBound);
+  if (!Number.isFinite(lowerBound) || lowerBound <= 0) return { error: 'lowerBound must be a positive number' };
+  if (!Number.isFinite(upperBound) || upperBound <= lowerBound) {
+    return { error: 'upperBound must be greater than lowerBound' };
+  }
+  const minYield = Number(params.minYield);
+  const maxYield = Number(params.maxYield);
+  if (!Number.isFinite(minYield) || minYield < 0) return { error: 'minYield must be non-negative' };
+  if (!Number.isFinite(maxYield) || maxYield < minYield) {
+    return { error: 'maxYield must be at least minYield' };
+  }
+  return { underlying, lowerBound, upperBound, minYield, maxYield };
+}

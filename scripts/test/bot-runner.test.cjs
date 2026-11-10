@@ -75,6 +75,14 @@ function observedTrade(symbol, price) {
   ).run(generateId(), symbol, generateId(), generateId(), generateId(), generateId(), price, price);
 }
 
+/** Publish the venue's own listed price for an asset, used to value a portfolio. */
+function setMarketPrice(asset, price) {
+  db.prepare(
+    `INSERT INTO market_data (id, symbol, price) VALUES (?, ?, ?)
+     ON CONFLICT(symbol) DO UPDATE SET price = excluded.price`,
+  ).run(generateId(), `${asset}/USDT`, price);
+}
+
 function botRow(botId) {
   return db
     .prepare('SELECT bot_id, user_id, strategy, symbol, params, status, state, last_run_ns FROM trading_bots WHERE bot_id = ?')
@@ -287,4 +295,54 @@ test('a created bot is listed for its owner and starts stopped', () => {
   assert.equal(listUserBots(user).length, 1);
   // A stopped bot is never ticked by the sweep.
   assert.equal(runDueBots().length, 0);
+});
+
+test('a rebalance bot trades the overweight asset back toward its target', () => {
+  const user = seedUser();
+  const { symbol } = listPair('RBAL');
+  credit(user, 'RBAL', 2);
+  credit(user, 'RUSD', 100);
+  setMarketPrice('RBAL', 100);
+  observedTrade(symbol, 100);
+
+  // A resting bid so the sell leg the rebalance needs can fill.
+  const maker = seedUser();
+  credit(maker, 'RUSD', 1000);
+  placeSpotOrder(maker, { symbol, side: 'buy', type: 'limit', price: 100, quantity: 1 });
+
+  const bot = createBot(user, {
+    strategy: 'rebalance',
+    symbol,
+    params: { targets: { RBAL: 0.5, RUSD: 0.5 }, minTradeNotional: 1 },
+  });
+  setBotStatus(user, bot.id, 'running');
+
+  // 2 RBAL at 100 plus 100 RUSD is 300 of value; a 50/50 target means selling
+  // 0.5 RBAL. The RUSD leg is the residual and needs no order of its own.
+  const result = runBotTick(botRow(bot.id));
+  assert.equal(result.action, 'placed');
+  assert.equal(result.orders.length, 1);
+  assert.equal(result.orders[0].side, 'sell');
+  assert.ok(Math.abs(result.orders[0].quantity - 0.5) < 1e-9);
+
+  // The portfolio is now at target, so the next tick is inert.
+  assert.equal(runBotTick(botRow(bot.id)).action, 'skipped');
+});
+
+test('a rebalance bot with weights that do not sum to one is refused', () => {
+  const user = seedUser();
+  const { symbol } = listPair('RBAL2');
+  assert.throws(
+    () => createBot(user, { strategy: 'rebalance', symbol, params: { targets: { RBAL2: 0.5, RUSD: 0.2 } } }),
+    (error) => error.code === 'INVALID_PARAMS',
+  );
+});
+
+test('a rebalance bot with no targets is refused', () => {
+  const user = seedUser();
+  const { symbol } = listPair('RBAL3');
+  assert.throws(
+    () => createBot(user, { strategy: 'rebalance', symbol, params: {} }),
+    (error) => error.code === 'INVALID_PARAMS',
+  );
 });

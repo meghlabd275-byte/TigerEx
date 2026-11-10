@@ -103,12 +103,12 @@ function listEtf(symbol, underlying, leverage, direction, nav, referencePrice) {
   return marketId;
 }
 
-function listEarnProduct(asset, apy, durationDays, minAmount, productType = 'flexible') {
+function listEarnProduct(asset, apy, durationDays, minAmount, productType = 'flexible', params = null) {
   const productId = generateId();
   db.prepare(
-    `INSERT INTO earn_products (product_id, name, product_type, asset, apy, duration_days, min_amount, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`,
-  ).run(productId, `${asset} ${productType}`, productType, asset, apy, durationDays, minAmount);
+    `INSERT INTO earn_products (product_id, name, product_type, asset, apy, duration_days, min_amount, status, params)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+  ).run(productId, `${asset} ${productType}`, productType, asset, apy, durationDays, minAmount, params);
   return productId;
 }
 
@@ -543,6 +543,108 @@ test('a funded earn reward account pays up to its balance', () => {
   // The principal returns plus the funded 100; nothing beyond the fund is minted.
   assert.equal(availableBalance(user, 'RUSD'), before + 1000 + 100);
   assert.equal(subscriptions.earnRewardFundBalance('RUSD'), 0);
+});
+
+test('a dual-investment keeps the quote when the settlement price is above the strike', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 10000);
+  setPrice('BTC/USDT', 50000);
+  const params = JSON.stringify({ underlying: 'BTC', strike: 40000, direction: 'buy_low' });
+  const productId = listEarnProduct('RUSD', 0.1, 30, 10, 'dual_investment', params);
+
+  const subscription = subscriptions.subscribe({ userId: user, productId, amount: 1000 });
+  db.prepare("UPDATE earn_subscriptions SET started_at = datetime('now', '-31 days') WHERE subscription_id = ?").run(
+    subscription.subscriptionId,
+  );
+  subscriptions.fundEarnRewards('RUSD', 100);
+
+  const before = availableBalance(user, 'RUSD');
+  const result = subscriptions.redeem(user, subscription.subscriptionId);
+
+  assert.equal(result.asset, 'RUSD');
+  assert.equal(result.principal, 1000);
+  assert.ok(result.reward > 0, 'the yield is paid regardless of conversion');
+  // Principal returns plus the funded reward; nothing is minted beyond the fund.
+  assert.equal(availableBalance(user, 'RUSD'), before + 1000 + result.reward);
+  assert.equal(subscriptions.earnRewardFundBalance('RUSD'), 100 - result.reward);
+});
+
+test('a dual-investment converts to the base asset below the strike', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 10000);
+  setPrice('BTC/USDT', 30000);
+  const params = JSON.stringify({ underlying: 'BTC', strike: 40000, direction: 'buy_low' });
+  const productId = listEarnProduct('RUSD', 0.1, 30, 10, 'dual_investment', params);
+
+  const subscription = subscriptions.subscribe({ userId: user, productId, amount: 1000 });
+  db.prepare("UPDATE earn_subscriptions SET started_at = datetime('now', '-31 days') WHERE subscription_id = ?").run(
+    subscription.subscriptionId,
+  );
+  const expectedPayout = (1000 + 1000 * 0.1 * (30 / 365)) / 40000;
+  subscriptions.fundEarnRewards('BTC', expectedPayout);
+
+  const before = availableBalance(user, 'RUSD');
+  const result = subscriptions.redeem(user, subscription.subscriptionId);
+
+  assert.equal(result.asset, 'BTC');
+  // The quote principal is consumed, not returned.
+  assert.equal(availableBalance(user, 'RUSD'), before);
+  assert.ok(Math.abs(availableBalance(user, 'BTC') - expectedPayout) < 1e-9);
+  assert.equal(subscriptions.earnRewardFundBalance('BTC'), 0);
+});
+
+test('a shark fin pays the maximum yield when settlement is inside the range', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 10000);
+  setPrice('BTC/USDT', 50000);
+  const params = JSON.stringify({ underlying: 'BTC', lowerBound: 40000, upperBound: 60000, minYield: 0.01, maxYield: 0.2 });
+  const productId = listEarnProduct('RUSD', 0.2, 30, 10, 'shark_fin', params);
+
+  const subscription = subscriptions.subscribe({ userId: user, productId, amount: 1000 });
+  db.prepare("UPDATE earn_subscriptions SET started_at = datetime('now', '-31 days') WHERE subscription_id = ?").run(
+    subscription.subscriptionId,
+  );
+  subscriptions.fundEarnRewards('RUSD', 500);
+
+  const before = availableBalance(user, 'RUSD');
+  const result = subscriptions.redeem(user, subscription.subscriptionId);
+
+  assert.equal(result.asset, 'RUSD');
+  assert.equal(result.principal, 1000);
+  assert.ok(Math.abs(result.reward - 200) < 1e-9);
+  assert.equal(availableBalance(user, 'RUSD'), before + 1000 + 200);
+});
+
+test('a structured product without a settlement price is refused, not settled on a guess', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 10000);
+  // The underlying is never listed, so it cannot be valued. A dedicated symbol
+  // is used because market data is shared across the test database.
+  const params = JSON.stringify({ underlying: 'ZZZZ', strike: 40000, direction: 'buy_low' });
+  const productId = listEarnProduct('RUSD', 0.1, 30, 10, 'dual_investment', params);
+
+  const subscription = subscriptions.subscribe({ userId: user, productId, amount: 1000 });
+  db.prepare("UPDATE earn_subscriptions SET started_at = datetime('now', '-31 days') WHERE subscription_id = ?").run(
+    subscription.subscriptionId,
+  );
+  assert.throws(
+    () => subscriptions.redeem(user, subscription.subscriptionId),
+    (error) => error.code === 'NO_SETTLEMENT_PRICE',
+  );
+  // The subscription is untouched and can be retried once a price exists.
+  const status = db.prepare('SELECT status FROM earn_subscriptions WHERE subscription_id = ?').get(subscription.subscriptionId).status;
+  assert.equal(status, 'active');
+});
+
+test('subscribing to a structured product with invalid terms is refused', () => {
+  const user = seedUser();
+  credit(user, 'RUSD', 10000);
+  const params = JSON.stringify({ underlying: 'BTC', lowerBound: 110, upperBound: 90, minYield: 0.01, maxYield: 0.2 });
+  const productId = listEarnProduct('RUSD', 0.1, 30, 10, 'shark_fin', params);
+  assert.throws(
+    () => subscriptions.subscribe({ userId: user, productId, amount: 1000 }),
+    (error) => error.code === 'INVALID_PRODUCT',
+  );
 });
 
 // ---------------------------------------------------------------------------

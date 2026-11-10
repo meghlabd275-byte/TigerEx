@@ -10,7 +10,7 @@
  */
 
 import { getDb, generateId } from '@/lib/db';
-import { gridLevels, dcaAmount, twapSlices, marketMakerQuotes, type GridConfig, type DcaConfig, type TwapConfig, type MarketMakerConfig } from '@/lib/bots/strategies';
+import { gridLevels, dcaAmount, twapSlices, marketMakerQuotes, normalizeTargets, type GridConfig, type DcaConfig, type TwapConfig, type MarketMakerConfig } from '@/lib/bots/strategies';
 
 export class BotError extends Error {
   constructor(
@@ -137,8 +137,19 @@ function validateParams(strategy: string, params: Record<string, unknown>): void
       if ('error' in plan) throw new BotError('INVALID_PARAMS', plan.error);
       break;
     }
+    case 'rebalance': {
+      const targets = normalizeTargets(params.targets);
+      if (Object.keys(targets).length === 0) {
+        throw new BotError('INVALID_PARAMS', 'targets must be a non-empty map of asset to weight');
+      }
+      const weightSum = Object.values(targets).reduce((sum, weight) => sum + weight, 0);
+      if (Math.abs(weightSum - 1) > 1e-6) {
+        throw new BotError('INVALID_PARAMS', 'target weights must sum to 1');
+      }
+      break;
+    }
     default:
-      // rebalance, arbitrage: the engine validates these against live balances.
+      // arbitrage: the engine validates its legs against live marks.
       break;
   }
 }

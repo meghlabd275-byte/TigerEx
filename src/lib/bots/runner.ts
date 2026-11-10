@@ -17,7 +17,8 @@ import { getDb } from '@/lib/db';
 import { placeSpotOrder, SpotError } from '@/lib/trading/spot-engine';
 import { placeFuturesOrder, FuturesError, markPriceFor } from '@/lib/trading/futures-engine';
 import { lastTradePrice, orderBookDepth } from '@/lib/trading/market-view';
-import { gridLevels, dcaAmount, twapSlices, marketMakerQuotes } from '@/lib/bots/strategies';
+import { gridLevels, dcaAmount, twapSlices, marketMakerQuotes, rebalanceOrders, normalizeTargets } from '@/lib/bots/strategies';
+import { portfolioSummary, usdPrice } from '@/lib/db/portfolio';
 import { pausedScope } from '@/lib/trading/controls';
 
 export interface BotTickResult {
@@ -301,10 +302,71 @@ function tickBot(bot: BotRow, nowNs: number): BotTickResult {
       return { ...base, action: 'placed', orders };
     }
 
+    case 'rebalance': {
+      // Smart rebalance is portfolio-wide: it values the caller's whole spot
+      // portfolio against target weights and trades the difference back to
+      // target. The bot's symbol supplies the quote asset, so each leg trades on
+      // a real listed pair. A rebalance only runs on its interval, so a
+      // scheduler sweeping every second does not churn the book.
+      const rawTargets = params.targets;
+      const targets: Record<string, number> = normalizeTargets(rawTargets);
+      if (Object.keys(targets).length === 0) return skipped('targets are not configured');
+
+      const quote =
+        String(params.quoteAsset ?? '').trim().toUpperCase() || bot.symbol.split('/')[1] || 'RUSD';
+      // A resting order still belongs to the user, so locked funds count toward
+      // the position; otherwise a rebalance would keep selling the same asset
+      // while its previous order rests on the book.
+      const held = new Map(
+        portfolioSummary(bot.user_id).holdings.map((h) => [h.coin, h.available + h.locked]),
+      );
+
+      const holdings: Record<string, number> = {};
+      const prices: Record<string, number> = {};
+      for (const asset of Object.keys(targets)) {
+        holdings[asset] = held.get(asset) ?? 0;
+        const assetPrice = asset === quote ? 1 : usdPrice(asset);
+        if (assetPrice === null || assetPrice <= 0) return skipped(`no price for ${asset}`);
+        prices[asset] = assetPrice;
+      }
+
+      const plan = rebalanceOrders({
+        targets,
+        holdings,
+        prices,
+        minTradeNotional:
+          params.minTradeNotional === undefined ? undefined : Number(params.minTradeNotional),
+      });
+      if ('error' in plan) return skipped(plan.error);
+
+      const intervalNs = positive(params.intervalNs) ?? 0;
+      const lastRun = Number(state.lastRunNs) || 0;
+      if (intervalNs > 0 && lastRun > 0 && nowNs - lastRun < intervalNs) return skipped('interval not elapsed');
+
+      for (const order of plan) {
+        // The quote asset's own delta is the residual of the other legs, so it
+        // needs no order of its own; a quote target is met by trading the rest.
+        if (order.asset === quote) continue;
+        try {
+          const placed = placeSpotOrder(bot.user_id, {
+            symbol: `${order.asset}/${quote}`,
+            side: order.side,
+            type: 'market',
+            quantity: order.quantity,
+            botId: bot.bot_id,
+          });
+          orders.push({ orderId: placed.orderId, side: order.side, type: 'market', price: null, quantity: order.quantity });
+        } catch (error) {
+          if (error instanceof SpotError) return skipped(`${order.asset} leg refused: ${error.message}`);
+          throw error;
+        }
+      }
+      recordState(bot.bot_id, { ...state, lastRunNs: nowNs });
+      return orders.length ? { ...base, action: 'placed', orders } : skipped('portfolio already at target');
+    }
+
     default:
-      // `rebalance` needs the caller's whole portfolio and is driven through the
-      // portfolio route, not a single-symbol tick.
-      return skipped(`${bot.strategy} is not a single-symbol strategy`);
+      return skipped(`${bot.strategy} is not a supported strategy`);
   }
 }
 

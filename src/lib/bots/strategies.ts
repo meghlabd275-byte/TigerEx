@@ -171,6 +171,31 @@ export interface RebalanceOrder {
 }
 
 /**
+ * Normalise a rebalance `targets` parameter into an asset-to-weight map.
+ *
+ * Accepts either a map (`{ BTC: 0.5, ETH: 0.5 }`) or an array of
+ * `{ asset|token, weight }` entries, so both the API and the UI can express the
+ * same intent. Weights are validated by the caller against the planner.
+ */
+export function normalizeTargets(raw: unknown): Record<string, number> {
+  const targets: Record<string, number> = {};
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (!entry || typeof entry !== 'object') continue;
+      const record = entry as Record<string, unknown>;
+      const asset = String(record.asset ?? record.token ?? '').trim().toUpperCase();
+      if (asset) targets[asset] = Number(record.weight);
+    }
+  } else if (raw && typeof raw === 'object') {
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      const asset = key.trim().toUpperCase();
+      if (asset) targets[asset] = Number(value);
+    }
+  }
+  return targets;
+}
+
+/**
  * Compute the trades that move a portfolio to its target weights.
  *
  * Weights must be positive and sum to 1 (within a small tolerance). Assets with

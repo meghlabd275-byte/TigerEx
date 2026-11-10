@@ -3,6 +3,7 @@ import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, finite, positive, NO_STORE } from '@/lib/api/route-guards';
 import { fundEarnRewards, earnRewardFundBalance } from '@/lib/earn/subscriptions';
+import { validateDualTerms, validateSharkTerms } from '@/lib/earn/products';
 
 /**
  * Earn product administration.
@@ -11,11 +12,25 @@ import { fundEarnRewards, earnRewardFundBalance } from '@/lib/earn/subscriptions
  * investment, shark fin, auto-invest and launchpool. The APR is a fraction
  * (0.15 is 15%) and a locked product must carry a duration, because a locked
  * product without a maturity cannot be redeemed correctly.
+ *
+ * A structured product (dual investment, shark fin) additionally carries its
+ * terms — a strike and direction, or a yield range — which are validated here so
+ * the settlement engine always has terms it can price.
  */
 
 const PRODUCT_TYPES = ['flexible', 'locked', 'vault', 'dual_investment', 'shark_fin', 'auto_invest', 'launchpool', 'defi_staking'];
 const ASSETS = ['BTC', 'ETH', 'TGR', 'RUSD', 'USDT', 'USDC', 'RYUSD'];
 const STATUSES = ['active', 'paused', 'closed'];
+
+function structuredTerms(
+  productType: string,
+  raw: unknown,
+): Record<string, unknown> | { error: string } | null {
+  if (productType !== 'dual_investment' && productType !== 'shark_fin') return null;
+  const params = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const valid = productType === 'dual_investment' ? validateDualTerms(params) : validateSharkTerms(params);
+  return 'error' in valid ? { error: valid.error } : (valid as unknown as Record<string, unknown>);
+}
 
 export async function GET(request: NextRequest) {
   const auth = await requireAdmin(request);
@@ -48,6 +63,7 @@ export async function GET(request: NextRequest) {
         maxAmount: row.max_amount ?? null,
         cap: row.cap ?? null,
         status: row.status,
+        params: row.params ?? null,
         createdAt: row.created_at,
       })),
     },
@@ -136,6 +152,18 @@ export async function POST(request: NextRequest) {
   const status = String(body.status ?? 'active').toLowerCase();
   if (!STATUSES.includes(status)) return fail('VALIDATION_FAILED', `status must be one of ${STATUSES.join(', ')}`);
 
+  // A structured product must carry valid terms, and a term in days so it can
+  // mature and settle.
+  let paramsJson: string | null = null;
+  if (productType === 'dual_investment' || productType === 'shark_fin') {
+    if (durationDays === null || durationDays <= 0) {
+      return fail('VALIDATION_FAILED', 'durationDays is required for a dual-investment or shark-fin product');
+    }
+    const terms = structuredTerms(productType, body.params);
+    if (terms && 'error' in terms) return fail('VALIDATION_FAILED', terms.error as string);
+    paramsJson = JSON.stringify(terms);
+  }
+
   const db = getDb();
   const productId = typeof body.productId === 'string' && body.productId ? body.productId : null;
 
@@ -145,18 +173,18 @@ export async function POST(request: NextRequest) {
     db.prepare(
       `UPDATE earn_products
           SET name = ?, product_type = ?, asset = ?, apy = ?, duration_days = ?, min_amount = ?,
-              max_amount = ?, cap = ?, status = ?
+              max_amount = ?, cap = ?, status = ?, params = ?
         WHERE product_id = ?`,
-    ).run(name, productType, asset, apy, durationDays, minAmount, maxAmount, cap, status, productId);
+    ).run(name, productType, asset, apy, durationDays, minAmount, maxAmount, cap, status, paramsJson, productId);
     recordAdminAction(request, auth.admin, 'earn.product.update', { type: 'earn_product', id: productId, detail: { name, productType, apy, status } });
     return NextResponse.json({ success: true, productId }, { headers: NO_STORE });
   }
 
   const newId = generateId();
   db.prepare(
-    `INSERT INTO earn_products (product_id, name, product_type, asset, apy, duration_days, min_amount, max_amount, cap, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(newId, name, productType, asset, apy, durationDays, minAmount, maxAmount, cap, status);
+    `INSERT INTO earn_products (product_id, name, product_type, asset, apy, duration_days, min_amount, max_amount, cap, status, params)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(newId, name, productType, asset, apy, durationDays, minAmount, maxAmount, cap, status, paramsJson);
 
   recordAdminAction(request, auth.admin, 'earn.product.create', { type: 'earn_product', id: newId, detail: { name, productType, apy, status } });
   return NextResponse.json({ success: true, productId: newId }, { status: 201, headers: NO_STORE });
