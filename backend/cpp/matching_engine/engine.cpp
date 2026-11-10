@@ -14,6 +14,9 @@
 #include <string>
 #include <sstream>
 #include <iomanip>
+#include <cmath>
+#include <fstream>
+#include <stdexcept>
 
 // Constants
 constexpr int MAX_ORDERS = 1000000;
@@ -315,34 +318,89 @@ private:
 
 };
 
-int main() {
-    std::cout << "TigerEx C++ Matching Engine v1.0" << std::endl;
-    std::cout << "=============================" << std::endl;
+// Each non-empty, non-comment input line is:
+// market,user,side,type,price,quantity  (side: Buy|Sell; type: Limit|Market)
+static bool load_orders(const std::string& path, MatchingEngine& engine) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        std::cerr << "Cannot open order file: " << path << std::endl;
+        return false;
+    }
 
-    MatchingEngine engine;
+    std::string line;
+    size_t loaded = 0;
+    while (std::getline(file, line)) {
+        if (line.empty() || line[0] == '#') continue;
 
-    engine.add_market({"BNB/USDT", "BNB", "USDT"});
-    engine.add_market({"XRP/USDT", "XRP", "USDT"});
+        std::stringstream ss(line);
+        std::string market, user, side_s, type_s, price_s, qty_s;
+        if (!std::getline(ss, market, ',') || !std::getline(ss, user, ',') ||
+            !std::getline(ss, side_s, ',') || !std::getline(ss, type_s, ',') ||
+            !std::getline(ss, price_s, ',') || !std::getline(ss, qty_s, ',')) {
+            std::cerr << "Malformed order line: " << line << std::endl;
+            return false;
+        }
 
-    // Test orders
-    std::vector<Order> test_orders = {
-        {"1", "user1", "BTC/USDT", Side::Buy, OrderType::Limit, 45000.0, 0.5, 0.0, OrderStatus::New, 0},
-        {"2", "user2", "BTC/USDT", Side::Sell, OrderType::Limit, 45000.0, 0.3, 0.0, OrderStatus::New, 0},
-        {"3", "user1", "ETH/USDT", Side::Buy, OrderType::Limit, 2500.0, 2.0, 0.0, OrderStatus::New, 0},
-    };
+        try {
+            Side side;
+            if (side_s == "Buy") side = Side::Buy;
+            else if (side_s == "Sell") side = Side::Sell;
+            else throw std::invalid_argument("side");
 
-    for (auto& o : test_orders) {
-        auto [trade, err] = engine.place_order(o);
-        if (!err.empty()) {
-            std::cerr << "Error: " << err << std::endl;
-        } else if (trade) {
-            std::cout << "Trade: " << trade->quantity << " @ " << trade->price << std::endl;
+            OrderType type;
+            if (type_s == "Limit") type = OrderType::Limit;
+            else if (type_s == "Market") type = OrderType::Market;
+            else throw std::invalid_argument("type");
+
+            size_t c1 = 0, c2 = 0;
+            double price = std::stod(price_s, &c1);
+            double qty = std::stod(qty_s, &c2);
+            if (c1 != price_s.size() || c2 != qty_s.size()) throw std::invalid_argument("trailing");
+            if (market.empty() || user.empty() || qty <= 0 || (type == OrderType::Limit && price <= 0))
+                throw std::invalid_argument("range");
+
+            Order order;
+            order.id = std::to_string(loaded + 1);
+            order.user_id = user;
+            order.market = market;
+            order.side = side;
+            order.type = type;
+            order.price = price;
+            order.quantity = qty;
+
+            auto [trade, err] = engine.place_order(order);
+            if (!err.empty()) {
+                std::cerr << "Order rejected: " << err << " (" << line << ")" << std::endl;
+                return false;
+            }
+            if (trade) {
+                std::cout << "Trade: " << trade->quantity << " @ " << trade->price << std::endl;
+            }
+            ++loaded;
+        } catch (const std::exception&) {
+            std::cerr << "Invalid order value in line: " << line << std::endl;
+            return false;
         }
     }
 
-    auto snap = engine.snapshot("BTC/USDT", 5);
-    std::cout << "\nBTC/USDT Order Book:" << std::endl;
-    std::cout << "Bid: " << snap.best_bid << " Ask: " << snap.best_ask << " Spread: " << snap.spread << std::endl;
+    if (loaded == 0) {
+        std::cerr << "Order file contained no orders: " << path << std::endl;
+        return false;
+    }
+    return true;
+}
+
+#ifndef TIGEREX_ENGINE_NO_MAIN
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "usage: matching-engine-simple <orders.csv>" << std::endl;
+        return 1;
+    }
+
+    MatchingEngine engine;
+    if (!load_orders(argv[1], engine)) {
+        return 1;
+    }
 
     auto st = engine.stats();
     std::cout << "\nEngine Stats:" << std::endl;
@@ -353,3 +411,4 @@ int main() {
 
     return 0;
 }
+#endif // TIGEREX_ENGINE_NO_MAIN

@@ -82,7 +82,9 @@ public:
         auto it = subscriptions.find(channel);
         if (it == subscriptions.end()) return false;
 
-        std::cout << "Publishing to " << it->second.size() << " clients" << std::endl;
+        for (const auto& client_id : it->second) {
+            send(client_id, data);
+        }
         return true;
     }
 
@@ -146,22 +148,28 @@ int main(int argc, char** argv) {
     });
 
     std::string client = hub.connect("/ws");
-    std::cout << "Connected: " << client << std::endl;
 
     // Subscribing before authentication is rejected.
-    if (!hub.subscribe(client, "BTC/USDT@trade")) {
-        std::cout << "Subscribe rejected before authentication" << std::endl;
+    if (hub.subscribe(client, "private")) {
+        std::cerr << "ERROR: unauthenticated subscribe was accepted" << std::endl;
+        return 1;
     }
 
-    if (argc >= 3 && hub.authenticate(client, argv[2])) {
-        hub.subscribe(client, "BTC/USDT@trade");
-        hub.subscribe(client, "BTC/USDT@depth");
-        hub.publish("BTC/USDT@trade", "{\"price\":50000,\"size\":0.1}");
-    } else {
-        std::cout << "Client not authenticated" << std::endl;
+    if (argc < 5) {
+        std::cerr << "usage: websocket-gateway <tokens.txt> <token> <channel> <message>"
+                  << std::endl;
+        return 1;
     }
 
-    std::cout << "Active clients: " << hub.client_count() << std::endl;
+    if (!hub.authenticate(client, argv[2])) {
+        std::cerr << "authentication failed" << std::endl;
+        return 1;
+    }
+    if (!hub.subscribe(client, argv[3])) {
+        std::cerr << "subscribe failed" << std::endl;
+        return 1;
+    }
+    hub.publish(argv[3], argv[4]);
 
     return 0;
 }

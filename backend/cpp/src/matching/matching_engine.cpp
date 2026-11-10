@@ -8,6 +8,13 @@
 #include <algorithm>
 #include <chrono>
 #include <atomic>
+#include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <mutex>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 
 using namespace std::chrono;
 
@@ -260,32 +267,87 @@ public:
     }
 };
 
-int main() {
-    MatchingEngine engine;
-
-    std::cout << "Matching Engine initialized (C++ ultra-low latency)" << std::endl;
-
-    // Create buy orders
-    engine.createOrder("BTCUSDT", "user1", Side::BUY, OrderType::LIMIT, 65000.0, 1.0);
-    engine.createOrder("BTCUSDT", "user2", Side::BUY, OrderType::LIMIT, 64900.0, 0.5);
-    engine.createOrder("BTCUSDT", "user3", Side::BUY, OrderType::LIMIT, 64800.0, 2.0);
-
-    // Create sell order
-    engine.createOrder("BTCUSDT", "user4", Side::SELL, OrderType::LIMIT, 65000.0, 1.5);
-
-    // Process matches
-    auto trades = engine.processMatches("BTCUSDT");
-    
-    std::cout << "Trades executed: " << trades.size() << std::endl;
-    for (const auto& trade : trades) {
-        std::cout << "  Trade: " << trade.symbol 
-                 << " @ $" << trade.price 
-                 << " qty: " << trade.quantity << std::endl;
+// Each non-empty, non-comment input line is:
+// symbol,user,side,type,price,quantity  (side: BUY|SELL; type: MARKET|LIMIT)
+static bool load_orders(const std::string& path, MatchingEngine& engine, std::vector<std::string>& symbols) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        std::cerr << "Cannot open order file: " << path << std::endl;
+        return false;
     }
 
-    // Market data
-    auto [bid, ask] = engine.getMarketData("BTCUSDT");
-    std::cout << "Market: bid $" << bid << " ask $" << ask << std::endl;
+    std::string line;
+    size_t loaded = 0;
+    while (std::getline(file, line)) {
+        if (line.empty() || line[0] == '#') continue;
+
+        std::stringstream ss(line);
+        std::string symbol, user, side_s, type_s, price_s, qty_s;
+        if (!std::getline(ss, symbol, ',') || !std::getline(ss, user, ',') ||
+            !std::getline(ss, side_s, ',') || !std::getline(ss, type_s, ',') ||
+            !std::getline(ss, price_s, ',') || !std::getline(ss, qty_s, ',')) {
+            std::cerr << "Malformed order line: " << line << std::endl;
+            return false;
+        }
+
+        try {
+            Side side = side_s == "BUY" ? Side::BUY : Side::SELL;
+            if (side_s != "BUY" && side_s != "SELL") throw std::invalid_argument("side");
+            OrderType type;
+            if (type_s == "MARKET") type = OrderType::MARKET;
+            else if (type_s == "LIMIT") type = OrderType::LIMIT;
+            else throw std::invalid_argument("type");
+
+            size_t c1 = 0, c2 = 0;
+            double price = std::stod(price_s, &c1);
+            double qty = std::stod(qty_s, &c2);
+            if (c1 != price_s.size() || c2 != qty_s.size()) throw std::invalid_argument("trailing");
+            if (symbol.empty() || user.empty() || qty <= 0 || (type == OrderType::LIMIT && price <= 0))
+                throw std::invalid_argument("range");
+
+            engine.createOrder(symbol, user, side, type, price, qty);
+            symbols.push_back(symbol);
+            ++loaded;
+        } catch (const std::exception&) {
+            std::cerr << "Invalid order value in line: " << line << std::endl;
+            return false;
+        }
+    }
+
+    if (loaded == 0) {
+        std::cerr << "Order file contained no orders: " << path << std::endl;
+        return false;
+    }
+    return true;
+}
+
+#ifndef TIGEREX_MATCHING_ENGINE_NO_MAIN
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "usage: matching-engine-v2 <orders.csv>" << std::endl;
+        return 1;
+    }
+
+    MatchingEngine engine;
+    std::vector<std::string> symbols;
+    if (!load_orders(argv[1], engine, symbols)) {
+        return 1;
+    }
+
+    std::sort(symbols.begin(), symbols.end());
+    symbols.erase(std::unique(symbols.begin(), symbols.end()), symbols.end());
+
+    for (const auto& symbol : symbols) {
+        auto trades = engine.processMatches(symbol);
+        std::cout << symbol << ": " << trades.size() << " trades" << std::endl;
+        for (const auto& trade : trades) {
+            std::cout << "  Trade: " << trade.symbol << " @ $" << trade.price
+                      << " qty: " << trade.quantity << std::endl;
+        }
+        auto [bid, ask] = engine.getMarketData(symbol);
+        std::cout << "  Market: bid $" << bid << " ask $" << ask << std::endl;
+    }
 
     return 0;
 }
+#endif // TIGEREX_MATCHING_ENGINE_NO_MAIN

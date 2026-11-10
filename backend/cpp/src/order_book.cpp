@@ -9,6 +9,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cmath>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 
 // ============================================================================
 // CONSTANTS
@@ -243,30 +248,80 @@ private:
 // MAIN
 // ============================================================================
 
-int main() {
-    std::cout << "TigerEx C++ Order Book - Ultra Low Latency" << std::endl;
-    std::cout << "============================================" << std::endl;
-    
+// Each non-empty, non-comment input line is:
+// side,price,quantity,user_id,symbol   (side is BUY or SELL)
+static bool load_orders(const std::string& path, OrderBook& book) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        std::cerr << "Cannot open order file: " << path << std::endl;
+        return false;
+    }
+
+    std::string line;
+    size_t loaded = 0;
+    while (std::getline(file, line)) {
+        if (line.empty() || line[0] == '#') continue;
+
+        std::stringstream ss(line);
+        std::string side_s, price_s, qty_s, user_s, symbol;
+        if (!std::getline(ss, side_s, ',') || !std::getline(ss, price_s, ',') ||
+            !std::getline(ss, qty_s, ',') || !std::getline(ss, user_s, ',') ||
+            !std::getline(ss, symbol, ',')) {
+            std::cerr << "Malformed order line: " << line << std::endl;
+            return false;
+        }
+
+        try {
+            OrderSide side;
+            if (side_s == "BUY") side = OrderSide::BUY;
+            else if (side_s == "SELL") side = OrderSide::SELL;
+            else throw std::invalid_argument("side");
+
+            size_t c1 = 0, c2 = 0, c3 = 0;
+            double price = std::stod(price_s, &c1);
+            double qty = std::stod(qty_s, &c2);
+            unsigned long long user = std::stoull(user_s, &c3);
+            if (c1 != price_s.size() || c2 != qty_s.size() || c3 != user_s.size())
+                throw std::invalid_argument("trailing characters");
+            if (!std::isfinite(price) || !std::isfinite(qty) || price <= 0 || qty <= 0 ||
+                symbol.empty())
+                throw std::invalid_argument("range");
+
+            book.add_order(side, price, qty, user, symbol);
+            ++loaded;
+        } catch (const std::exception&) {
+            std::cerr << "Invalid order value in line: " << line << std::endl;
+            return false;
+        }
+    }
+
+    if (loaded == 0) {
+        std::cerr << "Order file contained no orders: " << path << std::endl;
+        return false;
+    }
+    return true;
+}
+
+#ifndef TIGEREX_ORDER_BOOK_NO_MAIN
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "usage: order-book <orders.csv>" << std::endl;
+        return 1;
+    }
+
     OrderBook book;
-    
-    // Place orders
-    book.add_order(OrderSide::BUY, 49990.0, 1.0, 1, "BTC/USDT");
-    book.add_order(OrderSide::BUY, 49980.0, 2.0, 2, "BTC/USDT");
-    book.add_order(OrderSide::BUY, 49970.0, 3.0, 3, "BTC/USDT");
-    
-    book.add_order(OrderSide::SELL, 50010.0, 1.5, 4, "BTC/USDT");
-    book.add_order(OrderSide::SELL, 50020.0, 2.5, 5, "BTC/USDT");
-    book.add_order(OrderSide::SELL, 50030.0, 3.5, 6, "BTC/USDT");
-    
+    if (!load_orders(argv[1], book)) {
+        return 1;
+    }
+
     book.get_stats();
-    
     std::cout << "\nBest Bid: " << book.get_best_bid() << std::endl;
     std::cout << "Best Ask: " << book.get_best_ask() << std::endl;
     std::cout << "Spread: " << book.get_spread() << std::endl;
-    
-    // Match
+
     auto trades = book.match_orders();
     std::cout << "\nMatched " << trades.size() << " trades" << std::endl;
-    
+
     return 0;
 }
+#endif // TIGEREX_ORDER_BOOK_NO_MAIN

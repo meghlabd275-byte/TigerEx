@@ -59,3 +59,8 @@ add_test(NAME hft-low-latency-tests COMMAND hft-low-latency-tests)
 add_executable(networking-hot-path-tests tests/networking_hot_path_test.cpp)
 target_link_libraries(networking-hot-path-tests PRIVATE Threads::Threads)
 add_test(NAME networking-hot-path-tests COMMAND networking-hot-path-tests)
+
+# Reporting engine: totals computed from loaded trades, fail-closed parsing.
+add_executable(reporting-tests tests/reporting_test.cpp)
+target_link_libraries(reporting-tests PRIVATE Threads::Threads)
+add_test(NAME reporting-tests COMMAND reporting-tests)
