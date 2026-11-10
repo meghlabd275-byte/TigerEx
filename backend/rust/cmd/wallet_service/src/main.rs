@@ -592,10 +592,24 @@ impl WalletService {
         }
     }
 
-    async fn query_balance(&self, _address: &WalletAddress) -> Result<Vec<TokenBalance>, WalletError> {
-        // In production, query RPC endpoints
-        // For now, return empty balances
-        Ok(vec![])
+    async fn query_balance(&self, address: &WalletAddress) -> Result<Vec<TokenBalance>, WalletError> {
+        // A balance read must reflect the chain. Returning an empty list when no
+        // RPC provider is wired would report every wallet as empty, so the read
+        // fails closed until a provider is configured.
+        let config = self
+            .blockchain_configs
+            .get(&address.blockchain)
+            .ok_or(WalletError::ChainNotSupported)?;
+        if config.rpc_url.is_empty() {
+            return Err(WalletError::InternalError(format!(
+                "no RPC endpoint configured for {}; refusing to report a balance",
+                address.blockchain
+            )));
+        }
+        Err(WalletError::NetworkError(format!(
+            "no balance provider is configured for {}; refusing to report a balance",
+            address.blockchain
+        )))
     }
     
 }
@@ -789,6 +803,43 @@ async fn main() -> Result<()> {
     
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
-    
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn address(blockchain: &str) -> WalletAddress {
+        WalletAddress {
+            id: "addr-1".to_string(),
+            wallet_id: "wallet-1".to_string(),
+            blockchain: blockchain.to_string(),
+            address: "0x0000000000000000000000000000000000000000".to_string(),
+            public_key: String::new(),
+            derivation_path: "m/44'/60'/0'/0/0".to_string(),
+            created_at: Utc::now(),
+        }
+    }
+
+    /// A balance read without a configured provider must not report the wallet as
+    /// empty; it must fail so a caller cannot mistake "unknown" for "zero".
+    #[tokio::test]
+    async fn balance_read_fails_closed_without_provider() {
+        let service = WalletService::with_master_key(&[7u8; 32]);
+        let result = service.query_balance(&address("eth")).await;
+        assert!(
+            matches!(result, Err(WalletError::NetworkError(_))),
+            "expected a fail-closed error, got {result:?}"
+        );
+    }
+
+    /// An unknown chain is rejected rather than silently treated as empty.
+    #[tokio::test]
+    async fn balance_read_rejects_unknown_chain() {
+        let service = WalletService::with_master_key(&[7u8; 32]);
+        let result = service.query_balance(&address("not-a-chain")).await;
+        assert!(matches!(result, Err(WalletError::ChainNotSupported)));
+    }
 }
