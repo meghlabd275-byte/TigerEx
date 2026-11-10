@@ -5,10 +5,21 @@ import { Loader2, RefreshCw, Plus, Minus } from 'lucide-react';
 import { DexShell, Panel, TableWrap, Th, Td } from '@/components/dex/DexShell';
 import { useApiResource } from '@/lib/useApiResource';
 import { apiRequest } from '@/lib/api/client-request';
-import { formatAmount, formatPercent, shortenId, pairLabel } from '@/lib/dex/format';
+import { formatAmount, formatPercent, formatUsd, shortenId, pairLabel } from '@/lib/dex/format';
 
 interface PoolsResponse {
-  pools: Array<{ poolId: string; kind: string; tokens: string[]; fee: number; status: string; reserves: Record<string, number> }>;
+  pools: Array<{
+    poolId: string;
+    kind: string;
+    tokens: string[];
+    fee: number;
+    status: string;
+    reserves: Record<string, number>;
+    tvlUsd: number | null;
+    volume24hUsd: number | null;
+    feeApr: number | null;
+    feeApy: number | null;
+  }>;
 }
 
 interface PositionsResponse {
@@ -21,6 +32,11 @@ interface PositionsResponse {
     share: number;
     amount0: number;
     amount1: number;
+    valueUsd: number;
+    fees24hUsd: number;
+    feeApr: number | null;
+    feeApy: number | null;
+    divergenceLoss: number | null;
     lockedUntil: string | null;
   }>;
 }
@@ -193,6 +209,10 @@ export default function DexLiquidityPage() {
                   <Th>Pool</Th>
                   <Th right>Share</Th>
                   <Th right>Underlying</Th>
+                  <Th right>Value</Th>
+                  <Th right>Fees 24h</Th>
+                  <Th right>APR / APY</Th>
+                  <Th right>IL</Th>
                   <Th>Locked until</Th>
                   <Th right>Action</Th>
                 </tr>
@@ -210,6 +230,14 @@ export default function DexLiquidityPage() {
                       <Td right>
                         {formatAmount(position.amount0)} {position.tokens[0]}
                         {position.tokens[1] ? ` / ${formatAmount(position.amount1)} ${position.tokens[1]}` : ''}
+                      </Td>
+                      <Td right>{formatUsd(position.valueUsd)}</Td>
+                      <Td right>{formatUsd(position.fees24hUsd)}</Td>
+                      <Td right>
+                        {formatPercent(position.feeApr)} / {formatPercent(position.feeApy)}
+                      </Td>
+                      <Td right>
+                        {position.divergenceLoss === null ? '—' : formatPercent(position.divergenceLoss)}
                       </Td>
                       <Td>{position.lockedUntil ? new Date(position.lockedUntil).toLocaleString() : 'Not locked'}</Td>
                       <Td right>

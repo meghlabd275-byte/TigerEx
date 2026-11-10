@@ -34,6 +34,7 @@ import {
   assertNotBlacklisted,
   type DexPoolRow,
 } from '@/lib/dex/pool-service';
+import { positionAnalytics } from '@/lib/dex/liquidity-analytics-service';
 
 export { lpTokenSymbol };
 
@@ -349,11 +350,11 @@ export function removeLiquidity(request: RemoveLiquidityRequest): RemoveLiquidit
   return { poolId: request.poolId, amount0, amount1, liquidity: burn };
 }
 
-/** A user's liquidity positions with their pool metadata. */
+/** A user's liquidity positions with their pool metadata and live analytics. */
 export function userPositions(userId: string): Array<Record<string, unknown>> {
   const rows = getDb()
     .prepare(
-      `SELECT p.*, d.kind, d.tokens, d.reserves, d.total_supply, d.fee, d.tvl_usd
+      `SELECT p.*, d.kind, d.tokens, d.reserves, d.total_supply, d.fee, d.tvl_usd, d.fee_24h_usd, d.volume_24h_usd
          FROM dex_lp_positions p
          JOIN dex_pools d ON d.pool_id = p.pool_id
         WHERE p.user_id = ?
@@ -366,6 +367,10 @@ export function userPositions(userId: string): Array<Record<string, unknown>> {
     const total = Number(row.total_supply);
     const liquidity = Number(row.liquidity);
     const share = total > 0 ? liquidity / total : 0;
+    const analytics = positionAnalytics(
+      { liquidity, amount0: Number(row.amount0), amount1: Number(row.amount1) },
+      row as unknown as DexPoolRow,
+    );
     return {
       positionId: row.position_id,
       poolId: row.pool_id,
@@ -375,6 +380,12 @@ export function userPositions(userId: string): Array<Record<string, unknown>> {
       share,
       amount0: share * (reserves[tokens[0]] ?? 0),
       amount1: tokens[1] ? share * (reserves[tokens[1]] ?? 0) : 0,
+      valueUsd: analytics.valueUsd,
+      fees24hUsd: analytics.fees24hUsd,
+      feeApr: analytics.feeApr,
+      feeApy: analytics.feeApy,
+      divergenceLoss: analytics.divergenceLoss,
+      priceRatio: analytics.priceRatio,
       lockedUntil: row.locked_until,
       createdAt: row.created_at,
     };

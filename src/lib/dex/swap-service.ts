@@ -22,6 +22,7 @@ import {
   type RouteQuote,
 } from '@/lib/dex/router';
 import { AmmError } from '@/lib/dex/amm';
+import { poolFeeApr, aprToApy } from '@/lib/dex/liquidity-analytics';
 import {
   DexError,
   assertDexOpen,
@@ -330,7 +331,6 @@ export function executeSwap(request: SwapRequest): SwapResult {
           hop.poolId,
         );
       }
-      refreshPoolStats(hop.poolId);
     }
 
     if (settlementFee > 0) {
@@ -355,6 +355,13 @@ export function executeSwap(request: SwapRequest): SwapResult {
       JSON.stringify(quote.hops),
       sponsored ? 1 : 0,
     );
+
+    // The pool counters are recomputed from the settled swaps, so this must run
+    // after the swap row is written; refreshing earlier would leave every pool's
+    // 24-hour volume and fees one trade behind.
+    for (const poolId of new Set(quote.hops.map((hop) => hop.poolId))) {
+      refreshPoolStats(poolId);
+    }
   })();
 
   return {
@@ -405,27 +412,35 @@ export function swapHistory(userId: string, limit = 50): Array<Record<string, un
     .all(userId, capped) as Array<Record<string, unknown>>;
 }
 
-/** Pool metadata for the list endpoint, including the live TVL and APR. */
+/** Pool metadata for the list endpoint, including the live TVL and fee APR. */
 export function listPools(): Array<Record<string, unknown>> {
   const rows = getDb().prepare('SELECT * FROM dex_pools ORDER BY created_at DESC').all() as DexPoolRow[];
-  return rows.map((row) => ({
-    poolId: row.pool_id,
-    kind: row.kind,
-    address: row.address,
-    tokens: JSON.parse(row.tokens),
-    fee: row.fee,
-    reserves: JSON.parse(row.reserves),
-    totalSupply: row.total_supply,
-    tvlUsd: row.tvl_usd,
-    volume24hUsd: row.volume_24h_usd,
-    fee24hUsd: row.fee_24h_usd,
-    status: row.status,
-    amplification: row.amplification,
-    weights: row.weights ? JSON.parse(row.weights) : null,
-    tickSpacing: row.tick_spacing,
-    sqrtPrice: row.sqrt_price,
-    liquidity: row.liquidity,
-  }));
+  return rows.map((row) => {
+    const tvl = Number(row.tvl_usd) || 0;
+    // A pool whose tokens cannot be valued has no derivable rate; report null so
+    // the client shows "—" instead of a zero that reads as "earns nothing".
+    const feeApr = tvl > 0 ? poolFeeApr(Number(row.fee_24h_usd) || 0, tvl) : null;
+    return {
+      poolId: row.pool_id,
+      kind: row.kind,
+      address: row.address,
+      tokens: JSON.parse(row.tokens),
+      fee: row.fee,
+      reserves: JSON.parse(row.reserves),
+      totalSupply: row.total_supply,
+      tvlUsd: row.tvl_usd,
+      volume24hUsd: row.volume_24h_usd,
+      fee24hUsd: row.fee_24h_usd,
+      feeApr,
+      feeApy: feeApr === null ? null : aprToApy(feeApr),
+      status: row.status,
+      amplification: row.amplification,
+      weights: row.weights ? JSON.parse(row.weights) : null,
+      tickSpacing: row.tick_spacing,
+      sqrtPrice: row.sqrt_price,
+      liquidity: row.liquidity,
+    };
+  });
 }
 
 /** A single pool's detail with its recent swaps. */

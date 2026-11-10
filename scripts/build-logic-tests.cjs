@@ -119,6 +119,8 @@ const MODULES = [
   'src/lib/dex/copy-service.ts',
   'src/lib/dex/intelligence.ts',
   'src/lib/dex/options-service.ts',
+  'src/lib/dex/liquidity-analytics.ts',
+  'src/lib/dex/liquidity-analytics-service.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });

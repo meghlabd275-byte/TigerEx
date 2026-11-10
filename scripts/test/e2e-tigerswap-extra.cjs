@@ -305,6 +305,64 @@ async function main() {
     assert.ok(zapOut.json.zap.received > 0, 'the zap-out must return a single token');
     record('zap-out redeems a position into one token', true, `received ${zapOut.json.zap.received.toFixed(4)} RUSD`);
 
+    // --- LP analytics -----------------------------------------------------
+    // A swap has settled against the pool, so the pool's 24-hour fee run rate is
+    // non-zero and the analytics must reflect it rather than a placeholder.
+    const analyticsSwap = await request('POST', '/api/dex/swap', {
+      token,
+      body: { tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 5_000, slippage: 0.02 },
+    });
+    assert.equal(analyticsSwap.status, 201, `analytics swap failed: ${JSON.stringify(analyticsSwap.json)}`);
+
+    // The pool holds TGR, so until TGR has a mark the pool cannot be valued and
+    // must report no rate rather than a zero that would read as "earns nothing".
+    const poolsAfter = await request('GET', '/api/dex/pools');
+    const poolRow = poolsAfter.json.pools.find((entry) => entry.poolId === poolId);
+    assert.ok(poolRow, 'the pool must be listed');
+    assert.equal(poolRow.feeApr, null, 'an unpriceable pool reports no rate rather than a zero');
+
+    // Seed the TGR mark the way the oracle does, then trade once more so the
+    // pool's value and its fee counters are recomputed against the real price.
+    const priceDb = new Database(dbPath);
+    try {
+      priceDb
+        .prepare("INSERT INTO market_data (id, symbol, price, volume_24h) VALUES (?, ?, ?, 0)")
+        .run(crypto.randomUUID(), 'TGR/RUSD', 2);
+    } finally {
+      priceDb.close();
+    }
+    const pricedSwap = await request('POST', '/api/dex/swap', {
+      token,
+      body: { tokenIn: 'RUSD', tokenOut: 'TGR', amountIn: 1_000, slippage: 0.02 },
+    });
+    assert.equal(pricedSwap.status, 201, `priced swap failed: ${JSON.stringify(pricedSwap.json)}`);
+
+    const priced = await request('GET', '/api/dex/pools');
+    const pricedPool = priced.json.pools.find((entry) => entry.poolId === poolId);
+    assert.ok(pricedPool.tvlUsd > 0, 'a priceable pool must carry a real value');
+    assert.ok(Number.isFinite(pricedPool.feeApr), 'a priceable pool must report a numeric fee APR');
+    assert.ok(Number.isFinite(pricedPool.feeApy), 'a priceable pool must report a numeric fee APY');
+    assert.ok(pricedPool.feeApr > 0, `a pool with settled volume must earn a rate, got ${pricedPool.feeApr}`);
+    assert.ok(pricedPool.feeApy > pricedPool.feeApr, 'the APY must compound the APR');
+    record('the pools endpoint reports a live fee APR and APY', true, `apr ${(pricedPool.feeApr * 100).toFixed(2)}%`);
+
+    // Open a fresh position: the zap-out above closed the earlier one.
+    const lpAdd = await request('POST', '/api/dex/liquidity', {
+      token,
+      body: { poolId, amounts: { RUSD: 20_000, TGR: 10_000 } },
+    });
+    assert.equal(lpAdd.status, 201, `liquidity add failed: ${JSON.stringify(lpAdd.json)}`);
+    assert.ok(lpAdd.json.position.liquidity > 0, 'the deposit must mint liquidity');
+
+    const lpPositions = await request('GET', '/api/dex/liquidity', { token });
+    assert.equal(lpPositions.status, 200, `liquidity list failed: ${JSON.stringify(lpPositions.json)}`);
+    const lp = lpPositions.json.positions.find((entry) => entry.poolId === poolId);
+    assert.ok(lp, 'the provider position must be listed');
+    assert.ok(Number.isFinite(lp.valueUsd) && lp.valueUsd > 0, 'the position must carry a real value');
+    assert.ok(Number.isFinite(lp.feeApr) && lp.feeApr > 0, 'the position must carry the pool fee rate');
+    assert.ok(lp.divergenceLoss === null || lp.divergenceLoss <= 0, 'divergence loss is never positive');
+    record('the position reports value, fee rate and divergence loss', true, `value ${lp.valueUsd.toFixed(2)}`);
+
     // --- MEV protection ---------------------------------------------------
     const assessment = await request('GET', '/api/dex/mev?tokenIn=RUSD&tokenOut=TGR&amountIn=1000', { token });
     assert.equal(assessment.status, 200, `mev assess failed: ${JSON.stringify(assessment.json)}`);
