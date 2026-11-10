@@ -36,6 +36,7 @@ const {
   fundOptionPool,
   buyOption,
   settleOption,
+  settleMaturedOptions,
   optionPositions,
 } = require('../../.test-build/options-service.js');
 
@@ -251,4 +252,63 @@ test('settling the same option twice is refused', () => {
     () => settleOption(userId, buy.positionId),
     (error) => error instanceof DexError && error.code === 'NO_POSITION',
   );
+});
+
+test('a buy records the expiry and the keeper settles it once it matures', () => {
+  const userId = seedUser();
+  credit(userId, 'RUSD', 10_000);
+  listSpot('EXPIRECO', 100);
+
+  const pool = createOptionPool({ underlying: 'EXPIRECO', settlementAsset: 'RUSD', volatility: 0.5 });
+  fundOptionPool(pool.pool_id, 1_000);
+  const expiry = new Date(Date.now() + 60_000).toISOString();
+  const buy = buyOption({ userId, poolId: pool.pool_id, type: 'call', strike: 100, capPrice: 150, quantity: 1, expiry });
+  assert.equal(buy.expiresAt, expiry, 'the expiry the buyer chose is stored');
+  assert.equal(optionPositions(userId).find((p) => p.positionId === buy.positionId).expiresAt, expiry);
+
+  // Before maturity the keeper must leave the option alone.
+  const early = settleMaturedOptions(Date.now());
+  assert.equal(early.settled.length, 0);
+  assert.equal(optionPositions(userId).find((p) => p.positionId === buy.positionId).status, 'open');
+
+  // At maturity the keeper settles it and releases the reservation. The spot is
+  // raised so the call finishes in the money and the payout is observable.
+  db.prepare('UPDATE market_data SET price = 120 WHERE symbol = ?').run('EXPIRECO/RUSD');
+  const before = availableBalance(userId, 'RUSD');
+  const matured = settleMaturedOptions(Date.now() + 120_000);
+  assert.deepEqual(matured.settled, [buy.positionId]);
+  assert.equal(availableBalance(userId, 'RUSD'), before + 20, 'a 120 spot over a 100 strike pays 20');
+
+  const position = optionPositions(userId).find((p) => p.positionId === buy.positionId);
+  assert.equal(position.status, 'settled');
+  assert.equal(listOptionPools().find((row) => row.poolId === pool.pool_id).reserved, 0);
+
+  // A second pass must not settle it again.
+  assert.equal(settleMaturedOptions(Date.now() + 240_000).settled.length, 0);
+});
+
+test('the keeper leaves a matured option open when its underlying has no price', () => {
+  const userId = seedUser();
+  credit(userId, 'RUSD', 10_000);
+  listSpot('NOPRICECO', 100);
+  const pool = createOptionPool({ underlying: 'NOPRICECO', settlementAsset: 'RUSD', volatility: 0.5 });
+  fundOptionPool(pool.pool_id, 1_000);
+  const buy = buyOption({
+    userId,
+    poolId: pool.pool_id,
+    type: 'call',
+    strike: 100,
+    capPrice: 150,
+    quantity: 1,
+    // A near expiry so only this option matures in the pass below.
+    expiry: new Date(Date.now() + 60_000).toISOString(),
+  });
+
+  // Remove every price for the underlying: settlement must fail closed and the
+  // position must stay open rather than settling at an invented price.
+  db.prepare('DELETE FROM market_data WHERE symbol = ?').run('NOPRICECO/RUSD');
+  const result = settleMaturedOptions(Date.now() + 120_000);
+  assert.equal(result.settled.length, 0, 'an unpriced option must not be settled');
+  assert.equal(result.failed, 1, 'the failure must be reported');
+  assert.equal(optionPositions(userId).find((p) => p.positionId === buy.positionId).status, 'open');
 });

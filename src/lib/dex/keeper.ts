@@ -17,6 +17,7 @@ import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { executeSwap } from '@/lib/dex/swap-service';
 import { closePosition, applyFunding, liquidatePosition, markPrice, perpPositions, triggerConditionalOrders } from '@/lib/dex/perps-service';
 import { accrueInterest } from '@/lib/dex/margin-service';
+import { settleMaturedOptions } from '@/lib/dex/options-service';
 import { distributeVetgrFees } from '@/lib/dex/farm-service';
 import { runDexCopySweep } from '@/lib/dex/copy-service';
 import { runDueBotInstances } from '@/lib/dex/bot-service';
@@ -35,6 +36,7 @@ export interface KeeperReport {
   fundingApplied: string[];
   positionsLiquidated: number;
   conditionalOrdersTriggered: number;
+  optionsSettled: number;
   interestAccrued: number;
   vetgrFeesDistributed: number;
   copyMirrored: number;
@@ -320,6 +322,14 @@ export function runKeeperCycle(now = Date.now()): KeeperReport {
   const dca = runDueDcaPlans(now);
   const twap = runDueTwapPlans(now);
   const perps = runPerpCycle();
+  // Options settle at maturity so a matured contract releases its reservation
+  // without a user action.
+  let options: { settled: string[]; failed: number };
+  try {
+    options = settleMaturedOptions(now);
+  } catch {
+    options = { settled: [], failed: 0 };
+  }
   const lending = accrueInterest(now);
   const vetgrFees = distributeVetgrFees();
   // Copy mirroring places swaps, so it runs after the venue-level jobs for the
@@ -349,6 +359,7 @@ export function runKeeperCycle(now = Date.now()): KeeperReport {
     fundingApplied: perps.fundingApplied,
     positionsLiquidated: perps.liquidated,
     conditionalOrdersTriggered: perps.conditionalTriggered,
+    optionsSettled: options.settled.length,
     interestAccrued: lending.charged,
     vetgrFeesDistributed: vetgrFees.reduce((sum, entry) => sum + entry.distributed, 0),
     copyMirrored: copy.filter((row) => row.status === 'mirrored').length,

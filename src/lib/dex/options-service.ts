@@ -46,6 +46,7 @@ interface OptionPositionRow {
   fee: number;
   reserved: number;
   max_payout: number;
+  expires_at: string | null;
   status: string;
   opened_at: string;
   settled_at: string | null;
@@ -171,6 +172,7 @@ export interface BuyOptionResult {
   spot: number;
   delta: number;
   impliedYield: number;
+  expiresAt: string;
 }
 
 /**
@@ -210,6 +212,9 @@ export function buyOption(request: BuyOptionRequest): BuyOptionResult {
   if (!Number.isFinite(expiryMs)) throw new DexError('INVALID_EXPIRY', 'expiry must be a valid date', 400);
   const timeToExpiry = Math.max(0, (expiryMs - Date.now()) / YEAR_MS);
   if (timeToExpiry <= 0) throw new DexError('INVALID_EXPIRY', 'expiry must be in the future', 400);
+  // Stored so the keeper can settle the contract at maturity without a user
+  // action; an option with no expiry would never release its reservation.
+  const expiresAt = new Date(expiryMs).toISOString();
 
   const contractSize = 1;
   const feeRate = pool.fee_bps / 10_000;
@@ -254,8 +259,8 @@ export function buyOption(request: BuyOptionRequest): BuyOptionResult {
       .prepare(
         `INSERT INTO dex_option_positions
            (position_id, pool_id, user_id, underlying, option_type, strike, cap_price, contract_size,
-            quantity, premium, fee, reserved, max_payout, status, settlement_price)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
+            quantity, premium, fee, reserved, max_payout, expires_at, status, settlement_price)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
       )
       .run(
         positionId,
@@ -271,6 +276,7 @@ export function buyOption(request: BuyOptionRequest): BuyOptionResult {
         quote.fee,
         quote.reserve,
         quote.maxPayout,
+        expiresAt,
         spot,
       );
 
@@ -300,6 +306,7 @@ export function buyOption(request: BuyOptionRequest): BuyOptionResult {
       spot,
       delta: priced.delta,
       impliedYield: writerYield(quote.premium, quote.reserve, timeToExpiry),
+      expiresAt,
     };
   })() as BuyOptionResult;
 }
@@ -335,6 +342,40 @@ export function settleOption(userId: string, positionId: string): SettleOptionRe
     .prepare("SELECT * FROM dex_option_positions WHERE position_id = ? AND user_id = ? AND status = 'open'")
     .get(positionId, userId) as OptionPositionRow | undefined;
   if (!position) throw new DexError('NO_POSITION', 'no open option with that id', 404);
+  return settlePositionRow(position);
+}
+
+/**
+ * Settle every option whose expiry has passed.
+ *
+ * The keeper calls this so a matured contract is settled without a user action:
+ * an option that never expired would hold its reservation forever. Each
+ * settlement runs through the same accounting as a manual one, so the pool pays
+ * the capped intrinsic value and releases the rest.
+ */
+export function settleMaturedOptions(now = Date.now()): { settled: string[]; failed: number } {
+  const rows = getDb()
+    .prepare("SELECT * FROM dex_option_positions WHERE status = 'open' AND expires_at IS NOT NULL")
+    .all() as OptionPositionRow[];
+  const settled: string[] = [];
+  let failed = 0;
+  for (const row of rows) {
+    const expiry = row.expires_at ? Date.parse(row.expires_at) : NaN;
+    if (!Number.isFinite(expiry) || expiry > now) continue;
+    try {
+      settlePositionRow(row);
+      settled.push(row.position_id);
+    } catch {
+      // A pool with no price for the underlying cannot settle yet; leave the
+      // position open and retry on the next cycle rather than forcing a payout.
+      failed += 1;
+    }
+  }
+  return { settled, failed };
+}
+
+/** The settlement accounting for one open position row. */
+function settlePositionRow(position: OptionPositionRow): SettleOptionResult {
   const pool = loadPool(position.pool_id);
   const settlementPrice = spotOf(pool.underlying, pool.settlement_asset);
 
@@ -353,8 +394,8 @@ export function settleOption(userId: string, positionId: string): SettleOptionRe
   }
 
   return getDb().transaction(() => {
-    if (payout > 0) creditAvailable(userId, pool.settlement_asset, payout);
-    recordTransaction(userId, 'dex_option_settle', pool.settlement_asset, payout, 0, 'completed', `option ${positionId}`);
+    if (payout > 0) creditAvailable(position.user_id, pool.settlement_asset, payout);
+    recordTransaction(position.user_id, 'dex_option_settle', pool.settlement_asset, payout, 0, 'completed', `option ${position.position_id}`);
 
     // The payout leaves the pool's collateral; the unused reservation becomes
     // free again. A payout is always inside the reserve, so collateral stays
@@ -373,9 +414,9 @@ export function settleOption(userId: string, positionId: string): SettleOptionRe
             SET status = 'settled', settled_at = datetime('now'), settlement_price = ?, payout = ?
           WHERE position_id = ?`,
       )
-      .run(settlementPrice, payout, positionId);
+      .run(settlementPrice, payout, position.position_id);
 
-    return { positionId, settlementPrice, payout, released: reserved - payout };
+    return { positionId: position.position_id, settlementPrice, payout, released: reserved - payout };
   })() as SettleOptionResult;
 }
 
@@ -396,6 +437,7 @@ export function optionPositions(userId: string): Array<Record<string, unknown>> 
     fee: row.fee,
     reserved: row.reserved,
     maxPayout: row.max_payout,
+    expiresAt: row.expires_at,
     status: row.status,
     openedAt: row.opened_at,
     settledAt: row.settled_at,

@@ -31,6 +31,7 @@ interface OptionsResponse {
     fee: number;
     reserved: number;
     maxPayout: number;
+    expiresAt: string | null;
     status: string;
     openedAt: string;
     settledAt: string | null;
@@ -282,6 +283,7 @@ export default function DexOptionsPage() {
                 <Th right>Quantity</Th>
                 <Th right>Premium</Th>
                 <Th right>Max payout</Th>
+                <Th>Expires</Th>
                 <Th right>Action</Th>
               </tr>
             </thead>
@@ -297,6 +299,7 @@ export default function DexOptionsPage() {
                   <Td right>{formatAmount(position.quantity)}</Td>
                   <Td right>{formatAmount(position.premium)}</Td>
                   <Td right>{formatAmount(position.maxPayout)}</Td>
+                  <Td>{position.expiresAt ? new Date(position.expiresAt).toLocaleString() : '—'}</Td>
                   <Td right>
                     <button
                       onClick={() => settle(position.positionId)}

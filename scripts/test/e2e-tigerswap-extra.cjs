@@ -639,6 +639,43 @@ async function main() {
     assert.equal(optAfter.json.pools.find((p) => p.poolId === optPoolId).reserved, 0, 'the reservation must be released');
     record('settlement released the unused reserve', true);
 
+    // A short-dated option is left open until it matures, then the keeper
+    // settles it without a user action and releases its reservation.
+    const optExpiry = await request('POST', '/api/dex/options', {
+      token,
+      body: {
+        poolId: optPoolId,
+        type: 'call',
+        strike: 100,
+        capPrice: 150,
+        quantity: 1,
+        expiry: new Date(Date.now() + 3_000).toISOString(),
+      },
+    });
+    assert.equal(optExpiry.status, 201, `short-dated buy failed: ${JSON.stringify(optExpiry.json)}`);
+    const keeperNow = await fetch(`${base}/api/dex/keeper`, {
+      method: 'POST',
+      headers: { 'x-keeper-secret': keeperSecret },
+    });
+    assert.equal(keeperNow.status, 200, 'the keeper run failed');
+    assert.equal((await keeperNow.json()).report.optionsSettled, 0, 'an unexpired option must not settle');
+    record('the keeper leaves an unexpired option open', true);
+
+    await new Promise((resolve) => setTimeout(resolve, 3_200));
+    const keeperMatured = await fetch(`${base}/api/dex/keeper`, {
+      method: 'POST',
+      headers: { 'x-keeper-secret': keeperSecret },
+    });
+    assert.equal(keeperMatured.status, 200, 'the keeper run failed');
+    assert.equal((await keeperMatured.json()).report.optionsSettled, 1, 'the matured option must settle');
+    const maturedAfter = await request('GET', '/api/dex/options', { token });
+    assert.equal(
+      maturedAfter.json.positions.find((p) => p.positionId === optExpiry.json.option.positionId).status,
+      'settled',
+      'the keeper must settle the matured option',
+    );
+    record('the keeper settles a matured option and releases its reserve', true);
+
     // --- Emergency controls ----------------------------------------------
     // A blacklisted token is refused by the swap path even while a pool holds
     // it, and a blacklisted wallet cannot swap at all.

@@ -1837,6 +1837,7 @@ function initializeSchema() {
       fee REAL NOT NULL,
       reserved REAL NOT NULL,
       max_payout REAL NOT NULL,
+      expires_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open',
       opened_at TEXT DEFAULT (datetime('now')),
       settled_at TEXT,
@@ -2115,6 +2116,10 @@ function applyColumnMigrations(database: Database.Database) {
     // allowance counts only sponsored swaps rather than every swap the trader
     // made (which let a busy trader exhaust the allowance with paid swaps).
     { table: 'dex_swaps', column: 'sponsored', definition: 'INTEGER NOT NULL DEFAULT 0' },
+    // An option position records when it expires, so the keeper can settle a
+    // matured contract without a user action. An option with no expiry would
+    // stay open forever and its reservation would never be released.
+    { table: 'dex_option_positions', column: 'expires_at', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {
