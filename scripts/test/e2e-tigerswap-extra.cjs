@@ -486,6 +486,52 @@ async function main() {
     assert.equal(hookDetach.json.removed, true);
     record('admin detaches the hook', true);
 
+    // --- Anti-MEV enforcement --------------------------------------------
+    // The anti-MEV hook used to be stored and "evaluated" without ever gating a
+    // swap. This drives the real path: pin the settlement block, attach the hook
+    // to a fresh pool, push the pool's price with one swap, then confirm the next
+    // swap on the same pool is refused over HTTP.
+    const blockPin = await request('PUT', '/api/admin/settings', {
+      token: adminToken,
+      body: { key: 'dex_block_seconds', value: '86400' },
+    });
+    assert.equal(blockPin.status, 200, `block pin failed: ${JSON.stringify(blockPin.json)}`);
+
+    const mevPool = await request('POST', '/api/admin/dex/pools', {
+      token: adminToken,
+      body: { kind: 'v2', tokens: ['MEVA', 'RUSD'], fee: 0.003, reserves: { MEVA: 1000000, RUSD: 1000000 } },
+    });
+    assert.equal(mevPool.status, 201, `anti-MEV pool create failed: ${JSON.stringify(mevPool.json)}`);
+    const mevPoolId = mevPool.json.poolId;
+
+    const mevHook = await request('POST', '/api/admin/dex/hooks', {
+      token: adminToken,
+      body: { poolId: mevPoolId, kind: 'antiMev', config: { tolerance: 0.02 } },
+    });
+    assert.equal(mevHook.status, 201, `anti-MEV hook attach failed: ${JSON.stringify(mevHook.json)}`);
+    record('admin attaches an anti-MEV hook', true, mevHook.json.hook.kind);
+
+    creditBalance(trader.userId, 'RUSD', 1_000_000);
+    // The first swap of the block records the open price and pushes the pool up.
+    const frontRun = await request('POST', '/api/dex/swap', {
+      token,
+      body: { tokenIn: 'RUSD', tokenOut: 'MEVA', amountIn: 50_000, slippage: 0.05 },
+    });
+    assert.equal(frontRun.status, 201, `the front-run swap failed: ${JSON.stringify(frontRun.json)}`);
+
+    // The next swap on the same pool is refused because the price was pushed
+    // against it in the same block.
+    const pushed = await request('POST', '/api/dex/swap', {
+      token,
+      body: { tokenIn: 'RUSD', tokenOut: 'MEVA', amountIn: 10_000, slippage: 0.05 },
+    });
+    assert.equal(pushed.status, 409, `a swap after a same-block price push must be refused, got ${pushed.status}`);
+    assert.equal(pushed.json.error.code, 'MEV_PROTECTED');
+    record('the anti-MEV hook refuses a swap after a same-block push', true);
+
+    // Detach so the hook cannot colour a later check.
+    await request('DELETE', `/api/admin/dex/hooks?poolId=${mevPoolId}&kind=antiMev`, { token: adminToken });
+
     // --- Sniping ----------------------------------------------------------
     const snipeScan = await request('GET', '/api/dex/sniping?tokenIn=TGR', { token });
     assert.equal(snipeScan.status, 200, `snipe scan failed: ${JSON.stringify(snipeScan.json)}`);

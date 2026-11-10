@@ -143,10 +143,148 @@ function validateHook(kind: HookKind, config: Record<string, number>): void {
   }
 }
 
+/**
+ * The current settlement block.
+ *
+ * TigerSwap settles every swap that arrives within a window as one block, so
+ * the block number is the wall-clock window index. It is the unit an anti-MEV
+ * hook reasons in: a trade is judged against the price the pool held when the
+ * block opened, before any trade in the block moved it.
+ */
+export function currentBlock(now = Date.now()): number {
+  const windowSeconds = dexSetting('dex_block_seconds', 12);
+  return Math.floor(now / (windowSeconds * 1000));
+}
+
+/**
+ * The block-open price of a directed pool pair, without recording one.
+ *
+ * Returns the reference the block's first swap established, or `null` when no
+ * swap has settled in this block yet. A read path uses this so it never writes:
+ * reporting what the hook would do must not itself seed the reference.
+ */
+export function readBlockOpenPrice(
+  poolId: string,
+  tokenIn: string,
+  tokenOut: string,
+  block = currentBlock(),
+): number | null {
+  const row = getDb()
+    .prepare('SELECT block_number, open_price FROM dex_pool_block_prices WHERE pool_id = ? AND token_in = ? AND token_out = ?')
+    .get(poolId, tokenIn, tokenOut) as { block_number: number; open_price: number } | undefined;
+  if (!row || row.block_number !== block) return null;
+  return Number(row.open_price);
+}
+
+/**
+ * The block-open price of a directed pool pair.
+ *
+ * The first caller in a block records the pool's current spot price; every later
+ * caller in the same block reads that stored value. Recording it once is what
+ * makes the reference meaningful: if each swap overwrote the reference with the
+ * price it had just moved to, an attacker's own front-run trade would become the
+ * baseline and every subsequent victim trade would pass the check.
+ */
+export function blockOpenPrice(
+  poolId: string,
+  tokenIn: string,
+  tokenOut: string,
+  spotPrice: number,
+  block = currentBlock(),
+): number {
+  if (!Number.isFinite(spotPrice) || spotPrice <= 0) {
+    throw new DexError('INVALID_PRICE', 'spotPrice must be a positive finite number', 500);
+  }
+  const stored = readBlockOpenPrice(poolId, tokenIn, tokenOut, block);
+  if (stored !== null) return stored;
+
+  getDb()
+    .prepare(
+      `INSERT INTO dex_pool_block_prices (pool_id, token_in, token_out, block_number, open_price, updated_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(pool_id, token_in, token_out)
+         DO UPDATE SET block_number = excluded.block_number, open_price = excluded.open_price, updated_at = datetime('now')`,
+    )
+    .run(poolId, tokenIn, tokenOut, block, spotPrice);
+  return spotPrice;
+}
+
+export interface AntiMevVerdict {
+  /** Whether a hook of this kind is active on the pool at all. */
+  active: boolean;
+  allowed: boolean;
+  move: number;
+  reason: string;
+  /** The block-open price the hop was judged against. */
+  referencePrice: number;
+  /** Whether the reference is the block's recorded open rather than a fallback. */
+  referenceKnown: boolean;
+}
+
+/**
+ * Judge a hop against the anti-MEV hook on its pool.
+ *
+ * The verdict compares the pool's current spot price — measured before the hop
+ * trades, so it excludes the hop's own fee and impact — against the price the
+ * pool held when the block opened. A hop whose pool was pushed against by an
+ * earlier trade in the same block is refused; the first hop of a block records
+ * the open price and always passes. Using the current spot rather than the
+ * execution price is deliberate: a trader's own impact is not an attack, so only
+ * a move that predates their trade counts against them.
+ *
+ * A pool without an anti-MEV hook is always allowed: the check is a pool's own
+ * policy, not a venue-wide one.
+ *
+ * `record` is true on the settlement path, where the first swap of a block is
+ * expected to seed the reference. A read path passes `false` so that merely
+ * asking what the hook would decide cannot write the reference itself; when no
+ * swap has settled in the block yet there is nothing to compare against, so the
+ * verdict reports `referenceKnown: false` and allows the hop rather than
+ * fabricating a baseline.
+ */
+export function antiMevVerdict(
+  poolId: string,
+  tokenIn: string,
+  tokenOut: string,
+  currentPrice: number,
+  side: 'buy' | 'sell',
+  spotPrice: number,
+  block = currentBlock(),
+  record = true,
+): AntiMevVerdict {
+  const hook = listHooks(poolId).find((entry) => entry.kind === 'antiMev' && entry.status === 'active');
+  if (!hook) {
+    return { active: false, allowed: true, move: 0, reason: 'no anti-MEV hook on this pool', referencePrice: spotPrice, referenceKnown: false };
+  }
+
+  const tolerance = hook.config.tolerance ?? dexSetting('dex_mev_anti_tolerance', 0.02);
+  const reference = record ? blockOpenPrice(poolId, tokenIn, tokenOut, spotPrice, block) : readBlockOpenPrice(poolId, tokenIn, tokenOut, block);
+  if (reference === null) {
+    return { active: true, allowed: true, move: 0, reason: 'no swap has settled in this block yet', referencePrice: spotPrice, referenceKnown: false };
+  }
+
+  const decision = antiMevCheck({ blockOpenPrice: reference, currentPrice, tolerance }, side);
+  return { active: true, allowed: decision.allowed, move: decision.move, reason: decision.reason, referencePrice: reference, referenceKnown: true };
+}
+
 /** Detach a hook from a pool. */
 export function removeHook(poolId: string, kind: string): { removed: boolean } {
   const result = getDb().prepare('DELETE FROM dex_pool_hooks WHERE pool_id = ? AND kind = ?').run(poolId, kind);
   return { removed: result.changes > 0 };
+}
+
+/**
+ * Whether any active anti-MEV hook exists.
+ *
+ * The swap path calls this once: when no pool carries the hook the per-hop
+ * verdicts are skipped, so the common case pays one indexed query rather than
+ * one query per hop.
+ */
+export function hasAntiMevHook(): boolean {
+  const row = getDb()
+    .prepare("SELECT 1 AS present FROM dex_pool_hooks WHERE kind = 'antiMev' AND status = 'active' LIMIT 1")
+    .get() as { present: number } | undefined;
+  return Boolean(row);
 }
 
 /**
@@ -247,7 +385,7 @@ export interface HookEvaluation {
   volatility: number;
   limit?: { fire: boolean; reason: string };
   twamm?: { slice: number };
-  antiMev?: { allowed: boolean; reason: string };
+  antiMev?: AntiMevVerdict;
 }
 
 /**
@@ -301,11 +439,13 @@ export function evaluateHooks(
 
   const antiMev = hooks.find((hook) => hook.kind === 'antiMev');
   if (antiMev) {
-    const price = context.currentPrice ?? reserveRatio(tokens, reserves);
-    result.antiMev = antiMevCheck(
-      { blockOpenPrice: price, currentPrice: price, tolerance: antiMev.config.tolerance },
-      context.side ?? 'buy',
-    );
+    const spot = context.currentPrice ?? reserveRatio(tokens, reserves);
+    const side = context.side ?? 'buy';
+    // Read-only: reporting what the hook would decide must not seed the block
+    // reference itself. The verdict is judged against the block's recorded open
+    // price, so an evaluation that reflects a front-run in the same block is
+    // possible rather than a comparison of the price with itself.
+    result.antiMev = antiMevVerdict(row.pool_id, tokens[0] ?? '', tokens[1] ?? '', spot, side, spot, currentBlock(), false);
   }
 
   return result;

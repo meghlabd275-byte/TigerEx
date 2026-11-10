@@ -37,7 +37,7 @@ import {
   type DexPoolRow,
 } from '@/lib/dex/pool-service';
 import { applySchedule, DEFAULT_SWAP_SPLIT, type SplitSchedule } from '@/lib/dex/fee-engine';
-import { feeOverrides } from '@/lib/dex/hook-service';
+import { feeOverrides, antiMevVerdict, hasAntiMevHook, currentBlock } from '@/lib/dex/hook-service';
 import { priceImpact as impactOf } from '@/lib/dex/amm';
 
 export interface QuoteRequest {
@@ -231,6 +231,26 @@ function spotPrice(pools: RouterPool[], tokenIn: string, tokenOut: string): numb
   return 0;
 }
 
+/**
+ * The spot price a specific hop trades against, in tokenIn per tokenOut.
+ *
+ * A tiny probe through the hop's own pool gives its marginal price for the
+ * directed pair, before the trade moves it. This is the price an anti-MEV hook
+ * compares with the block open: using the execution price instead would fold in
+ * the fee and impact every AMM charges, so every swap would look adverse. The
+ * unit matches the execution price the caller passes, so the two are comparable.
+ */
+function hopSpotPrice(pools: RouterPool[], hop: QuoteHop): number {
+  const pool = pools.find((candidate) => candidate.poolId === hop.poolId);
+  if (!pool) throw new DexError('CORRUPT_POOL', `pool ${hop.poolId} is not in the routing set`, 500);
+  const probe = 1e-9;
+  const quote = quotePool(pool, hop.tokenIn, hop.tokenOut, probe);
+  if (!(quote.amountOut > 0)) {
+    throw new DexError('CORRUPT_POOL', `pool ${hop.poolId} returned no price for ${hop.tokenIn}/${hop.tokenOut}`, 500);
+  }
+  return probe / quote.amountOut;
+}
+
 /** Active liquidity of a concentrated pool in a loaded pool set. */
 function liquidityOf(pools: RouterPool[], poolId: string): number {
   const pool = pools.find((candidate) => candidate.poolId === poolId);
@@ -277,12 +297,33 @@ export function executeSwap(request: SwapRequest): SwapResult {
 
   const swapId = generateId();
   const pools = routerPools(feeOverrides());
+  const antiMevOn = hasAntiMevHook();
+  const block = currentBlock();
 
   db.transaction(() => {
     const input = quote.amountIn;
     const output = quote.amountOut;
     if (!covers(availableBalance(request.userId, quote.tokenIn), input)) {
       throw new DexError('INSUFFICIENT_BALANCE', `Insufficient ${quote.tokenIn} balance`, 400);
+    }
+
+    // A pool with an anti-MEV hook refuses a hop whose price was pushed against
+    // the trader earlier in the same block. The first swap of a block records the
+    // pool's open price and always passes; every later swap is compared with it,
+    // so a front-run that moved the price is caught. This runs before any balance
+    // moves, and inside the transaction, so a refused swap changes nothing and a
+    // rolled-back swap does not leave its open price behind.
+    if (antiMevOn) {
+      for (const hop of quote.hops) {
+        // The spot price is measured before this hop trades, so it carries any
+        // move an earlier trade in the block made but not the trader's own
+        // impact. That is exactly the quantity a front-run inflates.
+        const spot = hopSpotPrice(pools, hop);
+        const verdict = antiMevVerdict(hop.poolId, hop.tokenIn, hop.tokenOut, spot, 'buy', spot, block, true);
+        if (verdict.active && !verdict.allowed) {
+          throw new DexError('MEV_PROTECTED', `pool ${hop.poolId} refused the swap: ${verdict.reason}`, 409);
+        }
+      }
     }
 
     debitAvailable(request.userId, quote.tokenIn, input);

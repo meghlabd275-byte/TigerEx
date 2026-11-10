@@ -24,11 +24,18 @@ const { DexError } = require('../../.test-build/pool-service.js');
 const { quoteSwap, executeSwap } = require('../../.test-build/swap-service.js');
 const { assessSwapRisk, submitPrivateOrder, privateBatch, revealBatch, scanRecentSandwiches, batchIdFor } =
   require('../../.test-build/mev-service.js');
-const { setHook, listHooks, removeHook, effectiveFee, evaluateHooks, poolVolatility } =
+const { setHook, listHooks, removeHook, effectiveFee, evaluateHooks, poolVolatility, blockOpenPrice, readBlockOpenPrice, currentBlock, antiMevVerdict, hasAntiMevHook } =
   require('../../.test-build/hook-service.js');
 const { scanSnipeCandidates, quoteSnipe, executeSnipe } = require('../../.test-build/sniping-service.js');
 
 const db = getDb();
+
+// Pin the settlement block to one long window so the anti-MEV tests are
+// deterministic: the front-run and the victim trade must land in the same block
+// for the check to be meaningful, and a wall-clock boundary mid-test would
+// otherwise split them. Each test uses its own pool and token, so sharing one
+// block cannot make two tests collide.
+db.prepare("INSERT OR REPLACE INTO system_settings (key, value, category) VALUES ('dex_block_seconds', '86400', 'dex')").run();
 
 function seedUser() {
   const userId = generateId();
@@ -223,6 +230,89 @@ test('a hook can be detached', () => {
   const result = removeHook(poolId, 'antiMev');
   assert.equal(result.removed, true);
   assert.equal(listHooks(poolId).length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Anti-MEV enforcement on the swap path
+//
+// The hook used to be stored, listed and "evaluated" without ever gating a
+// swap: evaluateHooks compared a price against itself, so it could only ever
+// report "allowed", and executeSwap never consulted the hook at all. These
+// tests exercise the real path: the first swap of a block records the pool's
+// open price, and a later swap whose pool was pushed against is refused.
+// ---------------------------------------------------------------------------
+
+test('the first swap of a block records the pool open price and passes', () => {
+  const poolId = createPool('v2', ['MEVG', 'RUSD'], { MEVG: 1_000_000, RUSD: 1_000_000 });
+  setHook({ poolId, kind: 'antiMev', config: { tolerance: 0.02 } });
+  const user = seedUser();
+  credit(user, 'RUSD', 10_000);
+
+  const result = executeSwap({ userId: user, tokenIn: 'RUSD', tokenOut: 'MEVG', amountIn: 1000 });
+  assert.ok(result.amountOut > 0);
+
+  const open = readBlockOpenPrice(poolId, 'RUSD', 'MEVG');
+  assert.ok(open !== null, 'the block open price must be recorded by the first swap');
+  assert.ok(open > 0);
+});
+
+test('a swap whose pool was pushed against in the same block is refused', () => {
+  const poolId = createPool('v2', ['MEVH', 'RUSD'], { MEVH: 1_000_000, RUSD: 1_000_000 });
+  setHook({ poolId, kind: 'antiMev', config: { tolerance: 0.02 } });
+
+  // The attacker's buy is the first swap of the block: it records the open price
+  // and pushes the pool's price up ~10%. The victim's swap then sees a spot that
+  // has moved against it by more than the tolerance and must be refused.
+  const attacker = seedUser();
+  credit(attacker, 'RUSD', 1_000_000);
+  executeSwap({ userId: attacker, tokenIn: 'RUSD', tokenOut: 'MEVH', amountIn: 50_000 });
+
+  const victim = seedUser();
+  credit(victim, 'RUSD', 10_000);
+  assert.throws(
+    () => executeSwap({ userId: victim, tokenIn: 'RUSD', tokenOut: 'MEVH', amountIn: 10_000 }),
+    (error) => error instanceof DexError && error.code === 'MEV_PROTECTED',
+    'the victim swap must be refused because the price was pushed against it',
+  );
+  // The refused swap moved nothing.
+  assert.equal(availableBalance(victim, 'RUSD'), 10_000);
+});
+
+test('a pool without an anti-MEV hook is never blocked', () => {
+  const poolId = createPool('v2', ['MEVI', 'RUSD'], { MEVI: 1_000_000, RUSD: 1_000_000 });
+  const attacker = seedUser();
+  credit(attacker, 'RUSD', 1_000_000);
+  executeSwap({ userId: attacker, tokenIn: 'RUSD', tokenOut: 'MEVI', amountIn: 50_000 });
+
+  const trader = seedUser();
+  credit(trader, 'RUSD', 10_000);
+  const result = executeSwap({ userId: trader, tokenIn: 'RUSD', tokenOut: 'MEVI', amountIn: 10_000 });
+  assert.ok(result.amountOut > 0, 'no hook means no refusal');
+});
+
+test('evaluateHooks does not seed the block reference and reports an unknown baseline', () => {
+  const poolId = createPool('v2', ['MEVJ', 'RUSD'], { MEVJ: 1_000_000, RUSD: 1_000_000 });
+  setHook({ poolId, kind: 'antiMev', config: { tolerance: 0.02 } });
+
+  const evaluation = evaluateHooks(poolId, { currentPrice: 1.5, side: 'buy' });
+  assert.equal(evaluation.antiMev.active, true);
+  assert.equal(evaluation.antiMev.referenceKnown, false, 'a read must not fabricate a baseline');
+  assert.equal(readBlockOpenPrice(poolId, 'RUSD', 'MEVJ'), null, 'a read must not write the reference');
+});
+
+test('hasAntiMevHook reports whether any pool carries the hook', () => {
+  // Earlier tests attach anti-MEV hooks, so the venue-wide answer is true. The
+  // point of the helper is that it flips to false only when the last hook is
+  // gone; scope the check to a fresh pool so it does not depend on test order.
+  const poolId = createPool('v2', ['MEVK', 'RUSD'], { MEVK: 1_000_000, RUSD: 1_000_000 });
+  setHook({ poolId, kind: 'antiMev', config: { tolerance: 0.02 } });
+  assert.equal(hasAntiMevHook(), true);
+
+  const before = db.prepare("SELECT COUNT(*) AS c FROM dex_pool_hooks WHERE kind = 'antiMev'").get().c;
+  removeHook(poolId, 'antiMev');
+  const after = db.prepare("SELECT COUNT(*) AS c FROM dex_pool_hooks WHERE kind = 'antiMev'").get().c;
+  assert.equal(after, before - 1);
+  assert.equal(hasAntiMevHook(), after > 0);
 });
 
 // ---------------------------------------------------------------------------

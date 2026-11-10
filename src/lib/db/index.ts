@@ -1981,6 +1981,21 @@ function initializeSchema() {
       UNIQUE(pool_id, kind)
     );
 
+    -- The price a pool stood at when the current block opened. An anti-MEV hook
+    -- needs a reference that predates the trade it is judging, so this row is
+    -- written by the first swap a pool settles in a block and read — not
+    -- rewritten — by every swap after it in the same block. Comparing a trade
+    -- against the price it just moved would always pass, which is no protection.
+    CREATE TABLE IF NOT EXISTS dex_pool_block_prices (
+      pool_id TEXT NOT NULL,
+      token_in TEXT NOT NULL,
+      token_out TEXT NOT NULL,
+      block_number INTEGER NOT NULL,
+      open_price REAL NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (pool_id, token_in, token_out)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_dex_pool_hooks_pool ON dex_pool_hooks(pool_id, status);
     CREATE INDEX IF NOT EXISTS idx_dex_vault_pos_user ON dex_vault_positions(user_id);
     CREATE INDEX IF NOT EXISTS idx_dex_liquid_pos_user ON dex_liquid_positions(user_id);
@@ -2021,7 +2036,12 @@ function initializeSchema() {
       ('dex_snipe_min_liquidity', '1000', 'dex'),
       ('dex_snipe_gas_multiplier', '2', 'dex'),
       ('dex_v4_dynamic_fee_max_bps', '100', 'dex'),
-      ('dex_v4_volatility_ceiling', '0.05', 'dex');
+      ('dex_v4_volatility_ceiling', '0.05', 'dex'),
+      -- The settlement block an anti-MEV hook judges a swap against. A swap is
+      -- compared with the price its pool held when the block opened, so the
+      -- window has to be long enough to contain the front-run it is meant to
+      -- catch, but short enough that the reference price is still current.
+      ('dex_block_seconds', '12', 'dex');
 
     -- Create indexes
     CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
