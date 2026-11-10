@@ -270,12 +270,21 @@ type AuthService struct {
 	// Token storage
 	tokenStore TokenStore
 
+	// Wallet balance guard for account deletion
+	balances BalanceChecker
+
 	// Password requirements
 	passwordRequirements PasswordRequirements
 
 	// Trusted devices
 	mu             sync.RWMutex
 	trustedDevices map[uint64]map[string]TrustedDevice
+}
+
+// SetBalanceChecker wires the wallet adapter used to confirm an account holds
+// no funds before deletion. It must be called before RequestAccountDeletion.
+func (s *AuthService) SetBalanceChecker(checker BalanceChecker) {
+	s.balances = checker
 }
 
 type Database interface {
@@ -323,6 +332,14 @@ type OAuthUser struct {
 	Name         string
 	ProfileImage string
 	Provider     string
+}
+
+// BalanceChecker reports whether an account still holds any funds. Account
+// deletion must be refused while a balance remains, so a wallet adapter is
+// required; with none configured the request fails closed rather than
+// abandoning the customer's assets.
+type BalanceChecker interface {
+	HasAnyBalance(ctx context.Context, userID uint64) (bool, error)
 }
 
 type TokenStore interface {
@@ -1094,13 +1111,28 @@ func (s *AuthService) RequestAccountDeletion(ctx context.Context, userID uint64)
 		return err
 	}
 
-	// Check for remaining balances
-	// This should be checked via wallet service
-	// For now, mark for deletion
+	// Refuse to delete an account that still holds funds: without a balance
+	// provider we cannot prove the wallet is empty, so we fail closed.
+	if s.balances == nil {
+		return errors.New("account deletion unavailable: no wallet balance provider is configured")
+	}
+	hasBalance, err := s.balances.HasAnyBalance(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("account deletion blocked: cannot verify wallet balances: %w", err)
+	}
+	if hasBalance {
+		return errors.New("account deletion blocked: wallet still holds funds; withdraw or convert all assets first")
+	}
+
 	user.Status = UserStatusDeleted
 	user.UpdatedAt = time.Now()
 
-	// Revoke all sessions
+	// Revoke all sessions. A missing token store must not panic: the account is
+	// still marked deleted, but the operator has to know sessions were not
+	// actively revoked, so surface it rather than silently continuing.
+	if s.tokenStore == nil {
+		return errors.New("account marked deleted but sessions were not revoked: no token store is configured")
+	}
 	s.tokenStore.RevokeAll(ctx, userID)
 
 	if err := s.db.UpdateUser(ctx, user); err != nil {

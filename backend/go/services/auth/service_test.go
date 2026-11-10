@@ -455,3 +455,86 @@ func TestSetup2FAProducesScannableURI(t *testing.T) {
 		t.Fatal("the returned secret does not validate")
 	}
 }
+
+// fakeBalances is a wallet adapter whose answer the test controls, so the
+// deletion guard is exercised for real rather than mocked away.
+type fakeBalances struct {
+	has   bool
+	err   error
+	calls int
+}
+
+func (f *fakeBalances) HasAnyBalance(context.Context, uint64) (bool, error) {
+	f.calls++
+	return f.has, f.err
+}
+
+func TestRequestAccountDeletionFailsClosedWithoutBalanceProvider(t *testing.T) {
+	svc := newTestService(newFakeDB(testUser()))
+	if err := svc.RequestAccountDeletion(context.Background(), 1); err == nil {
+		t.Fatal("deletion proceeded with no balance provider configured")
+	}
+}
+
+func TestRequestAccountDeletionBlockedWhileFundsRemain(t *testing.T) {
+	svc := newTestService(newFakeDB(testUser()))
+	balances := &fakeBalances{has: true}
+	svc.SetBalanceChecker(balances)
+
+	if err := svc.RequestAccountDeletion(context.Background(), 1); err == nil {
+		t.Fatal("deletion proceeded while the wallet still held funds")
+	}
+	if balances.calls != 1 {
+		t.Fatalf("balance provider called %d times, want 1", balances.calls)
+	}
+}
+
+func TestRequestAccountDeletionBlockedWhenBalanceLookupFails(t *testing.T) {
+	svc := newTestService(newFakeDB(testUser()))
+	svc.SetBalanceChecker(&fakeBalances{err: fmt.Errorf("rpc down")})
+	if err := svc.RequestAccountDeletion(context.Background(), 1); err == nil {
+		t.Fatal("deletion proceeded when the balance lookup failed")
+	}
+}
+
+// fakeTokenStore records revocations so the happy path can be asserted.
+type fakeTokenStore struct {
+	revokedAll []uint64
+}
+
+func (f *fakeTokenStore) Store(context.Context, uint64, *TokenPair, TokenMetadata) error {
+	return nil
+}
+func (f *fakeTokenStore) Retrieve(context.Context, string) (*TokenPair, TokenMetadata, error) {
+	return nil, TokenMetadata{}, nil
+}
+func (f *fakeTokenStore) Revoke(context.Context, string) error { return nil }
+func (f *fakeTokenStore) RevokeAll(_ context.Context, userID uint64) error {
+	f.revokedAll = append(f.revokedAll, userID)
+	return nil
+}
+func (f *fakeTokenStore) Refresh(context.Context, string) (*TokenPair, error) {
+	return nil, nil
+}
+
+func TestRequestAccountDeletionSucceedsWhenEmptyAndRevokesSessions(t *testing.T) {
+	db := newFakeDB(testUser())
+	svc := newTestService(db)
+	svc.SetBalanceChecker(&fakeBalances{has: false})
+	tokens := &fakeTokenStore{}
+	svc.tokenStore = tokens
+
+	if err := svc.RequestAccountDeletion(context.Background(), 1); err != nil {
+		t.Fatalf("deletion of an empty account failed: %v", err)
+	}
+	stored, err := db.GetUserByID(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != UserStatusDeleted {
+		t.Fatalf("account status = %q, want deleted", stored.Status)
+	}
+	if len(tokens.revokedAll) != 1 || tokens.revokedAll[0] != 1 {
+		t.Fatalf("sessions not revoked: %v", tokens.revokedAll)
+	}
+}
