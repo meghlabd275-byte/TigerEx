@@ -19,6 +19,7 @@ import { closePosition, applyFunding, liquidatePosition, markPrice, perpPosition
 import { accrueInterest } from '@/lib/dex/margin-service';
 import { distributeVetgrFees } from '@/lib/dex/farm-service';
 import { runDexCopySweep } from '@/lib/dex/copy-service';
+import { runDueBotInstances } from '@/lib/dex/bot-service';
 import { dcaSlicesDue, twapChildren, limitShouldTrigger } from '@/lib/dex/orders';
 import { shouldLiquidate } from '@/lib/dex/perps';
 import { loadPool, parseObject, parseStringArray } from '@/lib/dex/pool-service';
@@ -37,6 +38,8 @@ export interface KeeperReport {
   vetgrFeesDistributed: number;
   copyMirrored: number;
   copySkipped: number;
+  botsRun: number;
+  botsExecuted: number;
 }
 
 /** The current spot price of a pair, from the deepest pool that serves it. */
@@ -315,6 +318,15 @@ export function runKeeperCycle(now = Date.now()): KeeperReport {
   } catch {
     copy = [];
   }
+  // Bot instances trade, so they run after the venue-level jobs for the same
+  // reason. Each instance is interval-gated so a fast cycle cannot make a bot
+  // trade faster than it was configured to.
+  let bots: Array<{ executed: boolean }> = [];
+  try {
+    bots = runDueBotInstances(now);
+  } catch {
+    bots = [];
+  }
   return {
     limitOrdersSettled: limits.settled,
     limitOrdersFailed: limits.failed,
@@ -328,6 +340,8 @@ export function runKeeperCycle(now = Date.now()): KeeperReport {
     vetgrFeesDistributed: vetgrFees.reduce((sum, entry) => sum + entry.distributed, 0),
     copyMirrored: copy.filter((row) => row.status === 'mirrored').length,
     copySkipped: copy.filter((row) => row.status === 'skipped').length,
+    botsRun: bots.length,
+    botsExecuted: bots.filter((row) => row.executed).length,
   };
 }
 

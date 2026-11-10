@@ -787,3 +787,114 @@ export function runBotInstance(userId: string, instanceId: string): BotRunResult
   return { botType, action: decision.action, executed: false };
 }
 
+/** One instance's outcome from a scheduled sweep. */
+export interface BotSweepResult {
+  instanceId: string;
+  userId: string;
+  botType: string;
+  action: string;
+  executed: boolean;
+  swapId?: string;
+  tokenIn?: string;
+  tokenOut?: string;
+  amountIn?: number;
+  amountOut?: number;
+  /** Set when the step was refused, e.g. `interval not elapsed`. */
+  reason?: string;
+  /** Set when the instance's step threw; the instance stays active. */
+  error?: string;
+}
+
+/**
+ * The minimum spacing between scheduled steps of one instance, in seconds.
+ *
+ * A manual run is never gated, but the keeper sweep must not step a bot on every
+ * cycle: a DCA or martingale instance would otherwise buy continuously. The
+ * instance's own `intervalSeconds` overrides the default.
+ */
+const DEFAULT_BOT_INTERVAL_SECONDS = 60;
+
+/**
+ * Run one step of every active bot instance whose interval has elapsed.
+ *
+ * The keeper calls this so a bot a trader has left running keeps trading without
+ * the trader having to open the page and press run, matching the CEX path whose
+ * `runDueBots` the settlement cycle sweeps. Each instance is gated by its own
+ * interval, recorded in the instance state, so a fast keeper cannot make a bot
+ * trade faster than configured. A planner that needs more state than an instance
+ * carries (a rebalance bot's holdings) returns `executed: false` rather than
+ * throwing, and an instance that does throw is reported with its error and left
+ * active, so one bad instance cannot stop the sweep.
+ */
+export function runDueBotInstances(nowMs: number = Date.now(), limit = 500): BotSweepResult[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT instance_id, user_id, bot_type, params, state FROM dex_bot_instances WHERE status = 'active' ORDER BY created_at LIMIT ?")
+    .all(Math.min(Math.max(limit, 1), 5000)) as Array<{
+    instance_id: string;
+    user_id: string;
+    bot_type: string;
+    params: string;
+    state: string;
+  }>;
+
+  const results: BotSweepResult[] = [];
+  for (const row of rows) {
+    const params = safeParse(row.params);
+    const state = safeParse(row.state);
+    const configured = Number(params.intervalSeconds);
+    const intervalMs =
+      (Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_BOT_INTERVAL_SECONDS) * 1000;
+    const lastRunMs = Number(state.lastRunMs);
+    if (Number.isFinite(lastRunMs) && lastRunMs > 0 && nowMs - lastRunMs < intervalMs) {
+      results.push({
+        instanceId: row.instance_id,
+        userId: row.user_id,
+        botType: row.bot_type,
+        action: 'skipped',
+        executed: false,
+        reason: 'interval not elapsed',
+      });
+      continue;
+    }
+
+    try {
+      const run = runBotInstance(row.user_id, row.instance_id);
+      // Re-read the state the step wrote and stamp the run time on it, so the
+      // interval is measured from the step rather than from the read above.
+      const after = safeParse(
+        (db.prepare('SELECT state FROM dex_bot_instances WHERE instance_id = ?').get(row.instance_id) as
+          | { state: string }
+          | undefined)?.state ?? '{}',
+      );
+      db.prepare("UPDATE dex_bot_instances SET state = ?, updated_at = datetime('now') WHERE instance_id = ?").run(
+        JSON.stringify({ ...after, lastRunMs: nowMs }),
+        row.instance_id,
+      );
+      results.push({ ...run, instanceId: row.instance_id, userId: row.user_id });
+    } catch (error) {
+      results.push({
+        instanceId: row.instance_id,
+        userId: row.user_id,
+        botType: row.bot_type,
+        action: 'skipped',
+        executed: false,
+        error: error instanceof DexError ? error.code : error instanceof Error ? error.message : 'bot step failed',
+      });
+    }
+  }
+  return results;
+}
+
+/** Parse a JSON object column, returning `{}` for a missing or invalid value. */
+function safeParse(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw !== 'string') return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+

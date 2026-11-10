@@ -237,6 +237,7 @@ const {
   runArbitrage,
   scanLiquidations,
   runBotInstance,
+  runDueBotInstances,
 } = require('../../.test-build/bot-service.js');
 
 function seedUserAndFund(currencies) {
@@ -459,6 +460,35 @@ test('a paused bot refuses to run', () => {
   });
   setBotInstanceStatus(userId, created.instanceId, 'paused');
   assert.throws(() => runBotInstance(userId, created.instanceId), /paused/);
+});
+
+test('the bot sweep steps an active instance and leaves a paused one alone', () => {
+  const userId = seedUserAndFund({ RUSD: 1_000_000, ETH: 100 });
+  const poolId = seedPool(['RUSD', 'ETH'], { RUSD: 2_000_000, ETH: 1_000 });
+  const active = createBotInstance(userId, {
+    botType: 'grid',
+    poolId,
+    params: { lowerPrice: 1000, upperPrice: 3000, levels: 5, orderSize: 100, tokenIn: 'RUSD', tokenOut: 'ETH' },
+  });
+  const paused = createBotInstance(userId, {
+    botType: 'grid',
+    poolId,
+    params: { lowerPrice: 1000, upperPrice: 3000, levels: 5, orderSize: 100, tokenIn: 'RUSD', tokenOut: 'ETH' },
+  });
+  setBotInstanceStatus(userId, paused.instanceId, 'paused');
+
+  const swept = runDueBotInstances(Date.now());
+  const mine = swept.filter((r) => r.userId === userId);
+  assert.equal(mine.length, 1, 'only the active instance is stepped');
+  assert.equal(mine[0].instanceId, active.instanceId);
+  assert.equal(mine[0].action, 'prime', 'the first scheduled step primes the grid');
+
+  // The interval gate stops a second step from trading again immediately, but
+  // once the interval has elapsed the sweep steps the instance again.
+  const tooSoon = runDueBotInstances(Date.now()).find((r) => r.instanceId === active.instanceId);
+  assert.equal(tooSoon.reason, 'interval not elapsed');
+  const later = runDueBotInstances(Date.now() + 61_000).find((r) => r.instanceId === active.instanceId);
+  assert.ok(later && later.reason === undefined, 'the instance steps again once its interval elapses');
 });
 
 // ---------------------------------------------------------------------------
