@@ -67,7 +67,12 @@ class PortfolioManager:
         rebalances = []
         
         for symbol, asset in self.assets.items():
-            price = prices.get(symbol, 0)
+            # A missing price would silently become a zero-cost rebalance (or a
+            # division by zero), so an unpriced asset is refused rather than
+            # traded against a fabricated price.
+            if symbol not in prices or prices[symbol] <= 0:
+                raise ValueError(f"a positive price is required to rebalance {symbol}")
+            price = prices[symbol]
             target_value = total * asset.target_weight
             diff = target_value - asset.value
             

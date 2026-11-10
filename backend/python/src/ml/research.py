@@ -349,14 +349,16 @@ class EnsembleModel:
     
     def predict(self, features: List[float]) -> float:
         if not self.models:
-            return 0.5
-        
+            raise RuntimeError("ensemble has no models to predict with")
+
         total_weight = sum(self.weights)
+        if total_weight <= 0:
+            raise RuntimeError("ensemble model weights must sum to a positive number")
         weighted_sum = sum(
-            model(features) * w 
+            model(features) * w
             for model, w in zip(self.models, self.weights)
         )
-        
+
         return weighted_sum / total_weight
 
 class BacktestRunner:

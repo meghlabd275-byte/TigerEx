@@ -39,7 +39,7 @@ except ImportError:
 
 
 class ModelType(Enum):
-    RANDandom_FOREST = "random_forest"
+    RANDOM_FOREST = "random_forest"
     GRADIENT_BOOSTING = "gradient_boosting"
     XGBOOST = "xgboost"
     LSTM = "lstm"
@@ -73,21 +73,33 @@ class FraudDetector:
         self.models = {}
         self.scaler = StandardScaler() if SKLEARN_AVAILABLE else None
         self.threshold = 0.85
+        self._fitted = False
         
     def add_model(self, name: str, model: Any) -> None:
         self.models[name] = model
+
+    def fit(self, features: np.ndarray) -> None:
+        """Fit the feature scaler on a training matrix (rows are samples)."""
+        if not SKLEARN_AVAILABLE:
+            raise RuntimeError("scikit-learn is required to fit the fraud detector")
+        matrix = np.asarray(features, dtype=float)
+        if matrix.ndim != 2 or matrix.shape[0] < 2:
+            raise ValueError("fitting requires a 2-D feature matrix with at least two samples")
+        self.scaler.fit(matrix)
+        self._fitted = True
         
     def predict(self, features: np.ndarray) -> FraudAlert:
-        if not self.models or not SKLEARN_AVAILABLE:
-            return FraudAlert(
-                user_id="unknown",
-                alert_type="unknown",
-                severity="low",
-                score=0.0,
-                description="Model not initialized"
+        # A fraud detector must fail closed. Without a fitted model there is no
+        # basis for clearing a transaction, so an unconfigured detector raises
+        # instead of reporting a benign low-risk score.
+        if not self.models or not SKLEARN_AVAILABLE or not self._fitted:
+            raise RuntimeError(
+                "fraud detection is not configured: no fitted model is available to screen this transaction"
             )
-        
-        features_scaled = self.scaler.fit_transform(features.reshape(1, -1))
+
+        # Scale with the training statistics; refitting on a single row would
+        # normalise every input to the same point and erase the signal.
+        features_scaled = self.scaler.transform(features.reshape(1, -1))
         
         scores = []
         for name, model in self.models.items():

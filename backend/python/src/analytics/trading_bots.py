@@ -332,23 +332,33 @@ class GridTradingBot:
 
 class MarketMakerBot:
     """Market making bot"""
-    
-    def __init__(self, spread_percent: float = 0.001, inventory_skew: float = 0.0):
+
+    def __init__(self, spread_percent: float = 0.001, inventory_skew: float = 0.0,
+                 order_size: float = 0.1):
+        if spread_percent <= 0:
+            raise ValueError("spread_percent must be positive")
+        if order_size <= 0:
+            raise ValueError("order_size must be positive")
         self.spread_percent = spread_percent
         self.inventory_skew = inventory_skew
-    
+        self.order_size = order_size
+
     def quote(self, mid_price: float, inventory_position: float = 0.0) -> Tuple[Dict, Dict]:
+        if mid_price <= 0:
+            raise ValueError("mid_price must be positive")
         spread = mid_price * self.spread_percent
-        
-        # Adjust spread based on inventory
+
+        # Skew quotes against inventory so the book leans toward flattening.
         skew_adjustment = inventory_position * self.inventory_skew
-        
+
         bid_price = mid_price - spread - skew_adjustment
         ask_price = mid_price + spread - skew_adjustment
-        
+        if bid_price <= 0 or ask_price <= bid_price:
+            raise ValueError("the quoted spread would produce a crossed or non-positive book")
+
         return (
-            {'side': 'buy', 'price': round(bid_price, 2), 'size': 0.1},
-            {'side': 'sell', 'price': round(ask_price, 2), 'size': 0.1}
+            {'side': 'buy', 'price': round(bid_price, 2), 'size': self.order_size},
+            {'side': 'sell', 'price': round(ask_price, 2), 'size': self.order_size}
         )
 
 # ============================================================================
@@ -357,39 +367,37 @@ class MarketMakerBot:
 
 class AnalyticsReporting:
     @staticmethod
-    def generate_daily_report(date: str, volume: float, trades: int, revenue: float, active_users: int) -> Dict:
+    def generate_daily_report(date: str, volume: float, trades: int, revenue: float,
+                              active_users: int, fees_collected: float,
+                              maker_volume: float, taker_volume: float) -> Dict:
+        # Every figure is passed in from the exchange's own ledgers. Nothing is
+        # extrapolated: a maker/taker split or fee total is not derivable from
+        # aggregate volume, so inventing one would misreport revenue.
+        if abs((maker_volume + taker_volume) - volume) > max(1e-6, abs(volume) * 1e-6):
+            raise ValueError("maker_volume + taker_volume must equal the reported volume")
         return {
             'date': date,
             'volume_24h': volume,
             'trades_24h': trades,
             'revenue_24h': revenue,
             'active_users': active_users,
-            'fees_collected': revenue * 0.001,
-            'maker_volume': volume * 0.6,
-            'taker_volume': volume * 0.4,
+            'fees_collected': fees_collected,
+            'maker_volume': maker_volume,
+            'taker_volume': taker_volume,
         }
-    
+
     @staticmethod
-    def generate_user_report(user_id: str, pnl: float, trades: int, volume: float) -> Dict:
+    def generate_user_report(user_id: str, pnl: float, trades: int, volume: float,
+                             winning_trades: int) -> Dict:
+        if trades < 0 or winning_trades < 0 or winning_trades > trades:
+            raise ValueError("winning_trades must be between 0 and trades")
         return {
             'user_id': user_id,
             'total_pnl': pnl,
             'total_trades': trades,
             'volume': volume,
-            'win_rate': 0.6,
+            'win_rate': (winning_trades / trades) if trades else 0.0,
             'avg_trade_size': volume / trades if trades else 0,
-        }
-    
-    @staticmethod
-    def generate_risk_report(positions: List[Dict]) -> Dict:
-        total_exposure = sum(abs(float(p.get('value', 0))) for p in positions)
-        leverage_avg = sum(float(p.get('leverage', 1)) for p in positions) / len(positions) if positions else 0
-        
-        return {
-            'total_exposure': total_exposure,
-            'average_leverage': leverage_avg,
-            'position_count': len(positions),
-            'risk_level': 'high' if leverage_avg > 10 else 'medium' if leverage_avg > 3 else 'low'
         }
 
 # ============================================================================

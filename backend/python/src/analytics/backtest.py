@@ -215,11 +215,15 @@ class StrategyTemplates:
 
 class MarketMakerBot:
     def __init__(self, spread_percent: float = 0.001):
+        if spread_percent <= 0:
+            raise ValueError("spread_percent must be positive")
         self.spread_percent = spread_percent
-    
+
     def quote(self, mid_price: float) -> Tuple[Dict, Dict]:
+        if mid_price <= 0:
+            raise ValueError("mid_price must be positive")
         spread = mid_price * self.spread_percent
-        return ({'side': 'buy', 'price': round(mid_price - spread, 2)}, 
+        return ({'side': 'buy', 'price': round(mid_price - spread, 2)},
                 {'side': 'sell', 'price': round(mid_price + spread, 2)})
 
 class AnalyticsReporting:

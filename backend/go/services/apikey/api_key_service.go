@@ -6,6 +6,7 @@ package apikey
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -148,8 +149,9 @@ func (akm *APIKeyManager) ValidateAPIKey(apiKey, secret, ip string) (*APIKey, er
 		return nil, errors.New("invalid API key")
 	}
 
-	// Verify secret
-	if key.APISecret != hashSecret(secret) {
+	// Verify the secret in constant time so the comparison cannot leak how
+	// many leading characters matched.
+	if subtle.ConstantTimeCompare([]byte(key.APISecret), []byte(hashSecret(secret))) != 1 {
 		return nil, errors.New("invalid API secret")
 	}
 
