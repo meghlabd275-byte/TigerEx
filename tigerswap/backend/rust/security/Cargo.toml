@@ -1,0 +1,34 @@
+[package]
+name = "tigerswap-security"
+version = "1.0.0"
+edition = "2021"
+authors = ["TigerSwap Team <security@tigerswap.io>"]
+description = "Security and cryptography modules for TigerSwap DEX"
+license = "MIT"
+
+[dependencies]
+# Cryptography
+aes-gcm = "0.10"
+argon2 = { version = "0.5", features = ["std"] }
+sha2 = "0.10"
+sha3 = "0.10"
+pbkdf2 = { version = "0.12", features = ["simple"] }
+rand = "0.8"
+hex = "0.4"
+log = "0.4"
+zeroize = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+
+# Digital signatures
+secp256k1 = { version = "0.28", features = ["recovery", "rand"] }
+k256 = { version = "0.13", features = ["ecdsa"] }
+
+# Error handling
+thiserror = "1"
+
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+[dev-dependencies]
+tempfile = "3"
+

@@ -1,0 +1,74 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build output
+.next/
+dist/
+build/
+.test-build/
+tsconfig.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+
+# Misc
+*.tgz
+.cache/
+
+# Compiled Go binaries
+backend/admin_service
+backend/cache
+backend/dex_connectors
+backend/indexer
+backend/keeper
+backend/oracle_service
+backend/api_gateway
+backend/order_matching
+backend/api
+backend/cli
+
+# Foundry build artifacts
+contracts/cache/
+contracts/out/
+contracts/lib/
+contracts/broadcast/
+
+# Rust build artifacts
+target/
+Cargo.lock
+
+# C++ build artifacts
+backend/cpp/build/
+backend/cpp/build*/
+compile_commands.json
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Python egg-info
+*.egg-info/

@@ -41,6 +41,7 @@
     "TigerEx/**",
     "core/**",
     "mobile/**",
-    "tiger-exchange/**"
+    "tiger-exchange/**",
+    "tigerswap/**"
   ]
 }

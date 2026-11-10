@@ -413,3 +413,42 @@ Frontend checks: `npx tsc --noEmit`, `npm run test:logic` (701 tests),
 `npm run build`, `npm run test:e2e:dex` (44 checks). Clear `.next` before `tsc`
 after a dependency or route change, or stale generated types under `.next/types`
 produce phantom module errors.
+
+## Vendored TigerSwap (TigerEx DEX mode)
+
+`tigerswap/` is a vendored copy of the standalone
+[`meghlabd275-byte/TigerSwap`](https://github.com/meghlabd275-byte/TigerSwap)
+repository, integrated here as TigerEx's on-chain DEX layer. It is a real,
+tested subtree — not a placeholder — and its own CI/build artifacts are
+git-ignored, so it never affects the root Next.js build.
+
+What it adds that the root repo did not have: a **Solidity contract layer**
+(25 contracts: V2/V3 factory, router, stable and weighted pools, zap, TWAP,
+options, perps, lending with flash loans, veTGE vote-escrow, staking, bridge,
+OTC, NFT marketplace, meme launchpad, locker, governance, price oracle, quoter)
+with **28 Foundry test suites / 696 passing tests**, plus an independent Go DEX
+backend (aggregator, order matching, indexer, AMM) and a small Next.js DEX UI.
+
+Wiring rules:
+
+- `tsconfig.json` excludes `tigerswap/**`, so the root `tsc` and `next build`
+  never compile the vendored app. Do not remove that exclude.
+- `.gitignore` ignores `tigerswap/contracts/{out,cache,lib}`,
+  `tigerswap/**/node_modules`, `tigerswap/**/.next` and
+  `tigerswap/frontend/.test-build`. Third-party Solidity deps are **not**
+  vendored; `tigerswap/contracts/install-deps.sh` fetches the pinned revisions
+  (`forge-std` v1.9.4, OpenZeppelin v5.0.2 — OZ is pinned to a tag whose
+  `pragma` is satisfiable by `solc 0.8.20`).
+- The vendored `go.mod` declares `go 1.26.0` and builds with that toolchain.
+- CI jobs `tigerswap-contracts` (install deps, `forge build`, `forge test`) and
+  `tigerswap-go` (`go build`/`go test` under `tigerswap/backend`) keep it green.
+
+Verify locally:
+
+```bash
+# contracts (needs Foundry; deps are fetched by the script)
+cd tigerswap/contracts && ./install-deps.sh && forge build && forge test
+
+# Go backend (needs Go 1.26+; auto-downloads via the toolchain directive)
+cd tigerswap/backend && go build ./... && go test ./...
+```

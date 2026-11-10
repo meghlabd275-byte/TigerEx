@@ -51,3 +51,11 @@ backend/go/admin_service
 backend/cpp/matching_engine/lib/
 backend/cpp/matching_engine/bin/
 .test-build
+
+# Vendored TigerSwap (TigerEx DEX mode) build artifacts
+tigerswap/**/node_modules/
+tigerswap/contracts/out/
+tigerswap/contracts/cache/
+tigerswap/contracts/lib/
+tigerswap/**/.next/
+tigerswap/frontend/.test-build/
