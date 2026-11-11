@@ -55,10 +55,11 @@ func AdminLogin(c *gin.Context) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"admin_id": admin.ID.String(),
-		"username": admin.Username,
-		"role":     admin.Role,
-		"exp":      time.Now().Add(24 * time.Hour).Unix(),
+		"admin_id":    admin.ID.String(),
+		"username":    admin.Username,
+		"role":        admin.Role,
+		"permissions": admin.Permissions,
+		"exp":         time.Now().Add(24 * time.Hour).Unix(),
 	})
 	if len(middleware.JWTSecret) < 32 {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": http.StatusServiceUnavailable, "message": "Admin authentication signing key is not configured"}})
@@ -1182,8 +1183,12 @@ func GetAnalytics(c *gin.Context) {
 	_ = models.Pool.QueryRow(c.Request.Context(), "SELECT COUNT(*) FROM users WHERE status = 'active'").Scan(&activeUsers)
 	stats["activeUsers"] = activeUsers
 
-	// Total trading volume 24h (mock)
-	stats["volume24h"] = 150000000.0
+	// Total trading volume 24h, summed from filled spot orders.
+	var volume24h float64
+	_ = models.Pool.QueryRow(c.Request.Context(),
+		"SELECT COALESCE(SUM(COALESCE(average_price, price, 0) * filled_quantity), 0) FROM spot_orders WHERE status = 'filled' AND created_at > NOW() - INTERVAL '24 hours'",
+	).Scan(&volume24h)
+	stats["volume24h"] = volume24h
 
 	// Total deposits
 	var deposits24h float64
@@ -1540,13 +1545,22 @@ func checkAdminPermission(c *gin.Context, permission string) string {
 		return adminID
 	}
 
-	permissions := c.GetString("admin_permissions")
-	if !strings.Contains(permissions, permission) && !strings.Contains(permissions, models.PermFullAccess) {
-		c.JSON(403, gin.H{"success": false, "error": gin.H{"code": 403, "message": "Permission denied"}})
-		return ""
+	// Permissions are stored and carried as a list. Reading them as one string
+	// never matched, so every non-super-admin was denied, and a substring test
+	// would also grant a permission that merely appears inside another. Compare
+	// whole entries.
+	raw, exists := c.Get("admin_permissions")
+	permissions, ok := raw.([]string)
+	if exists && ok {
+		for _, p := range permissions {
+			if p == permission || p == models.PermFullAccess {
+				return adminID
+			}
+		}
 	}
 
-	return adminID
+	c.JSON(403, gin.H{"success": false, "error": gin.H{"code": 403, "message": "Permission denied"}})
+	return ""
 }
 
 func getUserWallets(userID string) ([]gin.H, error) {

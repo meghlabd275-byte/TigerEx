@@ -37,8 +37,12 @@ func main() {
 	}
 	defer models.CloseDB()
 
-	// Market, derivatives, and earn products must be explicitly configured from
-	// reviewed production data; startup never inserts hard-coded trading products.
+	// Bootstrap the first administrator from explicit deployment secrets. This is
+	// idempotent: it creates an account only when admins is empty and the
+	// TIGEREX_BOOTSTRAP_ADMIN_* variables are set, and never a default password.
+	if err := models.CreateDefaultAdmin(); err != nil {
+		log.Printf("admin bootstrap skipped: %v", err)
+	}
 
 	// Setup router
 	r := gin.Default()
@@ -78,99 +82,9 @@ func main() {
 			auth.POST("/logout", handlers.Logout)
 		}
 
-		// Spot Trading
-		spot := api.Group("/spot")
-		{
-			spot.POST("/order", handlers.PlaceSpotOrder)
-			spot.DELETE("/order/:orderId", handlers.CancelOrder)
-			spot.GET("/open-orders", handlers.GetOpenOrders)
-			spot.GET("/orders", handlers.GetOrderHistory)
-			spot.GET("/my-trades", handlers.GetMyTrades)
-			spot.POST("/quote", handlers.QuoteOrder)
-		}
-
-		// Futures
-		futures := api.Group("/futures")
-		{
-			futures.GET("/contracts", handlers.GetFuturesContracts)
-			futures.POST("/position", handlers.OpenFuturesPosition)
-			futures.DELETE("/position/:id", handlers.CloseFuturesPosition)
-			futures.GET("/positions", handlers.GetFuturesPositions)
-			futures.POST("/quote", handlers.QuoteFutures)
-		}
-
-		// Margin
-		margin := api.Group("/margin")
-		{
-			margin.GET("/accounts", handlers.GetMarginAccount)
-			margin.POST("/borrow", handlers.BorrowMargin)
-			margin.POST("/repay", handlers.RepayMargin)
-			margin.GET("/positions", handlers.GetMarginPositions)
-		}
-
-		// Options
-		options := api.Group("/options")
-		{
-			options.GET("/contracts", handlers.GetOptionsContracts)
-			options.POST("/trade", handlers.TradeOptions)
-			options.GET("/positions", handlers.GetOptionsPositions)
-		}
-
-		// P2P
-		p2p := api.Group("/p2p")
-		{
-			p2p.GET("/ads", handlers.GetP2PAds)
-			p2p.POST("/ad", handlers.CreateP2PAd)
-			p2p.PUT("/ad/:id", handlers.UpdateP2PAd)
-			p2p.DELETE("/ad/:id", handlers.DeleteP2PAd)
-			p2p.POST("/trade", handlers.CreateP2PTrade)
-			p2p.POST("/trade/:id/confirm", handlers.ConfirmP2PTrade)
-			p2p.POST("/trade/:id/dispute", handlers.DisputeP2PTrade)
-		}
-
-		// Earn/Staking
-		earn := api.Group("/earn")
-		{
-			earn.GET("/products", handlers.GetEarnProducts)
-			earn.POST("/subscribe", handlers.SubscribeEarn)
-			earn.GET("/positions", handlers.GetEarnPositions)
-		}
-
-		staking := api.Group("/staking")
-		{
-			staking.GET("/pools", handlers.GetStakingPools)
-			staking.POST("/stake", handlers.Stake)
-			staking.POST("/unstake", handlers.Unstake)
-			staking.GET("/positions", handlers.GetStakingPositions)
-		}
-
-		// Launchpad
-		launchpad := api.Group("/launchpad")
-		{
-			launchpad.GET("/projects", handlers.GetLaunchpadProjects)
-			launchpad.POST("/subscribe", handlers.SubscribeLaunchpad)
-		}
-
-		// Convert
-		convert := api.Group("/convert")
-		{
-			convert.POST("", handlers.Convert)
-		}
-
-		// Transfer
-		transfer := api.Group("/transfer")
-		{
-			transfer.POST("", handlers.InternalTransfer)
-		}
-
-		// Rewards
-		rewards := api.Group("/rewards")
-		{
-			rewards.GET("/coupons", handlers.GetCoupons)
-			rewards.POST("/claim", handlers.ClaimCoupon)
-			rewards.GET("/red-packets", handlers.GetRedPackets)
-			rewards.POST("/open-red-packet", handlers.OpenRedPacket)
-		}
+		// Contract metadata (public, read-only)
+		api.GET("/futures/contracts", handlers.GetFuturesContracts)
+		api.GET("/options/contracts", handlers.GetOptionsContracts)
 	}
 
 	// Protected routes (require auth)
@@ -200,6 +114,98 @@ func main() {
 			user.POST("/kyc", handlers.SubmitKYC)
 			user.GET("/kyc/status", handlers.GetKYCStatus)
 			user.POST("/change-password", handlers.ChangePassword)
+		}
+
+		// Spot Trading
+		spot := protected.Group("/spot")
+		{
+			spot.POST("/order", handlers.PlaceSpotOrder)
+			spot.DELETE("/order/:orderId", handlers.CancelOrder)
+			spot.GET("/open-orders", handlers.GetOpenOrders)
+			spot.GET("/orders", handlers.GetOrderHistory)
+			spot.GET("/my-trades", handlers.GetMyTrades)
+			spot.POST("/quote", handlers.QuoteOrder)
+		}
+
+		// Futures
+		futures := protected.Group("/futures")
+		{
+			futures.POST("/position", handlers.OpenFuturesPosition)
+			futures.DELETE("/position/:id", handlers.CloseFuturesPosition)
+			futures.GET("/positions", handlers.GetFuturesPositions)
+			futures.POST("/quote", handlers.QuoteFutures)
+		}
+
+		// Margin
+		margin := protected.Group("/margin")
+		{
+			margin.GET("/accounts", handlers.GetMarginAccount)
+			margin.POST("/borrow", handlers.BorrowMargin)
+			margin.POST("/repay", handlers.RepayMargin)
+			margin.GET("/positions", handlers.GetMarginPositions)
+		}
+
+		// Options
+		options := protected.Group("/options")
+		{
+			options.POST("/trade", handlers.TradeOptions)
+			options.GET("/positions", handlers.GetOptionsPositions)
+		}
+
+		// P2P
+		p2p := protected.Group("/p2p")
+		{
+			p2p.GET("/ads", handlers.GetP2PAds)
+			p2p.POST("/ad", handlers.CreateP2PAd)
+			p2p.PUT("/ad/:id", handlers.UpdateP2PAd)
+			p2p.DELETE("/ad/:id", handlers.DeleteP2PAd)
+			p2p.POST("/trade", handlers.CreateP2PTrade)
+			p2p.POST("/trade/:id/confirm", handlers.ConfirmP2PTrade)
+			p2p.POST("/trade/:id/dispute", handlers.DisputeP2PTrade)
+		}
+
+		// Earn/Staking
+		earn := protected.Group("/earn")
+		{
+			earn.GET("/products", handlers.GetEarnProducts)
+			earn.POST("/subscribe", handlers.SubscribeEarn)
+			earn.GET("/positions", handlers.GetEarnPositions)
+		}
+
+		staking := protected.Group("/staking")
+		{
+			staking.GET("/pools", handlers.GetStakingPools)
+			staking.POST("/stake", handlers.Stake)
+			staking.POST("/unstake", handlers.Unstake)
+			staking.GET("/positions", handlers.GetStakingPositions)
+		}
+
+		// Launchpad
+		launchpad := protected.Group("/launchpad")
+		{
+			launchpad.GET("/projects", handlers.GetLaunchpadProjects)
+			launchpad.POST("/subscribe", handlers.SubscribeLaunchpad)
+		}
+
+		// Convert
+		convert := protected.Group("/convert")
+		{
+			convert.POST("", handlers.Convert)
+		}
+
+		// Transfer
+		transfer := protected.Group("/transfer")
+		{
+			transfer.POST("", handlers.InternalTransfer)
+		}
+
+		// Rewards
+		rewards := protected.Group("/rewards")
+		{
+			rewards.GET("/coupons", handlers.GetCoupons)
+			rewards.POST("/claim", handlers.ClaimCoupon)
+			rewards.GET("/red-packets", handlers.GetRedPackets)
+			rewards.POST("/open-red-packet", handlers.OpenRedPacket)
 		}
 	}
 

@@ -1,10 +1,13 @@
 // Master Wallet & Blockchain Management
-// Admin backend for managing master wallet, blockchains, and tokens
-
+// Admin backend for managing the blockchain registry, token registry, fee
+// configs and the master (hot) wallet registry. Every value is read from or
+// written to the database; nothing is seeded from a hard-coded network list and
+// no signing material is ever produced here.
 package handlers
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -40,56 +43,27 @@ type Token struct {
 	Symbol          string    `json:"symbol"`
 	ContractAddress string    `json:"contractAddress"`
 	Decimals        int       `json:"decimals"`
-	TotalSupply     string    `json:"totalSupply"`
 	TokenType       string    `json:"tokenType"` // "erc20", "trc20", "spl", "native"
 	Status          string    `json:"status"`
 	LogoURL         string    `json:"logoUrl"`
-	Price           float64   `json:"price"`
-	MarketCap       float64   `json:"marketCap"`
 	CreatedAt       time.Time `json:"createdAt"`
-}
-
-// Predefined blockchains (300+ networks)
-var Blockchains = []Blockchain{
-	// EVM Chains
-	{ID: "eth", Name: "Ethereum", Symbol: "ETH", ChainID: 1, TokenType: "evm", Decimals: 18, GasToken: "ETH"},
-	{ID: "bsc", Name: "BNB Smart Chain", Symbol: "BNB", ChainID: 56, TokenType: "evm", Decimals: 18, GasToken: "BNB"},
-	{ID: "arbitrum", Name: "Arbitrum One", Symbol: "ETH", ChainID: 42161, TokenType: "evm", Decimals: 18, GasToken: "ETH"},
-	{ID: "optimism", Name: "Optimism", Symbol: "ETH", ChainID: 10, TokenType: "evm", Decimals: 18, GasToken: "ETH"},
-	{ID: "polygon", Name: "Polygon", Symbol: "MATIC", ChainID: 137, TokenType: "evm", Decimals: 18, GasToken: "MATIC"},
-	{ID: "avalanche", Name: "Avalanche C-Chain", Symbol: "AVAX", ChainID: 43114, TokenType: "evm", Decimals: 18, GasToken: "AVAX"},
-	{ID: "fantom", Name: "Fantom", Symbol: "FTM", ChainID: 250, TokenType: "evm", Decimals: 18, GasToken: "FTM"},
-	{ID: "celo", Name: "Celo", Symbol: "CELO", ChainID: 42220, TokenType: "evm", Decimals: 18, GasToken: "CELO"},
-	{ID: "base", Name: "Base", Symbol: "ETH", ChainID: 8453, TokenType: "evm", Decimals: 18, GasToken: "ETH"},
-	{ID: "zksync", Name: "zkSync Era", Symbol: "ETH", ChainID: 324, TokenType: "evm", Decimals: 18, GasToken: "ETH"},
-	{ID: "linea", Name: "Linea", Symbol: "ETH", ChainID: 59144, TokenType: "evm", Decimals: 18, GasToken: "ETH"},
-	{ID: "scroll", Name: "Scroll", Symbol: "ETH", ChainID: 534352, TokenType: "evm", Decimals: 18, GasToken: "ETH"},
-	// Non-EVM
-	{ID: "solana", Name: "Solana", Symbol: "SOL", ChainID: 0, TokenType: "solana", Decimals: 9, GasToken: "SOL"},
-	{ID: "ton", Name: "TON", Symbol: "TON", ChainID: 0, TokenType: "ton", Decimals: 9, GasToken: "TON"},
-	{ID: "bitcoin", Name: "Bitcoin", Symbol: "BTC", ChainID: 0, TokenType: "bitcoin", Decimals: 8, GasToken: "BTC"},
-	{ID: "tron", Name: "Tron", Symbol: "TRX", ChainID: 0, TokenType: "trc20", Decimals: 6, GasToken: "TRX"},
-	{ID: "near", Name: "NEAR", Symbol: "NEAR", ChainID: 0, TokenType: "near", Decimals: 24, GasToken: "NEAR"},
-	{ID: "aptos", Name: "Aptos", Symbol: "APT", ChainID: 0, TokenType: "aptos", Decimals: 8, GasToken: "APT"},
-	{ID: "sui", Name: "Sui", Symbol: "SUI", ChainID: 0, TokenType: "sui", Decimals: 9, GasToken: "SUI"},
-	{ID: "cosmos", Name: "Cosmos", Symbol: "ATOM", ChainID: 0, TokenType: "cosmos", Decimals: 6, GasToken: "ATOM"},
-	{ID: "polkadot", Name: "Polkadot", Symbol: "DOT", ChainID: 0, TokenType: "polkadot", Decimals: 10, GasToken: "DOT"},
 }
 
 // ============================================================================
 // MASTER WALLET
 // ============================================================================
 
+// MasterWallet is the public metadata of a hot wallet. The signing key lives in
+// the custody layer and is referenced by KeyReference; it is never stored in or
+// returned by the API.
 type MasterWallet struct {
-	ID             string    `json:"id"`
-	Address        string    `json:"address"`
-	PrivateKeyHash string    `json:"-"`
-	Mnemonic       string    `json:"-"`
-	BlockchainID   string    `json:"blockchainId"`
-	Balance        string    `json:"balance"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"createdAt"`
-	LastActivity   time.Time `json:"lastActivity"`
+	ID           string    `json:"id"`
+	Address      string    `json:"address"`
+	KeyReference string    `json:"-"`
+	BlockchainID string    `json:"blockchainId"`
+	Status       string    `json:"status"`
+	CreatedAt    time.Time `json:"createdAt"`
+	LastActivity time.Time `json:"lastActivity"`
 }
 
 type FeeConfig struct {
@@ -108,15 +82,44 @@ type FeeConfig struct {
 // WALLET ADMIN HANDLERS
 // ============================================================================
 
-// Get all blockchains
+// GetBlockchains lists every configured blockchain.
 func GetBlockchains(c *gin.Context) {
-	c.JSON(200, gin.H{
-		"success": true,
-		"data":    Blockchains,
-	})
+	adminID := checkAdminPermission(c, "blockchain")
+	if adminID == "" {
+		return
+	}
+
+	rows, err := models.Pool.Query(c.Request.Context(), `
+		SELECT id, name, symbol, chain_id, COALESCE(rpc_url, ''), COALESCE(explorer_url, ''),
+		       COALESCE(explorer_api, ''), token_type, decimals, gas_token, status, created_at
+		FROM blockchains
+		ORDER BY name
+	`)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Blockchain registry is unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	blockchains := []Blockchain{}
+	for rows.Next() {
+		var b Blockchain
+		if err := rows.Scan(&b.ID, &b.Name, &b.Symbol, &b.ChainID, &b.RPCURL, &b.ExplorerURL,
+			&b.ExplorerAPI, &b.TokenType, &b.Decimals, &b.GasToken, &b.Status, &b.CreatedAt); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Blockchain registry could not be read"}})
+			return
+		}
+		blockchains = append(blockchains, b)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Blockchain registry could not be read"}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": blockchains})
 }
 
-// Add blockchain
+// AddBlockchain registers a new blockchain.
 func AddBlockchain(c *gin.Context) {
 	adminID := checkAdminPermission(c, "blockchain")
 	if adminID == "" {
@@ -125,26 +128,47 @@ func AddBlockchain(c *gin.Context) {
 
 	var req Blockchain
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"success": false, "error": gin.H{"code": 400, "message": err.Error()}})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid request body"}})
 		return
 	}
 
+	req.Name = strings.TrimSpace(req.Name)
+	req.Symbol = strings.ToUpper(strings.TrimSpace(req.Symbol))
+	req.GasToken = strings.ToUpper(strings.TrimSpace(req.GasToken))
+	if req.Name == "" || req.Symbol == "" || req.GasToken == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "name, symbol and gasToken are required"}})
+		return
+	}
 	req.ID = strings.ToLower(strings.ReplaceAll(req.Name, " ", "-"))
-	req.Status = "active"
-	req.CreatedAt = time.Now()
+	if req.TokenType == "" {
+		req.TokenType = "evm"
+	}
+	if req.Decimals <= 0 {
+		req.Decimals = 18
+	}
+	if req.Status == "" {
+		req.Status = "active"
+	}
 
-	Blockchains = append(Blockchains, req)
+	_, err := models.Pool.Exec(c.Request.Context(), `
+		INSERT INTO blockchains (id, name, symbol, chain_id, rpc_url, explorer_url, explorer_api, token_type, decimals, gas_token, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, req.ID, req.Name, req.Symbol, req.ChainID, nullIfEmpty(req.RPCURL), nullIfEmpty(req.ExplorerURL),
+		nullIfEmpty(req.ExplorerAPI), req.TokenType, req.Decimals, req.GasToken, req.Status)
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate key") {
+			c.JSON(http.StatusConflict, gin.H{"success": false, "error": gin.H{"code": 409, "message": "A blockchain with that id already exists"}})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Blockchain could not be added"}})
+		return
+	}
 
-	// Log action
 	logWalletAdminAction(adminID, c.GetString("admin_username"), "ADD_BLOCKCHAIN", "blockchain", req.ID, nil)
-
-	c.JSON(201, gin.H{
-		"success": true,
-		"data":    gin.H{"message": "Blockchain added", "id": req.ID},
-	})
+	c.JSON(http.StatusCreated, gin.H{"success": true, "data": gin.H{"message": "Blockchain added", "id": req.ID}})
 }
 
-// Update blockchain
+// UpdateBlockchain edits connection metadata for an existing blockchain.
 func UpdateBlockchain(c *gin.Context) {
 	adminID := checkAdminPermission(c, "blockchain")
 	if adminID == "" {
@@ -156,31 +180,38 @@ func UpdateBlockchain(c *gin.Context) {
 	var req struct {
 		RPCURL      *string `json:"rpcUrl"`
 		ExplorerURL *string `json:"explorerUrl"`
+		ExplorerAPI *string `json:"explorerApi"`
 		Status      *string `json:"status"`
 	}
-	c.ShouldBindJSON(&req)
-
-	for i, bc := range Blockchains {
-		if bc.ID == blockchainID {
-			if req.RPCURL != nil {
-				Blockchains[i].RPCURL = *req.RPCURL
-			}
-			if req.ExplorerURL != nil {
-				Blockchains[i].ExplorerURL = *req.ExplorerURL
-			}
-			if req.Status != nil {
-				Blockchains[i].Status = *req.Status
-			}
-
-			logWalletAdminAction(adminID, c.GetString("admin_username"), "UPDATE_BLOCKCHAIN", "blockchain", blockchainID, nil)
-			break
-		}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid request body"}})
+		return
 	}
 
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Blockchain updated"}})
+	tag, err := models.Pool.Exec(c.Request.Context(), `
+		UPDATE blockchains SET
+			rpc_url = COALESCE($1, rpc_url),
+			explorer_url = COALESCE($2, explorer_url),
+			explorer_api = COALESCE($3, explorer_api),
+			status = COALESCE($4, status),
+			updated_at = NOW()
+		WHERE id = $5
+	`, req.RPCURL, req.ExplorerURL, req.ExplorerAPI, req.Status, blockchainID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Blockchain could not be updated"}})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Blockchain not found"}})
+		return
+	}
+
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "UPDATE_BLOCKCHAIN", "blockchain", blockchainID, nil)
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"message": "Blockchain updated"}})
 }
 
-// Delete blockchain
+// DeleteBlockchain removes a blockchain. Tokens reference it with RESTRICT, so a
+// blockchain that still has tokens cannot be deleted.
 func DeleteBlockchain(c *gin.Context) {
 	adminID := checkAdminPermission(c, "blockchain")
 	if adminID == "" {
@@ -189,74 +220,65 @@ func DeleteBlockchain(c *gin.Context) {
 
 	blockchainID := c.Param("id")
 
-	for i, bc := range Blockchains {
-		if bc.ID == blockchainID {
-			Blockchains = append(Blockchains[:i], Blockchains[i+1:]...)
-			break
-		}
+	tag, err := models.Pool.Exec(c.Request.Context(), `DELETE FROM blockchains WHERE id = $1`, blockchainID)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": gin.H{"code": 409, "message": "Blockchain still has tokens and cannot be deleted"}})
+		return
 	}
-
-	logWalletAdminAction(adminID, c.GetString("admin_username"), "DELETE_BLOCKCHAIN", "blockchain", blockchainID, nil)
-
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Blockchain deleted"}})
-}
-
-// Get all tokens
-func GetTokens(c *gin.Context) {
-	blockchainID := c.Query("blockchainId")
-
-	// In production, fetch from database
-	tokens := []gin.H{
-		{
-			"id":              "eth-usdt",
-			"blockchainId":    "eth",
-			"name":            "Tether USD",
-			"symbol":          "USDT",
-			"contractAddress": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-			"decimals":        6,
-			"tokenType":       "erc20",
-			"status":          "active",
-			"price":           1.0,
-		},
-		{
-			"id":              "eth-wbtc",
-			"blockchainId":    "eth",
-			"name":            "Wrapped Bitcoin",
-			"symbol":          "WBTC",
-			"contractAddress": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
-			"decimals":        8,
-			"tokenType":       "erc20",
-			"status":          "active",
-			"price":           65000.0,
-		},
-		{
-			"id":              "bsc-busd",
-			"blockchainId":    "bsc",
-			"name":            "Binance USD",
-			"symbol":          "BUSD",
-			"contractAddress": "0xe9e7CEA3DedcA5984780Bafc599bD69ADf613D3E",
-			"decimals":        18,
-			"tokenType":       "erc20",
-			"status":          "active",
-			"price":           1.0,
-		},
-	}
-
-	if blockchainID != "" {
-		filtered := []gin.H{}
-		for _, t := range tokens {
-			if t["blockchainId"] == blockchainID {
-				filtered = append(filtered, t)
-			}
-		}
-		c.JSON(200, gin.H{"success": true, "data": filtered})
+	if tag.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Blockchain not found"}})
 		return
 	}
 
-	c.JSON(200, gin.H{"success": true, "data": tokens})
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "DELETE_BLOCKCHAIN", "blockchain", blockchainID, nil)
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"message": "Blockchain deleted"}})
 }
 
-// Add token
+// GetTokens lists tokens, optionally filtered by blockchain.
+func GetTokens(c *gin.Context) {
+	adminID := checkAdminPermission(c, "blockchain")
+	if adminID == "" {
+		return
+	}
+
+	blockchainID := c.Query("blockchainId")
+	query := `
+		SELECT id, blockchain_id, name, symbol, COALESCE(contract_address, ''), decimals, token_type,
+		       COALESCE(logo_url, ''), status, created_at
+		FROM tokens`
+	args := []interface{}{}
+	if blockchainID != "" {
+		query += ` WHERE blockchain_id = $1`
+		args = append(args, blockchainID)
+	}
+	query += ` ORDER BY symbol`
+
+	rows, err := models.Pool.Query(c.Request.Context(), query, args...)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Token registry is unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	tokens := []Token{}
+	for rows.Next() {
+		var t Token
+		if err := rows.Scan(&t.ID, &t.BlockchainID, &t.Name, &t.Symbol, &t.ContractAddress,
+			&t.Decimals, &t.TokenType, &t.LogoURL, &t.Status, &t.CreatedAt); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Token registry could not be read"}})
+			return
+		}
+		tokens = append(tokens, t)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Token registry could not be read"}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": tokens})
+}
+
+// AddToken registers a token on an existing blockchain.
 func AddToken(c *gin.Context) {
 	adminID := checkAdminPermission(c, "blockchain")
 	if adminID == "" {
@@ -272,126 +294,256 @@ func AddToken(c *gin.Context) {
 		TokenType       string `json:"tokenType"`
 		LogoURL         string `json:"logoUrl"`
 	}
-	c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid request body"}})
+		return
+	}
+	if req.TokenType == "" {
+		req.TokenType = "erc20"
+	}
+	if req.Decimals <= 0 {
+		req.Decimals = 18
+	}
+	tokenID := fmt.Sprintf("%s-%s", req.BlockchainID, strings.ToLower(strings.TrimSpace(req.Symbol)))
 
-	tokenID := fmt.Sprintf("%s-%s", req.BlockchainID, strings.ToLower(req.Symbol))
+	_, err := models.Pool.Exec(c.Request.Context(), `
+		INSERT INTO tokens (id, blockchain_id, name, symbol, contract_address, decimals, token_type, logo_url, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active')
+	`, tokenID, req.BlockchainID, req.Name, strings.ToUpper(strings.TrimSpace(req.Symbol)),
+		nullIfEmpty(req.ContractAddress), req.Decimals, req.TokenType, nullIfEmpty(req.LogoURL))
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate key") {
+			c.JSON(http.StatusConflict, gin.H{"success": false, "error": gin.H{"code": 409, "message": "That token already exists on this blockchain"}})
+			return
+		}
+		if strings.Contains(err.Error(), "foreign key") {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Unknown blockchainId"}})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Token could not be added"}})
+		return
+	}
 
 	logWalletAdminAction(adminID, c.GetString("admin_username"), "ADD_TOKEN", "token", tokenID, gin.H{
 		"blockchainId": req.BlockchainID,
 		"symbol":       req.Symbol,
 	})
-
-	c.JSON(201, gin.H{
-		"success": true,
-		"data":    gin.H{"message": "Token added", "id": tokenID},
-	})
+	c.JSON(http.StatusCreated, gin.H{"success": true, "data": gin.H{"message": "Token added", "id": tokenID}})
 }
 
-// Get fee configs
+// GetFeeConfigs lists configured withdrawal/swap fee rules.
 func GetFeeConfigs(c *gin.Context) {
-	fees := []gin.H{
-		{"id": "1", "feeType": "withdraw", "blockchainId": "eth", "tokenSymbol": "USDT", "feeAmount": 5, "feePercentage": 0, "minFee": 5, "maxFee": 100, "status": "active"},
-		{"id": "2", "feeType": "withdraw", "blockchainId": "bsc", "tokenSymbol": "USDT", "feeAmount": 1, "feePercentage": 0, "minFee": 1, "maxFee": 50, "status": "active"},
-		{"id": "3", "feeType": "swap", "blockchainId": "eth", "tokenSymbol": "ALL", "feeAmount": 0, "feePercentage": 0.3, "minFee": 0.1, "maxFee": 100, "status": "active"},
+	adminID := checkAdminPermission(c, "fees")
+	if adminID == "" {
+		return
 	}
 
-	c.JSON(200, gin.H{"success": true, "data": fees})
+	rows, err := models.Pool.Query(c.Request.Context(), `
+		SELECT id, fee_type, COALESCE(blockchain_id, ''), token_symbol, fee_amount, fee_percentage, min_fee, max_fee, status
+		FROM fee_configs
+		ORDER BY fee_type, token_symbol
+	`)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Fee configuration is unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	fees := []FeeConfig{}
+	for rows.Next() {
+		var f FeeConfig
+		if err := rows.Scan(&f.ID, &f.FeeType, &f.BlockchainID, &f.TokenSymbol, &f.FeeAmount,
+			&f.FeePercentage, &f.MinFee, &f.MaxFee, &f.Status); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Fee configuration could not be read"}})
+			return
+		}
+		fees = append(fees, f)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Fee configuration could not be read"}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": fees})
 }
 
-// Update fee config
+// UpdateFeeConfig edits a fee rule.
 func UpdateFeeConfig(c *gin.Context) {
 	adminID := checkAdminPermission(c, "fees")
 	if adminID == "" {
 		return
 	}
 
+	feeID := c.Param("id")
+	if _, err := uuid.Parse(feeID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Fee config not found"}})
+		return
+	}
+
 	var req struct {
-		FeeType       *string  `json:"feeType"`
 		FeeAmount     *float64 `json:"feeAmount"`
 		FeePercentage *float64 `json:"feePercentage"`
+		MinFee        *float64 `json:"minFee"`
+		MaxFee        *float64 `json:"maxFee"`
 		Status        *string  `json:"status"`
 	}
-	c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid request body"}})
+		return
+	}
+	if req.FeeAmount != nil && *req.FeeAmount < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "feeAmount cannot be negative"}})
+		return
+	}
+	if req.FeePercentage != nil && (*req.FeePercentage < 0 || *req.FeePercentage >= 1) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "feePercentage must be a fraction in [0, 1)"}})
+		return
+	}
 
-	feeID := c.Param("id")
+	tag, err := models.Pool.Exec(c.Request.Context(), `
+		UPDATE fee_configs SET
+			fee_amount = COALESCE($1, fee_amount),
+			fee_percentage = COALESCE($2, fee_percentage),
+			min_fee = COALESCE($3, min_fee),
+			max_fee = COALESCE($4, max_fee),
+			status = COALESCE($5, status),
+			updated_at = NOW()
+		WHERE id = $6
+	`, req.FeeAmount, req.FeePercentage, req.MinFee, req.MaxFee, req.Status, feeID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Fee config could not be updated"}})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Fee config not found"}})
+		return
+	}
 
 	logWalletAdminAction(adminID, c.GetString("admin_username"), "UPDATE_FEE", "fees", feeID, nil)
-
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Fee updated"}})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"message": "Fee updated"}})
 }
 
 // ============================================================================
 // MASTER WALLET OPERATIONS
 // ============================================================================
 
-// Get master wallet status
+// GetMasterWallet returns the configured hot wallet metadata for a blockchain.
 func GetMasterWallet(c *gin.Context) {
 	adminID := checkAdminPermission(c, "wallet")
 	if adminID == "" {
 		return
 	}
 
-	// In production, fetch from secure storage
-	wallet := gin.H{
-		"address":       "0x742d35Cc6634C0532925a3b844Bc9e7595f123456",
-		"blockchainId":  "eth",
-		"balance":       "1250.5 ETH",
-		"totalReceived": "5000 ETH",
-		"totalSent":     "3749.5 ETH",
-		"transactions":  1523,
-		"status":        "active",
-		"lastActivity":  time.Now().Format("2006-01-02 15:04:05"),
+	blockchainID := c.Query("blockchainId")
+	query := `
+		SELECT id, address, COALESCE(key_reference, ''), blockchain_id, status, created_at,
+		       COALESCE(last_activity, created_at)
+		FROM master_wallets`
+	args := []interface{}{}
+	if blockchainID != "" {
+		query += ` WHERE blockchain_id = $1`
+		args = append(args, blockchainID)
+	}
+	query += ` ORDER BY created_at DESC LIMIT 1`
+
+	var w MasterWallet
+	err := models.Pool.QueryRow(c.Request.Context(), query, args...).Scan(
+		&w.ID, &w.Address, &w.KeyReference, &w.BlockchainID, &w.Status, &w.CreatedAt, &w.LastActivity)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "No master wallet is configured for that blockchain"}})
+		return
 	}
 
-	c.JSON(200, gin.H{"success": true, "data": wallet})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{
+		"id":           w.ID,
+		"address":      w.Address,
+		"blockchainId": w.BlockchainID,
+		"status":       w.Status,
+		"createdAt":    w.CreatedAt,
+		"lastActivity": w.LastActivity,
+	}})
 }
 
-// Get master wallet balance by token
+// GetMasterWalletBalance reports the on-chain balance of the hot wallet. That
+// requires a configured node/RPC; without one the balance is unknown, so this
+// fails closed rather than returning a fabricated number.
 func GetMasterWalletBalance(c *gin.Context) {
 	adminID := checkAdminPermission(c, "wallet")
 	if adminID == "" {
 		return
 	}
-
-	_ = c.Query("blockchainId")
-
-	balances := []gin.H{
-		{"symbol": "ETH", "balance": "1250.5", "value": "8128250"},
-		{"symbol": "USDT", "balance": "500000", "value": "500000"},
-		{"symbol": "WBTC", "balance": "10.5", "value": "682500"},
-		{"symbol": "BNB", "balance": "5000", "value": "3000000"},
-	}
-
-	c.JSON(200, gin.H{"success": true, "data": balances})
+	c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "On-chain balance requires a configured node/RPC provider"}})
 }
 
 // ============================================================================
 // USER WALLET MANAGEMENT (Under Master Wallet)
 // ============================================================================
 
-// Get all user wallets
+// GetUserWallets lists custodial wallet balances, optionally for one user.
 func GetUserWallets(c *gin.Context) {
 	adminID := checkAdminPermission(c, "wallet")
 	if adminID == "" {
 		return
 	}
 
-	wallets := []gin.H{
-		{
-			"id":           "user-1",
-			"userId":       "user123",
-			"address":      "0x1234567890AbCdEfGhIjKlMnOpQrStUvWx",
-			"blockchainId": "eth",
-			"balance":      "10.5 ETH",
-			"status":       "active",
-			"lastActivity": "2024-01-15 10:30:00",
-		},
+	userID := c.Query("userId")
+	query := `
+		SELECT w.id, w.user_id, COALESCE(u.email, ''), w.currency, w.network, w.wallet_type,
+		       w.balance, w.locked, w.available, w.updated_at
+		FROM wallets w
+		LEFT JOIN users u ON u.id = w.user_id`
+	args := []interface{}{}
+	if userID != "" {
+		if _, err := uuid.Parse(userID); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid userId"}})
+			return
+		}
+		query += ` WHERE w.user_id = $1`
+		args = append(args, userID)
+	}
+	query += ` ORDER BY w.updated_at DESC LIMIT 500`
+
+	rows, err := models.Pool.Query(c.Request.Context(), query, args...)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Wallet balances are unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	wallets := []gin.H{}
+	for rows.Next() {
+		var id, walletUserID, email, currency, network, walletType string
+		var balance, locked, available float64
+		var updatedAt time.Time
+		if err := rows.Scan(&id, &walletUserID, &email, &currency, &network, &walletType,
+			&balance, &locked, &available, &updatedAt); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Wallet balances could not be read"}})
+			return
+		}
+		wallets = append(wallets, gin.H{
+			"id":           id,
+			"userId":       walletUserID,
+			"email":        email,
+			"currency":     currency,
+			"network":      network,
+			"walletType":   walletType,
+			"balance":      balance,
+			"locked":       locked,
+			"available":    available,
+			"lastActivity": updatedAt,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Wallet balances could not be read"}})
+		return
 	}
 
-	c.JSON(200, gin.H{"success": true, "data": wallets})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": wallets})
 }
 
-// Force transaction (master wallet can trigger for users)
+// ForceTransaction would move funds from the master wallet. Signing and
+// broadcasting requires the custody layer, so this fails closed rather than
+// reporting a hash for a transaction that was never sent.
 func ForceTransaction(c *gin.Context) {
 	adminID := checkAdminPermission(c, "wallet")
 	if adminID == "" {
@@ -401,89 +553,68 @@ func ForceTransaction(c *gin.Context) {
 	var req struct {
 		FromAddress string  `json:"fromAddress" binding:"required"`
 		ToAddress   string  `json:"toAddress" binding:"required"`
-		Amount      float64 `json:"amount" binding:"required"`
+		Amount      float64 `json:"amount" binding:"required,gt=0"`
 		Token       string  `json:"token" binding:"required"`
 		Blockchain  string  `json:"blockchain" binding:"required"`
 	}
-	c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid request body"}})
+		return
+	}
 
-	// In production, execute transaction via master wallet
-	txHash := "0x" + fmt.Sprintf("%x", uuid.New().String())
-
-	logWalletAdminAction(adminID, c.GetString("admin_username"), "FORCE_TRANSACTION", "wallet", txHash, gin.H{
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "FORCE_TRANSACTION_REQUESTED", "wallet", "", gin.H{
 		"from":       req.FromAddress,
 		"to":         req.ToAddress,
 		"amount":     req.Amount,
 		"token":      req.Token,
 		"blockchain": req.Blockchain,
 	})
-
-	c.JSON(200, gin.H{
-		"success": true,
-		"data": gin.H{
-			"message":   "Transaction executed",
-			"txHash":    txHash,
-			"timestamp": time.Now().Format("2006-01-02 15:04:05"),
-		},
-	})
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Custody signing is not implemented; no transaction was sent"}})
 }
 
 // ============================================================================
 // AUTO-STABILIZATION
 // ============================================================================
 
-// Auto-balance master wallet
+// AutoStabilize would rebalance gas across user wallets. That needs the custody
+// layer and chain access, so it fails closed rather than reporting a summary of
+// work that never ran.
 func AutoStabilize(c *gin.Context) {
 	adminID := checkAdminPermission(c, "wallet")
 	if adminID == "" {
 		return
 	}
-
-	// In production, this would:
-	// 1. Check all user wallets
-	// 2. Calculate needed gas fees
-	// 3. Top up low-balance wallets from master
-	// 4. Collect excess to master wallet
-
-	report := gin.H{
-		"action":        "stabilization_complete",
-		"walletsTopped": 15,
-		"gasSpent":      "2.5 ETH",
-		"collected":     "10 ETH",
-		"timestamp":     time.Now().Format("2006-01-02 15:04:05"),
-	}
-
-	logWalletAdminAction(adminID, c.GetString("admin_username"), "AUTO_STABILIZE", "wallet", "", report)
-
-	c.JSON(200, gin.H{"success": true, "data": report})
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "AUTO_STABILIZE_REQUESTED", "wallet", "", nil)
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Wallet stabilization is not implemented; no wallets were touched"}})
 }
 
 // ============================================================================
 // EXPORT MASTER WALLET BACKUP
 // ============================================================================
 
+// ExportMasterWalletBackup must never emit signing material over HTTP. Key
+// backups are produced by the custody layer, not the API.
 func ExportMasterWalletBackup(c *gin.Context) {
 	adminID := checkAdminPermission(c, "wallet")
 	if adminID == "" {
 		return
 	}
-
-	// In production, provide encrypted backup
-	backup := gin.H{
-		"encryptedPrivateKey": "eyJpdiI6IjEyeiIsInIiOiIxfQ==...",
-		"encryptedMnemonic":   "eyJpdiI6IjEyeiIsInIiOiIxfQ==...",
-		"createdAt":           time.Now().Format("2006-01-02 15:04:05"),
-		"expiresAt":           time.Now().Add(24 * time.Hour).Format("2006-01-02 15:04:05"),
-	}
-
-	logWalletAdminAction(adminID, c.GetString("admin_username"), "EXPORT_WALLET_BACKUP", "wallet", "", nil)
-
-	c.JSON(200, gin.H{"success": true, "data": backup})
+	logWalletAdminAction(adminID, c.GetString("admin_username"), "EXPORT_WALLET_BACKUP_REQUESTED", "wallet", "", nil)
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Key backups are produced by the custody layer and are never served over the API"}})
 }
 
 // ============================================================================
 // HELPER
 // ============================================================================
+
+// nullIfEmpty keeps optional text columns NULL instead of storing an empty
+// string, so a missing value is distinguishable from a present one.
+func nullIfEmpty(s string) interface{} {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
+}
 
 func logWalletAdminAction(adminID, adminUsername, action, resourceType, resourceID string, details gin.H) {
 	parsedID, err := uuid.Parse(adminID)

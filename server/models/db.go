@@ -428,7 +428,121 @@ func runMigrations(ctx context.Context) error {
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 		)`,
 
+		// Futures / perpetual market registry. futures_contracts is the minimal
+		// legacy set; futures_markets is the full instrument definition the admin
+		// listing API manages. Without it, futures/perpetual listing is unreachable.
+		`CREATE TABLE IF NOT EXISTS futures_markets (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			symbol VARCHAR(50) UNIQUE NOT NULL,
+			base_currency VARCHAR(20) NOT NULL,
+			quote_currency VARCHAR(20) NOT NULL,
+			settlement_currency VARCHAR(20) NOT NULL,
+			contract_type VARCHAR(20) NOT NULL DEFAULT 'perpetual',
+			margin_type VARCHAR(20) NOT NULL DEFAULT 'usdt_m',
+			contract_size NUMERIC(32, 16) NOT NULL DEFAULT 1,
+			price_precision INTEGER NOT NULL DEFAULT 2,
+			quantity_precision INTEGER NOT NULL DEFAULT 4,
+			min_quantity NUMERIC(32, 16) NOT NULL DEFAULT 0,
+			max_leverage INTEGER NOT NULL DEFAULT 1,
+			initial_margin_rate NUMERIC(10, 6) NOT NULL,
+			maintenance_margin_rate NUMERIC(10, 6) NOT NULL,
+			liquidation_fee_rate NUMERIC(10, 6) NOT NULL,
+			maker_fee NUMERIC(10, 6) NOT NULL,
+			taker_fee NUMERIC(10, 6) NOT NULL,
+			funding_interval_hours INTEGER NOT NULL DEFAULT 8,
+			funding_rate_cap NUMERIC(10, 6) NOT NULL,
+			oracle_source VARCHAR(50) NOT NULL,
+			status VARCHAR(20) NOT NULL DEFAULT 'active',
+			created_by UUID,
+			updated_by UUID,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+		// Margin market registry (cross and isolated). The admin margin listing API
+		// is the only path that creates a borrowable pair.
+		`CREATE TABLE IF NOT EXISTS margin_markets (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			symbol VARCHAR(50) UNIQUE NOT NULL,
+			base_currency VARCHAR(20) NOT NULL,
+			quote_currency VARCHAR(20) NOT NULL,
+			margin_mode VARCHAR(20) NOT NULL DEFAULT 'cross',
+			max_leverage INTEGER NOT NULL DEFAULT 1,
+			collateral_asset VARCHAR(20) NOT NULL,
+			collateral_ltv NUMERIC(10, 6) NOT NULL,
+			liquidation_threshold NUMERIC(10, 6) NOT NULL,
+			liquidation_bonus NUMERIC(10, 6) NOT NULL,
+			borrowable_asset VARCHAR(20) NOT NULL,
+			interest_base_apy NUMERIC(10, 6) NOT NULL,
+			interest_kink_utilization NUMERIC(10, 6) NOT NULL,
+			interest_jump_multiplier NUMERIC(10, 6) NOT NULL,
+			status VARCHAR(20) NOT NULL DEFAULT 'active',
+			created_by UUID,
+			updated_by UUID,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+		// Blockchain registry used by the wallet admin console. Rows are created by
+		// an administrator; nothing is seeded from a hard-coded network list.
+		`CREATE TABLE IF NOT EXISTS blockchains (
+			id VARCHAR(50) PRIMARY KEY,
+			name VARCHAR(100) NOT NULL,
+			symbol VARCHAR(20) NOT NULL,
+			chain_id BIGINT DEFAULT 0,
+			rpc_url TEXT,
+			explorer_url TEXT,
+			explorer_api TEXT,
+			token_type VARCHAR(20) NOT NULL DEFAULT 'evm',
+			decimals INTEGER NOT NULL DEFAULT 18,
+			gas_token VARCHAR(20) NOT NULL,
+			status VARCHAR(20) NOT NULL DEFAULT 'active',
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS tokens (
+			id VARCHAR(80) PRIMARY KEY,
+			blockchain_id VARCHAR(50) NOT NULL REFERENCES blockchains(id) ON DELETE RESTRICT,
+			name VARCHAR(100) NOT NULL,
+			symbol VARCHAR(20) NOT NULL,
+			contract_address TEXT,
+			decimals INTEGER NOT NULL DEFAULT 18,
+			token_type VARCHAR(20) NOT NULL DEFAULT 'erc20',
+			logo_url TEXT,
+			status VARCHAR(20) NOT NULL DEFAULT 'active',
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			UNIQUE(blockchain_id, symbol)
+		)`,
+		`CREATE TABLE IF NOT EXISTS fee_configs (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			fee_type VARCHAR(20) NOT NULL,
+			blockchain_id VARCHAR(50) REFERENCES blockchains(id) ON DELETE CASCADE,
+			token_symbol VARCHAR(20) NOT NULL,
+			fee_amount NUMERIC(32, 16) NOT NULL DEFAULT 0,
+			fee_percentage NUMERIC(10, 6) NOT NULL DEFAULT 0,
+			min_fee NUMERIC(32, 16) NOT NULL DEFAULT 0,
+			max_fee NUMERIC(32, 16) NOT NULL DEFAULT 0,
+			status VARCHAR(20) NOT NULL DEFAULT 'active',
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+		// Master (hot) wallet registry. Only public metadata and a reference to the
+		// signing key are stored; the key itself lives in the custody/HSM layer and
+		// is never persisted or returned here.
+		`CREATE TABLE IF NOT EXISTS master_wallets (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			blockchain_id VARCHAR(50) NOT NULL REFERENCES blockchains(id) ON DELETE RESTRICT,
+			address TEXT NOT NULL,
+			key_reference VARCHAR(255),
+			status VARCHAR(20) NOT NULL DEFAULT 'active',
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			last_activity TIMESTAMP WITH TIME ZONE,
+			UNIQUE(blockchain_id, address)
+		)`,
+
 		// Indexes
+		`CREATE INDEX IF NOT EXISTS idx_tokens_blockchain ON tokens(blockchain_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_futures_markets_status ON futures_markets(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_margin_markets_status ON margin_markets(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token)`,
 		`CREATE INDEX IF NOT EXISTS idx_orders_user ON spot_orders(user_id)`,
@@ -449,100 +563,11 @@ func runMigrations(ctx context.Context) error {
 	return nil
 }
 
-// Seed default markets
-func SeedMarkets() {
-	ctx := context.Background()
-	defaultMarkets := []struct {
-		Symbol        string
-		BaseCurrency  string
-		QuoteCurrency string
-	}{
-		{"BTC-USDT", "BTC", "USDT"},
-		{"ETH-USDT", "ETH", "USDT"},
-		{"BNB-USDT", "BNB", "USDT"},
-		{"SOL-USDT", "SOL", "USDT"},
-		{"XRP-USDT", "XRP", "USDT"},
-		{"ADA-USDT", "ADA", "USDT"},
-		{"DOGE-USDT", "DOGE", "USDT"},
-		{"ETH-BTC", "ETH", "BTC"},
-	}
-
-	for _, m := range defaultMarkets {
-		_, _ = Pool.Exec(ctx, `
-			INSERT INTO markets (symbol, base_currency, quote_currency, status)
-			VALUES ($1, $2, $3, 'active')
-			ON CONFLICT (symbol) DO NOTHING
-		`, m.Symbol, m.BaseCurrency, m.QuoteCurrency)
-	}
-
-	// Seed futures contracts
-	futuresContracts := []struct {
-		Symbol        string
-		BaseCurrency  string
-		QuoteCurrency string
-	}{
-		{"BTC-USDT-PERP", "BTC", "USDT"},
-		{"ETH-USDT-PERP", "ETH", "USDT"},
-		{"BNB-USDT-PERP", "BNB", "USDT"},
-		{"SOL-USDT-PERP", "SOL", "USDT"},
-	}
-
-	for _, c := range futuresContracts {
-		_, _ = Pool.Exec(ctx, `
-			INSERT INTO futures_contracts (symbol, base_currency, quote_currency, contract_type, status)
-			VALUES ($1, $2, $3, 'perpetual', 'active')
-			ON CONFLICT (symbol) DO NOTHING
-		`, c.Symbol, c.BaseCurrency, c.QuoteCurrency)
-	}
-
-	// Seed earn products
-	earnProducts := []struct {
-		Name     string
-		Currency string
-		APY      float64
-	}{
-		{"USDT Flexible", "USDT", 4.5},
-		{"USDT 30 Days", "USDT", 5.2},
-		{"USDT 90 Days", "USDT", 6.5},
-		{"ETH Flexible", "ETH", 3.8},
-		{"BTC Flexible", "BTC", 2.5},
-	}
-
-	for _, p := range earnProducts {
-		lockPeriod := 0
-		if p.Name == "USDT 30 Days" {
-			lockPeriod = 30
-		} else if p.Name == "USDT 90 Days" {
-			lockPeriod = 90
-		}
-		_, _ = Pool.Exec(ctx, `
-			INSERT INTO earn_products (name, currency, apy, lock_period, status)
-			VALUES ($1, $2, $3, $4, 'active')
-			ON CONFLICT DO NOTHING
-		`, p.Name, p.Currency, p.APY, lockPeriod)
-	}
-
-	// Seed staking pools
-	stakingPools := []struct {
-		Name     string
-		Currency string
-		APY      float64
-	}{
-		{"ETH 2.0", "ETH", 5.5},
-		{"SOL 2.0", "SOL", 8.0},
-		{"ATOM 2.0", "ATOM", 12.0},
-	}
-
-	for _, s := range stakingPools {
-		_, _ = Pool.Exec(ctx, `
-			INSERT INTO staking_pools (name, currency, apy, status)
-			VALUES ($1, $2, $3, 'active')
-			ON CONFLICT DO NOTHING
-		`, s.Name, s.Currency, s.APY)
-	}
-
-	fmt.Println("✓ Seeded market data")
-}
+// SeedMarkets is intentionally a no-op. Markets, derivatives and earn
+// products are created through the reviewed admin listing APIs, never seeded
+// from hard-coded rows at startup. It fails closed by inserting nothing
+// rather than fabricating tradable instruments.
+func SeedMarkets() {}
 
 // Helper functions (common helpers are implemented in user.go)
 

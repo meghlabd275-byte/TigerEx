@@ -62,6 +62,7 @@ func initAdminTables(ctx context.Context) error {
 		username VARCHAR(100) UNIQUE NOT NULL,
 		email VARCHAR(255) UNIQUE NOT NULL,
 		password_hash VARCHAR(255) NOT NULL,
+		password_salt VARCHAR(255) NOT NULL DEFAULT '',
 		role VARCHAR(50) NOT NULL DEFAULT 'admin',
 		status VARCHAR(20) DEFAULT 'active',
 		permissions TEXT[] DEFAULT '{}',
@@ -72,6 +73,12 @@ func initAdminTables(ctx context.Context) error {
 	)
 `)
 	if err != nil {
+		return err
+	}
+
+	// Existing installs created admins before password_salt existed. AdminLogin
+	// reads it, so add it idempotently rather than fail every login.
+	if _, err := Pool.Exec(ctx, `ALTER TABLE admins ADD COLUMN IF NOT EXISTS password_salt VARCHAR(255) NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 
@@ -299,6 +306,24 @@ func initAdminTables(ctx context.Context) error {
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)
+`)
+	if err != nil {
+		return err
+	}
+
+	// Support ticket replies. Declared after support_tickets so the foreign key
+	// resolves, and created here rather than in runMigrations, which runs before
+	// this table exists.
+	_, err = Pool.Exec(ctx, `
+        CREATE TABLE IF NOT EXISTS support_messages (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                ticket_id UUID NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+                sender_id UUID,
+                sender_type VARCHAR(20) NOT NULL DEFAULT 'user',
+                message TEXT NOT NULL,
+                is_internal BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
 `)
 	if err != nil {
 		return err

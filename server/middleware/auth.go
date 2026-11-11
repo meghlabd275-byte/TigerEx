@@ -69,7 +69,7 @@ func CORS() gin.HandlerFunc {
 // Rate limiter (simple in-memory)
 type visitor struct {
 	lastSeen time.Time
-	visits  int
+	visits   int
 }
 
 var visitors = make(map[string]*visitor)
@@ -166,11 +166,19 @@ func AuthRequired() gin.HandlerFunc {
 			return
 		}
 
+		// A refresh token is not an access credential. Reject it so a stolen
+		// refresh token cannot be used directly against the API.
+		if tokenType, ok := claims["type"].(string); ok && tokenType != "access" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token type"})
+			c.Abort()
+			return
+		}
+
 		// Verify user exists and is active
 		var count int
-		err = models.Pool.QueryRow(c.Request.Context(), 
+		err = models.Pool.QueryRow(c.Request.Context(),
 			"SELECT COUNT(*) FROM users WHERE id = $1 AND status = 'active'", userID).Scan(&count)
-		
+
 		if err != nil || count == 0 {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found or inactive"})
 			c.Abort()

@@ -17,8 +17,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 
@@ -27,7 +27,6 @@ import (
 )
 
 // ============ MARKET DATA ============
-
 
 func GetMarkets(c *gin.Context) {
 	rows, err := models.Pool.Query(c.Request.Context(), `
@@ -63,25 +62,25 @@ func GetMarkets(c *gin.Context) {
 func GetTicker(c *gin.Context) {
 	c.JSON(http.StatusServiceUnavailable, gin.H{
 		"success": false,
-		"error": gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
+		"error":   gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
 	})
 }
 func GetOrderBook(c *gin.Context) {
 	c.JSON(http.StatusServiceUnavailable, gin.H{
 		"success": false,
-		"error": gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
+		"error":   gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
 	})
 }
 func GetKlines(c *gin.Context) {
 	c.JSON(http.StatusServiceUnavailable, gin.H{
 		"success": false,
-		"error": gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
+		"error":   gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
 	})
 }
 func GetRecentTrades(c *gin.Context) {
 	c.JSON(http.StatusServiceUnavailable, gin.H{
 		"success": false,
-		"error": gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
+		"error":   gin.H{"code": 503, "message": "Live market data provider is not configured; synthetic market data is disabled"},
 	})
 }
 func Register(c *gin.Context) {
@@ -339,6 +338,7 @@ func Login(c *gin.Context) {
 func generateTokens(userID string) (string, string) {
 	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id": userID,
+		"type":    "access",
 		"exp":     time.Now().Add(time.Hour).Unix(),
 	})
 	accessStr, _ := accessToken.SignedString(middleware.JWTSecret)
@@ -363,6 +363,12 @@ func RefreshToken(c *gin.Context) {
 	}
 
 	token, err := jwt.Parse(req.RefreshToken, func(t *jwt.Token) (interface{}, error) {
+		if t.Method != jwt.SigningMethodHS256 {
+			return nil, fmt.Errorf("unexpected JWT signing method: %s", t.Method.Alg())
+		}
+		if len(middleware.JWTSecret) < 32 {
+			return nil, fmt.Errorf("JWT signing key is not configured")
+		}
 		return middleware.JWTSecret, nil
 	})
 
@@ -371,14 +377,31 @@ func RefreshToken(c *gin.Context) {
 		return
 	}
 
-	claims := token.Claims.(jwt.MapClaims)
-	if claims["type"] != "refresh" {
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Invalid token"}})
+		return
+	}
+	if t, _ := claims["type"].(string); t != "refresh" {
 		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Invalid token type"}})
 		return
 	}
+	userID, ok := claims["user_id"].(string)
+	if !ok || userID == "" {
+		c.JSON(401, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Invalid token"}})
+		return
+	}
 
-	userID := claims["user_id"].(string)
 	accessToken, refreshToken := generateTokens(userID)
+
+	// Rotate the stored session so the previous token pair is no longer usable.
+	if _, err := models.Pool.Exec(c.Request.Context(), `
+		UPDATE sessions SET session_token = $1, refresh_token = $2, expires_at = $3
+		WHERE user_id = $4 AND refresh_token = $5
+	`, accessToken, refreshToken, time.Now().Add(7*24*time.Hour), userID, req.RefreshToken); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Could not rotate session"}})
+		return
+	}
 
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"accessToken": accessToken, "refreshToken": refreshToken}})
 }
@@ -689,13 +712,40 @@ func GetTransactionHistory(c *gin.Context) {
 }
 
 func GetNetworkFees(c *gin.Context) {
-	fees := gin.H{
-		"BTC":  gin.H{"deposit": 0, "withdraw": 0.0005, "network": "Bitcoin"},
-		"ETH":  gin.H{"deposit": 0, "withdraw": 0.005, "network": "Ethereum"},
-		"USDT": gin.H{"deposit": 1, "withdraw": 5, "network": "TRC20"},
-		"BNB":  gin.H{"deposit": 0, "withdraw": 0.5, "network": "BNB Smart Chain"},
+	rows, err := models.Pool.Query(c.Request.Context(), `
+		SELECT COALESCE(blockchain_id, ''), token_symbol, fee_amount, fee_percentage, min_fee, max_fee
+		FROM fee_configs
+		WHERE fee_type = 'withdraw' AND status = 'active'
+		ORDER BY token_symbol
+	`)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Network fees are unavailable"}})
+		return
 	}
-	c.JSON(200, gin.H{"success": true, "data": fees})
+	defer rows.Close()
+
+	fees := gin.H{}
+	for rows.Next() {
+		var blockchainID, symbol string
+		var feeAmount, feePercentage, minFee, maxFee float64
+		if err := rows.Scan(&blockchainID, &symbol, &feeAmount, &feePercentage, &minFee, &maxFee); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Network fees could not be read"}})
+			return
+		}
+		fees[symbol] = gin.H{
+			"network":      blockchainID,
+			"withdraw":     feeAmount,
+			"withdrawRate": feePercentage,
+			"minFee":       minFee,
+			"maxFee":       maxFee,
+		}
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Network fees could not be read"}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": fees})
 }
 
 // ============ SPOT TRADING ============
@@ -716,7 +766,7 @@ func PlaceSpotOrder(c *gin.Context) {
 	// Reject all orders until the durable matching engine and ledger are connected.
 	c.JSON(http.StatusServiceUnavailable, gin.H{
 		"success": false,
-		"error": gin.H{"code": 503, "message": "Spot order execution is unavailable until the durable matching engine and ledger are configured"},
+		"error":   gin.H{"code": 503, "message": "Spot order execution is unavailable until the durable matching engine and ledger are configured"},
 	})
 }
 func CancelOrder(c *gin.Context) {
@@ -865,7 +915,51 @@ func GetOrderHistory(c *gin.Context) {
 }
 
 func GetMyTrades(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+
+	rows, err := models.Pool.Query(c.Request.Context(), `
+		SELECT id, market_symbol, side, order_type, quantity, price, filled_quantity,
+		       average_price, commission, status, created_at
+		FROM spot_orders
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+		LIMIT 100
+	`, userID)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Trade history is temporarily unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	trades := []gin.H{}
+	for rows.Next() {
+		var id, symbol, side, orderType, status string
+		var quantity, filled, commission float64
+		var price, averagePrice *float64
+		var createdAt time.Time
+		if err := rows.Scan(&id, &symbol, &side, &orderType, &quantity, &price, &filled, &averagePrice, &commission, &status, &createdAt); err != nil {
+			continue
+		}
+		trades = append(trades, gin.H{
+			"id":             id,
+			"symbol":         symbol,
+			"side":           side,
+			"orderType":      orderType,
+			"quantity":       quantity,
+			"price":          price,
+			"filledQuantity": filled,
+			"averagePrice":   averagePrice,
+			"commission":     commission,
+			"status":         status,
+			"createdAt":      createdAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": trades})
 }
 
 func QuoteOrder(c *gin.Context) {
@@ -873,7 +967,7 @@ func QuoteOrder(c *gin.Context) {
 	// validate orders. Never calculate a quote from a hard-coded reference price.
 	c.JSON(http.StatusServiceUnavailable, gin.H{
 		"success": false,
-		"error": gin.H{"code": 503, "message": "Order quoting is unavailable until live market data and risk checks are configured"},
+		"error":   gin.H{"code": 503, "message": "Order quoting is unavailable until live market data and risk checks are configured"},
 	})
 }
 func GetProfile(c *gin.Context) {
@@ -1096,23 +1190,67 @@ func GetFuturesContracts(c *gin.Context) {
 func OpenFuturesPosition(c *gin.Context) {
 	c.JSON(http.StatusServiceUnavailable, gin.H{
 		"success": false,
-		"error": gin.H{"code": 503, "message": "Futures execution is unavailable until the durable matching and risk engine is configured"},
+		"error":   gin.H{"code": 503, "message": "Futures execution is unavailable until the durable matching and risk engine is configured"},
 	})
 }
 func CloseFuturesPosition(c *gin.Context) {
 	c.JSON(http.StatusServiceUnavailable, gin.H{
 		"success": false,
-		"error": gin.H{"code": 503, "message": "Futures execution is unavailable until the durable matching and risk engine is configured"},
+		"error":   gin.H{"code": 503, "message": "Futures execution is unavailable until the durable matching and risk engine is configured"},
 	})
 }
 func GetFuturesPositions(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+
+	rows, err := models.Pool.Query(c.Request.Context(), `
+		SELECT id, contract_symbol, side, size, entry_price, mark_price, margin, leverage,
+		       liq_price, unrealized_pnl, created_at
+		FROM futures_positions
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Positions are temporarily unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	positions := []gin.H{}
+	for rows.Next() {
+		var id, symbol, side string
+		var size, entryPrice, margin float64
+		var markPrice, liqPrice, unrealizedPnl *float64
+		var leverage int
+		var createdAt time.Time
+		if err := rows.Scan(&id, &symbol, &side, &size, &entryPrice, &markPrice, &margin, &leverage, &liqPrice, &unrealizedPnl, &createdAt); err != nil {
+			continue
+		}
+		positions = append(positions, gin.H{
+			"id":               id,
+			"symbol":           symbol,
+			"side":             side,
+			"size":             size,
+			"entryPrice":       entryPrice,
+			"markPrice":        markPrice,
+			"margin":           margin,
+			"leverage":         leverage,
+			"liquidationPrice": liqPrice,
+			"unrealizedPnl":    unrealizedPnl,
+			"createdAt":        createdAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": positions})
 }
 
 func QuoteFutures(c *gin.Context) {
 	c.JSON(http.StatusServiceUnavailable, gin.H{
 		"success": false,
-		"error": gin.H{"code": 503, "message": "Futures execution is unavailable until the durable matching and risk engine is configured"},
+		"error":   gin.H{"code": 503, "message": "Futures execution is unavailable until the durable matching and risk engine is configured"},
 	})
 }
 func GetMarginAccount(c *gin.Context) {
@@ -1262,23 +1400,274 @@ func CreateP2PAd(c *gin.Context) {
 }
 
 func UpdateP2PAd(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Ad updated"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+
+	adID := c.Param("id")
+	if _, err := uuid.Parse(adID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Ad not found"}})
+		return
+	}
+
+	var req struct {
+		Amount         *float64 `json:"amount"`
+		Price          *float64 `json:"price"`
+		PaymentMethods []string `json:"paymentMethods"`
+		Status         *string  `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid request body"}})
+		return
+	}
+
+	updates := []string{"updated_at = NOW()"}
+	args := []interface{}{}
+	argNum := 1
+
+	if req.Amount != nil {
+		if *req.Amount <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Amount must be positive"}})
+			return
+		}
+		updates = append(updates, fmt.Sprintf("amount = $%d", argNum))
+		args = append(args, *req.Amount)
+		argNum++
+	}
+	if req.Price != nil {
+		if *req.Price <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Price must be positive"}})
+			return
+		}
+		updates = append(updates, fmt.Sprintf("price = $%d", argNum))
+		args = append(args, *req.Price)
+		argNum++
+	}
+	if req.PaymentMethods != nil {
+		updates = append(updates, fmt.Sprintf("payment_methods = $%d", argNum))
+		args = append(args, req.PaymentMethods)
+		argNum++
+	}
+	if req.Status != nil {
+		updates = append(updates, fmt.Sprintf("status = $%d", argNum))
+		args = append(args, *req.Status)
+		argNum++
+	}
+
+	query := "UPDATE p2p_ads SET " + strings.Join(updates, ", ") +
+		fmt.Sprintf(" WHERE id = $%d AND user_id = $%d", argNum, argNum+1)
+	args = append(args, adID, userID)
+
+	tag, err := models.Pool.Exec(c.Request.Context(), query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Ad could not be updated"}})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Ad not found"}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"message": "Ad updated"}})
 }
 
 func DeleteP2PAd(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Ad deleted"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+
+	adID := c.Param("id")
+	if _, err := uuid.Parse(adID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Ad not found"}})
+		return
+	}
+
+	// Only the owner can delete their own ad, and only when no live trade
+	// references it, so a delete cannot strand a buyer mid-trade.
+	tag, err := models.Pool.Exec(c.Request.Context(), `
+		DELETE FROM p2p_ads
+		WHERE id = $1 AND user_id = $2
+		  AND NOT EXISTS (
+			SELECT 1 FROM p2p_trades t
+			WHERE t.p2p_ad_id = $1 AND t.status IN ('pending', 'disputed')
+		  )
+	`, adID, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Ad could not be deleted"}})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": gin.H{"code": 409, "message": "Ad not found, or it has an open trade and cannot be deleted"}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"message": "Ad deleted"}})
 }
 
 func CreateP2PTrade(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Trade created"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+
+	var req struct {
+		AdID   string  `json:"adId" binding:"required"`
+		Amount float64 `json:"amount" binding:"required,gt=0"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Invalid request body"}})
+		return
+	}
+	if _, err := uuid.Parse(req.AdID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Ad not found"}})
+		return
+	}
+
+	ctx := c.Request.Context()
+	tx, err := models.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Trade could not be created"}})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var adUserID, adType, cryptoCurrency string
+	var adAmount, price float64
+	err = tx.QueryRow(ctx, `
+		SELECT user_id, type, crypto_currency, amount, price
+		FROM p2p_ads
+		WHERE id = $1 AND status = 'active'
+		FOR UPDATE
+	`, req.AdID).Scan(&adUserID, &adType, &cryptoCurrency, &adAmount, &price)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Ad is not available"}})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Trade could not be created"}})
+		return
+	}
+	if adUserID == userID {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "You cannot trade against your own ad"}})
+		return
+	}
+	if req.Amount > adAmount {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": gin.H{"code": 400, "message": "Amount exceeds the ad's remaining size"}})
+		return
+	}
+	if price <= 0 {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": gin.H{"code": 409, "message": "Ad has an invalid price and cannot be traded"}})
+		return
+	}
+
+	cryptoAmount := req.Amount / price
+
+	// A "sell" ad means the creator sells crypto, so the taker is the buyer.
+	var buyerID, sellerID string
+	if adType == "sell" {
+		sellerID, buyerID = adUserID, userID
+	} else {
+		buyerID, sellerID = adUserID, userID
+	}
+
+	tradeID := uuid.New()
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO p2p_trades (id, p2p_ad_id, buyer_id, seller_id, amount, crypto_amount, status)
+		VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+	`, tradeID, req.AdID, buyerID, sellerID, req.Amount, cryptoAmount); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Trade could not be created"}})
+		return
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Trade could not be created"}})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"success": true, "data": gin.H{
+		"id":             tradeID,
+		"adId":           req.AdID,
+		"amount":         req.Amount,
+		"cryptoAmount":   cryptoAmount,
+		"cryptoCurrency": cryptoCurrency,
+		"status":         "pending",
+	}})
 }
 
 func ConfirmP2PTrade(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Trade confirmed"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+
+	tradeID := c.Param("id")
+	if _, err := uuid.Parse(tradeID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Trade not found"}})
+		return
+	}
+
+	var buyerID, sellerID string
+	err := models.Pool.QueryRow(c.Request.Context(),
+		`SELECT buyer_id, seller_id FROM p2p_trades WHERE id = $1`, tradeID).Scan(&buyerID, &sellerID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Trade not found"}})
+		return
+	}
+	if userID != buyerID && userID != sellerID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "error": gin.H{"code": 403, "message": "You are not a party to this trade"}})
+		return
+	}
+
+	// Confirming a trade releases escrow and moves crypto between the two
+	// parties' wallets. That settlement ledger is not implemented, so fail
+	// closed rather than report a confirmation that moved no funds.
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "P2P settlement ledger is not implemented; no funds were moved"}})
 }
 
 func DisputeP2PTrade(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Dispute filed"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+
+	tradeID := c.Param("id")
+	if _, err := uuid.Parse(tradeID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Trade not found"}})
+		return
+	}
+
+	var buyerID, sellerID string
+	err := models.Pool.QueryRow(c.Request.Context(),
+		`SELECT buyer_id, seller_id FROM p2p_trades WHERE id = $1`, tradeID).Scan(&buyerID, &sellerID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Trade not found"}})
+		return
+	}
+	if userID != buyerID && userID != sellerID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "error": gin.H{"code": 403, "message": "You are not a party to this trade"}})
+		return
+	}
+
+	// Filing a dispute only marks the trade for review; it moves no funds.
+	tag, err := models.Pool.Exec(c.Request.Context(),
+		`UPDATE p2p_trades SET status = 'disputed', updated_at = NOW() WHERE id = $1`, tradeID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": gin.H{"code": 500, "message": "Dispute could not be filed"}})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": gin.H{"code": 404, "message": "Trade not found"}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"message": "Dispute filed"}})
 }
 
 // ============ EARN ============
@@ -1317,11 +1706,63 @@ func GetEarnProducts(c *gin.Context) {
 }
 
 func SubscribeEarn(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Subscribed"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+	// Subscribing debits the user's balance and opens a position that accrues
+	// rewards. The earn ledger is not implemented, so fail closed instead of
+	// reporting a subscription that locked nothing.
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Earn subscription ledger is not implemented; no funds were locked"}})
 }
 
 func GetEarnPositions(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+
+	rows, err := models.Pool.Query(c.Request.Context(), `
+		SELECT ep.id, ep.product_id, ep.amount, ep.reward, ep.start_time, ep.end_time, ep.status,
+		       p.name, p.currency, p.apy
+		FROM earn_positions ep
+		LEFT JOIN earn_products p ON p.id = ep.product_id
+		WHERE ep.user_id = $1
+		ORDER BY ep.start_time DESC
+	`, userID)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Earn positions are temporarily unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	positions := []gin.H{}
+	for rows.Next() {
+		var id, productID, status string
+		var amount, reward float64
+		var startTime, endTime interface{}
+		var name, currency *string
+		var apy *float64
+		if err := rows.Scan(&id, &productID, &amount, &reward, &startTime, &endTime, &status, &name, &currency, &apy); err != nil {
+			continue
+		}
+		positions = append(positions, gin.H{
+			"id":        id,
+			"productId": productID,
+			"name":      name,
+			"currency":  currency,
+			"apy":       apy,
+			"amount":    amount,
+			"reward":    reward,
+			"startTime": startTime,
+			"endTime":   endTime,
+			"status":    status,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": positions})
 }
 
 // ============ STAKING ============
@@ -1359,33 +1800,141 @@ func GetStakingPools(c *gin.Context) {
 }
 
 func Stake(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Staked"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+	// Staking locks the user's balance in a pool. The staking ledger is not
+	// implemented, so fail closed rather than report a stake that locked nothing.
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Staking ledger is not implemented; no funds were locked"}})
 }
 
 func Unstake(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Unstaked"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+	// Unstaking returns principal plus rewards to the user's balance. The
+	// staking ledger is not implemented, so fail closed rather than report an
+	// unstake that released nothing.
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Staking ledger is not implemented; no funds were released"}})
 }
 
 func GetStakingPositions(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+
+	rows, err := models.Pool.Query(c.Request.Context(), `
+		SELECT sp.id, sp.pool_id, sp.amount, sp.reward, sp.lock_period, sp.start_time, sp.end_time, sp.status,
+		       p.name, p.currency, p.apy
+		FROM staking_positions sp
+		LEFT JOIN staking_pools p ON p.id::text = sp.pool_id
+		WHERE sp.user_id = $1
+		ORDER BY sp.start_time DESC
+	`, userID)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Staking positions are temporarily unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	positions := []gin.H{}
+	for rows.Next() {
+		var id, poolID, status string
+		var amount, reward float64
+		var lockPeriod int
+		var startTime, endTime interface{}
+		var name, currency *string
+		var apy *float64
+		if err := rows.Scan(&id, &poolID, &amount, &reward, &lockPeriod, &startTime, &endTime, &status, &name, &currency, &apy); err != nil {
+			continue
+		}
+		positions = append(positions, gin.H{
+			"id":         id,
+			"poolId":     poolID,
+			"name":       name,
+			"currency":   currency,
+			"apy":        apy,
+			"amount":     amount,
+			"reward":     reward,
+			"lockPeriod": lockPeriod,
+			"startTime":  startTime,
+			"endTime":    endTime,
+			"status":     status,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": positions})
 }
 
 // ============ LAUNCHPAD ============
 
 func GetLaunchpadProjects(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": []gin.H{
-		{"id": "1", "name": "Sample Project", "symbol": "SAMPLE", "status": "upcoming", "hardCap": 1000000},
-	}})
+	rows, err := models.Pool.Query(c.Request.Context(), `
+		SELECT id, name, symbol, description, total_raise, token_price, start_time, end_time, status
+		FROM launchpad_projects
+		ORDER BY start_time DESC NULLS LAST, created_at DESC
+	`)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Launchpad projects are temporarily unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	projects := []gin.H{}
+	for rows.Next() {
+		var id, name, symbol, status string
+		var description *string
+		var totalRaise, tokenPrice *float64
+		var startTime, endTime interface{}
+		if err := rows.Scan(&id, &name, &symbol, &description, &totalRaise, &tokenPrice, &startTime, &endTime, &status); err != nil {
+			continue
+		}
+		projects = append(projects, gin.H{
+			"id":          id,
+			"name":        name,
+			"symbol":      symbol,
+			"description": description,
+			"totalRaise":  totalRaise,
+			"tokenPrice":  tokenPrice,
+			"startTime":   startTime,
+			"endTime":     endTime,
+			"status":      status,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": projects})
 }
 
 func SubscribeLaunchpad(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Subscribed"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+	// Subscribing to a launchpad commits the user's balance to an allocation.
+	// The allocation ledger is not implemented, so fail closed rather than
+	// report a subscription that committed nothing.
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Launchpad allocation ledger is not implemented; no funds were committed"}})
 }
 
 // ============ CONVERT & TRANSFER ============
 
 func Convert(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Converted"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+	// A convert swaps one asset for another at a quoted rate. The quote and
+	// swap ledger are not implemented, so fail closed rather than report a
+	// conversion that exchanged nothing.
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Convert quote and settlement ledger are not implemented; no assets were exchanged"}})
 }
 
 func InternalTransfer(c *gin.Context) {
@@ -1398,19 +1947,111 @@ func InternalTransfer(c *gin.Context) {
 }
 
 func GetCoupons(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+
+	rows, err := models.Pool.Query(c.Request.Context(), `
+		SELECT id, amount, currency, code, status, expires_at, used_at, created_at
+		FROM rewards
+		WHERE user_id = $1 AND type = 'coupon'
+		ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Coupons are temporarily unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	coupons := []gin.H{}
+	for rows.Next() {
+		var id, currency, status string
+		var amount float64
+		var code *string
+		var expiresAt, usedAt, createdAt interface{}
+		if err := rows.Scan(&id, &amount, &currency, &code, &status, &expiresAt, &usedAt, &createdAt); err != nil {
+			continue
+		}
+		coupons = append(coupons, gin.H{
+			"id":        id,
+			"amount":    amount,
+			"currency":  currency,
+			"code":      code,
+			"status":    status,
+			"expiresAt": expiresAt,
+			"usedAt":    usedAt,
+			"createdAt": createdAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": coupons})
 }
 
 func ClaimCoupon(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"message": "Coupon claimed"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+	// Claiming a coupon credits the user's balance. The reward ledger is not
+	// implemented, so fail closed rather than report a claim that credited nothing.
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Reward credit ledger is not implemented; no funds were credited"}})
 }
 
 func GetRedPackets(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": []gin.H{}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+
+	rows, err := models.Pool.Query(c.Request.Context(), `
+		SELECT id, amount, currency, code, status, expires_at, used_at, created_at
+		FROM rewards
+		WHERE user_id = $1 AND type = 'red_packet'
+		ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": gin.H{"code": 503, "message": "Red packets are temporarily unavailable"}})
+		return
+	}
+	defer rows.Close()
+
+	packets := []gin.H{}
+	for rows.Next() {
+		var id, currency, status string
+		var amount float64
+		var code *string
+		var expiresAt, usedAt, createdAt interface{}
+		if err := rows.Scan(&id, &amount, &currency, &code, &status, &expiresAt, &usedAt, &createdAt); err != nil {
+			continue
+		}
+		packets = append(packets, gin.H{
+			"id":        id,
+			"amount":    amount,
+			"currency":  currency,
+			"code":      code,
+			"status":    status,
+			"expiresAt": expiresAt,
+			"usedAt":    usedAt,
+			"createdAt": createdAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": packets})
 }
 
 func OpenRedPacket(c *gin.Context) {
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"amount": 10, "currency": "USDT"}})
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": gin.H{"code": 401, "message": "Unauthorized"}})
+		return
+	}
+	// Opening a red packet credits the user's balance. The reward ledger is not
+	// implemented, so fail closed rather than return a fabricated amount.
+	c.JSON(http.StatusNotImplemented, gin.H{"success": false, "error": gin.H{"code": 501, "message": "Red packet reward ledger is not implemented; no funds were credited"}})
 }
 
 // ============ WEBSOCKET ============
