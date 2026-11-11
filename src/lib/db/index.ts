@@ -343,6 +343,42 @@ function initializeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_deposit_networks_asset ON deposit_networks(asset);
 
+    -- Blockchain registry. Which chains the exchange serves is operator
+    -- configuration, not a compiled-in list: a chain row carries the node URL
+    -- the balance reader dials and the chain id that node must report, so a
+    -- fresh deployment serves nothing until an administrator lists a chain.
+    CREATE TABLE IF NOT EXISTS blockchain_chains (
+      chain_key TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      chain_type TEXT NOT NULL DEFAULT 'evm',
+      chain_id INTEGER NOT NULL,
+      native_symbol TEXT NOT NULL,
+      native_decimals INTEGER NOT NULL DEFAULT 18,
+      rpc_url TEXT NOT NULL,
+      explorer_url TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Tokens listed on a chain. A non-native EVM token needs its contract
+    -- address and decimals to be readable; a token cannot be listed on a chain
+    -- that is not listed itself.
+    CREATE TABLE IF NOT EXISTS blockchain_tokens (
+      token_id TEXT PRIMARY KEY,
+      chain_key TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      name TEXT NOT NULL,
+      contract_address TEXT,
+      decimals INTEGER NOT NULL DEFAULT 18,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(chain_key, symbol),
+      FOREIGN KEY (chain_key) REFERENCES blockchain_chains(chain_key) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_blockchain_tokens_chain ON blockchain_tokens(chain_key, symbol);
+
     -- KYC documents
     CREATE TABLE IF NOT EXISTS kyc_documents (
       document_id TEXT PRIMARY KEY,

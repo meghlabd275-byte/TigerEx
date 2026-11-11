@@ -14,6 +14,7 @@
  */
 
 import { createHash } from 'crypto';
+import { EVM_CHAIN_NETWORKS } from '@/lib/chains/chain-networks';
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const BASE58_INDEX = new Map<string, number>(
@@ -309,12 +310,9 @@ export function toChecksumAddress(address: string): string | null {
 // Per-network validation
 // ---------------------------------------------------------------------------
 
-const EVM_NETWORKS = new Set([
-  'ERC20', 'ETH', 'ETHEREUM', 'BEP20', 'BSC', 'BNB', 'POLYGON', 'MATIC', 'AVALANCHE',
-  'AVAXC', 'ARBITRUM', 'OPTIMISM', 'BASE', 'LINEA', 'SCROLL', 'ZKSYNC', 'MANTLE',
-  'BLAST', 'CELO', 'FTM', 'FANTOM', 'GNOSIS', 'KAVA', 'AURORA', 'CRONOS', 'OKC',
-  'HECO', 'EVM',
-]);
+// EVM-style address handling is shared with the chain registry so a network
+// added for on-chain reads is validated the same way here.
+const EVM_NETWORKS = EVM_CHAIN_NETWORKS;
 
 const BITCOIN_LIKE: Record<string, { p2pkh: number[]; p2sh: number[]; hrp: string[] }> = {
   BTC: { p2pkh: [0x00], p2sh: [0x05], hrp: ['bc'] },

@@ -122,6 +122,12 @@ const MODULES = [
   'src/lib/dex/options-service.ts',
   'src/lib/dex/liquidity-analytics.ts',
   'src/lib/dex/liquidity-analytics-service.ts',
+  'src/lib/chains/chain-networks.ts',
+  'src/lib/chains/evm-rpc.ts',
+  'src/lib/chains/registry.ts',
+  'src/lib/chains/onchain.ts',
+  'src/lib/chains/tigersmartchain.ts',
+  'src/lib/chains/bootstrap.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });

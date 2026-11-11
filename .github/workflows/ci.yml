@@ -87,6 +87,10 @@ jobs:
         working-directory: TigerEx/services
         run: go vet ./... && go test ./...
 
+      - name: Test unified integration layer (fail-closed)
+        working-directory: integrations
+        run: go vet ./... && go test ./...
+
       - name: Test auth service
         working-directory: TigerEx/auth_service
         run: go vet ./... && go test ./...

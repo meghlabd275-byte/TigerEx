@@ -14,6 +14,7 @@
 
 import { createHmac, pbkdf2Sync } from 'crypto';
 import { keccak256Hex, toChecksumAddress } from '@/lib/wallet/address';
+import { isEvmChainNetwork } from '@/lib/chains/chain-networks';
 
 // secp256k1 domain parameters.
 const P = 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2fn;
@@ -185,14 +186,7 @@ export function deriveEvmAddress(mnemonic: string, index: number): string {
   return addressForPrivateKey(privateKey);
 }
 
-const EVM_NETWORKS = new Set([
-  'ERC20', 'ETH', 'ETHEREUM', 'BEP20', 'BSC', 'BNB', 'POLYGON', 'MATIC', 'AVALANCHE',
-  'AVAXC', 'ARBITRUM', 'OPTIMISM', 'BASE', 'LINEA', 'SCROLL', 'ZKSYNC', 'MANTLE',
-  'BLAST', 'CELO', 'FTM', 'FANTOM', 'GNOSIS', 'KAVA', 'AURORA', 'CRONOS', 'OKC',
-  'HECO', 'EVM',
-]);
-
 /** Whether a network uses EVM-style addresses, which this module can derive. */
 export function isEvmNetwork(network: string): boolean {
-  return EVM_NETWORKS.has(String(network ?? '').trim().toUpperCase());
+  return isEvmChainNetwork(network);
 }

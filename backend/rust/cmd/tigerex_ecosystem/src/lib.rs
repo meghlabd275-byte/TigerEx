@@ -173,38 +173,52 @@ impl Token {
             coingecko_id: None,
         }
     }
+
+    /// Record the token's on-chain total supply. A negative or non-finite value
+    /// is refused, leaving the supply at its previous (initially zero) value
+    /// rather than storing a number no chain could report.
+    pub fn with_supply(mut self, total_supply: f64) -> Self {
+        if total_supply.is_finite() && total_supply >= 0.0 {
+            self.total_supply = total_supply.to_string();
+        }
+        self
+    }
 }
 
 // ============================================================================
 // TIGER ECOSYSTEM NATIVE TOKENS
 // ============================================================================
 
+/// The Tiger ecosystem's own tokens.
+///
+/// The chain ids and symbols are fixed by the chain itself, but the contract
+/// addresses are not known to the library: they are deployment configuration.
+/// `new` therefore takes them as arguments rather than embedding a placeholder
+/// such as `0xTGR`, which would make the wallet read a contract that does not
+/// exist and report a zero balance.
 pub struct TigerTokens {
     pub tgr: Token,
     pub rusd: Token,
 }
 
 impl TigerTokens {
-    pub fn new() -> Self {
-        // TGR - Tiger Coin (native token)
-        let tgr = Token::new_erc20(
-            "tgr",
-            "TGR",
-            "Tiger Coin",
-            "0x...TGR_ADDRESS...",
-            "tigersmartchain",
-            18,
-        );
-
-        // RUSD - Royal Tiger United States Dollar (stablecoin)
+    /// The TGR and RUSD tokens on TigerSmartChain, from their real addresses.
+    ///
+    /// `tgr_address` is the wrapped/native-bridged TGR contract and
+    /// `rusd_address` the RUSD stablecoin contract; both must be real 20-byte
+    /// addresses on the chain the caller names.
+    pub fn new(chain: &str, tgr_address: &str, rusd_address: &str, tgr_total_supply: f64, rusd_total_supply: f64) -> Self {
+        let tgr = Token::new_erc20("tgr", "TGR", "Tiger Coin", tgr_address, chain, 18)
+            .with_supply(tgr_total_supply);
         let rusd = Token::new_erc20(
             "rusd",
             "RUSD",
             "Royal Tiger United States Dollar",
-            "0x...RUSD_ADDRESS...",
-            "tigersmartchain",
+            rusd_address,
+            chain,
             18,
-        );
+        )
+        .with_supply(rusd_total_supply);
 
         Self { tgr, rusd }
     }
@@ -389,6 +403,9 @@ impl FeeCollection {
     }
 
     pub fn add(&mut self, source: FeeSource, amount: f64) {
+        if !amount.is_finite() || amount <= 0.0 {
+            return;
+        }
         match source {
             FeeSource::Exchange => self.exchange_fees += amount,
             FeeSource::DexSwap => self.dex_swap_fees += amount,
@@ -397,6 +414,17 @@ impl FeeCollection {
             FeeSource::Staking => self.staking_fees += amount,
         }
         self.total_fees += amount;
+    }
+
+    /// The fee booked against one source, which is what the split reports.
+    pub fn for_source(&self, source: FeeSource) -> f64 {
+        match source {
+            FeeSource::Exchange => self.exchange_fees,
+            FeeSource::DexSwap => self.dex_swap_fees,
+            FeeSource::Bridge => self.bridge_fees,
+            FeeSource::Wallet => self.wallet_fees,
+            FeeSource::Staking => self.staking_fees,
+        }
     }
 }
 
@@ -427,7 +455,7 @@ pub struct TigerEcosystem {
 
     // Statistics
     total_volume_24h: RwLock<f64>,
-    total_fees_collected: RwLock<f64>,
+    fees_collected: RwLock<FeeCollection>,
     pool_count: RwLock<usize>,
     active_chain_count: RwLock<usize>,
     active_token_count: RwLock<usize>,
@@ -452,6 +480,62 @@ pub struct EcosystemSettings {
     pub enable_farms: bool,
 }
 
+/// One chain a deployment operates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainConfig {
+    pub key: String,
+    pub name: String,
+    pub chain_id: u64,
+    pub rpc_url: String,
+    pub explorer_url: String,
+    pub native_symbol: String,
+    pub native_decimals: u8,
+}
+
+/// One token a deployment lists, with its real contract address and reference
+/// price. A token without a positive reference price cannot be swapped (fee
+/// accounting is denominated in USD), so `price_usd` is required.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenConfig {
+    pub symbol: String,
+    pub name: String,
+    pub address: String,
+    pub chain: String,
+    pub decimals: u8,
+    pub standard: TokenStandard,
+    pub total_supply: f64,
+    pub price_usd: f64,
+}
+
+/// One DEX pool a deployment seeds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolConfig {
+    pub token_a: String,
+    pub token_b: String,
+    pub fee_rate: f64,
+}
+
+/// One bridge a deployment operates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeConfig {
+    pub key: String,
+    pub name: String,
+    pub source_chain: String,
+    pub target_chain: String,
+    pub contract_address: String,
+}
+
+/// Everything a deployment operates, supplied by the caller.
+///
+/// There is deliberately no `Default`: a default would be a fabricated dataset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeploymentConfig {
+    pub chains: Vec<ChainConfig>,
+    pub tokens: Vec<TokenConfig>,
+    pub pools: Vec<PoolConfig>,
+    pub bridges: Vec<BridgeConfig>,
+}
+
 impl Default for EcosystemSettings {
     fn default() -> Self {
         Self {
@@ -468,15 +552,18 @@ impl Default for EcosystemSettings {
     }
 }
 
-/// USD value seeded on each side of a genesis DEX pool so the constant-product
-/// AMM can quote a real price from the first trade.
-const GENESIS_POOL_NOTIONAL_USD: f64 = 1_000_000.0;
-
 impl TigerEcosystem {
+    /// An empty ecosystem.
+    ///
+    /// Nothing is seeded: chains, tokens, pools, farms and bridges are all
+    /// operator configuration added through the `add_*`/`create_*` methods (or
+    /// the registry that fronts them). A default dataset would mean the process
+    /// advertised endpoints, contract addresses and prices it had invented,
+    /// which is exactly what a live exchange must never do.
     pub fn new() -> Self {
         let (event_tx, _) = broadcast::channel(1000);
 
-        let mut ecosystem = Self {
+        Self {
             blockchains: RwLock::new(HashMap::new()),
             tokens: RwLock::new(HashMap::new()),
             bridges: RwLock::new(HashMap::new()),
@@ -487,94 +574,63 @@ impl TigerEcosystem {
             hd_seed: RwLock::new(None),
             hd_phrase: RwLock::new(None),
             total_volume_24h: RwLock::new(0.0),
-            total_fees_collected: RwLock::new(0.0),
+            fees_collected: RwLock::new(FeeCollection::new()),
             pool_count: RwLock::new(0),
             active_chain_count: RwLock::new(0),
             active_token_count: RwLock::new(0),
             event_tx,
             settings: EcosystemSettings::default(),
-        };
-
-        // Initialize with default chains, tokens, pools
-        ecosystem.initialize_default_data();
-
-        ecosystem
+        }
     }
 
-    fn initialize_default_data(&mut self) {
-        // Add EVM Blockchains
-        self.add_evm_chain("tigersmartchain", "TigerSmartChain", 0x1234, "https://rpc.tigersmartchain.com", "https://explorer.tigersmartchain.com", "TGR", 18);
-        self.add_evm_chain("ethereum", "Ethereum", 1, "https://eth.llamarpc.com", "https://etherscan.io", "ETH", 18);
-        self.add_evm_chain("polygon", "Polygon", 137, "https://polygon-rpc.com", "https://polygonscan.com", "MATIC", 18);
-        self.add_evm_chain("bsc", "BSC", 56, "https://bsc-dataseed1.binance.org", "https://bscscan.com", "BNB", 18);
-        self.add_evm_chain("avalanche", "Avalanche", 43114, "https://api.avax.network/ext/bc/C/rp", "https://snowtrace.io", "AVAX", 18);
-        self.add_evm_chain("arbitrum", "Arbitrum", 42161, "https://arb1.arbitrum.io/rpc", "https://arbiscan.io", "ETH", 18);
-        self.add_evm_chain("optimism", "Optimism", 10, "https://mainnet.optimism.io", "https://optimistic.etherscan.io", "ETH", 18);
-        self.add_evm_chain("base", "Base", 8453, "https://mainnet.base.org", "https://basescan.org", "ETH", 18);
+    /// The deployment settings this ecosystem runs with.
+    pub fn settings(&self) -> EcosystemSettings {
+        self.settings.clone()
+    }
 
-        // Add Non-EVM Blockchains
-        self.add_nonevm_chain("solana", "Solana", ChainType::Solana, "https://api.mainnet-beta.solana.com", "https://solscan.io", "SOL", 9);
-        self.add_nonevm_chain("aptos", "Aptos", ChainType::Aptos, "https://fullnode.mainnet.aptoslabs.com", "https://explorer.aptoslabs.com", "APT", 8);
-        self.add_nonevm_chain("sui", "Sui", ChainType::Sui, "https://fullnode.mainnet.sui.io", "https://suiscan.io", "SUI", 9);
-        self.add_nonevm_chain("near", "NEAR", ChainType::Near, "https://rpc.mainnet.near.org", "https://explorer.near.org", "NEAR", 24);
-        self.add_nonevm_chain("cosmos", "Cosmos", ChainType::Cosmos, "https://rpc.cosmos.network", "https://mintscan.io", "ATOM", 6);
-
-        // Add Tiger Ecosystem Tokens
-        self.add_token("TGR", "Tiger Coin", "0xTGR", "tigersmartchain", 18, TokenStandard::ERC20, 1000000000.0, 0.5);
-        self.add_token("RUSD", "Royal Tiger USD", "0xRUSD", "tigersmartchain", 18, TokenStandard::ERC20, 1000000000.0, 1.0);
-
-        // Add popular tokens
-        self.add_token("ETH", "Ethereum", "0xETH", "ethereum", 18, TokenStandard::ERC20, 0.0, 3500.0);
-        self.add_token("USDT", "Tether USD", "0xUSDT", "ethereum", 18, TokenStandard::ERC20, 0.0, 1.0);
-        self.add_token("USDC", "USD Coin", "0xUSDC", "ethereum", 18, TokenStandard::ERC20, 0.0, 1.0);
-        self.add_token("BNB", "BNB", "0xBNB", "bsc", 18, TokenStandard::ERC20, 0.0, 600.0);
-        self.add_token("SOL", "Solana", "SOL", "solana", 9, TokenStandard::SPL, 0.0, 150.0);
-        self.add_token("MATIC", "Polygon", "0xMATIC", "polygon", 18, TokenStandard::ERC20, 0.0, 0.8);
-        self.add_token("AVAX", "Avalanche", "0xAVAX", "avalanche", 18, TokenStandard::ERC20, 0.0, 35.0);
-        self.add_token("ARB", "Arbitrum", "0xARB", "arbitrum", 18, TokenStandard::ERC20, 0.0, 1.2);
-        self.add_token("OP", "Optimism", "0xOP", "optimism", 18, TokenStandard::ERC20, 0.0, 2.5);
-
-        // Add more top tokens (continuing list...)
-        self.add_token("LINK", "Chainlink", "0xLINK", "ethereum", 18, TokenStandard::ERC20, 0.0, 15.0);
-        self.add_token("UNI", "Uniswap", "0xUNI", "ethereum", 18, TokenStandard::ERC20, 0.0, 10.0);
-        self.add_token("AAVE", "Aave", "0xAAVE", "ethereum", 18, TokenStandard::ERC20, 0.0, 250.0);
-        self.add_token("WBTC", "Wrapped Bitcoin", "0xWBTC", "ethereum", 18, TokenStandard::ERC20, 0.0, 65000.0);
-        self.add_token("DAI", "Dai", "0xDAI", "ethereum", 18, TokenStandard::ERC20, 0.0, 1.0);
-
-        // Add DEX Pools (Tigerswap style)
-        self.create_pool("TGR", "USDT", 0.003);
-        self.create_pool("TGR", "RUSD", 0.003);
-        self.create_pool("RUSD", "USDT", 0.001);
-        self.create_pool("ETH", "USDT", 0.003);
-        self.create_pool("BNB", "USDT", 0.003);
-        self.create_pool("SOL", "USDT", 0.003);
-
-        // Bootstrap each pool with a two-sided position so the constant-product
-        // AMM starts at the token reference price instead of an empty book.
-        // These are genesis values for a fresh deployment; production liquidity
-        // is supplied by market makers through `add_liquidity`.
-        for (a, b) in [
-            ("TGR", "USDT"),
-            ("TGR", "RUSD"),
-            ("RUSD", "USDT"),
-            ("ETH", "USDT"),
-            ("BNB", "USDT"),
-            ("SOL", "USDT"),
-        ] {
-            self.bootstrap_pool(a, b, GENESIS_POOL_NOTIONAL_USD);
+    /// Register the chains, tokens, pools and bridges a deployment operates.
+    ///
+    /// This is the seed point a caller drives from its own configuration: it
+    /// takes each entry's real values (node URL, chain id, contract address,
+    /// reference price) rather than a compiled-in list. It exists so a caller
+    /// can build a populated ecosystem in one call, and it never invents an
+    /// entry — every value comes from the argument.
+    pub fn register_deployment(&mut self, deployment: &DeploymentConfig) {
+        for chain in &deployment.chains {
+            self.add_evm_chain(
+                &chain.key,
+                &chain.name,
+                chain.chain_id,
+                &chain.rpc_url,
+                &chain.explorer_url,
+                &chain.native_symbol,
+                chain.native_decimals,
+            );
         }
-
-        // Add Farms
-        self.create_farm("TGR_USDT", "TGR", 25.0, 365);
-        self.create_farm("TGR_RUSD", "TGR", 25.0, 365);
-        self.create_farm("ETH_USDT", "TGR", 15.0, 180);
-
-        // Add Bridges
-        self.add_bridge("tgr_eth", "Tiger-Ethereum Bridge", "tigersmartchain", "ethereum", "0xBRIDGE_ETH");
-        self.add_bridge("tgr_bsc", "Tiger-BSC Bridge", "tigersmartchain", "bsc", "0xBRIDGE_BSC");
-        self.add_bridge("eth_bsc", "Ethereum-BSC Bridge", "ethereum", "bsc", "0xETH_BSC");
-
-        info!("Tiger Ecosystem initialized with default data");
+        for token in &deployment.tokens {
+            self.add_token(
+                &token.symbol,
+                &token.name,
+                &token.address,
+                &token.chain,
+                token.decimals,
+                token.standard,
+                token.total_supply,
+                token.price_usd,
+            );
+        }
+        for pool in &deployment.pools {
+            self.create_pool(&pool.token_a, &pool.token_b, pool.fee_rate);
+        }
+        for bridge in &deployment.bridges {
+            self.add_bridge(
+                &bridge.key,
+                &bridge.name,
+                &bridge.source_chain,
+                &bridge.target_chain,
+                &bridge.contract_address,
+            );
+        }
     }
 
     // ============================================================================
@@ -1054,7 +1110,7 @@ impl TigerEcosystem {
 
         // Advance the pool reserves so subsequent swaps see the post-trade state.
         // The constant-product invariant is preserved by construction.
-        *self.total_fees_collected.write().unwrap() += fee * from_price;
+        self.add_fee(FeeSource::DexSwap, fee * from_price);
         {
             let mut pools = self.dex_pools.write().unwrap();
             let stored = if pools.contains_key(&pool_key) {
@@ -1148,7 +1204,7 @@ impl TigerEcosystem {
         }
 
         // Update fees
-        *self.total_fees_collected.write().unwrap() += fee;
+        self.add_fee(FeeSource::Bridge, fee);
 
         Ok(BridgeResult {
             from_chain: from_chain.to_string(),
@@ -1236,25 +1292,18 @@ impl TigerEcosystem {
     // ============================================================================
 
     pub fn collect_fees(&self) -> FeeCollection {
-        let total = self.total_fees_collected.read().unwrap();
-
-        FeeCollection {
-            exchange_fees: 0.0,
-            dex_swap_fees: *self.total_fees_collected.read().unwrap() * 0.3,
-            bridge_fees: *self.total_fees_collected.read().unwrap() * 0.1,
-            wallet_fees: 0.0,
-            staking_fees: 0.0,
-            total_fees: *total,
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as u64,
-        }
+        let mut snapshot = self.fees_collected.read().unwrap().clone();
+        snapshot.timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u64;
+        snapshot
     }
 
+    /// Record a fee against its source. The split reports exactly what was
+    /// recorded here; it is never estimated from a total.
     pub fn add_fee(&self, source: FeeSource, amount: f64) {
-        let mut total = self.total_fees_collected.write().unwrap();
-        *total += amount;
+        self.fees_collected.write().unwrap().add(source, amount);
     }
 
     // ============================================================================
@@ -1264,7 +1313,7 @@ impl TigerEcosystem {
     pub fn get_statistics(&self) -> EcosystemStatistics {
         EcosystemStatistics {
             total_volume_24h: *self.total_volume_24h.read().unwrap(),
-            total_fees_collected: *self.total_fees_collected.read().unwrap(),
+            total_fees_collected: self.fees_collected.read().unwrap().total_fees,
             pool_count: *self.pool_count.read().unwrap(),
             active_chain_count: *self.active_chain_count.read().unwrap(),
             active_token_count: *self.active_token_count.read().unwrap(),
@@ -1413,30 +1462,114 @@ fn bridge_reference(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_ecosystem_creation() {
-        let ecosystem = create_tiger_ecosystem();
-        let stats = ecosystem.get_statistics();
+    /// A test deployment. The addresses are documentation constants used only
+    /// by these tests; the library itself never embeds an address.
+    fn fixture() -> TigerEcosystem {
+        let mut ecosystem = TigerEcosystem::new();
+        ecosystem.register_deployment(&DeploymentConfig {
+            chains: vec![
+                ChainConfig {
+                    key: "tigersmartchain".into(),
+                    name: "TigerSmartChain".into(),
+                    chain_id: 6666,
+                    rpc_url: "https://rpc.test.invalid".into(),
+                    explorer_url: "https://scan.test.invalid".into(),
+                    native_symbol: "TGR".into(),
+                    native_decimals: 18,
+                },
+                ChainConfig {
+                    key: "ethereum".into(),
+                    name: "Ethereum".into(),
+                    chain_id: 1,
+                    rpc_url: "https://eth.test.invalid".into(),
+                    explorer_url: "https://etherscan.test.invalid".into(),
+                    native_symbol: "ETH".into(),
+                    native_decimals: 18,
+                },
+            ],
+            tokens: vec![
+                TokenConfig {
+                    symbol: "TGR".into(),
+                    name: "Tiger Coin".into(),
+                    address: "0x1111111111111111111111111111111111111111".into(),
+                    chain: "tigersmartchain".into(),
+                    decimals: 18,
+                    standard: TokenStandard::ERC20,
+                    total_supply: 1_000_000_000.0,
+                    price_usd: 0.5,
+                },
+                TokenConfig {
+                    symbol: "RUSD".into(),
+                    name: "Royal Tiger USD".into(),
+                    address: "0x2222222222222222222222222222222222222222".into(),
+                    chain: "tigersmartchain".into(),
+                    decimals: 18,
+                    standard: TokenStandard::ERC20,
+                    total_supply: 1_000_000_000.0,
+                    price_usd: 1.0,
+                },
+                TokenConfig {
+                    symbol: "USDT".into(),
+                    name: "Tether USD".into(),
+                    address: "0x3333333333333333333333333333333333333333".into(),
+                    chain: "ethereum".into(),
+                    decimals: 18,
+                    standard: TokenStandard::ERC20,
+                    total_supply: 0.0,
+                    price_usd: 1.0,
+                },
+            ],
+            pools: vec![
+                PoolConfig { token_a: "TGR".into(), token_b: "USDT".into(), fee_rate: 0.003 },
+                PoolConfig { token_a: "RUSD".into(), token_b: "USDT".into(), fee_rate: 0.001 },
+            ],
+            bridges: vec![BridgeConfig {
+                key: "tgr_eth".into(),
+                name: "Tiger-Ethereum Bridge".into(),
+                source_chain: "tigersmartchain".into(),
+                target_chain: "ethereum".into(),
+                contract_address: "0x4444444444444444444444444444444444444444".into(),
+            }],
+        });
+        ecosystem
+    }
 
-        assert!(stats.active_chain_count > 0);
-        assert!(stats.active_token_count > 0);
+    /// A new ecosystem advertises nothing: no chains, tokens, pools or farms.
+    #[test]
+    fn a_new_ecosystem_is_empty() {
+        let ecosystem = TigerEcosystem::new();
+        let stats = ecosystem.get_statistics();
+        assert_eq!(stats.active_chain_count, 0);
+        assert_eq!(stats.active_token_count, 0);
+        assert_eq!(stats.active_pool_count, 0);
+        assert_eq!(stats.active_farm_count, 0);
+        assert_eq!(stats.total_fees_collected, 0.0);
+        assert!(ecosystem.get_all_chains().is_empty());
+        assert!(ecosystem.get_all_tokens().is_empty());
     }
 
     #[test]
-    fn test_swap() {
-        let ecosystem = create_tiger_ecosystem();
-        let result = ecosystem.swap("ETH", "USDT", 1.0, 0.5);
+    fn register_deployment_populates_from_caller_config() {
+        let ecosystem = fixture();
+        let stats = ecosystem.get_statistics();
+        assert_eq!(stats.active_chain_count, 2);
+        assert_eq!(stats.active_token_count, 3);
+        assert_eq!(stats.active_pool_count, 2);
 
-        assert!(result.is_ok());
+        // The token carries the caller's address and price, not an invented one.
+        let tgr = ecosystem.get_token("TGR").expect("TGR listed");
+        assert_eq!(tgr.address, "0x1111111111111111111111111111111111111111");
+        assert_eq!(tgr.price_usd, 0.5);
+        assert_eq!(tgr.total_supply, "1000000000");
     }
 
     /// A swap whose input token has no reference price is rejected rather than
     /// booked at a made-up one dollar.
     #[test]
     fn swap_rejects_unpriced_token() {
-        let mut ecosystem = create_tiger_ecosystem();
+        let mut ecosystem = fixture();
         // A listed token with no price feed yet, and a pool it can trade in.
-        ecosystem.add_token("NOPRICE", "No Price Token", "0xNOPRICE", "ethereum", 18, TokenStandard::ERC20, 1.0, 0.0);
+        ecosystem.add_token("NOPRICE", "No Price Token", "0x5555555555555555555555555555555555555555", "ethereum", 18, TokenStandard::ERC20, 1.0, 0.0);
         ecosystem.create_pool("NOPRICE", "USDT", 0.003);
         // Give the pool reserves directly: bootstrap_pool refuses to seed from a
         // token that has no price, which is the behaviour under test.
@@ -1448,7 +1581,7 @@ mod tests {
 
     #[test]
     fn test_chain_search() {
-        let ecosystem = create_tiger_ecosystem();
+        let ecosystem = fixture();
         let chains = ecosystem.search_chains("eth");
 
         assert!(!chains.is_empty());
@@ -1456,7 +1589,7 @@ mod tests {
 
     #[test]
     fn test_token_search() {
-        let ecosystem = create_tiger_ecosystem();
+        let ecosystem = fixture();
         let tokens = ecosystem.search_tokens("tiger");
 
         assert!(!tokens.is_empty());
@@ -1464,7 +1597,7 @@ mod tests {
 
     #[test]
     fn wallet_creation_requires_seed_and_derives_real_address() {
-        let mut ecosystem = TigerEcosystem::new();
+        let mut ecosystem = fixture();
         // Without a seed, wallet creation must fail closed.
         assert!(ecosystem.create_wallet("ethereum").is_err());
 
@@ -1486,21 +1619,16 @@ mod tests {
 
     #[test]
     fn swap_uses_constant_product_and_moves_price() {
-        let ecosystem = create_tiger_ecosystem();
-        let pools = ecosystem.dex_pools.read().unwrap();
-        let (key, pool) = pools
-            .iter()
-            .find(|(_, p)| p.liquidity_a > 0.0 && p.liquidity_b > 0.0)
-            .map(|(k, p)| (k.clone(), p.clone()))
-            .expect("expected a seeded pool with liquidity");
-        drop(pools);
+        let mut ecosystem = fixture();
+        ecosystem.add_liquidity("TGR_USDT", 1_000_000.0, 500_000.0);
 
+        let pool = ecosystem.get_pool("TGR_USDT").expect("pool exists");
         let reserve_in = pool.liquidity_a;
         let reserve_out = pool.liquidity_b;
         let amount = reserve_in / 1000.0;
 
         let result = ecosystem
-            .swap(&pool.token_a, &pool.token_b, amount, 5.0)
+            .swap("TGR", "USDT", amount, 5.0)
             .expect("swap should succeed");
 
         // x*y=k: output must match the constant-product formula exactly.
@@ -1511,27 +1639,49 @@ mod tests {
         assert!(result.price_impact > 0.0);
 
         // Reserves advanced: token_in up, token_out down.
-        let after = ecosystem.dex_pools.read().unwrap().get(&key).cloned().unwrap();
+        let after = ecosystem.get_pool("TGR_USDT").unwrap();
         assert!(after.liquidity_a > pool.liquidity_a);
         assert!(after.liquidity_b < pool.liquidity_b);
+
+        // The swap fee is booked to the DEX bucket, and the split sums to it.
+        let fees = ecosystem.collect_fees();
+        assert!(fees.dex_swap_fees > 0.0);
+        assert!((fees.total_fees - fees.dex_swap_fees).abs() < 1e-9);
     }
 
     #[test]
     fn swap_rejects_empty_pool_and_bad_amounts() {
-        let ecosystem = create_tiger_ecosystem();
+        let mut ecosystem = fixture();
         assert!(ecosystem.swap("NOPE", "ALSO", 10.0, 1.0).is_err());
-        let pools = ecosystem.dex_pools.read().unwrap();
-        if let Some((_, pool)) = pools.iter().find(|(_, p)| p.liquidity_a > 0.0) {
-            let (a, b) = (pool.token_a.clone(), pool.token_b.clone());
-            drop(pools);
-            assert!(ecosystem.swap(&a, &b, 0.0, 1.0).is_err());
-            assert!(ecosystem.swap(&a, &b, -5.0, 1.0).is_err());
-        }
+        // An empty pool cannot quote.
+        assert!(ecosystem.swap("TGR", "USDT", 1.0, 1.0).is_err());
+        ecosystem.add_liquidity("TGR_USDT", 100_000.0, 50_000.0);
+        assert!(ecosystem.swap("TGR", "USDT", 0.0, 1.0).is_err());
+        assert!(ecosystem.swap("TGR", "USDT", -5.0, 1.0).is_err());
+    }
+
+    /// The fee split reports exactly what was recorded against each source, and
+    /// refuses a non-positive amount.
+    #[test]
+    fn fee_split_reports_recorded_fees_only() {
+        let ecosystem = TigerEcosystem::new();
+        ecosystem.add_fee(FeeSource::DexSwap, 30.0);
+        ecosystem.add_fee(FeeSource::Bridge, 10.0);
+        ecosystem.add_fee(FeeSource::Exchange, 5.0);
+        ecosystem.add_fee(FeeSource::DexSwap, -1.0);
+
+        let fees = ecosystem.collect_fees();
+        assert_eq!(fees.dex_swap_fees, 30.0);
+        assert_eq!(fees.bridge_fees, 10.0);
+        assert_eq!(fees.exchange_fees, 5.0);
+        assert_eq!(fees.wallet_fees, 0.0);
+        assert_eq!(fees.staking_fees, 0.0);
+        assert_eq!(fees.total_fees, 45.0);
     }
 
     #[test]
     fn bridge_reference_is_deterministic() {
-        let ecosystem = create_tiger_ecosystem();
+        let ecosystem = fixture();
         let bridge = Bridge::new("b1", "Test", "ethereum", "polygon", "0xabc");
         let first = bridge_reference("ethereum", "polygon", "USDT", 100.0, &bridge);
         let second = bridge_reference("ethereum", "polygon", "USDT", 100.0, &bridge);
@@ -1540,5 +1690,23 @@ mod tests {
         assert_ne!(first, different);
         assert_eq!(first.len(), 66);
         assert!(first.starts_with("0x"));
+        // A bridge request books its fee against the bridge bucket.
+        ecosystem.bridge("tigersmartchain", "ethereum", "TGR", 100.0).unwrap();
+        assert!(ecosystem.collect_fees().bridge_fees > 0.0);
+    }
+
+    /// `TigerTokens` uses the caller's real addresses, never a placeholder.
+    #[test]
+    fn tiger_tokens_use_configured_addresses() {
+        let tokens = TigerTokens::new(
+            "tigersmartchain",
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+            1_000_000_000.0,
+            1_000_000_000.0,
+        );
+        assert_eq!(tokens.tgr.address, "0x1111111111111111111111111111111111111111");
+        assert_eq!(tokens.rusd.address, "0x2222222222222222222222222222222222222222");
+        assert_eq!(tokens.tgr.total_supply, "1000000000");
     }
 }

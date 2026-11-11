@@ -36,6 +36,13 @@ export interface ListingSpec {
   symbolField: string;
   fields: ListingField[];
   defaults?: Record<string, unknown>;
+  /** Query parameter used by DELETE; defaults to `symbol`. */
+  deleteQuery?: string;
+  /**
+   * Row field whose value is sent as the DELETE key; defaults to `symbolField`.
+   * A table keyed by an opaque id rather than a symbol sets this to that id.
+   */
+  deleteField?: string;
 }
 
 type Row = Record<string, unknown>;
@@ -181,7 +188,8 @@ export default function ListingManager({ spec }: { spec: ListingSpec }) {
     setBusy(true);
     try {
       const token = adminToken();
-      const response = await fetch(`${spec.endpoint}?symbol=${encodeURIComponent(symbol)}`, {
+      const key = spec.deleteQuery ?? 'symbol';
+      const response = await fetch(`${spec.endpoint}?${key}=${encodeURIComponent(symbol)}`, {
         method: 'DELETE',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -330,8 +338,9 @@ export default function ListingManager({ spec }: { spec: ListingSpec }) {
               <tbody className="divide-y">
                 {rows.map((row) => {
                   const symbol = String(row[spec.symbolField] ?? '');
+                  const rowKey = spec.deleteField ? String(row[spec.deleteField] ?? symbol) : symbol;
                   return (
-                    <tr key={symbol}>
+                    <tr key={rowKey}>
                       {columns.map((column) => (
                         <td key={column} className="px-4 py-3 text-sm">
                           {displayValue(row[column]) || '—'}
@@ -347,7 +356,7 @@ export default function ListingManager({ spec }: { spec: ListingSpec }) {
                             <Pencil className="h-3 w-3" /> Edit
                           </button>
                           <button
-                            onClick={() => remove(symbol)}
+                            onClick={() => remove(rowKey)}
                             disabled={busy}
                             className="inline-flex items-center gap-1 text-sm text-red-600 hover:underline disabled:opacity-50"
                           >

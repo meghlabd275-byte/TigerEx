@@ -86,6 +86,13 @@ const SECTIONS: Array<{ group: string; items: Array<{ href: string; label: strin
     ],
   },
   {
+    group: 'Blockchains',
+    items: [
+      { href: '/admin/chains', label: 'Chains', description: 'List blockchains and their node endpoints', icon: Layers },
+      { href: '/admin/tokens', label: 'Tokens', description: 'Tokens read on each chain', icon: Coins },
+    ],
+  },
+  {
     group: 'Revenue',
     items: [
       { href: '/admin/fees', label: 'Fees', description: 'Maker, taker and network fee schedules', icon: DollarSign },
