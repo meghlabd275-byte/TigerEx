@@ -51,13 +51,13 @@ impl NFTMarketplace {
         id
     }
     pub fn list(&mut self, token_id: &str, price: f64) -> Result<(), String> {
-        let t = self.tokens.get_mut(&token_id).ok_or("Token not found")?;
+        let t = self.tokens.get_mut(token_id).ok_or("Token not found")?;
         t.listed = true;
         t.price = price;
         Ok(())
     }
     pub fn buy(&mut self, token_id: &str, buyer: &str) -> Result<f64, String> {
-        let t = self.tokens.get_mut(&token_id).ok_or("Token not found")?;
+        let t = self.tokens.get_mut(token_id).ok_or("Token not found")?;
         if !t.listed {
             return Err("Not listed".into());
         }

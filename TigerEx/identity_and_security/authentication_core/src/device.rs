@@ -2,7 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
-use std::collections::HashMap;
 
 /// Device fingerprint
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +57,6 @@ impl ImpossibleTravelDetector {
         last_login: &LoginLocation,
         current_login: &LoginLocation,
     ) -> bool {
-        use std::f64::consts::EARTH_RADIUS_KM;
         
         let distance = Self::haversine_distance(
             last_login.lat, last_login.lon,
@@ -177,43 +175,4 @@ pub struct Captcha {
     pub question: String,
     pub answer: String,
     pub expires_at: std::time::SystemTime,
-}
-
-/// Rate limiter using token bucket
-pub struct TokenBucket {
-    pub capacity: u64,
-    pub tokens: u64,
-    pub refill_rate: u64, // tokens per second
-    pub last_refill: std::time::Instant,
-}
-
-impl TokenBucket {
-    pub fn new(capacity: u64, refill_rate: u64) -> Self {
-        Self {
-            capacity,
-            tokens: capacity,
-            refill_rate,
-            last_refill: std::time::Instant::now(),
-        }
-    }
-    
-    pub fn try_consume(&mut self) -> bool {
-        self.refill();
-        
-        if self.tokens >= 1 {
-            self.tokens -= 1;
-            true
-        } else {
-            false
-        }
-    }
-    
-    fn refill(&mut self) {
-        let elapsed = self.last_refill.elapsed().as_secs();
-        if elapsed > 0 {
-            let to_add = elapsed * self.refill_rate;
-            self.tokens = (self.tokens + to_add).min(self.capacity);
-            self.last_refill = std::time::Instant::now();
-        }
-    }
 }

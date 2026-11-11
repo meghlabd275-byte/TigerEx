@@ -3,7 +3,6 @@
 //! Provides Ed25519 and ECDSA signature functionality
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use rand::RngCore;
 use crate::errors::{Result, SecurityError};
 
 /// Ed25519 Signer
@@ -265,14 +264,10 @@ mod tests {
         let signatures = multisig.sign(message);
         assert_eq!(signatures.len(), 2);
         
-        let public_keys = vec![
+        let pub_keys_bytes: Vec<Vec<u8>> = vec![
             multisig.signers[0].verifying_key(),
             multisig.signers[1].verifying_key(),
         ];
-        
-        let pub_keys_bytes: Vec<Vec<u8>> = public_keys.iter()
-            .map(|k| k.to_bytes().to_vec())
-            .collect();
         
         assert!(verify_multisig(message, &signatures, &pub_keys_bytes, 2).unwrap());
     }

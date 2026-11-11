@@ -74,6 +74,7 @@ impl VolSurface {
 pub struct RealizedVol {
     returns: Vec<f64>,
     window: usize,
+    last_price: Option<f64>,
 }
 
 impl RealizedVol {
@@ -81,21 +82,24 @@ impl RealizedVol {
         RealizedVol {
             returns: Vec::new(),
             window,
+            last_price: None,
         }
     }
 
     pub fn update(&mut self, price: f64) {
-        if let Some(&last) = self.returns.last() {
-            let ret = (price - last) / last;
-            self.returns.push(ret);
-            
-            if self.returns.len() > self.window {
-                self.returns.remove(0);
+        if let Some(last) = self.last_price {
+            if last > 0.0 {
+                let ret = (price - last) / last;
+                self.returns.push(ret);
+
+                if self.returns.len() > self.window {
+                    self.returns.remove(0);
+                }
             }
-        } else {
-            self.returns.push(0.0);
         }
+        self.last_price = Some(price);
     }
+
 
     pub fn calculate(&self) -> f64 {
         if self.returns.is_empty() {

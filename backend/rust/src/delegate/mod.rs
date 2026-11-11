@@ -138,16 +138,16 @@ impl DelegationMgr {
     }
 
     // Select best validator (highest uptime, lowest commission)
-    pub fn select_validator(&self, validators: &[(&String, f64, f64)]) -> Option<String> {
+    pub fn select_validator(&self, validators: &[(&str, f64, f64)]) -> Option<String> {
         // Score = uptime * 1000 - commission
         let mut best = None;
         let mut best_score = f64::MIN;
 
         for (id, uptime, comm) in validators {
-            let score = uptime * 1000.0 - comm;
+            let score = *uptime * 1000.0 - *comm;
             if score > best_score {
                 best_score = score;
-                best = Some(id.clone());
+                best = Some(id.to_string());
             }
         }
 
@@ -215,11 +215,12 @@ impl Governance {
         // Auto-close if threshold reached
         let total = prop.votes_for + prop.votes_against;
         if total > 1000000.0 { // Quorum
-            if prop.votes_for > prop.votes_against {
-                prop.status = "passed";
+            let status = if prop.votes_for > prop.votes_against {
+                "passed".to_string()
             } else {
-                prop.status = "rejected";
-            }
+                "rejected".to_string()
+            };
+            prop.status = status;
         }
 
         self.votes

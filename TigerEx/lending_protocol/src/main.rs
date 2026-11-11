@@ -154,13 +154,16 @@ impl LendingPool {
 
     #[inline]
     pub fn supply(&self, user_id: &str, asset: &str, amount: f64) -> Result<SupplyPosition, String> {
+        if amount <= 0.0 {
+            return Err("Amount must be positive".to_string());
+        }
         let mut markets = self.markets.write();
         let market = markets.get_mut(asset).ok_or("Market not found")?;
         if !market.asset.is_active {
             return Err("Market not active".to_string());
         }
-        market.total_supply += amount;
-        market.utilization_rate = market.total_borrow / market.total_supply;
+        market.asset.total_supply += amount;
+        market.asset.utilization_rate = utilization(market.asset.total_borrow, market.asset.total_supply);
         let supply_interest = amount * market.supply_index;
         let position = SupplyPosition {
             id: Uuid::new_v4().to_string(),
@@ -179,23 +182,38 @@ impl LendingPool {
 
     #[inline]
     pub fn borrow(&self, user_id: &str, asset: &str, amount: f64, collateral_asset: &str, collateral_amount: f64) -> Result<BorrowPosition, String> {
+        if amount <= 0.0 {
+            return Err("Amount must be positive".to_string());
+        }
         let prices = self.prices.read();
         let collateral_price = prices.get(collateral_asset).ok_or("Collateral price not found")?;
         let collateral_value = collateral_amount * collateral_price;
-        let max_borrow = collateral_value * 0.8;
+        let mut markets = self.markets.write();
+        // The borrow limit comes from the collateral asset's own risk parameters,
+        // not a fixed ratio: a hardcoded 0.8 ignored each asset's collateral
+        // factor and let an asset with a lower factor borrow as if it were blue
+        // chip. An unknown collateral market fails closed.
+        let collateral_factor = markets
+            .get(collateral_asset)
+            .map(|m| m.asset.collateral_factor)
+            .ok_or("Collateral market not found")?;
+        let max_borrow = collateral_value * collateral_factor;
         if amount > max_borrow {
             return Err("Insufficient collateral".to_string());
         }
-        let mut markets = self.markets.write();
         let market = markets.get_mut(asset).ok_or("Market not found")?;
         if !market.asset.is_active {
             return Err("Market not active".to_string());
         }
-        if market.total_supply < amount {
+        // Liquidity available to borrow is what lenders supplied minus what is
+        // already borrowed. Comparing against `total_supply` alone let a market
+        // lend out its deposits twice.
+        let available = market.asset.total_supply - market.asset.total_borrow;
+        if available < amount {
             return Err("Insufficient liquidity".to_string());
         }
-        market.total_borrow += amount;
-        market.utilization_rate = market.total_borrow / market.total_supply;
+        market.asset.total_borrow += amount;
+        market.asset.utilization_rate = utilization(market.asset.total_borrow, market.asset.total_supply);
         let borrow_interest = amount * market.borrow_index;
         let position = BorrowPosition {
             id: Uuid::new_v4().to_string(),
@@ -239,8 +257,8 @@ impl LendingPool {
                 borrow.balance -= repay;
                 borrow.borrowed_amount -= repay;
                 repaid += repay;
-                market.total_borrow -= repay;
-                market.utilization_rate = market.total_borrow / market.total_supply;
+                market.asset.total_borrow -= repay;
+                market.asset.utilization_rate = utilization(market.asset.total_borrow, market.asset.total_supply);
                 break;
             }
         }
@@ -249,20 +267,34 @@ impl LendingPool {
 
     #[inline]
     pub fn withdraw(&self, user_id: &str, asset: &str, amount: f64) -> Result<f64, String> {
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("Amount must be a positive finite number".to_string());
+        }
         let mut markets = self.markets.write();
         let market = markets.get_mut(asset).ok_or("Market not found")?;
         let mut user_supplies = self.user_supplies.write();
         let user_supply_list = user_supplies.get_mut(user_id).ok_or("No supplies found")?;
+        // A supplier may only take back idle liquidity: what the market holds
+        // that is not currently lent out. Withdrawing borrowed liquidity would
+        // strand a borrower who still owes it, so a request beyond what is idle
+        // fails closed rather than silently returning a partial amount.
+        let idle = market.asset.total_supply - market.asset.total_borrow;
+        if idle <= 0.0 || amount > idle {
+            return Err("Insufficient idle liquidity to withdraw".to_string());
+        }
         let mut withdrawn = 0.0;
         for supply in user_supply_list.iter_mut() {
             if supply.asset == asset && supply.balance > 0.0 {
                 let withdraw = amount.min(supply.balance);
                 supply.balance -= withdraw;
                 withdrawn += withdraw;
-                market.total_supply -= withdraw;
-                market.utilization_rate = market.total_borrow / market.total_supply;
+                market.asset.total_supply -= withdraw;
+                market.asset.utilization_rate = utilization(market.asset.total_borrow, market.asset.total_supply);
                 break;
             }
+        }
+        if withdrawn == 0.0 {
+            return Err("Insufficient supplied balance".to_string());
         }
         Ok(withdrawn)
     }
@@ -274,7 +306,12 @@ impl LendingPool {
         let user_supplies = self.user_supplies.read();
         if let Some(supplies) = user_supplies.get(user_id) {
             for supply in supplies {
-                let value = supply.balance * prices.get(&supply.asset).unwrap_or(&1.0);
+                // An unpriced asset contributes nothing rather than an invented
+                // $1 price, which would have inflated the collateral value.
+                let value = match prices.get(&supply.asset) {
+                    Some(price) => supply.balance * price,
+                    None => 0.0,
+                };
                 portfolio.total_supply_value += value;
                 portfolio.supplies.insert(supply.asset.clone(), supply.clone());
             }
@@ -282,7 +319,13 @@ impl LendingPool {
         let user_borrows = self.user_borrows.read();
         if let Some(borrows) = user_borrows.get(user_id) {
             for borrow in borrows {
-                let value = borrow.balance * prices.get(&borrow.asset).unwrap_or(&1.0);
+                let value = match prices.get(&borrow.asset) {
+                    Some(price) => borrow.balance * price,
+                    // A debt we cannot price must not be treated as zero, or the
+                    // account would look healthier than it is. Signal it so the
+                    // health factor fails closed below.
+                    None => f64::INFINITY,
+                };
                 portfolio.total_borrow_value += value;
                 portfolio.borrows.insert(borrow.asset.clone(), borrow.clone());
             }
@@ -300,6 +343,132 @@ impl LendingPool {
     #[inline]
     pub fn update_price(&self, asset: &str, price: f64) {
         self.prices.write().insert(asset.to_string(), price);
+    }
+}
+
+/// Utilization of a market, defined as zero when nothing is supplied. A bare
+/// `total_borrow / total_supply` produced NaN once a market was fully withdrawn.
+#[inline]
+fn utilization(total_borrow: f64, total_supply: f64) -> f64 {
+    if total_supply <= 0.0 {
+        0.0
+    } else {
+        total_borrow / total_supply
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn market(symbol: &str, factor: f64) -> Asset {
+        Asset {
+            symbol: symbol.to_string(),
+            name: symbol.to_string(),
+            decimals: 8,
+            collateral_factor: factor,
+            liquidation_threshold: factor - 0.05,
+            borrow_apr: 0.12,
+            supply_apr: 0.08,
+            total_supply: 0.0,
+            total_borrow: 0.0,
+            utilization_rate: 0.0,
+            is_active: true,
+        }
+    }
+
+    fn pool() -> LendingPool {
+        let p = LendingPool::new();
+        p.add_market(market("USDT", 0.9));
+        p.add_market(market("BTC", 0.7));
+        p.update_price("USDT", 1.0);
+        p.update_price("BTC", 50_000.0);
+        p
+    }
+
+    #[test]
+    fn supply_rejects_non_positive_amount() {
+        let p = pool();
+        assert!(p.supply("u1", "USDT", 0.0).is_err());
+        assert!(p.supply("u1", "USDT", -1.0).is_err());
+    }
+
+    #[test]
+    fn borrow_uses_the_collateral_assets_own_factor() {
+        let p = pool();
+        p.supply("lender", "USDT", 1_000_000.0);
+        // 1 BTC at 50k with a 0.7 factor -> 35k borrow limit.
+        assert!(p.borrow("u1", "USDT", 35_000.0, "BTC", 1.0).is_ok());
+        assert!(p.borrow("u2", "USDT", 35_001.0, "BTC", 1.0).is_err());
+    }
+
+    #[test]
+    fn borrow_cannot_exceed_idle_liquidity() {
+        let p = pool();
+        p.supply("lender", "USDT", 10_000.0);
+        // Plenty of collateral, but only 10k of liquidity exists.
+        let err = p.borrow("whale", "USDT", 20_000.0, "BTC", 10.0).unwrap_err();
+        assert_eq!(err, "Insufficient liquidity");
+    }
+
+    #[test]
+    fn borrow_fails_closed_on_unknown_collateral_market() {
+        let p = pool();
+        p.supply("lender", "USDT", 10_000.0);
+        assert!(p.borrow("u1", "USDT", 100.0, "DOGE", 1000.0).is_err());
+    }
+
+    #[test]
+    fn utilization_is_zero_not_nan_when_empty() {
+        let p = pool();
+        p.supply("u1", "USDT", 100.0);
+        p.withdraw("u1", "USDT", 100.0).unwrap();
+        let market = p.markets.read().get("USDT").cloned().unwrap();
+        assert_eq!(market.asset.total_supply, 0.0);
+        assert!(market.asset.utilization_rate.is_finite());
+        assert_eq!(market.asset.utilization_rate, 0.0);
+    }
+
+    #[test]
+    fn withdraw_cannot_take_borrowed_liquidity() {
+        let p = pool();
+        p.supply("lender", "USDT", 1_000.0);
+        p.borrow("borrower", "USDT", 900.0, "BTC", 1.0).unwrap();
+        // Only 100 is idle; a 500 withdrawal must fail rather than break the book.
+        assert!(p.withdraw("lender", "USDT", 500.0).is_err());
+        assert_eq!(p.withdraw("lender", "USDT", 100.0).unwrap(), 100.0);
+    }
+
+    #[test]
+    fn health_factor_is_collateral_value_over_debt_value() {
+        let p = pool();
+        p.supply("lender", "USDT", 100_000.0);
+        p.borrow("u1", "USDT", 10_000.0, "BTC", 1.0).unwrap();
+        let portfolio = p.get_portfolio("u1");
+        // Collateral 50k, debt 10k -> HF 5.
+        assert!((portfolio.health_factor - 5.0).abs() < 1e-9, "hf={}", portfolio.health_factor);
+    }
+
+    #[test]
+    fn unpriced_debt_forces_a_failing_health_factor() {
+        let p = pool();
+        p.supply("lender", "USDT", 100_000.0);
+        p.borrow("u1", "USDT", 10_000.0, "BTC", 1.0).unwrap();
+        // Drop the USDT price: the debt can no longer be valued, so it must be
+        // treated as unbounded, not as zero.
+        p.prices.write().remove("USDT");
+        let portfolio = p.get_portfolio("u1");
+        assert!(portfolio.total_borrow_value.is_infinite());
+        assert_eq!(portfolio.health_factor, 0.0);
+    }
+
+    #[test]
+    fn repay_reduces_debt_and_total_borrow() {
+        let p = pool();
+        p.supply("lender", "USDT", 100_000.0);
+        p.borrow("u1", "USDT", 10_000.0, "BTC", 1.0).unwrap();
+        assert_eq!(p.repay("u1", "USDT", 4_000.0).unwrap(), 4_000.0);
+        assert_eq!(p.markets.read().get("USDT").unwrap().asset.total_borrow, 6_000.0);
     }
 }
 

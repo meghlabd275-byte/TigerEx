@@ -50,7 +50,7 @@ impl KeyManager {
     /// Store a key securely
     pub fn store_key(&self, name: &str, key: &[u8]) -> Result<()> {
         let encryptor = AesEncryptor::new(
-            &self.encryption_key.try_into()
+            &self.encryption_key.as_slice().try_into()
                 .map_err(|_| SecurityError::InvalidKey("Invalid key length".to_string()))?
         )?;
         
@@ -73,7 +73,7 @@ impl KeyManager {
             .ok_or_else(|| SecurityError::InvalidKey(format!("Key not found: {}", name)))?;
         
         let encryptor = AesEncryptor::new(
-            &self.encryption_key.try_into()
+            &self.encryption_key.as_slice().try_into()
                 .map_err(|_| SecurityError::InvalidKey("Invalid key length".to_string()))?
         )?;
         
@@ -113,12 +113,9 @@ impl HotWalletKeys {
         let mut encryption_key = vec![0u8; 32];
         let mut public_key = vec![0u8; 32];
         
-        rand::OsRng.fill_bytes(&mut signing_key)
-            .map_err(|e| SecurityError::RandomError(e.to_string()))?;
-        rand::OsRng.fill_bytes(&mut encryption_key)
-            .map_err(|e| SecurityError::RandomError(e.to_string()))?;
-        rand::OsRng.fill_bytes(&mut public_key)
-            .map_err(|e| SecurityError::RandomError(e.to_string()))?;
+        rand::rngs::OsRng.fill_bytes(&mut signing_key);
+        rand::rngs::OsRng.fill_bytes(&mut encryption_key);
+        rand::rngs::OsRng.fill_bytes(&mut public_key);
         
         Ok(Self {
             signing_key,

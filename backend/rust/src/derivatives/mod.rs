@@ -42,8 +42,9 @@ impl DerivativesService {
     pub fn open_perp(&mut self, uid: &str, sym: &str, side: Side, size: f64, px: f64, lev: f64) -> String {
         let liq = match side { Side::Long => px * (1.0 - 1.0/lev + 0.005), Side::Short => px * (1.0 + 1.0/lev - 0.005) };
         let pos = PerpPosition { id: format!("PERP_{}", self.positions.len()), user_id: uid.to_string(), symbol: sym.to_string(), side, size, entry_px: px, liq_px: liq, leverage: lev };
-        self.positions.insert(pos.id.clone(), pos);
-        pos.id
+        let id = pos.id.clone();
+        self.positions.insert(id.clone(), pos);
+        id
     }
     
     pub fn check_liq(&self, pos_id: &str, cur_px: f64) -> bool {

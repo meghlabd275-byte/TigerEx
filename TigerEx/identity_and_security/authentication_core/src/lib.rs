@@ -1,38 +1,39 @@
 //! TigerEx Authentication Core Library
-//! 
+//!
 //! Implements:
-//! - Login/password authentication
-//! - JWT refresh tokens  
+//! - Login/password authentication (bcrypt + Argon2id)
+//! - JWT access/refresh tokens (HS256, algorithm-pinned)
 //! - TOTP 2FA
-//! - SMS/Email OTP
-//! - WebAuthn passkeys
-//! - Hardware 2FA (YubiKey)
-//! - Biometric authentication
+//! - SMS/Email OTP (HMAC-digested, single-use)
+//! - WebAuthn passkeys (ES256 assertion verification)
+//! - Session lifecycle (rotation, revocation, replay detection)
 //! - Anti-phishing codes
 //! - Device fingerprinting
 //! - Impossible travel detection
 //! - Brute force protection
 //! - Geo-restrictions
+//! - Per-key rate limiting
+//! - API-key and request signing (HMAC-SHA256), secret sealing (AES-256-GCM)
 
-pub mod login;
-pub mod totp_2fa;
-pub mod otp;
-pub mod webauthn;
-pub mod session;
-pub mod jwt;
 pub mod device;
-pub mod security;
+pub mod jwt;
+pub mod login;
+pub mod otp;
 pub mod rate_limit;
+pub mod security;
+pub mod session;
+pub mod totp_2fa;
+pub mod webauthn;
 
-pub use login::*;
-pub use totp_2fa::*;
-pub use otp::*;
-pub use webauthn::*;
-pub use session::*;
-pub use jwt::*;
 pub use device::*;
-pub use security::*;
+pub use jwt::*;
+pub use login::*;
+pub use otp::*;
 pub use rate_limit::*;
+pub use security::*;
+pub use session::*;
+pub use totp_2fa::*;
+pub use webauthn::*;
 
 /// Maximum login attempts before lockout
 pub const MAX_LOGIN_ATTEMPTS: u32 = 5;

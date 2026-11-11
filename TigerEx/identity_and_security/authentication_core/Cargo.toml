@@ -6,35 +6,27 @@ authors = ["TigerEx Team"]
 description = "TigerEx Authentication Service - Secure, Fast, Multi-factor"
 
 [dependencies]
-# Webauthn/FIDO2
-webauthn = "2.0"
-
-# TOTP/HOTP  
-totp-rs = "5.4"
+# TOTP/HOTP
+totp-rs = { version = "5.4", features = ["gen_secret", "otpauth"] }
 
 # JWT
 jsonwebtoken = "9.2"
-
-# Async
-tokio = { version = "1.35", features = ["full"] }
-
-# Database
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "migrate"] }
-
-# Redis for sessions
-redis = { version = "0.24", features = ["tokio-comp"] }
 
 # Password hashing
 bcrypt = "0.15"
 argon2 = "0.5"
 
-# Cryptography
-ring = "0.17"
-rusty_jwt = "4.1"
+# Cryptography (OTP derivation, request signing, constant-time compare)
+hmac = "0.12"
+sha2 = "0.10"
+subtle = "2.5"
 
-# HTTP server
-axum = "0.7"
-tower = "0.4"
+# Authenticated encryption for secrets at rest (AES-256-GCM)
+aes-gcm = "0.10"
+
+# Passkey/WebAuthn ES256 signature verification (NIST P-256)
+p256 = { version = "0.13", features = ["ecdsa"] }
+ecdsa = { version = "0.16", features = ["der"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -43,27 +35,12 @@ serde_json = "1.0"
 # Utilities
 uuid = { version = "1.6", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-base64 = "0.21"
+base64 = "0.22"
 hex = "0.4"
 rand = "0.8"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = "0.3"
-
-# Rate limiting
-governor = "0.6"
-
-# Anti-brute-force
-failed = "0.6"
-
-[dev-dependencies]
-tokio-test = "0.4"
-mockall = "0.12"
-
-[[bin]]
-name = "auth-server"
-path = "src/main.rs"
 
 [lib]
 name = "tigerex_auth"

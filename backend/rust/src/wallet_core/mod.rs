@@ -141,7 +141,7 @@ impl Balance {
 }
 
 // Transaction types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionType {
     Deposit,
     Withdrawal,
@@ -151,7 +151,7 @@ pub enum TransactionType {
     Adjustment,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionStatus {
     Pending,
     Processing,

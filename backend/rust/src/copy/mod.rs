@@ -60,8 +60,8 @@ impl SignalRouter {
     }
 
     // Route signal to followers (simplified)
-    pub fn route_signals(&self, master_id: &str) -> Vec<&MasterSignal> {
-        self.signals.get(master_id).map(|v| v.as_slice()).unwrap_or(&[]).to_vec()
+    pub fn route_signals(&self, master_id: &str) -> Vec<MasterSignal> {
+        self.signals.get(master_id).cloned().unwrap_or_default()
     }
 
     // Calculate copy size

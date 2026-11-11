@@ -97,7 +97,7 @@ impl LiquidationEngine {
             timestamp: now_ms(),
         };
 
-        self.events.push(event);
+        self.events.push(event.clone());
         self.positions.remove(position_id);
 
         Ok(event)

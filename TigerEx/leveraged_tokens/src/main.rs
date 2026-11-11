@@ -125,6 +125,9 @@ impl LeveragedTokenManager {
 
     #[inline]
     pub fn mint(&self, user_id: &str, token_symbol: &str, amount: f64) -> Result<TokenPosition, String> {
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("Amount must be a positive finite number".to_string());
+        }
         let mut tokens = self.tokens.write();
         let token = tokens.get_mut(token_symbol).ok_or("Token not found")?;
 
@@ -152,6 +155,9 @@ impl LeveragedTokenManager {
 
     #[inline]
     pub fn burn(&self, user_id: &str, token_symbol: &str, amount: f64) -> Result<(f64, f64), String> {
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("Amount must be a positive finite number".to_string());
+        }
         let mut tokens = self.tokens.write();
         let token = tokens.get_mut(token_symbol).ok_or("Token not found")?;
 
@@ -174,23 +180,85 @@ impl LeveragedTokenManager {
         Ok((current_value, pnl))
     }
 
-    #[inline]
-    pub fn update_nav(&self, token_symbol: &str, underlying_price: f64) -> Result<f64, String> {
+    /// Apply an underlying price move to a token's NAV.
+    ///
+    /// A leveraged token tracks `leverage ×` the daily return of its underlying,
+    /// so NAV changes by `leverage × (new_price / old_price - 1)`. A short token
+    /// loses when the price rises. A move that would drive NAV to or below zero
+    /// is rejected (the token would be worthless and must be liquidated by the
+    /// issuer instead of silently going negative).
+    pub fn update_nav(
+        &self,
+        token_symbol: &str,
+        old_underlying_price: f64,
+        new_underlying_price: f64,
+    ) -> Result<f64, String> {
+        if !old_underlying_price.is_finite() || old_underlying_price <= 0.0 {
+            return Err("Previous underlying price must be positive".to_string());
+        }
+        if !new_underlying_price.is_finite() || new_underlying_price <= 0.0 {
+            return Err("New underlying price must be positive".to_string());
+        }
         let mut tokens = self.tokens.write();
         let token = tokens.get_mut(token_symbol).ok_or("Token not found")?;
 
         let old_nav = token.nav;
-        let price_change = (underlying_price - token.last_rebalance as f64) / token.last_rebalance as f64;
-
-        if token.leverage > 0 {
-            token.nav *= 1.0 + (price_change * token.leverage as f64);
-        } else {
-            token.nav *= 1.0 - (price_change * token.leverage.abs() as f64);
+        let price_return = new_underlying_price / old_underlying_price - 1.0;
+        let leveraged_return = price_return * token.leverage as f64;
+        let new_nav = old_nav * (1.0 + leveraged_return);
+        if !new_nav.is_finite() || new_nav <= 0.0 {
+            return Err("Underlying move would drive NAV to zero or below".to_string());
         }
 
+        token.nav = new_nav;
         token.nav_change_24h = (token.nav - old_nav) / old_nav * 100.0;
+        token.market_cap = token.total_supply * token.nav;
 
         Ok(token.nav)
+    }
+
+    /// Daily rebalance: snap the token back to exactly `leverage ×` the
+    /// underlying so compounding does not drift the effective leverage.
+    ///
+    /// The issuer adjusts the token's position in the underlying to restore the
+    /// target exposure. This records the event; the NAV itself is unchanged
+    /// because rebalancing does not create or destroy value.
+    pub fn rebalance(
+        &self,
+        token_symbol: &str,
+        underlying_price: f64,
+        now: i64,
+    ) -> Result<RebalanceEvent, String> {
+        if !underlying_price.is_finite() || underlying_price <= 0.0 {
+            return Err("Underlying price must be positive".to_string());
+        }
+        let mut tokens = self.tokens.write();
+        let token = tokens.get_mut(token_symbol).ok_or("Token not found")?;
+
+        let event = RebalanceEvent {
+            id: Uuid::new_v4().to_string(),
+            token_symbol: token_symbol.to_string(),
+            old_leverage: token.leverage,
+            new_leverage: token.leverage,
+            underlying_price,
+            rebalance_ratio: 1.0,
+            timestamp: now,
+        };
+        token.last_rebalance = now;
+        self.rebalance_history.write().push(event.clone());
+        Ok(event)
+    }
+
+    /// True when the token's drift from its target leverage exceeds the
+    /// configured threshold and a rebalance is due.
+    pub fn needs_rebalance(&self, token_symbol: &str, effective_leverage: f64) -> Result<bool, String> {
+        let tokens = self.tokens.read();
+        let token = tokens.get(token_symbol).ok_or("Token not found")?;
+        let target = token.leverage as f64;
+        if target == 0.0 {
+            return Err("Token has no leverage target".to_string());
+        }
+        Ok(((effective_leverage - target) / target).abs() >= token.rebalance_threshold)
     }
 
     #[inline]
@@ -204,8 +272,109 @@ impl LeveragedTokenManager {
     }
 
     #[inline]
+    pub fn rebalance_history(&self) -> Vec<RebalanceEvent> {
+        self.rebalance_history.read().clone()
+    }
+
+    #[inline]
     pub fn update_price(&self, asset: &str, price: f64) {
-        self.prices.write().insert(asset.to_string(), price);
+        if price.is_finite() && price > 0.0 {
+            self.prices.write().insert(asset.to_string(), price);
+        }
+    }
+
+    #[inline]
+    pub fn get_price(&self, asset: &str) -> Option<f64> {
+        self.prices.read().get(asset).copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manager_with_token() -> LeveragedTokenManager {
+        let m = LeveragedTokenManager::new();
+        m.create_token("BTC3L".into(), "Bitcoin 3x Long".into(), "BTC".into(), 3).unwrap();
+        m.create_token("BTC3S".into(), "Bitcoin 3x Short".into(), "BTC".into(), -3).unwrap();
+        m
+    }
+
+    #[test]
+    fn rejects_invalid_leverage() {
+        let m = LeveragedTokenManager::new();
+        assert!(m.create_token("X".into(), "x".into(), "BTC".into(), 0).is_err());
+        assert!(m.create_token("X".into(), "x".into(), "BTC".into(), 1).is_err());
+        assert!(m.create_token("X".into(), "x".into(), "BTC".into(), 11).is_err());
+    }
+
+    #[test]
+    fn mint_rejects_non_positive_amount() {
+        let m = manager_with_token();
+        assert!(m.mint("u1", "BTC3L", 0.0).is_err());
+        assert!(m.mint("u1", "BTC3L", -5.0).is_err());
+        assert!(m.mint("u1", "BTC3L", f64::NAN).is_err());
+    }
+
+    #[test]
+    fn long_token_tracks_positive_return_with_leverage() {
+        let m = manager_with_token();
+        // Underlying +10% -> NAV +30%.
+        let nav = m.update_nav("BTC3L", 100.0, 110.0).unwrap();
+        assert!((nav - 13.0).abs() < 1e-9, "expected 13.0 got {nav}");
+    }
+
+    #[test]
+    fn short_token_loses_when_price_rises() {
+        let m = manager_with_token();
+        let nav = m.update_nav("BTC3S", 100.0, 110.0).unwrap();
+        assert!((nav - 7.0).abs() < 1e-9, "expected 7.0 got {nav}");
+    }
+
+    #[test]
+    fn update_nav_rejects_bad_prices_and_wipeout() {
+        let m = manager_with_token();
+        assert!(m.update_nav("BTC3L", 0.0, 100.0).is_err());
+        assert!(m.update_nav("BTC3L", 100.0, -1.0).is_err());
+        // A -50% move on a 3x long would make NAV negative.
+        assert!(m.update_nav("BTC3L", 100.0, 50.0).is_err());
+    }
+
+    #[test]
+    fn burn_realizes_pnl() {
+        let m = manager_with_token();
+        m.mint("u1", "BTC3L", 10.0).unwrap();
+        m.update_nav("BTC3L", 100.0, 110.0).unwrap(); // NAV 10 -> 13
+        let (value, pnl) = m.burn("u1", "BTC3L", 10.0).unwrap();
+        assert!((value - 130.0).abs() < 1e-9);
+        assert!((pnl - 30.0).abs() < 1e-9);
+        assert!(m.burn("u1", "BTC3L", 1.0).is_err()); // nothing left
+    }
+
+    #[test]
+    fn needs_rebalance_respects_threshold() {
+        let m = manager_with_token();
+        assert!(!m.needs_rebalance("BTC3L", 3.1).unwrap());
+        assert!(m.needs_rebalance("BTC3L", 3.6).unwrap());
+        assert!(m.needs_rebalance("BTC3L", 2.0).unwrap());
+    }
+
+    #[test]
+    fn rebalance_records_event_and_updates_timestamp() {
+        let m = manager_with_token();
+        let ev = m.rebalance("BTC3L", 105.0, 12345).unwrap();
+        assert_eq!(ev.timestamp, 12345);
+        assert_eq!(m.get_token("BTC3L").unwrap().last_rebalance, 12345);
+        assert_eq!(m.rebalance_history().len(), 1);
+    }
+
+    #[test]
+    fn price_updates_ignore_invalid_values() {
+        let m = manager_with_token();
+        m.update_price("BTC", 100.0);
+        assert_eq!(m.get_price("BTC"), Some(100.0));
+        m.update_price("BTC", -5.0);
+        assert_eq!(m.get_price("BTC"), Some(100.0));
     }
 }
 

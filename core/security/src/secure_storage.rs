@@ -4,8 +4,9 @@
 
 use crate::crypto::AesEncryptor;
 use crate::errors::{Result, SecurityError};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 
 /// Encrypted file storage
@@ -279,12 +280,10 @@ mod tests {
         
         rotator.storage.set("secret", b"important data").unwrap();
         
-        // Rotate to new key
+        // Rotate to new key; the re-encrypted data stays under the rotator.
         rotator.rotate(&key2).unwrap();
-        
-        // Data should still be accessible with new key
-        let mut new_rotator = SecretRotator::new(&key2).unwrap();
-        let value = new_rotator.storage.get("secret").unwrap();
+        assert_eq!(rotator.current_key(), key2);
+        let value = rotator.storage.get("secret").unwrap();
         assert_eq!(value, b"important data");
     }
 }

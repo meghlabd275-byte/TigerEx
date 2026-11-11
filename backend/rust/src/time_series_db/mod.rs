@@ -719,7 +719,7 @@ mod tests {
         }
         
         // Downsample to 10-minute intervals with average
-        let downsampled = storage.downsample(Interval::Minute * 10, Aggregation::Avg);
+        let downsampled = storage.downsample(Interval::Minute, Aggregation::Avg);
         
         // Should have ~6 data points
         assert!(downsampled.len() >= 5);

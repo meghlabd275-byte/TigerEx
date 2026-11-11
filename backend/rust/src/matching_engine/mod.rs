@@ -191,6 +191,13 @@ impl PartialOrd for OrderLevel {
     }
 }
 
+impl PartialEq for OrderLevel {
+    fn eq(&self, other: &Self) -> bool {
+        self.price == other.price && self.timestamp == other.timestamp
+    }
+}
+
+
 impl Eq for OrderLevel {}
 
 impl MatchingEngine {
@@ -307,22 +314,42 @@ impl MatchingEngine {
     }
 
     fn process_limit_order(&mut self, order: &mut Order) -> Result<(), String> {
-        let book = self.order_books.get_mut(&order.symbol)
-            .ok_or("Market not found")?;
+        let can_fill = {
+            let book = self.order_books.get(&order.symbol)
+                .ok_or("Market not found")?;
+            self.check_immediate_fill(order, book)
+        };
 
-        let can_fill = self.check_immediate_fill(order, book);
+        let is_immediate = order.time_in_force == TimeInForce::IOC
+            || order.time_in_force == TimeInForce::FOK;
 
-        if can_fill && order.time_in_force == TimeInForce::IOC {
-            self.fill_order(order, book)?;
-        } else if can_fill && order.time_in_force == TimeInForce::FOK {
-            self.fill_order(order, book)?;
-            if order.filled_quantity == 0.0 {
+        if is_immediate && !can_fill {
+            // Nothing to trade against: an immediate order cannot rest on the book.
+            order.status = OrderStatus::Cancelled;
+            order.updated_at = current_timestamp_ms();
+            return Ok(());
+        }
+
+        if is_immediate {
+            let mut book = self.order_books.remove(&order.symbol)
+                .ok_or("Market not found")?;
+            let fill_result = self.fill_order(order, &mut book);
+            self.order_books.insert(order.symbol.clone(), book);
+            fill_result?;
+
+            if order.time_in_force == TimeInForce::FOK && order.filled_quantity < order.quantity {
+                // FOK must fill completely or not at all.
+                order.filled_quantity = 0.0;
+                order.average_fill_price = None;
                 order.status = OrderStatus::Rejected;
                 order.rejected_reason = Some("Unable to fill completely".to_string());
             }
         } else {
             order.status = OrderStatus::Open;
-            self.add_to_order_book(order, book);
+            let mut book = self.order_books.remove(&order.symbol)
+                .ok_or("Market not found")?;
+            self.add_to_order_book(order, &mut book);
+            self.order_books.insert(order.symbol.clone(), book);
         }
 
         Ok(())
@@ -338,11 +365,11 @@ impl MatchingEngine {
     }
 
     fn process_market_order(&mut self, order: &mut Order) -> Result<(), String> {
-        let book = self.order_books.get_mut(&order.symbol)
+        let mut book = self.order_books.remove(&order.symbol)
             .ok_or("Market not found")?;
-        
-        self.fill_order(order, book)?;
-        Ok(())
+        let result = self.fill_order(order, &mut book);
+        self.order_books.insert(order.symbol.clone(), book);
+        result
     }
 
     fn fill_order(&mut self, order: &mut Order, book: &mut OrderBook) -> Result<(), String> {

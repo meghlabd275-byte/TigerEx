@@ -3,7 +3,6 @@
 //! Provides secure hashing functions
 
 use sha2::{Sha256, Sha512, Digest};
-use crate::errors::{Result, SecurityError};
 
 /// SHA-256 hash function
 pub fn sha256(data: &[u8]) -> Vec<u8> {
@@ -61,7 +60,7 @@ pub mod password {
     }
 
     /// Check if a password is strong enough
-    pub fn check_strength(password: &str) -> PasswordStrength {
+    pub fn check_strength(password: &str) -> super::PasswordStrength {
         let mut score = 0;
         
         // Length check
@@ -76,10 +75,10 @@ pub mod password {
         if password.chars().any(|c| !c.is_alphanumeric()) { score += 1; }
         
         match score {
-            0..=2 => PasswordStrength::Weak,
-            3..=4 => PasswordStrength::Fair,
-            5..=6 => PasswordStrength::Good,
-            _ => PasswordStrength::Strong,
+            0..=2 => super::PasswordStrength::Weak,
+            3..=4 => super::PasswordStrength::Fair,
+            5..=6 => super::PasswordStrength::Good,
+            _ => super::PasswordStrength::Strong,
         }
     }
 }
@@ -132,39 +131,61 @@ pub mod hmac {
     }
 }
 
-/// PBKDF2 key derivation
+/// PBKDF2-HMAC-SHA256 key derivation (RFC 2898).
 pub mod pbkdf2 {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
     use crate::errors::{Result, SecurityError};
-    
-    /// Derive a key using PBKDF2
-    /// 
-    /// Note: For new applications, consider using Argon2 instead
-    pub fn derive_key(password: &[u8], salt: &[u8], iterations: u32, key_length: usize) -> Result<Vec<u8>> {
-        use std::num::NonZeroU32;
-        
-        let iterations = NonZeroU32::new(iterations)
-            .ok_or_else(|| SecurityError::InvalidData("Invalid iteration count".to_string()))?;
-        
-        let mut key = vec![0u8; key_length];
-        
-        // Simple PBKDF2-like derivation using HMAC-SHA256
-        // Note: In production, use a proper PBKDF2 implementation
-        let mut block = Vec::new();
-        block.extend_from_slice(password);
-        block.extend_from_slice(salt);
-        
-        let mut result = Vec::new();
-        for _ in 0..((key_length + 31) / 32) {
-            let hash = super::hmac::create(password, &block)
-                .map_err(|e| SecurityError::HashingError(e.to_string()))?;
-            result.extend(hash);
-            
-            // Update for next block
-            block = hash;
+
+    type HmacSha256 = Hmac<Sha256>;
+
+    /// Derive `key_length` bytes from `password`/`salt` with `iterations`
+    /// rounds, using the standard F(P, S, c, i) construction.
+    pub fn derive_key(
+        password: &[u8],
+        salt: &[u8],
+        iterations: u32,
+        key_length: usize,
+    ) -> Result<Vec<u8>> {
+        if iterations == 0 {
+            return Err(SecurityError::InvalidData(
+                "Invalid iteration count".to_string(),
+            ));
         }
-        
-        key.copy_from_slice(&result[..key_length]);
-        Ok(key)
+        if key_length == 0 {
+            return Err(SecurityError::InvalidData(
+                "Invalid key length".to_string(),
+            ));
+        }
+
+        let mut out = Vec::with_capacity(key_length);
+        let mut block_index: u32 = 1;
+        while out.len() < key_length {
+            let mut mac = HmacSha256::new_from_slice(password)
+                .map_err(|e| SecurityError::InvalidKey(e.to_string()))?;
+            mac.update(salt);
+            mac.update(&block_index.to_be_bytes());
+            let mut u = mac.finalize().into_bytes();
+            let mut t = u;
+
+            for _ in 1..iterations {
+                let mut mac = HmacSha256::new_from_slice(password)
+                    .map_err(|e| SecurityError::InvalidKey(e.to_string()))?;
+                mac.update(&u);
+                u = mac.finalize().into_bytes();
+                for (a, b) in t.iter_mut().zip(u.iter()) {
+                    *a ^= *b;
+                }
+            }
+
+            out.extend_from_slice(&t);
+            block_index = block_index
+                .checked_add(1)
+                .ok_or_else(|| SecurityError::HashingError("PBKDF2 block overflow".to_string()))?;
+        }
+
+        out.truncate(key_length);
+        Ok(out)
     }
 }
 
@@ -196,6 +217,22 @@ mod tests {
         assert_eq!(password::check_strength("password123"), PasswordStrength::Fair);
         assert_eq!(password::check_strength("Password123!"), PasswordStrength::Good);
         assert_eq!(password::check_strength("MyV3ryStr0ng!P@ssw0rd"), PasswordStrength::Strong);
+    }
+
+    #[test]
+    fn test_pbkdf2_known_answer() {
+        // RFC 7914 / common PBKDF2-HMAC-SHA256 vector.
+        let dk = pbkdf2::derive_key(b"password", b"salt", 1, 32).unwrap();
+        assert_eq!(
+            hex::encode(dk),
+            "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+        );
+        let dk2 = pbkdf2::derive_key(b"password", b"salt", 4096, 32).unwrap();
+        assert_eq!(
+            hex::encode(dk2),
+            "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a"
+        );
+        assert!(pbkdf2::derive_key(b"p", b"s", 0, 32).is_err());
     }
 
     #[test]

@@ -22,8 +22,8 @@ impl AdminService {
     pub fn grant(&mut self, admin: &str, privs: &[&str]) {
         self.privileges.insert(admin.to_string(), privs.iter().map(|s| s.to_string()).collect());
     }
-    pub fn has_priv(&self, admin: &str, priv: &str) -> bool {
-        self.privileges.get(admin).map(|p| p.contains(&priv.to_string())).unwrap_or(false)
+    pub fn has_priv(&self, admin: &str, privilege: &str) -> bool {
+        self.privileges.get(admin).map(|p| p.contains(&privilege.to_string())).unwrap_or(false)
     }
     pub fn log_action(&mut self, admin: &str, action: &str, target: &str) {
         self.actions.push(AdminAction { id: format!("ADM_{}", self.actions.len()), admin_id: admin.to_string(), action: action.to_string(), target: target.to_string(), timestamp: now_ms() });

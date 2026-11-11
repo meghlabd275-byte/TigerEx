@@ -101,11 +101,11 @@ impl FeedAggregator {
     }
 
     // Get trending symbols
-    pub fn get_trending(&self, limit: usize) -> Vec<(&String, i32)> {
+    pub fn get_trending(&self, limit: usize) -> Vec<(String, i32)> {
         let mut counts: HashMap<String, i32> = HashMap::new();
         
         for (_, post) in &self.posts {
-            *counts.entry(&post.symbol).or_insert(0) += post.likes;
+            *counts.entry(post.symbol.clone()).or_insert(0) += post.likes;
         }
         
         let mut sorted: Vec<_> = counts.into_iter().collect();
@@ -137,7 +137,6 @@ impl FeedAggregator {
         Vec::new()
     }
 }
-}
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -154,8 +153,8 @@ mod tests {
     fn test_feed() {
         let mut feed = FeedAggregator::new();
         
-        feed.create_post("u1", "BTCUSDT", "long", 65000, 64000, 70000);
+        feed.create_post("u1", "BTCUSDT", "long", 65000.0, 64000.0, 70000.0);
         
-        assert!(feed.get_trending(5).len() > 0);
+        assert!(!feed.get_trending(5).is_empty());
     }
 }

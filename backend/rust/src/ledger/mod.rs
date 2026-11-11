@@ -128,7 +128,7 @@ impl Ledger {
         let entry_idx = self.pending.iter().position(|e| e.id == tx_id);
         
         if let Some(idx) = entry_idx {
-            let entry = self.pending.remove(idx);
+            let mut entry = self.pending.remove(idx);
             let account = self.get_account(&entry.user_id);
             
             // Update balance
@@ -165,7 +165,7 @@ impl Ledger {
         let entry_idx = self.pending.iter().position(|e| e.id == tx_id);
         
         if let Some(idx) = entry_idx {
-            let entry = self.pending.remove(idx);
+            let mut entry = self.pending.remove(idx);
             entry.status = "reverted".to_string();
             self.entries.push(entry);
             Ok(())
@@ -178,8 +178,8 @@ impl Ledger {
     pub fn get_balance(&self, user_id: &str, symbol: &str) -> f64 {
         self.accounts
             .get(user_id)
-            .map(|a| a.balances.get(symbol).unwrap_or(&0.0))
-            .unwrap_or(&0.0)
+            .map(|a| *a.balances.get(symbol).unwrap_or(&0.0))
+            .unwrap_or(0.0)
     }
 
     // Get entry history

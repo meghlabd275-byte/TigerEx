@@ -256,6 +256,7 @@ mod tests {
     fn test_liquidation_price_long() {
         let engine = RiskManagementEngine::new();
         let liq_price = engine.calculate_liquidation_price(50000.0, 10.0, PositionSide::Long);
-        assert!(liq_price > 40000.0 && liq_price < 41000.0);
+        // 50000 * (1 - 1/10 + 0.005) = 45250.
+        assert!((liq_price - 45250.0).abs() < 1.0, "got {liq_price}");
     }
 }

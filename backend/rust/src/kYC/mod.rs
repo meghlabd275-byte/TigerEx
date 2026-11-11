@@ -23,15 +23,18 @@ pub struct KYCService {
 impl KYCService {
     pub fn new() -> Self { Self { verifications: vec![] } }
     pub fn submit(&mut self, uid: &str, doc_type: DocType, country: &str) -> String {
-        let id = format!("KYC_{}", self.verifications.len());
+        let id: String = format!("KYC_{}", self.verifications.len());
         self.verifications.push((uid.to_string(), Level::Basic));
         id
     }
     pub fn approve(&mut self, id: &str) -> Result<(), String> {
-        if id.parse::<usize>().map(|i| i < self.verifications.len()).unwrap_or(false) {
-            self.verifications[id.parse().unwrap()].1 = Level::Full;
-            Ok(())
-        } else { Err("KYC not found".into()) }
+        match id.parse::<usize>() {
+            Ok(i) if i < self.verifications.len() => {
+                self.verifications[i].1 = Level::Full;
+                Ok(())
+            }
+            _ => Err("KYC not found".into()),
+        }
     }
 }
 

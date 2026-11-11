@@ -5,7 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ============================================================================
@@ -13,50 +12,149 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // ============================================================================
 
 pub mod encryption {
-    use super::*;
-    
-    // AES-256-GCM Encryption
+    use aes_gcm::{
+        aead::{Aead, KeyInit, OsRng},
+        Aes256Gcm, Nonce,
+    };
+    use argon2::{
+        password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+        Argon2,
+    };
+    use chacha20poly1305::{ChaCha20Poly1305, Nonce as ChNonce};
+    use rand::RngCore;
+    use rsa::{
+        pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding},
+        Oaep, RsaPrivateKey, RsaPublicKey,
+    };
+    use sha2::Sha256;
+
+    const NONCE_LEN: usize = 12;
+
+    /// AES-256-GCM. Output is `nonce || ciphertext || tag`; the random nonce
+    /// travels with the ciphertext so it is never reused under one key, and a
+    /// wrong key or a tampered ciphertext fails to decrypt.
     pub fn encrypt_aes256(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
-        // In production, use ring or aes-gcm crate
-        // This is a placeholder
-        let mut ciphertext = Vec::new();
-        ciphertext.extend_from_slice(plaintext);
-        Ok(ciphertext)
+        let cipher = Aes256Gcm::new_from_slice(key)
+            .map_err(|e| format!("invalid AES key length: {}", e))?;
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
+            .map_err(|_| "AES-256-GCM encryption failed".to_string())?;
+
+        let mut out = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ciphertext);
+        Ok(out)
     }
-    
+
     pub fn decrypt_aes256(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
-        // In production, use ring or aes-gcm crate
-        Ok(ciphertext.to_vec())
+        if ciphertext.len() <= NONCE_LEN {
+            return Err("AES-256-GCM ciphertext is truncated".to_string());
+        }
+        let cipher = Aes256Gcm::new_from_slice(key)
+            .map_err(|e| format!("invalid AES key length: {}", e))?;
+        let (nonce_bytes, body) = ciphertext.split_at(NONCE_LEN);
+        let nonce = Nonce::from_slice(nonce_bytes);
+        cipher
+            .decrypt(nonce, body)
+            .map_err(|_| "AES-256-GCM authentication failed".to_string())
     }
-    
-    // RSA-OAEP for key exchange
-    pub fn generate_rsa_keypair() -> (Vec<u8>, Vec<u8>) {
-        // In production, use rsa crate
-        (vec![0; 256], vec![0; 256])
+
+    /// Generate an RSA-2048 key pair, DER-encoded (PKCS#8 private, SPKI public).
+    pub fn generate_rsa_keypair() -> Result<(Vec<u8>, Vec<u8>), String> {
+        let mut rng = OsRng;
+        let private = RsaPrivateKey::new(&mut rng, 2048)
+            .map_err(|e| format!("RSA key generation failed: {}", e))?;
+        let public = RsaPublicKey::from(&private);
+
+        let private_der = private
+            .to_pkcs8_der()
+            .map_err(|e| format!("RSA private key encoding failed: {}", e))?;
+        let public_der = public
+            .to_public_key_der()
+            .map_err(|e| format!("RSA public key encoding failed: {}", e))?;
+        Ok((private_der.as_bytes().to_vec(), public_der.as_bytes().to_vec()))
     }
-    
-    // Argon2id for password hashing
-    pub fn hash_password(password: &str, salt: &[u8]) -> Vec<u8> {
-        // In production, use argon2 crate
-        let mut hash = Vec::new();
-        hash.extend_from_slice(password.as_bytes());
-        hash.extend_from_slice(salt);
-        hash
+
+    /// Encrypt to an RSA public key with OAEP-SHA256.
+    pub fn rsa_encrypt(public_der: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+        let public = RsaPublicKey::from_public_key_der(public_der)
+            .map_err(|e| format!("invalid RSA public key: {}", e))?;
+        let mut rng = OsRng;
+        public
+            .encrypt(&mut rng, Oaep::new::<Sha256>(), plaintext)
+            .map_err(|e| format!("RSA encryption failed: {}", e))
     }
-    
-    pub fn verify_password(password: &str, salt: &[u8], hash: &[u8]) -> bool {
-        let computed = hash_password(password, salt);
-        computed == hash
+
+    pub fn rsa_decrypt(private_der: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
+        let private = RsaPrivateKey::from_pkcs8_der(private_der)
+            .map_err(|e| format!("invalid RSA private key: {}", e))?;
+        private
+            .decrypt(Oaep::new::<Sha256>(), ciphertext)
+            .map_err(|_| "RSA decryption failed".to_string())
     }
-    
-    // ChaCha20-Poly1305 for authenticated encryption
+
+    /// Export a private key as PEM for storage in a secret manager.
+    pub fn rsa_private_to_pem(private_der: &[u8]) -> Result<String, String> {
+        let private = RsaPrivateKey::from_pkcs8_der(private_der)
+            .map_err(|e| format!("invalid RSA private key: {}", e))?;
+        private
+            .to_pkcs8_pem(LineEnding::LF)
+            .map(|pem| pem.to_string())
+            .map_err(|e| format!("RSA PEM encoding failed: {}", e))
+    }
+
+    /// Hash a password with Argon2id. The PHC string carries the salt and
+    /// parameters, so no separate salt needs to be stored.
+    pub fn hash_password(password: &str) -> Result<String, String> {
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map(|h| h.to_string())
+            .map_err(|e| format!("password hashing failed: {}", e))
+    }
+
+    pub fn verify_password(password: &str, encoded: &str) -> bool {
+        match PasswordHash::new(encoded) {
+            Ok(parsed) => Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok(),
+            Err(_) => false,
+        }
+    }
+
+    /// ChaCha20-Poly1305 authenticated encryption; output is `nonce || ct||tag`.
     pub fn encrypt_chacha20(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
-        // In production, use chacha20poly1305 crate
-        Ok(plaintext.to_vec())
+        let cipher = ChaCha20Poly1305::new_from_slice(key)
+            .map_err(|e| format!("invalid ChaCha20 key length: {}", e))?;
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = ChNonce::from_slice(&nonce_bytes);
+
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
+            .map_err(|_| "ChaCha20-Poly1305 encryption failed".to_string())?;
+
+        let mut out = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ciphertext);
+        Ok(out)
     }
-    
+
     pub fn decrypt_chacha20(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
-        Ok(ciphertext.to_vec())
+        if ciphertext.len() <= NONCE_LEN {
+            return Err("ChaCha20-Poly1305 ciphertext is truncated".to_string());
+        }
+        let cipher = ChaCha20Poly1305::new_from_slice(key)
+            .map_err(|e| format!("invalid ChaCha20 key length: {}", e))?;
+        let (nonce_bytes, body) = ciphertext.split_at(NONCE_LEN);
+        let nonce = ChNonce::from_slice(nonce_bytes);
+        cipher
+            .decrypt(nonce, body)
+            .map_err(|_| "ChaCha20-Poly1305 authentication failed".to_string())
     }
 }
 
@@ -86,7 +184,7 @@ pub mod anti_phishing {
             }
         }
         
-        pub fn generate_code(&self, user_id: &str) -> String {
+        pub fn generate_code(&self, _user_id: &str) -> String {
             // Generate 8-character alphanumeric code
             let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
             let mut code = String::new();
@@ -376,20 +474,16 @@ fn current_time() -> u64 {
         .as_secs()
 }
 
+/// Cryptographically secure random value, used to seed anti-phishing codes.
 fn rand_u64() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64
+    use rand::RngCore;
+    rand::rngs::OsRng.next_u64()
 }
 
 fn sha256_hash(data: &[u8]) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    
-    let mut hasher = DefaultHasher::new();
-    data.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(data);
+    digest.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 fn detect_device_type(user_agent: &str) -> String {
@@ -484,5 +578,58 @@ mod tests {
         
         // Should deny 11th request
         assert!(!limiter.allow("user123"));
+    }
+
+    #[test]
+    fn aes_gcm_round_trips_and_rejects_tampering() {
+        let key = [7u8; 32];
+        let plaintext = b"seed phrase material";
+        let ct = encryption::encrypt_aes256(&key, plaintext).unwrap();
+        assert_ne!(&ct[..], plaintext, "ciphertext must not equal plaintext");
+        assert_eq!(encryption::decrypt_aes256(&key, &ct).unwrap(), plaintext);
+
+        let mut tampered = ct.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        assert!(encryption::decrypt_aes256(&key, &tampered).is_err());
+
+        let wrong_key = [8u8; 32];
+        assert!(encryption::decrypt_aes256(&wrong_key, &ct).is_err());
+    }
+
+    #[test]
+    fn chacha20_round_trips_and_rejects_tampering() {
+        let key = [3u8; 32];
+        let plaintext = b"withdrawal signing payload";
+        let ct = encryption::encrypt_chacha20(&key, plaintext).unwrap();
+        assert_ne!(&ct[..], plaintext);
+        assert_eq!(encryption::decrypt_chacha20(&key, &ct).unwrap(), plaintext);
+        assert!(encryption::decrypt_chacha20(&[4u8; 32], &ct).is_err());
+    }
+
+    #[test]
+    fn rsa_oaep_round_trips() {
+        let (private, public) = encryption::generate_rsa_keypair().unwrap();
+        assert!(!private.is_empty() && !public.is_empty());
+        let ct = encryption::rsa_encrypt(&public, b"wrapped data key").unwrap();
+        assert_eq!(encryption::rsa_decrypt(&private, &ct).unwrap(), b"wrapped data key");
+        assert!(encryption::rsa_private_to_pem(&private).unwrap().contains("PRIVATE KEY"));
+    }
+
+    #[test]
+    fn password_hash_is_salted_and_verifies() {
+        let hash = encryption::hash_password("SecurePass123!").unwrap();
+        assert!(hash.starts_with("$argon2"));
+        assert!(encryption::verify_password("SecurePass123!", &hash));
+        assert!(!encryption::verify_password("wrong", &hash));
+        // Two hashes of the same password differ (distinct salts).
+        assert_ne!(hash, encryption::hash_password("SecurePass123!").unwrap());
+    }
+
+    #[test]
+    fn device_fingerprint_uses_real_sha256() {
+        let hash = sha256_hash(b"abc");
+        assert_eq!(hash.len(), 64);
+        assert_eq!(hash, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 }

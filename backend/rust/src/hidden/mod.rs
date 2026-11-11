@@ -37,7 +37,7 @@ impl IcebergOrder {
         
         if remaining <= 0.0 {
             self.displayed_size = 0.0;
-            self.status = "filled";
+            self.status = "filled".to_string();
         } else if remaining < self.displayed_size {
             self.displayed_size = remaining;
         }
@@ -49,7 +49,7 @@ impl IcebergOrder {
         self.filled += size;
         
         if self.filled >= self.total_size {
-            self.status = "filled";
+            self.status = "filled".to_string();
             self.displayed_size = 0.0;
         } else {
             self.update_display();
@@ -88,32 +88,41 @@ impl DarkMatcher {
 
     // Match orders
     pub fn match_orders(&mut self, symbol: &str) -> Vec<(String, String, f64, f64)> {
-        // Sort buys descending by price, sells ascending
-        let mut matches = Vec::new();
-        
+        // Collect the crossing pairs first (immutable pass), then apply the
+        // fills in a second mutable pass, so the borrow checker does not see an
+        // immutable and a mutable borrow of the same map at once.
+        let mut candidates: Vec<(String, String, f64, f64)> = Vec::new();
+
         for (_, buy) in &self.buy_orders {
             if buy.symbol != symbol || buy.status == "filled" || buy.status == "cancelled" {
                 continue;
             }
-            
             for (_, sell) in &self.sell_orders {
                 if sell.symbol != symbol || sell.status == "filled" || sell.status == "cancelled" {
                     continue;
                 }
-                
                 if buy.price >= sell.price {
                     let qty = sell.total_size.min(buy.total_size - buy.filled);
-                    
-                    matches.push((buy.id.clone(), sell.id.clone(), qty, (buy.price + sell.price) / 2.0));
-                    
-                    // Update fills
-                    self.buy_orders.get_mut(&buy.id).map(|o| o.fill(qty));
-                    self.sell_orders.get_mut(&sell.id).map(|o| o.fill(qty));
+                    candidates.push((
+                        buy.id.clone(),
+                        sell.id.clone(),
+                        qty,
+                        (buy.price + sell.price) / 2.0,
+                    ));
                 }
             }
         }
-        
-        matches
+
+        for (buy_id, sell_id, qty, _price) in &candidates {
+            if let Some(o) = self.buy_orders.get_mut(buy_id) {
+                o.fill(*qty);
+            }
+            if let Some(o) = self.sell_orders.get_mut(sell_id) {
+                o.fill(*qty);
+            }
+        }
+
+        candidates
     }
 
     // Get displayed orders (whatpublic sees)

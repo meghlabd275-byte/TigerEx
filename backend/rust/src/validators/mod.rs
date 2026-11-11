@@ -324,6 +324,6 @@ mod tests {
 
     #[test]
     fn test_crypto_address_eth() {
-        assert!(WalletValidators::crypto_address("0x742d35Cc6544D86f7c5d7c3d1E3C3E3C3E3C3E3C3E3C3").is_ok());
+        assert!(WalletValidators::crypto_address("0x742d35Cc6634C0532925a3b844Bc454e4438f44e").is_ok());
     }
 }

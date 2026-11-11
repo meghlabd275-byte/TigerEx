@@ -235,7 +235,7 @@ impl WalletService {
     pub fn lock_funds(&mut self, user_id: &str, wallet_type: WalletType, asset: &str, 
                     amount: f64) -> bool {
         let key = format!("{}_{:?}_{}", user_id, wallet_type, asset);
-        let wallet = self.wallets.get_mut(&key)?;
+        let wallet = match self.wallets.get_mut(&key) { Some(w) => w, None => return false };
         
         let available = wallet.balance - wallet.locked_balance;
         if available < amount {
@@ -251,7 +251,7 @@ impl WalletService {
     pub fn unlock_funds(&mut self, user_id: &str, wallet_type: WalletType, asset: &str,
                       amount: f64) -> bool {
         let key = format!("{}_{:?}_{}", user_id, wallet_type, asset);
-        let wallet = self.wallets.get_mut(&key)?;
+        let wallet = match self.wallets.get_mut(&key) { Some(w) => w, None => return false };
         
         if wallet.locked_balance < amount {
             wallet.locked_balance = 0.0;

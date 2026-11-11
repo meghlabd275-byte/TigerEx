@@ -1,6 +1,7 @@
 //! Login and password authentication
 
 use serde::{Deserialize, Serialize};
+use crate::{ANTIPHISHING_CODE_LENGTH, LOCKOUT_DURATION_HOURS, MAX_LOGIN_ATTEMPTS};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -142,14 +143,35 @@ impl PasswordHasher {
         verify(password, hash)
     }
     
-    /// Verify and update legacy MD5/SHA1 hashes (migration path)
-    pub fn verify_migration(password: &str, hash: &str, hasher: &str) -> Result<bool, &str> {
+    /// Hash a password with Argon2id (the preferred modern KDF).
+    pub fn hash_argon2(password: &str) -> Result<String, argon2::password_hash::Error> {
+        use argon2::password_hash::{rand_core::OsRng, PasswordHasher as _, SaltString};
+        use argon2::Argon2;
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map(|h| h.to_string())
+    }
+
+    /// Verify a password against an Argon2 PHC string.
+    pub fn verify_argon2(password: &str, hash: &str) -> Result<bool, argon2::password_hash::Error> {
+        use argon2::password_hash::{PasswordHash, PasswordVerifier};
+        use argon2::Argon2;
+        let parsed = PasswordHash::new(hash)?;
+        match Argon2::default().verify_password(password.as_bytes(), &parsed) {
+            Ok(()) => Ok(true),
+            Err(argon2::password_hash::Error::Password) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Verify a password against a hash tagged with its algorithm. Used to
+    /// validate credentials during a migration from an older hasher; an unknown
+    /// tag fails closed rather than accepting the password.
+    pub fn verify_migration(password: &str, hash: &str, hasher: &str) -> Result<bool, &'static str> {
         match hasher {
             "bcrypt" => Self::verify(password, hash).map_err(|_| "bcrypt error"),
-            "argon2" => {
-                // Argon2 verification
-                Ok(false)
-            }
+            "argon2" => Self::verify_argon2(password, hash).map_err(|_| "argon2 error"),
             _ => Err("Unknown hasher"),
         }
     }

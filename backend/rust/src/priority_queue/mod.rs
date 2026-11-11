@@ -126,6 +126,12 @@ impl<T: Ord> Ord for Reverse<T> {
     }
 }
 
+impl<T: PartialEq> PartialEq for Reverse<T> {
+    fn eq(&self, other: &Reverse<T>) -> bool {
+        self.0 == other.0
+    }
+}
+
 impl<T: Eq> Eq for Reverse<T> {}
 
 #[cfg(test)]

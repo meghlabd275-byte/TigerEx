@@ -99,7 +99,7 @@ impl StakingService {
     }
 
     /// Get pool
-    pub fn get_pool(&self, asset &str) -> Option<&StakingPool> {
+    pub fn get_pool(&self, asset: &str) -> Option<&StakingPool> {
         self.pools.get(asset)
     }
 
@@ -141,13 +141,16 @@ impl StakingService {
 
     /// Claim rewards
     pub fn claim_rewards(&mut self, stake_id: &str) -> Result<f64, String> {
-        let stake = self.stakes.get_mut(stake_id)
-            .ok_or("Stake not found")?;
-
         let now = current_timestamp_ms();
-        let days = ((now - stake.started_at) / 86400000) as f64;
-        
-        let rewards = stake.accrued_rewards + self.calculate_rewards(stake_id, days);
+
+        let (amount, apy, started_at, accrued) = {
+            let stake = self.stakes.get(stake_id).ok_or("Stake not found")?;
+            (stake.amount, stake.apy, stake.started_at, stake.accrued_rewards)
+        };
+        let days = ((now - started_at) / 86400000) as f64;
+        let rewards = accrued + (amount * apy * days) / 365.0;
+
+        let stake = self.stakes.get_mut(stake_id).ok_or("Stake not found")?;
         stake.accrued_rewards = 0.0;
         stake.started_at = now;
 
@@ -156,29 +159,38 @@ impl StakingService {
 
     /// Unstake
     pub fn unstake(&mut self, stake_id: &str) -> Result<f64, String> {
-        let stake = self.stakes.get(stake_id)
-            .ok_or("Stake not found")?;
-
-        let pool = self.pools.get_mut(&stake.asset)
-            .ok_or("Pool not found")?;
-
         let now = current_timestamp_ms();
-        let days = ((now - stake.started_at) / 86400000) as f64;
 
-        // Check lock period
-        if days < stake.lock_period as f64 {
-            let penalty = stake.amount * pool.early_unstake_penalty;
-            pool.total_staked -= stake.amount;
+        let (asset, amount, apy, started_at, lock_period) = {
+            let stake = self.stakes.get(stake_id).ok_or("Stake not found")?;
+            (stake.asset.clone(), stake.amount, stake.apy, stake.started_at, stake.lock_period)
+        };
+        let days = ((now - started_at) / 86400000) as f64;
+        let rewards = (amount * apy * days) / 365.0;
+
+        let penalty = {
+            let pool = self.pools.get(&asset).ok_or("Pool not found")?;
+            if days < lock_period as f64 {
+                amount * pool.early_unstake_penalty
+            } else {
+                0.0
+            }
+        };
+
+        if penalty > 0.0 {
+            if let Some(pool) = self.pools.get_mut(&asset) {
+                pool.total_staked -= amount;
+            }
             self.stakes.remove(stake_id);
             return Err(format!("Early unstake penalty: {}", penalty));
         }
 
-        let rewards = self.calculate_rewards(stake_id, days);
-        pool.total_staked -= stake.amount;
-        
+        if let Some(pool) = self.pools.get_mut(&asset) {
+            pool.total_staked -= amount;
+        }
         self.stakes.remove(stake_id);
-        
-        Ok(stake.amount + rewards)
+
+        Ok(amount + rewards)
     }
 
     /// Get user stakes

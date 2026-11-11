@@ -3,7 +3,7 @@
 //! Provides encryption and decryption using AES-256-GCM
 
 use aes_gcm::{
-    aead::{Aead, KeyInit, OsRand},
+    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
 use rand::RngCore;
@@ -30,8 +30,7 @@ impl AesEncryptor {
     /// Create a new encryptor with a randomly generated key
     pub fn generate_key() -> Result<[u8; AES_KEY_SIZE]> {
         let mut key = [0u8; AES_KEY_SIZE];
-        OsRng.fill_bytes(&mut key)
-            .map_err(|e| SecurityError::RandomError(e.to_string()))?;
+        rand::rngs::OsRng.fill_bytes(&mut key);
         Ok(key)
     }
 
@@ -40,8 +39,7 @@ impl AesEncryptor {
     /// Returns the nonce (12 bytes) + ciphertext
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
         let mut nonce_bytes = [0u8; AES_NONCE_SIZE];
-        OsRng.fill_bytes(&mut nonce_bytes)
-            .map_err(|e| SecurityError::RandomError(e.to_string()))?;
+        rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
         
         let nonce = Nonce::from_slice(&nonce_bytes);
         
@@ -93,33 +91,19 @@ impl AesEncryptor {
     }
 }
 
-/// Encryptor using AES-256-CBC with HMAC
-pub struct AesCbcEncryptor {
-    key: [u8; AES_KEY_SIZE],
+/// Reject a decryption whose key or ciphertext is malformed.
+fn ensure_len(data: &[u8]) -> Result<()> {
+    if data.len() < AES_NONCE_SIZE {
+        return Err(SecurityError::InvalidData("Data too short".to_string()));
+    }
+    Ok(())
 }
 
-impl AesCbcEncryptor {
-    pub fn new(key: &[u8; AES_KEY_SIZE]) -> Result<Self> {
-        Ok(Self { key: *key })
-    }
-
-    /// Simple XOR-based encryption for educational purposes
-    /// Note: In production, use AES-GCM or ChaCha20-Poly1305
-    pub fn encrypt_simple(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
-        let mut result = Vec::with_capacity(plaintext.len());
-        
-        for (i, &byte) in plaintext.iter().enumerate() {
-            let key_byte = self.key[i % self.key.len()];
-            result.push(byte ^ key_byte ^ (i as u8));
-        }
-        
-        Ok(result)
-    }
-
-    pub fn decrypt_simple(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        // XOR is symmetric
-        self.encrypt_simple(ciphertext)
-    }
+/// Verify that a value round-trips under `key`, so a corrupted ciphertext is
+/// refused rather than handed to the caller as if it were authentic.
+pub fn is_authentic(key: &[u8; AES_KEY_SIZE], data: &[u8]) -> bool {
+    ensure_len(data).is_ok()
+        && AesEncryptor::new(key).map(|e| e.decrypt(data).is_ok()).unwrap_or(false)
 }
 
 #[cfg(test)]

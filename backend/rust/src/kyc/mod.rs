@@ -23,7 +23,7 @@ pub struct KYCApplication {
     pub reviewed_by: Option<String>,
 }
 
-#[derive(Debug, Clone,_copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KYCLevel {
     None = 0,
     Basic = 1,
@@ -89,7 +89,7 @@ impl KYCService {
         };
 
         let id = user_id.to_string();
-        self.applications.insert(id, app);
+        self.applications.insert(id.clone(), app);
         id
     }
 

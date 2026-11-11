@@ -64,10 +64,14 @@ impl RewardStore {
 
     // Add points
     pub fn add_points(&mut self, user_id: &str, points: i64) {
-        if let Some(up) = self.user_points.get_mut(user_id) {
-            up.points += points;
-            up.lifetime_points += points;
-            up.tier_id = self.calculate_tier(up.lifetime_points);
+        if self.user_points.contains_key(user_id) {
+            let lifetime = self.user_points[user_id].lifetime_points + points;
+            let tier = self.calculate_tier(lifetime);
+            if let Some(up) = self.user_points.get_mut(user_id) {
+                up.points += points;
+                up.lifetime_points += points;
+                up.tier_id = tier;
+            }
         } else {
             self.user_points.insert(user_id.to_string(), UserPoints {
                 user_id: user_id.to_string(),

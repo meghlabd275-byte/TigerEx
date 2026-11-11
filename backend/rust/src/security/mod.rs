@@ -8,7 +8,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
-use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
+use argon2::{Argon2, PasswordHasher, password_hash::{PasswordVerifier, SaltString}};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use digest::{Digest, FixedOutput};
 use hmac::{Hmac, Mac};
@@ -60,8 +60,7 @@ pub const SALT_SIZE: usize = 16;
 /// Generate cryptographically secure random bytes
 pub fn generate_random_bytes(size: usize) -> Result<Vec<u8>> {
     let mut bytes = vec![0u8; size];
-    OsRng.fill_bytes(&mut bytes)
-        .map_err(|e| SecurityError::RandomError(e.to_string()))?;
+    OsRng.fill_bytes(&mut bytes);
     Ok(bytes)
 }
 
@@ -80,14 +79,14 @@ type HmacSha512 = Hmac<Sha512>;
 
 /// HMAC-SHA256
 pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Vec<u8> {
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC can take any key size");
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC can take any key size");
     mac.update(message);
     mac.finalize().into_bytes().to_vec()
 }
 
 /// HMAC-SHA512
 pub fn hmac_sha512(key: &[u8], message: &[u8]) -> Vec<u8> {
-    let mut mac = HmacSha512::new_from_slice(key).expect("HMAC can take any key size");
+    let mut mac = <HmacSha512 as Mac>::new_from_slice(key).expect("HMAC can take any key size");
     mac.update(message);
     mac.finalize().into_bytes().to_vec()
 }
@@ -150,8 +149,7 @@ impl AesEncryptor {
             .map_err(|e| SecurityError::EncryptionFailed(e.to_string()))?;
 
         let mut nonce_bytes = [0u8; NONCE_SIZE];
-        OsRng.fill_bytes(&mut nonce_bytes)
-            .map_err(|e| SecurityError::RandomError(e.to_string()))?;
+        OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let ciphertext = cipher
@@ -189,8 +187,7 @@ impl AesEncryptor {
 
 pub fn generate_aes_key() -> Result<[u8; KEY_SIZE_256]> {
     let mut key = [0u8; KEY_SIZE_256];
-    OsRng.fill_bytes(&mut key)
-        .map_err(|e| SecurityError::RandomError(e.to_string()))?;
+    OsRng.fill_bytes(&mut key);
     Ok(key)
 }
 
@@ -234,7 +231,9 @@ pub fn derive_key_argon2(password: &str, params: &KdfParams) -> Result<Vec<u8>> 
         ).map_err(|e| SecurityError::KeyDerivationFailed(e.to_string()))?,
     );
 
-    let hash = argon2.hash_password(password.as_bytes(), &SaltString::encode_b64(&salt))
+    let salt_string = SaltString::encode_b64(&salt)
+        .map_err(|e| SecurityError::KeyDerivationFailed(e.to_string()))?;
+    let hash = argon2.hash_password(password.as_bytes(), &salt_string)
         .map_err(|e| SecurityError::KeyDerivationFailed(e.to_string()))?;
     
     Ok(hash.hash.unwrap().as_bytes().to_vec())
@@ -287,9 +286,9 @@ pub fn rsa_encrypt(public_key_pem: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
         .map_err(|e| SecurityError::InvalidKey(e.to_string()))?;
     
     let mut rng = rand::thread_rng();
-    let encrypter = Pkcs1v15Encrypt::new(&rng);
     
-    public_key.encrypt(&mut rng, encrypter, plaintext)
+    
+    public_key.encrypt(&mut rng, Pkcs1v15Encrypt, plaintext)
         .map_err(|e| SecurityError::EncryptionFailed(e.to_string()))
 }
 
@@ -297,9 +296,9 @@ pub fn rsa_decrypt(private_key_pem: &str, ciphertext: &[u8]) -> Result<Vec<u8>> 
     let private_key = RsaPrivateKey::from_pkcs8_pem(private_key_pem)
         .map_err(|e| SecurityError::InvalidKey(e.to_string()))?;
     
-    let decrypter = Pkcs1v15Encrypt::new(&SHA256::new());
     
-    private_key.decrypt(decrypter, ciphertext)
+    
+    private_key.decrypt(Pkcs1v15Encrypt, ciphertext)
         .map_err(|e| SecurityError::DecryptionFailed(e.to_string()))
 }
 
@@ -409,8 +408,7 @@ pub fn generate_api_key() -> Result<String> {
 
 pub fn generate_jwt_secret() -> Result<[u8; 64]> {
     let mut secret = [0u8; 64];
-    OsRng.fill_bytes(&mut secret)
-        .map_err(|e| SecurityError::RandomError(e.to_string()))?;
+    OsRng.fill_bytes(&mut secret);
     Ok(secret)
 }
 
@@ -459,8 +457,8 @@ impl TotpGenerator {
             .as_secs();
         
         for i in 0..=window {
-            let check_time = time - (i * self.period);
-            let counter = check_time.to_be_bytes();
+            let check_time = time.saturating_sub(i * self.period);
+            let counter = (check_time / self.period).to_be_bytes();
             let hmac = hmac_sha512(&self.secret, &counter);
             
             let offset = (hmac[hmac.len() - 1] & 0x0f) as usize;

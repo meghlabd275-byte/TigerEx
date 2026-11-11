@@ -91,7 +91,7 @@ mod tests {
     use super::*;
     #[test] fn test_add() {
         let mut e = Engine::new();
-        e.book("BTC/USDT").add(Order { id: "1".into(), user_id: "u1".into(), side: Side::Bid, price: 50000.0, qty: 1.0, ..Default::default() });
+        e.book("BTC/USDT").add(Order { id: "1".into(), user_id: "u1".into(), side: Side::Bid, price: 50000.0, quantity: 1.0, filled: 0.0, status: Status::New });
         assert!(e.depth("BTC/USDT", 1).0.len() == 1);
     }
 }

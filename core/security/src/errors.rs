@@ -43,12 +43,6 @@ pub enum SecurityError {
 
 pub type Result<T> = std::result::Result<T, SecurityError>;
 
-impl From<ring::error::Error> for SecurityError {
-    fn from(err: ring::error::Error) -> Self {
-        SecurityError::EncryptionError(err.to_string())
-    }
-}
-
 impl From<base64::DecodeError> for SecurityError {
     fn from(err: base64::DecodeError) -> Self {
         SecurityError::EncodingError(err.to_string())

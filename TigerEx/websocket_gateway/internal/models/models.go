@@ -91,9 +91,9 @@ type WSTicker struct {
 	PriceChange       float64 `json:"p"`
 	PriceChangePercent float64 `json:"P"`
 	WeightedAvgPrice  float64 `json:"w"`
-	PrevClosePrice    float64 `json:"c"`
+	PrevClosePrice    float64 `json:"x"`
 	LastPrice        float64 `json:"c"`
-	LastQty          float64 `json:"c"`
+	LastQty          float64 `json:"Q"`
 	OpenPrice        float64 `json:"o"`
 	HighPrice       float64 `json:"h"`
 	LowPrice        float64 `json:"l"`
@@ -151,7 +151,7 @@ type WSOrderUpdate struct {
 	OrderID     int64   `json:"i"`
 	TradeTime   int64   `json:"T"`
 	Maker       bool    `json:"m"`
-	Commission float64 `json:"m"`
+	Commission float64 `json:"n"`
 }
 
 // WSTradeV5 represents user trade

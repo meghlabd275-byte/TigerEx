@@ -193,11 +193,11 @@ pub struct NetworkFee {
     pub withdraw_fee: f64,
     pub deposit_enabled: bool,
     pub withdraw_enabled: bool,
-    pubconfirmations: u32,
+    pub confirmations: u32,
 }
 
 impl NetworkFee {
-    pub const fn btc() -> Self {
+    pub fn btc() -> Self {
         Self {
             network: "Bitcoin".to_string(),
             symbol: "BTC".to_string(),
@@ -208,7 +208,7 @@ impl NetworkFee {
         }
     }
 
-    pub const fn eth() -> Self {
+    pub fn eth() -> Self {
         Self {
             network: "Ethereum".to_string(),
             symbol: "ETH".to_string(),
@@ -219,7 +219,7 @@ impl NetworkFee {
         }
     }
 
-    pub const fn usdt() -> Self {
+    pub fn usdt() -> Self {
         Self {
             network: "Ethereum".to_string(),
             symbol: "USDT".to_string(),
@@ -287,8 +287,9 @@ mod tests {
 
     #[test]
     fn test_fee_tiers() {
-        assert!(FEE_TIERS.len() > 0);
-        assert!(FEE_TIERS[0].maker_fee < FEE_TIERS[1].maker_fee);
+        assert!(!FEE_TIERS.is_empty());
+        // Fee tiers are volume-based: a higher tier must not cost more.
+        assert!(FEE_TIERS[0].maker_fee > FEE_TIERS[1].maker_fee);
     }
 
     #[test]
