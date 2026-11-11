@@ -422,12 +422,17 @@ repository, integrated here as TigerEx's on-chain DEX layer. It is a real,
 tested subtree — not a placeholder — and its own CI/build artifacts are
 git-ignored, so it never affects the root Next.js build.
 
+The vendored copy tracks upstream `TigerSwap` `main`. When upstream lands fixes,
+re-vendor and re-apply the local-only additions listed under "TigerSwap
+local-only deltas" below; `git -C <upstream> log` shows what moved.
+
 What it adds that the root repo did not have: a **Solidity contract layer**
-(25 contracts: V2/V3 factory, router, stable and weighted pools, zap, TWAP,
+(26 contracts: V2/V3 factory, router, stable and weighted pools, zap, TWAP,
 options, perps, lending with flash loans, veTGE vote-escrow, staking, bridge,
-OTC, NFT marketplace, meme launchpad, locker, governance, price oracle, quoter)
-with **28 Foundry test suites / 696 passing tests**, plus an independent Go DEX
-backend (aggregator, order matching, indexer, AMM) and a small Next.js DEX UI.
+OTC, NFT marketplace, meme launchpad, locker, governance, price oracle, quoter,
+call-based `TigerSwapSafeERC20`) with **27 Foundry test suites / 721 passing
+tests**, plus an independent Go DEX backend (aggregator, order matching,
+indexer, AMM) and a small Next.js DEX UI.
 
 Wiring rules:
 
@@ -438,7 +443,8 @@ Wiring rules:
   `tigerswap/frontend/.test-build`. Third-party Solidity deps are **not**
   vendored; `tigerswap/contracts/install-deps.sh` fetches the pinned revisions
   (`forge-std` v1.9.4, OpenZeppelin v5.0.2 — OZ is pinned to a tag whose
-  `pragma` is satisfiable by `solc 0.8.20`).
+  `pragma` is satisfiable by `solc 0.8.20`). `foundry.toml` sets
+  `skip = ["lib/**"]` so the vendored third-party test trees are not compiled.
 - The vendored `go.mod` declares `go 1.26.0` and builds with that toolchain.
 - CI jobs `tigerswap-contracts` (`forge build`/`forge test`), `tigerswap-go`
   (`go build`/`go test`), `tigerswap-rust` (`cargo test`), `tigerswap-cpp`
@@ -463,6 +469,8 @@ fixed, each with a regression test that fails against the old code:
 1. **Cross-site WebSocket hijacking** — `backend/go/distributed/{cache,trading}`
    set `CheckOrigin: func(...) bool { return true }`. Now same-origin /
    `TIGEREX_WS_ALLOWED_ORIGINS` allowlist, matching `order_matching`.
+   `trading/origin_test.go` covers it; keep that test when re-vendoring, since
+   upstream still ships the fail-open `CheckOrigin`.
 2. **Governance could never execute** — `TigerSwapGovernance.executeProposal`
    built calldata with `abi.encodeWithSignature(sig, calldatas[i])`, passing the
    encoded args as a single argument, so every call reverted. Now prefixes the
@@ -476,7 +484,28 @@ fixed, each with a regression test that fails against the old code:
    token let `stake` mint phantom balance and `withdraw` zero a balance without
    paying. Now checked. `test/FalseReturnERC20.sol` exercises this.
 5. The two Go origin checks and the four contract fixes are covered by new
-   tests; contracts went 696 -> 704 tests.
+   tests.
+
+Upstream later re-worked the same surface with a call-based
+`TigerSwapSafeERC20` helper (accepts a zero-length return like USDT, rejects an
+explicit `false`) and routed every ERC-20 transfer through it. The vendored copy
+has both: the helper plus the local regression tests. The liquidation-bot seizure
+clamp is a local-only fix — upstream still computes `seize = repay + bonus`
+unclamped, which over-reports collateral and can yield a negative bonus on a
+deeply underwater position; the vendored copy clamps to the collateral value
+(`backend/rust/bots/src/guard.rs`) with tests.
+
+## TigerSwap local-only deltas (re-apply after re-vendoring)
+
+These are in the vendored copy but not in upstream `TigerSwap` `main`:
+
+- `backend/go/distributed/trading/main.go` + `origin_test.go` — origin allowlist.
+- `backend/rust/bots/src/guard.rs` + `tests/bots.rs` — liquidation seizure clamp.
+- `contracts/foundry.toml` — `skip = ["lib/**"]`.
+- `contracts/install-deps.sh`, `contracts/test/FalseReturnERC20.sol` — dep pinning
+  and the false-return token, used by the staking regression test.
+- `contracts/test/TigerSwapGovernance.t.sol` — double-execute, timelock and
+  blank-signature-value tests.
 
 Verified clean (no change needed): lending/margin interest index math,
 perps payout caps and liquidation, options LP-collateral reservation and

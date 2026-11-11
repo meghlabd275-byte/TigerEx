@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "./TigerSwapInterfaces.sol";
+import "./TigerSwapSafeERC20.sol";
 
 /**
  * @title TigerSwapVoteEscrow
@@ -49,6 +50,8 @@ contract TigerSwapVoteEscrow {
     // Weights frozen per epoch (epoch = timestamp / WEEK) for bribe accounting.
     mapping(address => mapping(uint256 => uint256)) public epochGaugeWeight; // gauge => epoch => weight
     mapping(address => mapping(address => mapping(uint256 => uint256))) public epochUserWeight; // user => gauge => epoch
+    mapping(address => address[]) private userGaugeList; // user => gauges voted on
+    mapping(address => mapping(address => bool)) private userGaugeSeen;
 
     // ---- Bribe market ------------------------------------------------------
     mapping(address => mapping(uint256 => address[])) private bribeTokenList;
@@ -215,7 +218,16 @@ contract TigerSwapVoteEscrow {
 
         _checkpoint(msg.sender, old, LockedBalance(0, 0, 0));
 
-        require(token.transfer(msg.sender, amount), "transfer failed");
+        // Voting power goes to zero with the lock, so the caller's live gauge
+        // weights must be released too. Leaving them would strand a phantom
+        // total that blocks every later vote (the power check would always
+        // fail) and keep a gauge's live weight inflated with no tokens behind
+        // it. The per-epoch snapshots are deliberately left alone: they are the
+        // frozen record a bribe for an epoch the caller actually voted in is
+        // paid from.
+        _clearVotes(msg.sender);
+
+        require(TigerSwapSafeERC20.safeTransfer(address(token), msg.sender, amount), "transfer failed");
         emit Withdrawn(msg.sender, amount);
     }
 
@@ -271,7 +283,7 @@ contract TigerSwapVoteEscrow {
         locked[_addr] = next;
 
         if (_amount > 0) {
-            require(token.transferFrom(msg.sender, address(this), _amount), "transferFrom failed");
+            require(TigerSwapSafeERC20.safeTransferFrom(address(token), msg.sender, address(this), _amount), "transferFrom failed");
         }
 
         _checkpoint(_addr, _old, next);
@@ -352,6 +364,21 @@ contract TigerSwapVoteEscrow {
         return gaugeList.length;
     }
 
+    /// @dev Release every live gauge vote the caller holds. Called when the
+    ///      lock that backed those votes is withdrawn.
+    function _clearVotes(address _user) private {
+        address[] storage gauges = userGaugeList[_user];
+        for (uint256 i = 0; i < gauges.length; i++) {
+            address gauge = gauges[i];
+            uint256 weight = userGaugeWeight[_user][gauge];
+            if (weight > 0) {
+                gaugeWeight[gauge] -= weight;
+                userGaugeWeight[_user][gauge] = 0;
+            }
+        }
+        userTotalWeight[_user] = 0;
+    }
+
     /// @notice Set this caller's vote weight for a gauge.
     function vote(address _gauge, uint256 _weight) external {
         require(isGauge[_gauge], "not a gauge");
@@ -364,6 +391,11 @@ contract TigerSwapVoteEscrow {
         userGaugeWeight[msg.sender][_gauge] = _weight;
         userTotalWeight[msg.sender] = newTotal;
         gaugeWeight[_gauge] = gaugeWeight[_gauge] - previous + _weight;
+
+        if (!userGaugeSeen[msg.sender][_gauge]) {
+            userGaugeSeen[msg.sender][_gauge] = true;
+            userGaugeList[msg.sender].push(_gauge);
+        }
 
         uint256 epoch = block.timestamp / WEEK;
         uint256 previousThisEpoch = epochUserWeight[msg.sender][_gauge][epoch];
@@ -388,7 +420,7 @@ contract TigerSwapVoteEscrow {
         }
         bribeTotal[_gauge][epoch][_token] += _amount;
 
-        require(IERC20(_token).transferFrom(msg.sender, address(this), _amount), "bribe transfer failed");
+        require(TigerSwapSafeERC20.safeTransferFrom(_token, msg.sender, address(this), _amount), "bribe transfer failed");
 
         emit BribeAdded(_gauge, epoch, _token, _amount, msg.sender);
     }
@@ -414,7 +446,7 @@ contract TigerSwapVoteEscrow {
         require(share > 0, "share is zero");
 
         bribeClaimed[msg.sender][_gauge][_epoch][_token] = true;
-        require(IERC20(_token).transfer(msg.sender, share), "bribe payout failed");
+        require(TigerSwapSafeERC20.safeTransfer(_token, msg.sender, share), "bribe payout failed");
 
         emit BribeClaimed(msg.sender, _gauge, _epoch, _token, share);
         return share;

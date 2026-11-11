@@ -10,6 +10,7 @@ solc = "0.8.20"
 optimizer = true
 optimizer_runs = 200
 via_ir = true
+
 # Dependencies under lib/ are third-party and carry their own compiler
 # requirements and test trees; they are not part of this project's sources.
 skip = ["lib/**"]

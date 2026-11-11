@@ -188,9 +188,10 @@ contract TigerSwapGovernance {
         proposal.executed = true;
         
         for (uint256 i = 0; i < proposal.targets.length; i++) {
-            // `calldatas[i]` is already ABI-encoded arguments; prefix the 4-byte
-            // selector to build the full call data. A blank signature forwards
-            // `calldatas[i]` verbatim (e.g. a plain value transfer).
+            // `calldatas[i]` already holds the ABI-encoded arguments. The
+            // selector is prefixed to it directly; re-encoding the blob with
+            // `encodeWithSignature` would nest it as a single dynamic argument
+            // and every call would decode to garbage.
             bytes memory callData = bytes(proposal.signatures[i]).length == 0
                 ? proposal.calldatas[i]
                 : abi.encodePacked(bytes4(keccak256(bytes(proposal.signatures[i]))), proposal.calldatas[i]);

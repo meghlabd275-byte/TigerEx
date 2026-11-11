@@ -1,0 +1,105 @@
+name: Tigerswap
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          # There is no go.mod at the repository root, so the cache would not
+          # find a dependency file without these paths.
+          cache-dependency-path: |
+            backend/go.sum
+            backend/go/api_gateway/go.sum
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build Go packages
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/backend/go/api_gateway" && go build -o api_gateway .
+          cd "$GITHUB_WORKSPACE/backend/go/dex_aggregator" && go build -o dex_aggregator .
+          cd "$GITHUB_WORKSPACE/backend/go/dex_connectors" && go build -o dex_connectors .
+
+      - name: Build Frontend
+        run: |
+          cd "$GITHUB_WORKSPACE/frontend" && npm install && npm run build
+
+      - name: Run Go tests
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/backend" && go test ./...
+          # api_gateway is a separate Go module, so the command above does not
+          # reach it. Test it explicitly.
+          cd "$GITHUB_WORKSPACE/backend/go/api_gateway" && go test ./...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build and test Rust packages
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/backend/rust" && cargo build --release && cargo test --release
+
+      - name: Build and test C++ packages
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libssl-dev
+          cd "$GITHUB_WORKSPACE/backend/cpp"
+          mkdir -p build && cd build
+          cmake .. && make && ctest --output-on-failure
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build and test Java SDK
+        run: |
+          # The SDK has no third-party dependencies, so it compiles and tests
+          # with nothing but a JDK.
+          cd "$GITHUB_WORKSPACE/backend/java/sdk" && ./build.sh
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run Python tests
+        run: |
+          set -e
+          python -m pip install --quiet --upgrade pip
+          # The ML models are standard library only; the SDK talks to the chain
+          # and needs web3.
+          python -m pip install --quiet pytest "web3>=6.0.0" "eth-account>=0.9.0" "eth-typing>=4.0.0"
+          cd "$GITHUB_WORKSPACE/backend/python/ml" && python -m pytest tests/ -q
+          cd "$GITHUB_WORKSPACE/backend/python/sdk" && python -m pytest tests/ -q
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Build and test contracts
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/contracts"
+          # contracts/lib is gitignored, so the test framework is fetched here.
+          # Only the test suite needs forge-std; the contracts themselves have no
+          # external Solidity dependencies.
+          mkdir -p lib
+          git clone --depth 1 --quiet https://github.com/foundry-rs/forge-std.git lib/forge-std
+          forge build && forge test

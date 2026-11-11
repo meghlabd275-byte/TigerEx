@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "./TigerSwapInterfaces.sol";
+import "./TigerSwapSafeERC20.sol";
 
 /**
  * @title TigerSwapLending
@@ -161,7 +162,7 @@ contract TigerSwapLending {
         uint256 amount = m.totalReserves;
         require(amount > 0, "TigerSwap: NO_RESERVES");
         m.totalReserves = 0;
-        require(IERC20(token).transfer(to, amount), "TigerSwap: TRANSFER_FAILED");
+        require(TigerSwapSafeERC20.safeTransfer(token, to, amount), "TigerSwap: TRANSFER_FAILED");
         emit ReservesWithdrawn(token, amount);
     }
 
@@ -173,7 +174,7 @@ contract TigerSwapLending {
         require(m.isActive, "TigerSwap: MARKET_NOT_ACTIVE");
         _accrue(m);
 
-        require(IERC20(token).transferFrom(msg.sender, address(this), amount), "TigerSwap: TRANSFER_FAILED");
+        require(TigerSwapSafeERC20.safeTransferFrom(token, msg.sender, address(this), amount), "TigerSwap: TRANSFER_FAILED");
 
         uint256 shares = amount * WAD / m.depositIndex;
         accounts[msg.sender].deposits[token] += shares;
@@ -193,10 +194,10 @@ contract TigerSwapLending {
         accounts[msg.sender].deposits[token] -= shares;
         m.totalDeposits -= shares;
 
-        // A withdrawal must not push the account into liquidation.
-        require(_isHealthy(msg.sender), "TigerSwap: WITHDRAW_WOULD_LIQUIDATE");
+        // A withdrawal must not push the account below its borrow capacity.
+        require(_isBorrowHealthy(msg.sender), "TigerSwap: WITHDRAW_WOULD_LIQUIDATE");
 
-        require(IERC20(token).transfer(msg.sender, amount), "TigerSwap: TRANSFER_FAILED");
+        require(TigerSwapSafeERC20.safeTransfer(token, msg.sender, amount), "TigerSwap: TRANSFER_FAILED");
         emit Withdrawn(msg.sender, token, amount);
     }
 
@@ -215,9 +216,12 @@ contract TigerSwapLending {
         accounts[msg.sender].borrows[token] += shares;
         m.totalBorrows += shares;
 
-        require(_isHealthy(msg.sender), "TigerSwap: INSUFFICIENT_COLLATERAL");
+        // Borrowing is capped by the collateral factor, which is stricter than
+        // the liquidation threshold, so a fresh loan always leaves headroom
+        // before it can be liquidated.
+        require(_isBorrowHealthy(msg.sender), "TigerSwap: INSUFFICIENT_COLLATERAL");
 
-        require(IERC20(token).transfer(msg.sender, amount), "TigerSwap: TRANSFER_FAILED");
+        require(TigerSwapSafeERC20.safeTransfer(token, msg.sender, amount), "TigerSwap: TRANSFER_FAILED");
         emit Borrowed(msg.sender, token, amount);
     }
 
@@ -230,7 +234,7 @@ contract TigerSwapLending {
         uint256 payAmount = amount > owed ? owed : amount;
         require(payAmount > 0, "TigerSwap: NO_DEBT");
 
-        require(IERC20(token).transferFrom(msg.sender, address(this), payAmount), "TigerSwap: TRANSFER_FAILED");
+        require(TigerSwapSafeERC20.safeTransferFrom(token, msg.sender, address(this), payAmount), "TigerSwap: TRANSFER_FAILED");
 
         uint256 shares = _sharesForAmount(m.borrowIndex, payAmount);
         accounts[msg.sender].borrows[token] -= shares;
@@ -281,7 +285,7 @@ contract TigerSwapLending {
         );
         require(collateralSeized <= userCollateral, "TigerSwap: INSUFFICIENT_COLLATERAL");
 
-        require(IERC20(debtToken).transferFrom(msg.sender, address(this), actualRepay), "TigerSwap: TRANSFER_FAILED");
+        require(TigerSwapSafeERC20.safeTransferFrom(debtToken, msg.sender, address(this), actualRepay), "TigerSwap: TRANSFER_FAILED");
 
         uint256 repayShares = _sharesForAmount(debtMarket.borrowIndex, actualRepay);
         accounts[user].borrows[debtToken] -= repayShares;
@@ -291,7 +295,7 @@ contract TigerSwapLending {
         accounts[user].deposits[collateralToken] -= seizeShares;
         collMarket.totalDeposits -= seizeShares;
 
-        require(IERC20(collateralToken).transfer(msg.sender, collateralSeized), "TigerSwap: TRANSFER_FAILED");
+        require(TigerSwapSafeERC20.safeTransfer(collateralToken, msg.sender, collateralSeized), "TigerSwap: TRANSFER_FAILED");
 
         emit Liquidated(msg.sender, user, debtToken, collateralToken, actualRepay, collateralSeized);
     }
@@ -321,7 +325,7 @@ contract TigerSwapLending {
         uint256 fee = amount * flashLoanFee / WAD;
         uint256 balanceBefore = IERC20(token).balanceOf(address(this));
 
-        require(IERC20(token).transfer(receiver, amount), "TigerSwap: TRANSFER_FAILED");
+        require(TigerSwapSafeERC20.safeTransfer(token, receiver, amount), "TigerSwap: TRANSFER_FAILED");
         IFlashLoanReceiver(receiver).onFlashLoan(msg.sender, token, amount, fee, data);
 
         uint256 balanceAfter = IERC20(token).balanceOf(address(this));
@@ -505,9 +509,33 @@ contract TigerSwapLending {
         }
     }
 
+    /// @dev Health against the liquidation threshold, used by liquidation: the
+    ///      account is liquidatable when the threshold-weighted collateral no
+    ///      longer covers the debt.
     function _isHealthy(address user) internal view returns (bool) {
         (uint256 collateralValue, uint256 debtValue) = _accountValues(user);
         return collateralValue >= debtValue;
+    }
+
+    /// @dev Collateral value weighted by each market's collateral factor, which
+    ///      is what caps how much a user may borrow. It is deliberately
+    ///      stricter than the liquidation-threshold value so a new loan is
+    ///      never born liquidatable.
+    function _borrowCapacity(address user) internal view returns (uint256 borrowPower) {
+        uint256 len = _tokens.length;
+        for (uint256 i = 0; i < len; i++) {
+            address token = _tokens[i];
+            uint256 depositShares = accounts[user].deposits[token];
+            if (depositShares == 0) continue;
+            Market storage m = markets[token];
+            uint256 amount = _amountForShares(_projectedDepositIndex(m), depositShares);
+            borrowPower += amount * _price(token) / WAD * m.collateralFactor / WAD;
+        }
+    }
+
+    function _isBorrowHealthy(address user) internal view returns (bool) {
+        (, uint256 debtValue) = _accountValues(user);
+        return _borrowCapacity(user) >= debtValue;
     }
 
     function _price(address token) internal view returns (uint256) {

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "./TigerSwapInterfaces.sol";
+import "./TigerSwapSafeERC20.sol";
 
 /**
  * @title TigerSwapBridge
@@ -30,6 +31,8 @@ contract TigerSwapBridge {
     uint256 public feeBps = 5; // 0.05%
     uint256 public minAmount = 100;
     uint256 public validatorThreshold;
+    /// @notice Number of validators currently registered via setValidator.
+    uint256 public validatorCount;
     uint256 public chainId;
 
     mapping(uint256 => bool) public supportedChains;
@@ -90,12 +93,24 @@ contract TigerSwapBridge {
 
     function setValidator(address validator, bool status) external onlyOwner {
         require(validator != address(0), "TigerSwap: ZERO_ADDRESS");
+        // Keep validatorCount in step with the set so the threshold can be
+        // bounded by it. Only a real change of membership moves the count.
+        if (status && !isValidator[validator]) {
+            validatorCount += 1;
+        } else if (!status && isValidator[validator]) {
+            validatorCount -= 1;
+        }
         isValidator[validator] = status;
         emit ValidatorUpdated(validator, status);
     }
 
+    /// @notice Set how many distinct validator signatures an inbound message needs.
+    /// @dev Bounded above by the live validator set: a threshold above the set
+    ///      size could never be met, and one of zero would let anyone complete a
+    ///      message without a single signature.
     function setValidatorThreshold(uint256 threshold) external onlyOwner {
         require(threshold > 0, "TigerSwap: ZERO_THRESHOLD");
+        require(threshold <= validatorCount, "TigerSwap: THRESHOLD_EXCEEDS_VALIDATORS");
         validatorThreshold = threshold;
         emit ThresholdUpdated(threshold);
     }
@@ -120,7 +135,7 @@ contract TigerSwapBridge {
         uint256 amount = collectedFees[token];
         require(amount > 0, "TigerSwap: NO_FEES");
         collectedFees[token] = 0;
-        require(IERC20(token).transfer(to, amount), "TigerSwap: TRANSFER_FAILED");
+        require(TigerSwapSafeERC20.safeTransfer(token, to, amount), "TigerSwap: TRANSFER_FAILED");
         emit FeesWithdrawn(token, to, amount);
     }
 
@@ -143,7 +158,7 @@ contract TigerSwapBridge {
         uint256 transferAmount = amount - fee;
         require(transferAmount > 0, "TigerSwap: AMOUNT_TOO_LOW");
 
-        require(IERC20(token).transferFrom(msg.sender, address(this), amount), "TigerSwap: TRANSFER_FAILED");
+        require(TigerSwapSafeERC20.safeTransferFrom(token, msg.sender, address(this), amount), "TigerSwap: TRANSFER_FAILED");
         collectedFees[token] += fee;
 
         messageId = keccak256(abi.encodePacked(
@@ -167,9 +182,6 @@ contract TigerSwapBridge {
         require(message.receiver != address(0), "TigerSwap: ZERO_RECEIVER");
         require(message.amount > 0, "TigerSwap: ZERO_AMOUNT");
         require(!processedMessages[message.messageId], "TigerSwap: MESSAGE_ALREADY_PROCESSED");
-        // Fail closed: an unset threshold would otherwise accept an empty
-        // signature set, letting anyone release the locked supply.
-        require(validatorThreshold > 0, "TigerSwap: THRESHOLD_NOT_SET");
 
         bytes32 payloadHash = keccak256(abi.encode(
             message.messageId,
@@ -181,13 +193,17 @@ contract TigerSwapBridge {
         ));
         bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", payloadHash));
 
+        // Fail closed when the threshold was never configured. Without this an
+        // unset (zero) threshold would accept an empty signature set and release
+        // the bridge's locked liquidity to any caller.
+        require(validatorThreshold > 0, "TigerSwap: THRESHOLD_NOT_SET");
         require(_countValidSignatures(digest, signatures) >= validatorThreshold,
             "TigerSwap: INSUFFICIENT_SIGNATURES");
 
         // Set replay protection before the external transfer.
         processedMessages[message.messageId] = true;
 
-        require(IERC20(message.token).transfer(message.receiver, message.amount), "TigerSwap: TRANSFER_FAILED");
+        require(TigerSwapSafeERC20.safeTransfer(message.token, message.receiver, message.amount), "TigerSwap: TRANSFER_FAILED");
 
         emit BridgeCompleted(message.receiver, message.fromChain, message.token, message.amount, message.messageId);
     }

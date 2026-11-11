@@ -428,8 +428,7 @@ fn twap_remainder_is_exact() {
     .unwrap();
 
     let mut total = Fixed::ZERO;
-    let mut timestamp = 1_700_000_000_000i64;
-    for _ in 0..3 {
+    for timestamp in (1_700_000_000_000i64..).take(3) {
         let snapshot = MarketSnapshot::new(
             "BTC/RUSD",
             vec![level("99.99", "10")],
@@ -440,7 +439,6 @@ fn twap_remainder_is_exact() {
         .unwrap();
         let orders = bot.step(&snapshot).unwrap();
         total = total.add(orders[0].quantity).unwrap();
-        timestamp += 1;
     }
     assert_eq!(total, fx("10"), "slices must sum to the total");
     assert!(bot.is_complete());
@@ -583,32 +581,6 @@ fn liquidation_repays_half_and_seizes_with_bonus() {
 }
 
 #[test]
-fn liquidation_skips_healthy_positions() {
-    let bot = LiquidationBot::new(LiquidationConfig {
-        close_factor_bps: 5_000,
-        min_bonus_bps: 100,
-    })
-    .unwrap();
-    assert!(bot.evaluate(&position("1000", "500", "0.75")).unwrap().is_none());
-}
-
-#[test]
-fn liquidation_skips_a_thin_bonus() {
-    let bot = LiquidationBot::new(LiquidationConfig {
-        close_factor_bps: 5_000,
-        min_bonus_bps: 1_000,
-    })
-    .unwrap();
-    assert!(bot.evaluate(&position("1000", "800", "0.75")).unwrap().is_none());
-}
-
-#[test]
-fn liquidation_rejects_a_position_with_no_debt() {
-    let debt_free = position("1000", "0", "0.75");
-    assert!(debt_free.health_factor().is_err());
-}
-
-#[test]
 fn liquidation_seizure_is_capped_at_the_collateral_value() {
     // Collateral 300, debt 1000: the position is deeply underwater, so the
     // repayment plus bonus (400 + 20) exceeds the collateral. The seizure must
@@ -633,10 +605,36 @@ fn liquidation_seizure_keeps_the_bonus_when_the_collateral_covers_it() {
     })
     .unwrap();
 
-    let liquidation = bot.evaluate(&position("1000", "800", "0.75")).unwrap().unwrap();
-    assert_eq!(liquidation.collateral_seized, fx("420"));
-    assert_eq!(liquidation.bonus_earned, fx("20"));
-    assert!(liquidation.collateral_seized <= fx("1000"));
+    let liquidation = bot.evaluate(&position("1000", "1000", "0.75")).unwrap().unwrap();
+    assert_eq!(liquidation.repay_amount, fx("500"));
+    assert_eq!(liquidation.collateral_seized, fx("525"));
+    assert_eq!(liquidation.bonus_earned, fx("25"));
+}
+
+#[test]
+fn liquidation_skips_healthy_positions() {
+    let bot = LiquidationBot::new(LiquidationConfig {
+        close_factor_bps: 5_000,
+        min_bonus_bps: 100,
+    })
+    .unwrap();
+    assert!(bot.evaluate(&position("1000", "500", "0.75")).unwrap().is_none());
+}
+
+#[test]
+fn liquidation_skips_a_thin_bonus() {
+    let bot = LiquidationBot::new(LiquidationConfig {
+        close_factor_bps: 5_000,
+        min_bonus_bps: 1_000,
+    })
+    .unwrap();
+    assert!(bot.evaluate(&position("1000", "800", "0.75")).unwrap().is_none());
+}
+
+#[test]
+fn liquidation_rejects_a_position_with_no_debt() {
+    let debt_free = position("1000", "0", "0.75");
+    assert!(debt_free.health_factor().is_err());
 }
 
 // ---------------------------------------------------------------- rebalance
