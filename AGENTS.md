@@ -551,3 +551,46 @@ Deliberately not changed (verified, not defects):
 - `core/wallet/crypto.rs` is orphaned (no `Cargo.toml`, referenced by nothing) and
   its `TimeLock`/`SessionToken` use hardcoded AES keys. It is dead code with
   sample data, not a live path; do not wire it as-is.
+
+## TigerSmartChain integration surface (registry-driven)
+
+Chains and tokens are operator configuration, never compiled in. A chain exists
+only once an admin lists it; nothing dials a node the operator did not
+configure.
+
+- `src/lib/chains/` — `chain-networks.ts` (EVM aliases, EIP-55 checks),
+  `evm-rpc.ts`, `registry.ts` (`blockchain_chains` / `blockchain_tokens` in the
+  DB, parameterized SQL only), `onchain.ts` (balance reads; a node reporting the
+  wrong chain id fails closed), `tigersmartchain.ts` (registers TGR, plus RUSD
+  when `TIGEREX_TSC_RUSD_ADDRESS` is set), `bootstrap.ts`.
+- Admin: `src/app/api/admin/chains` and `.../tokens` (both `requireAdmin` +
+  `enforceRequestGuards` + `recordAdminAction`), pages `src/app/admin/chains`
+  and `src/app/admin/tokens`. Public read routes `/api/chains` and
+  `/api/wallet/onchain`.
+- `src/instrumentation.ts` runs the bootstrap in the Node runtime only (pulling
+  `better-sqlite3`/`crypto` into Edge broke `next build`; keep the guard).
+- TSC parameters come from the chain's own genesis (mainnet 6666, testnet 6667,
+  native TGR). The node URL and the RUSD contract address are environment
+  variables (`TIGEREX_TSC_RPC_URL`, `TIGEREX_TSC_TESTNET_RPC_URL`,
+  `TIGEREX_TSC_RUSD_ADDRESS`); an unset RPC URL means the chain is simply not
+  served. Never substitute a placeholder address — the wallet would read a
+  contract that does not exist and report a zero balance.
+- Tests: `scripts/test/chains.test.cjs`; `npm run test:logic` includes the chain
+  modules via `scripts/build-logic-tests.cjs`.
+
+`backend/rust/cmd/tigerex_ecosystem` is the Rust side of the same surface.
+`TigerEcosystem::new()` seeds nothing; a caller supplies chains, tokens, pools
+and bridges through `register_deployment(DeploymentConfig)`. `TigerTokens::new`
+takes the real TGR/RUSD addresses. `FeeCollection` books each fee against the
+source it was recorded with and `collect_fees` reports exactly that — it no
+longer apportions a total into 30%/10% buckets. Run
+`cargo test --lib` from the crate directory.
+
+`integrations/` is a standalone Go module (`tigerex/integrations`, wired into
+CI job `test`). It holds the cross-product registry and shared arithmetic:
+chain/token registry (a node URL, and a contract address for a non-native
+token, are required), basis-point bridge fees, a constant-product pool
+(`x*y=k`, positive price impact), and a fee ledger that reports only fees
+actually recorded. Typed errors with stable codes (`IsCode`). Address
+derivation, signing and chain reads stay in the wallet service that owns the
+keys — this package never generates an address or a signature.
