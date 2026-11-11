@@ -166,7 +166,21 @@ impl AuthService {
             .unwrap_or_default();
         let password_ok = self.verify_password(password, &stored_hash);
 
-        let user = self.users.get_mut(&user_id).unwrap();
+        let user = match self.users.get_mut(&user_id) {
+            Some(u) => u,
+            // The index and the user map are written together, so this is
+            // unreachable in a consistent store. Fail the login rather than
+            // panic: a request must never be able to crash the service.
+            None => {
+                return AuthResult {
+                    success: false,
+                    token: None,
+                    refresh_token: None,
+                    user: None,
+                    message: Some("Invalid credentials".to_string()),
+                };
+            }
+        };
 
         // Check if locked
         if let Some(locked_until) = user.locked_until {

@@ -7,16 +7,22 @@ kind: Namespace
 metadata:
   name: tigerex-production
 ---
+# The secret is NOT committed. A production cluster must create it out of band
+# from a real secret store, e.g.:
+#   kubectl -n tigerex-production create secret generic tigerex-secrets \
+#     --from-literal=database-url="$DATABASE_URL" \
+#     --from-literal=redis-password="$REDIS_PASSWORD" \
+#     --from-literal=jwt-secret="$JWT_SECRET"
+# or via External Secrets / a sealed-secret controller. Committing literal
+# credentials here would ship a known database password and JWT signing key to
+# everyone with read access to the repository.
 apiVersion: v1
 kind: Secret
 metadata:
   name: tigerex-secrets
   namespace: tigerex-production
 type: Opaque
-stringData:
-  database-url: "postgresql://postgres:password@postgres:5432/tigerex"
-  redis-password: "redis-password"
-  jwt-secret: "jwt-secret"
+# stringData is intentionally omitted; populate it from the secret store above.
 ---
 # Matching Engine - C++
 apiVersion: apps/v1
