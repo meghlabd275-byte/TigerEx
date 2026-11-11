@@ -1,6 +1,8 @@
 // Ledger System - Financial Truth Layer
 // Rust for ACID-compliant balance tracking
 
+pub mod ledger_engine;
+
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 
@@ -93,6 +95,19 @@ impl Ledger {
 
     // Begin transaction (two-phase commit)
     pub fn begin_tx(&mut self, user_id: &str, symbol: &str, amount: f64, tx_type: TxType, reference: &str) -> Result<String, String> {
+        if user_id.trim().is_empty() {
+            return Err("user id is required".to_string());
+        }
+        if symbol.trim().is_empty() {
+            return Err("symbol is required".to_string());
+        }
+        // A zero, negative or non-finite amount is rejected for every type: a
+        // negative debit would credit the account, and a negative credit would
+        // debit it, both bypassing the balance check below.
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("amount must be positive and finite".to_string());
+        }
+
         let account = self.get_account(user_id);
         let balance_before = account.get_available(symbol);
         
@@ -220,15 +235,10 @@ fn now_ms() -> i64 {
 }
 
 fn random_id() -> String {
-    use std::iter;
-    let chars: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789"
-        .chars()
-        .collect();
-    
-    iter::repeat_with(|| chars[0])
-        .take(16)
-        .map(|c| c)
-        .collect()
+    use rand::RngCore;
+    let mut bytes = [0u8; 8];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
 }
 
 #[cfg(test)]
@@ -245,4 +255,44 @@ mod tests {
         
         assert_eq!(ledger.get_balance("user1", "USDT"), 10000.0);
     }
+
+    #[test]
+    fn transaction_ids_are_unique() {
+        let mut ledger = Ledger::new();
+        let a = ledger.begin_tx("u", "USDT", 1.0, TxType::Deposit, "a").unwrap();
+        let b = ledger.begin_tx("u", "USDT", 1.0, TxType::Deposit, "b").unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn non_positive_amount_is_rejected_for_every_type() {
+        let mut ledger = Ledger::new();
+        assert!(ledger.begin_tx("u", "USDT", 0.0, TxType::Deposit, "r").is_err());
+        assert!(ledger.begin_tx("u", "USDT", -100.0, TxType::Withdrawal, "r").is_err());
+        assert!(ledger.begin_tx("u", "USDT", f64::NAN, TxType::Deposit, "r").is_err());
+        assert!(ledger.begin_tx("", "USDT", 1.0, TxType::Deposit, "r").is_err());
+        assert!(ledger.begin_tx("u", "", 1.0, TxType::Deposit, "r").is_err());
+    }
+
+    #[test]
+    fn a_negative_debit_cannot_mint_balance() {
+        let mut ledger = Ledger::new();
+        let dep = ledger.begin_tx("u", "USDT", 100.0, TxType::Deposit, "dep").unwrap();
+        ledger.commit(&dep).unwrap();
+        // A negative withdrawal must not credit the account.
+        assert!(ledger.begin_tx("u", "USDT", -50.0, TxType::Withdrawal, "w").is_err());
+        assert_eq!(ledger.get_balance("u", "USDT"), 100.0);
+    }
+
+    #[test]
+    fn a_debit_beyond_available_balance_is_refused() {
+        let mut ledger = Ledger::new();
+        let dep = ledger.begin_tx("u", "USDT", 100.0, TxType::Deposit, "dep").unwrap();
+        ledger.commit(&dep).unwrap();
+        assert!(ledger.begin_tx("u", "USDT", 101.0, TxType::Withdrawal, "w").is_err());
+        let ok = ledger.begin_tx("u", "USDT", 100.0, TxType::Withdrawal, "w").unwrap();
+        ledger.commit(&ok).unwrap();
+        assert_eq!(ledger.get_balance("u", "USDT"), 0.0);
+    }
+
 }

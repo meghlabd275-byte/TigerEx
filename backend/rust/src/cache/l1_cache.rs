@@ -3,8 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::cmp::Ordering;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// EvictionPolicy determines cache eviction strategy
 #[derive(Debug, Clone, Copy)]
@@ -33,19 +32,19 @@ pub struct CacheEntry {
 pub struct L1Cache {
     // Storage
     entries: HashMap<String, CacheEntry>,
-    
+
     // Access order for LRU
     access_order: VecDeque<String>,
-    
+
     // Access counts for LFU
     access_counts: HashMap<String, u32>,
-    
+
     // Configuration
     max_entries: usize,
     max_bytes: usize,
     current_bytes: usize,
     policy: EvictionPolicy,
-    
+
     // Statistics
     hits: u64,
     misses: u64,
@@ -69,58 +68,63 @@ impl L1Cache {
             expirations: 0,
         }
     }
-    
+
     pub fn with_policy(max_entries: usize, max_bytes: usize, policy: EvictionPolicy) -> Self {
         let mut cache = Self::new(max_entries, max_bytes);
         cache.policy = policy;
         cache
     }
-    
+
     /// Get value
     pub fn get(&mut self, key: &str) -> Option<Vec<u8>> {
         let now = timestamp_ms();
-        
+
         // Check expiration
-        if let Some(entry) = self.entries.get(key) {
-            if let Some(expires) = entry.expires_at {
-                if now > expires {
-                    // Expired
-                    self.remove(key);
-                    self.misses += 1;
-                    return None;
+        // Copy the value out before mutating so the read borrow ends here.
+        let value = match self.entries.get(key) {
+            Some(entry) => {
+                if let Some(expires) = entry.expires_at {
+                    if now > expires {
+                        // Expired
+                        self.remove(key);
+                        self.misses += 1;
+                        return None;
+                    }
                 }
+                entry.value.clone()
             }
-            
-            // Update access
-            self.touch(key);
-            self.hits += 1;
-            return Some(entry.value.clone());
-        }
-        
-        self.misses += 1;
-        None
+            None => {
+                self.misses += 1;
+                return None;
+            }
+        };
+
+        // Update access
+        self.touch(key);
+        self.hits += 1;
+        Some(value)
     }
-    
+
     /// Set value
     pub fn set(&mut self, key: &str, value: Vec<u8>, ttl_ms: Option<u64>) {
         let now = timestamp_ms();
         let size = value.len();
-        
+
         // Check capacity and evict if needed
         while self.entries.len() >= self.max_entries || self.current_bytes + size > self.max_bytes {
             if self.entries.is_empty() { break; }
             self.evict_one();
         }
-        
+
         // Remove existing
         if let Some(old) = self.entries.remove(key) {
             self.current_bytes -= old.size;
             self.remove_access(key);
         }
-        
+
         // Calculate expiration
         let expires = ttl_ms.map(|ms| now + ms);
-        
+
         // Add entry
         let entry = CacheEntry {
             value: value.clone(),
@@ -130,12 +134,12 @@ impl L1Cache {
             last_access: now,
             size,
         };
-        
+
         self.entries.insert(key.to_string(), entry);
         self.current_bytes += size;
         self.add_access(key);
     }
-    
+
     /// Delete key
     pub fn delete(&mut self, key: &str) -> bool {
         if let Some(entry) = self.entries.remove(key) {
@@ -145,12 +149,12 @@ impl L1Cache {
         }
         false
     }
-    
+
     /// Exists
     pub fn exists(&self, key: &str) -> bool {
         self.entries.contains_key(key)
     }
-    
+
     /// Clear all
     pub fn clear(&mut self) {
         self.entries.clear();
@@ -158,7 +162,7 @@ impl L1Cache {
         self.access_counts.clear();
         self.current_bytes = 0;
     }
-    
+
     /// Update access for policy
     fn add_access(&mut self, key: &str) {
         match self.policy {
@@ -174,20 +178,20 @@ impl L1Cache {
             },
         }
     }
-    
+
     fn remove_access(&mut self, key: &str) {
         if let Some(pos) = self.access_order.iter().position(|k| k == key) {
             self.access_order.remove(pos);
         }
         self.access_counts.remove(key);
     }
-    
+
     fn touch(&mut self, key: &str) {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.accessed += 1;
             entry.last_access = timestamp_ms();
         }
-        
+
         // Update access tracking
         match self.policy {
             EvictionPolicy::LRU => {
@@ -202,10 +206,10 @@ impl L1Cache {
             _ => {},
         }
     }
-    
+
     fn evict_one(&mut self) {
         if self.entries.is_empty() { return; }
-        
+
         let key_to_remove = match self.policy {
             EvictionPolicy::LRU => {
                 self.access_order.pop_front()
@@ -220,25 +224,25 @@ impl L1Cache {
                 self.entries.keys().next().cloned()
             },
         };
-        
+
         if let Some(key) = key_to_remove {
-            self.remove(key);
+            self.remove(&key);
             self.evictions += 1;
         }
     }
-    
+
     fn remove(&mut self, key: &str) {
         if let Some(entry) = self.entries.remove(key) {
             self.current_bytes -= entry.size;
         }
         self.remove_access(key);
     }
-    
+
     /// Get statistics
     pub fn stats(&self) -> CacheStats {
         let total_req = self.hits + self.misses;
         let hit_rate = if total_req > 0 { self.hits as f64 / total_req as f64 } else { 0.0 };
-        
+
         CacheStats {
             entries: self.entries.len(),
             bytes: self.current_bytes,
@@ -281,7 +285,7 @@ impl HotSymbolCache {
             ],
         }
     }
-    
+
     /// Get price for symbol
     pub fn get_price(&mut self, symbol: &str) -> Option<f64> {
         let key = format!("price:{}", symbol);
@@ -289,13 +293,13 @@ impl HotSymbolCache {
             .and_then(|v| String::from_utf8(v).ok())
             .and_then(|s| s.parse().ok())
     }
-    
-    /// Set price for symbol  
+
+    /// Set price for symbol
     pub fn set_price(&mut self, symbol: &str, price: f64) {
         let key = format!("price:{}", symbol);
         self.cache.set(&key, format!("{}", price).into_bytes(), Some(1000)); // 1s TTL
     }
-    
+
     /// Check if symbol is hot
     pub fn is_hot(&self, symbol: &str) -> bool {
         self.symbols.contains(&symbol.to_string())
@@ -317,19 +321,19 @@ impl MarketDataCache {
             trades: L1Cache::new(10000, 100*1024*1024),  // 100MB
         }
     }
-    
+
     pub fn set_orderbook(&mut self, symbol: &str, data: Vec<u8>) {
         self.orderbooks.set(&format!("ob:{}", symbol), data, Some(500));
     }
-    
+
     pub fn get_orderbook(&mut self, symbol: &str) -> Option<Vec<u8>> {
         self.orderbooks.get(&format!("ob:{}", symbol))
     }
-    
+
     pub fn set_ticker(&mut self, symbol: &str, data: Vec<u8>) {
         self.tickers.set(&format!("t:{}", symbol), data, Some(1000));
     }
-    
+
     pub fn add_trade(&mut self, symbol: &str, trade: Vec<u8>) {
         let key = format!("trade:{}", symbol);
         self.trades.set(&key, trade, Some(60000)); // 60s TTL
@@ -343,14 +347,14 @@ fn timestamp_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_l1_cache() {
         let mut cache = L1Cache::new(10, 1024);
-        
+
         cache.set("key1", b"value1".to_vec(), None);
         assert_eq!(cache.get("key1"), Some(b"value1".to_vec()));
-        
+
         let stats = cache.stats();
         assert_eq!(stats.hits, 1);
     }

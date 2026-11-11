@@ -61,27 +61,58 @@ impl CircuitBreaker {
             rejected_calls: 0,
         }
     }
-    
+
+    /// Whether a call would be admitted right now, without consuming a slot.
     pub fn is_available(&self) -> bool {
         match self.state {
             CircuitState::Closed => true,
-            CircuitState::Open => {
-                if let Some(last_failure) = self.last_failure_time {
-                    if last_failure.elapsed() >= self.config.timeout {
-                        return true;
-                    }
-                }
-                false
-            },
-            CircuitState::HalfOpen => {
-                self.half_open_requests < self.config.max_requests
-            },
+            CircuitState::Open => self.open_timeout_elapsed(),
+            CircuitState::HalfOpen => self.half_open_requests < self.config.max_requests,
         }
     }
-    
+
+    fn open_timeout_elapsed(&self) -> bool {
+        matches!(self.last_failure_time, Some(t) if t.elapsed() >= self.config.timeout)
+    }
+
+    /// Admit a call and account for it. Transitions an expired Open circuit to
+    /// HalfOpen, admits up to `max_requests` probe calls there, and rejects the
+    /// rest. This is the entry point the caller should use.
+    pub fn try_request(&mut self) -> bool {
+        match self.state {
+            CircuitState::Closed => {
+                self.total_calls += 1;
+                true
+            }
+            CircuitState::Open => {
+                if self.open_timeout_elapsed() {
+                    // Move to half-open and admit this probe.
+                    self.state = CircuitState::HalfOpen;
+                    self.successes = 0;
+                    self.half_open_requests = 1;
+                    self.total_calls += 1;
+                    true
+                } else {
+                    self.rejected_calls += 1;
+                    false
+                }
+            }
+            CircuitState::HalfOpen => {
+                if self.half_open_requests < self.config.max_requests {
+                    self.half_open_requests += 1;
+                    self.total_calls += 1;
+                    true
+                } else {
+                    self.rejected_calls += 1;
+                    false
+                }
+            }
+        }
+    }
+
     pub fn record_success(&mut self) {
         self.successful_calls += 1;
-        
+
         match self.state {
             CircuitState::Closed => {
                 self.failures = 0;
@@ -98,12 +129,12 @@ impl CircuitBreaker {
             _ => {},
         }
     }
-    
+
     pub fn record_failure(&mut self) {
         self.failed_calls += 1;
         self.failures += 1;
         self.last_failure_time = Some(Instant::now());
-        
+
         match self.state {
             CircuitState::Closed => {
                 if self.failures >= self.config.failure_threshold {
@@ -117,11 +148,11 @@ impl CircuitBreaker {
             _ => {},
         }
     }
-    
+
     pub fn state(&self) -> CircuitState {
         self.state
     }
-    
+
     pub fn stats(&self) -> CircuitStats {
         CircuitStats {
             state: self.state,
@@ -133,7 +164,7 @@ impl CircuitBreaker {
             successes_in_sequence: self.successes,
         }
     }
-    
+
     pub fn reset(&mut self) {
         self.state = CircuitState::Closed;
         self.failures = 0;
@@ -171,7 +202,7 @@ impl Default for CircuitStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_circuit() {
         let config = CircuitConfig {
@@ -179,11 +210,47 @@ mod tests {
             ..Default::default()
         };
         let mut cb = CircuitBreaker::new(config);
-        
+
         cb.record_failure();
         assert_eq!(cb.state(), CircuitState::Closed);
-        
+
         cb.record_failure();
         assert_eq!(cb.state(), CircuitState::Open);
+    }
+
+    #[test]
+    fn an_open_circuit_rejects_until_the_timeout_then_half_opens() {
+        let config = CircuitConfig {
+            failure_threshold: 1,
+            success_threshold: 1,
+            timeout: Duration::from_millis(0),
+            max_requests: 1,
+        };
+        let mut cb = CircuitBreaker::new(config);
+        assert!(cb.try_request());
+        cb.record_failure();
+        assert_eq!(cb.state(), CircuitState::Open);
+
+        // Timeout is zero, so the next request half-opens and is admitted.
+        assert!(cb.try_request());
+        assert_eq!(cb.state(), CircuitState::HalfOpen);
+
+        // The half-open budget is one probe; a second is rejected and counted.
+        assert!(!cb.try_request());
+        assert_eq!(cb.stats().rejected_calls, 1);
+
+        cb.record_success();
+        assert_eq!(cb.state(), CircuitState::Closed);
+    }
+
+    #[test]
+    fn a_closed_circuit_rejects_nothing_and_counts_calls() {
+        let mut cb = CircuitBreaker::new(CircuitConfig::default());
+        assert!(cb.try_request());
+        cb.record_success();
+        let s = cb.stats();
+        assert_eq!(s.total_calls, 1);
+        assert_eq!(s.successful_calls, 1);
+        assert_eq!(s.rejected_calls, 0);
     }
 }

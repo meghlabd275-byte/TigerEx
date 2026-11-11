@@ -76,16 +76,16 @@ pub enum TreasuryStatus {
 pub struct TreasuryEngine {
     // Reserves by type
     reserves: RwLock<HashMap<String, Reserve>>,
-    
+
     // Liquidity pools
     pools: RwLock<HashMap<String, LiquidityPool>>,
-    
+
     // Operations
     operations: RwLock<Vec<TreasuryOperation>>,
-    
+
     // Total assets under management
     total_assets: RwLock<f64>,
-    
+
     // Configuration
     min_operational_reserve_ratio: f64,
     risk_reserve_ratio: f64,
@@ -104,11 +104,11 @@ impl TreasuryEngine {
             insurance_reserve_ratio: 0.05,         // 5%
         }
     }
-    
+
     /// Initialize default reserves
     pub fn init_reserves(&self, assets: Vec<(&str, &str, f64)>) {
         let mut reserves = self.reserves.write().unwrap();
-        
+
         for (asset, name, balance) in assets {
             reserves.insert(asset.to_string(), Reserve {
                 id: format!("reserve_{}", asset),
@@ -123,31 +123,31 @@ impl TreasuryEngine {
             });
         }
     }
-    
+
     /// Get reserve balance
     pub fn get_reserve(&self, asset: &str) -> Option<Reserve> {
         self.reserves.read().unwrap().get(asset).cloned()
     }
-    
+
     /// Get all reserves
     pub fn get_all_reserves(&self) -> Vec<Reserve> {
         self.reserves.read().unwrap().values().cloned().collect()
     }
-    
+
     /// Check reserve adequacy
     pub fn check_reserve_adequacy(&self) -> ReserveAdequacyResult {
         let reserves = self.reserves.read().unwrap();
         let total = *self.total_assets.read().unwrap();
-        
+
         let mut result = ReserveAdequacyResult {
             total_assets: total,
             reserves: Vec::new(),
             overall_status: ReserveStatus::Adequate,
         };
-        
+
         for reserve in reserves.values() {
             let actual_ratio = if total > 0.0 { reserve.balance / total } else { 0.0 };
-            
+
             let status = if actual_ratio < reserve.min_ratio {
                 ReserveStatus::Critical
             } else if actual_ratio < reserve.target_ratio {
@@ -155,7 +155,7 @@ impl TreasuryEngine {
             } else {
                 ReserveStatus::Adequate
             };
-            
+
             result.reserves.push(ReserveStatusDetail {
                 asset: reserve.asset.clone(),
                 balance: reserve.balance,
@@ -164,28 +164,31 @@ impl TreasuryEngine {
                 min_ratio: reserve.min_ratio,
                 status,
             });
-            
+
             if status == ReserveStatus::Critical {
                 result.overall_status = ReserveStatus::Critical;
             } else if status == ReserveStatus::Warning && result.overall_status != ReserveStatus::Critical {
                 result.overall_status = ReserveStatus::Warning;
             }
         }
-        
+
         result
     }
-    
+
     /// Top up reserve
     pub fn top_up_reserve(&self, asset: &str, amount: f64) -> Result<TreasuryOperation, String> {
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("top-up amount must be positive and finite".to_string());
+        }
         let mut reserves = self.reserves.write().unwrap();
-        
+
         let reserve = reserves.get_mut(asset)
             .ok_or("reserve not found")?;
-        
+
         // Move from operational pool
         reserve.balance += amount;
         reserve.updated_at = timestamp_ms();
-        
+
         // Record operation
         let op = TreasuryOperation {
             id: generate_id("topup"),
@@ -198,31 +201,38 @@ impl TreasuryEngine {
             created_at: timestamp_ms(),
             executed_at: Some(timestamp_ms()),
         };
-        
+
         self.operations.write().unwrap().push(op.clone());
-        
+
         Ok(op)
     }
-    
+
     /// Withdraw excess from reserve
     pub fn withdraw_excess(&self, asset: &str, amount: f64) -> Result<TreasuryOperation, String> {
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("withdrawal amount must be positive and finite".to_string());
+        }
         let mut reserves = self.reserves.write().unwrap();
-        
+
         let reserve = reserves.get_mut(asset)
             .ok_or("reserve not found")?;
-        
+
+        if amount > reserve.balance {
+            return Err("withdrawal exceeds reserve balance".to_string());
+        }
+
         // Check max ratio
         let total = *self.total_assets.read().unwrap();
         let new_balance = reserve.balance - amount;
         let new_ratio = if total > 0.0 { new_balance / total } else { 0.0 };
-        
+
         if new_ratio < reserve.min_ratio {
             return Err("would breach minimum reserve ratio".to_string());
         }
-        
+
         reserve.balance -= amount;
         reserve.updated_at = timestamp_ms();
-        
+
         let op = TreasuryOperation {
             id: generate_id("wdrex"),
             operation_type: TreasuryOperationType::WithdrawExcess,
@@ -234,17 +244,17 @@ impl TreasuryEngine {
             created_at: timestamp_ms(),
             executed_at: Some(timestamp_ms()),
         };
-        
+
         self.operations.write().unwrap().push(op.clone());
-        
+
         Ok(op)
     }
-    
+
     /// Rebalance reserves
     pub fn rebalance(&self) -> Result<Vec<TreasuryOperation>, String> {
         let adequacy = self.check_reserve_adequacy();
         let mut operations = Vec::new();
-        
+
         for detail in &adequacy.reserves {
             if detail.status == ReserveStatus::Critical || detail.status == ReserveStatus::Warning {
                 let needed = (detail.target_ratio - detail.actual_ratio) * adequacy.total_assets;
@@ -256,24 +266,32 @@ impl TreasuryEngine {
                 }
             }
         }
-        
+
         Ok(operations)
     }
-    
-    /// Update total assets (called periodically)
-    pub fn update_total_assets(&self, total: f64) {
+
+    /// Update total assets (called periodically). A non-finite or negative
+    /// total is refused so ratios never divide by a bogus denominator.
+    pub fn update_total_assets(&self, total: f64) -> Result<(), String> {
+        if !total.is_finite() || total < 0.0 {
+            return Err("total assets must be finite and non-negative".to_string());
+        }
         *self.total_assets.write().unwrap() = total;
+        Ok(())
     }
-    
+
     /// Get liquidity pool
     pub fn get_pool(&self, asset: &str) -> Option<LiquidityPool> {
         self.pools.read().unwrap().get(asset).cloned()
     }
-    
+
     /// Add liquidity
     pub fn add_liquidity(&self, asset: &str, amount: f64) -> Result<(), String> {
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("liquidity amount must be positive and finite".to_string());
+        }
         let mut pools = self.pools.write().unwrap();
-        
+
         let pool = pools.entry(asset.to_string())
             .or_insert_with(|| LiquidityPool {
                 id: format!("pool_{}", asset),
@@ -284,11 +302,11 @@ impl TreasuryEngine {
                 utilization_rate: 0.0,
                 updated_at: timestamp_ms(),
             });
-        
+
         pool.balance += amount;
         pool.available += amount;
         pool.updated_at = timestamp_ms();
-        
+
         Ok(())
     }
 }
@@ -322,21 +340,50 @@ fn timestamp_ms() -> u64 {
 }
 
 fn generate_id(prefix: &str) -> String {
-    format!("{}_{}", prefix, timestamp_ms())
+    use rand::RngCore;
+    let mut bytes = [0u8; 12];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    format!("{}_{}", prefix, hex::encode(bytes))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_treasury() {
         let treasury = TreasuryEngine::new();
         treasury.init_reserves(vec![("USDT", "Operational", 1_000_000.0)]);
-        
-        treasury.update_total_assets(10_000_000.0);
-        
+
+        treasury.update_total_assets(10_000_000.0).unwrap();
+
         let result = treasury.check_reserve_adequacy();
         assert!(result.overall_status != ReserveStatus::Critical);
+    }
+
+    #[test]
+    fn a_non_positive_top_up_is_refused() {
+        let t = TreasuryEngine::new();
+        t.init_reserves(vec![("USDT", "Operational", 1_000.0)]);
+        assert!(t.top_up_reserve("USDT", 0.0).is_err());
+        assert!(t.top_up_reserve("USDT", -5.0).is_err());
+        assert!(t.top_up_reserve("USDT", f64::NAN).is_err());
+        assert_eq!(t.get_reserve("USDT").unwrap().balance, 1_000.0);
+    }
+
+    #[test]
+    fn a_withdrawal_beyond_the_reserve_is_refused() {
+        let t = TreasuryEngine::new();
+        t.init_reserves(vec![("USDT", "Operational", 1_000.0)]);
+        t.update_total_assets(1_000.0).unwrap();
+        assert!(t.withdraw_excess("USDT", 5_000.0).is_err());
+        assert_eq!(t.get_reserve("USDT").unwrap().balance, 1_000.0);
+    }
+
+    #[test]
+    fn a_negative_total_assets_update_is_refused() {
+        let t = TreasuryEngine::new();
+        assert!(t.update_total_assets(-1.0).is_err());
+        assert!(t.update_total_assets(f64::NAN).is_err());
     }
 }

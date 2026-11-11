@@ -11,7 +11,7 @@ use serde::{Serialize, Deserialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WalletType {
     Hot,      // Online - for daily trading
-    Warm,     // Semi-online - for larger operations  
+    Warm,     // Semi-online - for larger operations
     Cold,     // Offline - for storage
     Vault,    // Multi-sig - for large holdings
 }
@@ -120,13 +120,20 @@ impl Balance {
         self.total += amount;
     }
 
-    pub fn debit(&mut self, amount: f64) {
-        self.available = (self.available - amount).max(0.0);
-        self.total = (self.total - amount).max(0.0);
+    /// Debit available balance. Returns `false` (and moves nothing) when the
+    /// amount is not a positive finite value or exceeds what is available; it
+    /// never clamps, because clamping silently hid an over-debit.
+    pub fn debit(&mut self, amount: f64) -> bool {
+        if !amount.is_finite() || amount < 0.0 || self.available < amount {
+            return false;
+        }
+        self.available -= amount;
+        self.total -= amount;
+        true
     }
 
     pub fn lock(&mut self, amount: f64) -> bool {
-        if self.available < amount {
+        if !amount.is_finite() || amount < 0.0 || self.available < amount {
             return false;
         }
         self.available -= amount;
@@ -134,9 +141,16 @@ impl Balance {
         true
     }
 
-    pub fn unlock(&mut self, amount: f64) {
-        self.locked = (self.locked - amount).max(0.0);
+    /// Unlock locked balance back to available. Returns `false` and moves
+    /// nothing when the amount is not a positive finite value or exceeds what
+    /// is locked; unlocking more than is locked would mint available balance.
+    pub fn unlock(&mut self, amount: f64) -> bool {
+        if !amount.is_finite() || amount < 0.0 || self.locked < amount {
+            return false;
+        }
+        self.locked -= amount;
         self.available += amount;
+        true
     }
 }
 
@@ -249,10 +263,10 @@ impl WalletManager {
             transactions: HashMap::new(),
             assets: HashMap::new(),
         };
-        
+
         // Initialize supported assets
         mgr.init_assets();
-        
+
         mgr
     }
 
@@ -261,10 +275,10 @@ impl WalletManager {
             ("BTC", "Bitcoin", 8, 0.0001, 0.0001, 0.0001),
             ("ETH", "Ethereum", 18, 0.001, 0.01, 0.005),
             ("USDT", "Tether", 6, 1.0, 1.0, 1.0),
-            ("BNB", "Binance Coin", 8, 0.01, 0.1, 0.05),
+            ("BNB", "BNB", 8, 0.01, 0.1, 0.05),
             ("SOL", "Solana", 9, 0.01, 0.1, 0.025),
         ];
-        
+
         for (symbol, name, decimals, min_withdraw, min_deposit, fee) in assets {
             self.assets.insert(symbol.to_string(), AssetInfo {
                 symbol: symbol.to_string(),
@@ -282,11 +296,11 @@ impl WalletManager {
     pub fn create_wallet(&mut self, user_id: &str, wallet_type: WalletType) -> Result<String, String> {
         let wallet = Wallet::new(user_id, wallet_type);
         let id = wallet.id.clone();
-        
+
         self.wallets.insert(id.clone(), wallet);
         self.balances.insert(id.clone(), HashMap::new());
         self.transactions.insert(id.clone(), Vec::new());
-        
+
         Ok(id)
     }
 
@@ -319,27 +333,27 @@ impl WalletManager {
     // Credit balance (deposit)
     pub fn credit(&mut self, wallet_id: &str, symbol: &str, amount: f64) -> Result<Transaction, String> {
         // Validate amount
-        if amount <= 0.0 {
+        if !amount.is_finite() || amount <= 0.0 {
             return Err("invalid amount".to_string());
         }
-        
+
         // Get asset info
         if !self.assets.contains_key(symbol) {
             return Err("unsupported asset".to_string());
         }
-        
+
         if let Some(balances) = self.balances.get_mut(wallet_id) {
             let balance = balances.entry(symbol.to_string()).or_insert(Balance::new(symbol));
             balance.credit(amount);
-            
+
             // Create transaction
             let tx = Transaction::new_deposit(wallet_id, symbol, amount, "external");
             let tx_clone = tx.clone();
             self.transactions.get_mut(wallet_id).unwrap().push(tx);
-            
+
             return Ok(tx_clone);
         }
-        
+
         Err("wallet not found".to_string())
     }
 
@@ -348,37 +362,35 @@ impl WalletManager {
         // Get asset info
         let asset = self.assets.get(symbol)
             .ok_or_else(|| "unsupported asset".to_string())?;
-        
+
         if !asset.is_enabled {
             return Err("asset not enabled".to_string());
         }
-        
-        if amount < asset.min_withdraw {
+
+        if !amount.is_finite() || amount < asset.min_withdraw {
             return Err("below minimum withdrawal".to_string());
         }
-        
+
         let total_required = amount + asset.withdraw_fee;
-        
+
         if let Some(balances) = self.balances.get_mut(wallet_id) {
             let balance = balances.entry(symbol.to_string()).or_insert(Balance::new(symbol));
-            
-            if balance.available < total_required {
+
+            // Move the funds; fails closed if the balance cannot cover it.
+            if !balance.debit(total_required) {
                 return Err("insufficient balance".to_string());
             }
-            
-            // Lock funds
-            balance.debit(total_required);
-            
+
             // Create transaction
             let tx = Transaction::new_withdrawal(
                 wallet_id, symbol, amount, asset.withdraw_fee, to_address
             );
             let tx_clone = tx.clone();
             self.transactions.get_mut(wallet_id).unwrap().push(tx);
-            
+
             return Ok(tx_clone);
         }
-        
+
         Err("wallet not found".to_string())
     }
 
@@ -422,8 +434,10 @@ impl WalletManager {
     pub fn unlock(&mut self, wallet_id: &str, symbol: &str, amount: f64) -> Result<(), String> {
         if let Some(balances) = self.balances.get_mut(wallet_id) {
             if let Some(balance) = balances.get_mut(symbol) {
-                balance.unlock(amount);
-                return Ok(());
+                if balance.unlock(amount) {
+                    return Ok(());
+                }
+                return Err("cannot unlock more than is locked".to_string());
             }
         }
         Err("balance not found".to_string())
@@ -431,25 +445,31 @@ impl WalletManager {
 
     // Internal transfer
     pub fn internal_transfer(
-        &mut self, 
-        from_wallet: &str, 
-        to_wallet: &str, 
-        symbol: &str, 
+        &mut self,
+        from_wallet: &str,
+        to_wallet: &str,
+        symbol: &str,
         amount: f64
     ) -> Result<String, String> {
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err("transfer amount must be positive and finite".to_string());
+        }
+        if from_wallet == to_wallet {
+            return Err("sender and receiver must differ".to_string());
+        }
+
         // Debit from sender
         {
             if let Some(balances) = self.balances.get_mut(from_wallet) {
                 let balance = balances.entry(symbol.to_string()).or_insert(Balance::new(symbol));
-                if balance.available < amount {
+                if !balance.debit(amount) {
                     return Err("insufficient balance".to_string());
                 }
-                balance.debit(amount);
             } else {
                 return Err("sender wallet not found".to_string());
             }
         }
-        
+
         // Credit to receiver
         {
             if let Some(balances) = self.balances.get_mut(to_wallet) {
@@ -459,7 +479,7 @@ impl WalletManager {
                 return Err("receiver wallet not found".to_string());
             }
         }
-        
+
         Ok(format!("transfer_{}", rand_id()))
     }
 }
@@ -494,24 +514,24 @@ mod tests {
     #[test]
     fn test_wallet_creation() {
         let mut mgr = WalletManager::new();
-        
+
         let wallet_id = mgr.create_wallet("user1", WalletType::Hot).unwrap();
         mgr.activate_wallet(&wallet_id).unwrap();
-        
+
         assert!(mgr.get_wallet(&wallet_id).is_some());
     }
 
     #[test]
     fn test_credit_debit() {
         let mut mgr = WalletManager::new();
-        
+
         let wallet_id = mgr.create_wallet("user1", WalletType::Hot).unwrap();
         mgr.activate_wallet(&wallet_id).unwrap();
-        
+
         // Credit
         let tx = mgr.credit(&wallet_id, "BTC", 1.5).unwrap();
         assert_eq!(tx.amount, 1.5);
-        
+
         // Check balance
         let bal = mgr.get_balance(&wallet_id, "BTC").unwrap();
         assert_eq!(bal.total, 1.5);
@@ -521,13 +541,13 @@ mod tests {
     #[test]
     fn test_withdrawal() {
         let mut mgr = WalletManager::new();
-        
+
         let wallet_id = mgr.create_wallet("user1", WalletType::Cold).unwrap();
         mgr.activate_wallet(&wallet_id).unwrap();
-        
+
         // Credit first
         mgr.credit(&wallet_id, "USDT", 1000.0).unwrap();
-        
+
         // Request withdrawal
         let tx = mgr.debit(&wallet_id, "USDT", 500.0, "0x1234...");
         assert!(tx.is_ok());

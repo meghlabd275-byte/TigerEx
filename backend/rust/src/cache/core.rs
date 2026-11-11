@@ -35,45 +35,50 @@ impl Cache {
             misses: 0,
         }
     }
-    
+
     pub fn get(&mut self, key: &str) -> Option<Vec<u8>> {
         let now = timestamp_ms();
-        
-        if let Some(entry) = self.entries.get(key) {
-            if let Some(expires) = entry.expires_at {
-                if now > expires {
-                    self.remove(key);
-                    self.misses += 1;
-                    return None;
+
+        // Copy the value out before mutating so the read borrow ends here.
+        let value = match self.entries.get(key) {
+            Some(entry) => {
+                if let Some(expires) = entry.expires_at {
+                    if now > expires {
+                        self.remove(key);
+                        self.misses += 1;
+                        return None;
+                    }
                 }
+                entry.value.clone()
             }
-            
-            // Update LRU
-            self.touch(key);
-            self.hits += 1;
-            return Some(entry.value.clone());
-        }
-        
-        self.misses += 1;
-        None
+            None => {
+                self.misses += 1;
+                return None;
+            }
+        };
+
+        // Update LRU
+        self.touch(key);
+        self.hits += 1;
+        Some(value)
     }
-    
+
     pub fn set(&mut self, key: &str, value: Vec<u8>, ttl_ms: Option<u64>) {
         let now = timestamp_ms();
         let size = value.len();
-        
+
         // Evict if needed
         while self.entries.len() >= self.max_entries || self.current_bytes + size > self.max_bytes {
             if self.entries.is_empty() { break; }
             self.evict();
         }
-        
+
         // Remove old
         if let Some(old) = self.entries.remove(key) {
             self.current_bytes -= old.value.len();
             self.remove_access(key);
         }
-        
+
         // Add new
         let entry = Entry {
             value: value.clone(),
@@ -81,12 +86,12 @@ impl Cache {
             created_at: now,
             accessed: 1,
         };
-        
+
         self.entries.insert(key.to_string(), entry);
         self.current_bytes += size;
         self.access_order.push_back(key.to_string());
     }
-    
+
     pub fn delete(&mut self, key: &str) -> bool {
         if let Some(entry) = self.entries.remove(key) {
             self.current_bytes -= entry.value.len();
@@ -95,21 +100,21 @@ impl Cache {
         }
         false
     }
-    
+
     pub fn exists(&self, key: &str) -> bool {
         self.entries.contains_key(key)
     }
-    
+
     pub fn clear(&mut self) {
         self.entries.clear();
         self.access_order.clear();
         self.current_bytes = 0;
     }
-    
+
     pub fn stats(&self) -> CacheStats {
         let total = self.hits + self.misses;
         let hit_rate = if total > 0 { self.hits as f64 / total as f64 } else { 0.0 };
-        
+
         CacheStats {
             entries: self.entries.len(),
             bytes: self.current_bytes,
@@ -118,30 +123,30 @@ impl Cache {
             hit_rate,
         }
     }
-    
+
     fn touch(&mut self, key: &str) {
         if let Some(pos) = self.access_order.iter().position(|k| k == key) {
             self.access_order.remove(pos);
             self.access_order.push_back(key.to_string());
         }
-        
+
         if let Some(e) = self.entries.get_mut(key) {
             e.accessed += 1;
         }
     }
-    
+
     fn remove_access(&mut self, key: &str) {
         if let Some(pos) = self.access_order.iter().position(|k| k == key) {
             self.access_order.remove(pos);
         }
     }
-    
+
     fn evict(&mut self) {
         if let Some(key) = self.access_order.pop_front() {
             self.remove(&key);
         }
     }
-    
+
     fn remove(&mut self, key: &str) {
         if let Some(entry) = self.entries.remove(key) {
             self.current_bytes -= entry.value.len();
@@ -166,14 +171,14 @@ fn timestamp_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_cache() {
         let mut cache = Cache::new(100, 1024*1024);
-        
+
         cache.set("key1", b"value1".to_vec(), None);
         assert!(cache.get("key1").is_some());
-        
+
         let stats = cache.stats();
         assert_eq!(stats.hits, 1);
     }
