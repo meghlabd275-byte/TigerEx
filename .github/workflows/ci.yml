@@ -45,6 +45,16 @@ jobs:
             TigerEx/kyc_aml/go.mod
             TigerEx/payment_integration/go.mod
             TigerEx/health_check/go.mod
+            TigerEx/services/go.mod
+            TigerEx/auth_service/go.mod
+            TigerEx/user_wallet/go.mod
+            TigerEx/user_auth/service/go.mod
+            TigerEx/super_admin_and_rbac/go.mod
+            TigerEx/security/go.mod
+            TigerEx/blockchain_and_web3/go.mod
+            TigerEx/defi_wallet/go.mod
+            TigerEx/fiat_onramp/go.mod
+            TigerEx/payment_gateway/go.mod
 
       - name: Test REST gateway internal packages
         working-directory: TigerEx/rest_api_gateway
@@ -72,6 +82,46 @@ jobs:
 
       - name: Test admin service validation and isolation
         run: GO111MODULE=off go test ./TigerEx/admin_panel
+
+      - name: Test shared services module (fail-closed)
+        working-directory: TigerEx/services
+        run: go vet ./... && go test ./...
+
+      - name: Test auth service
+        working-directory: TigerEx/auth_service
+        run: go vet ./... && go test ./...
+
+      - name: Test user wallet service
+        working-directory: TigerEx/user_wallet
+        run: go vet ./... && go test ./...
+
+      - name: Test user auth service
+        working-directory: TigerEx/user_auth/service
+        run: go vet ./... && go test ./...
+
+      - name: Test super-admin RBAC service
+        working-directory: TigerEx/super_admin_and_rbac
+        run: go vet ./... && go test ./...
+
+      - name: Test security service
+        working-directory: TigerEx/security
+        run: go vet ./... && go test ./...
+
+      - name: Test blockchain and web3 service
+        working-directory: TigerEx/blockchain_and_web3
+        run: go vet ./... && go test ./...
+
+      - name: Test DeFi wallet service
+        working-directory: TigerEx/defi_wallet
+        run: go vet ./... && go test ./...
+
+      - name: Test fiat on-ramp service
+        working-directory: TigerEx/fiat_onramp
+        run: go vet ./... && go test ./...
+
+      - name: Test payment gateway service
+        working-directory: TigerEx/payment_gateway
+        run: go vet ./... && go test ./...
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

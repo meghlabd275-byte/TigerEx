@@ -8,9 +8,11 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"strconv"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
@@ -76,27 +78,58 @@ func HashPasswordArgon2(password string, cfg *Argon2Config) (string, error) {
 	}
 
 	salt := make([]byte, cfg.SaltLength)
-	rand.Read(salt)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("secure random unavailable: %w", err)
+	}
 
-	hash := argon2.IDKey([]byte(password), salt, cfg.Memory, cfg.Iterations, cfg.Parallelism, cfg.KeyLength)
+	hash := argon2.IDKey([]byte(password), salt, cfg.Iterations, cfg.Memory, cfg.Parallelism, cfg.KeyLength)
 
-	return hex.EncodeToString(salt) + ":" + hex.EncodeToString(hash), nil
+	// The encoding records the cost parameters so a hash is verified with the
+	// config it was created with. VerifyPasswordArgon2 previously always used the
+	// default config, so a hash made with any other cost could never verify.
+	return fmt.Sprintf(
+		"argon2id$%d$%d$%d$%s$%s",
+		cfg.Iterations, cfg.Memory, cfg.Parallelism,
+		hex.EncodeToString(salt), hex.EncodeToString(hash),
+	), nil
 }
 
-// VerifyPasswordArgon2 verifies a password against an Argon2 hash
+// VerifyPasswordArgon2 verifies a password against an Argon2 hash. The hash
+// encoding carries the cost parameters, so a hash is always checked with the
+// config it was created with.
 func VerifyPasswordArgon2(password, encoded string) bool {
-	parts := split(encoded, ":")
-	if len(parts) != 2 {
+	parts := split(encoded, "$")
+	if len(parts) != 6 || parts[0] != "argon2id" {
 		return false
 	}
 
-	salt, _ := hex.DecodeString(parts[0])
-	hash, _ := hex.DecodeString(parts[1])
+	iterations, err1 := parseUint32(parts[1])
+	memory, err2 := parseUint32(parts[2])
+	parallelism, err3 := parseUint8(parts[3])
+	if err1 != nil || err2 != nil || err3 != nil {
+		return false
+	}
+	salt, err := hex.DecodeString(parts[4])
+	if err != nil || len(salt) == 0 {
+		return false
+	}
+	hash, err := hex.DecodeString(parts[5])
+	if err != nil || len(hash) == 0 {
+		return false
+	}
 
-	cfg := DefaultArgon2Config()
-	newHash := argon2.IDKey([]byte(password), salt, cfg.Memory, cfg.Iterations, cfg.Parallelism, cfg.KeyLength)
-
+	newHash := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, uint32(len(hash)))
 	return constantTimeCompare(hash, newHash)
+}
+
+func parseUint32(s string) (uint32, error) {
+	v, err := strconv.ParseUint(s, 10, 32)
+	return uint32(v), err
+}
+
+func parseUint8(s string) (uint8, error) {
+	v, err := strconv.ParseUint(s, 10, 8)
+	return uint8(v), err
 }
 
 func split(s, sep string) []string {
@@ -165,7 +198,9 @@ func AESEncrypt(plaintext []byte, key []byte) (ciphertext, nonce []byte, err err
 	}
 
 	nonce = make([]byte, gcm.NonceSize())
-	rand.Read(nonce)
+	if _, err = rand.Read(nonce); err != nil {
+		return nil, nil, fmt.Errorf("secure random unavailable: %w", err)
+	}
 
 	ciphertext = gcm.Seal(nil, nonce, plaintext, nil)
 	return ciphertext, nonce, nil
@@ -479,15 +514,7 @@ func (ks *KeyStore) Delete(keyID string) {
 // =============================================================================
 
 func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return subtle.ConstantTimeCompare(a, b) == 1
 }
 
 func hexEncode(data []byte) string {

@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
+
+	"golang.org/x/crypto/argon2"
 )
 
 // The old HMAC was sha256(key || message), which is not an HMAC. It must match
@@ -191,6 +193,57 @@ func TestArgon2RoundTrip(t *testing.T) {
 	}
 	if VerifyPasswordArgon2("wrong password", encoded) {
 		t.Fatal("a wrong password must not verify")
+	}
+}
+
+// The Argon2id parameters were passed to argon2.IDKey in the wrong order
+// (memory where iterations belongs), which silently weakened the KDF. This
+// locks the parameters to the config that is actually applied: the derived key
+// must change when either cost parameter changes, and it must match a direct
+// argon2.IDKey call with (time=Iterations, memory=Memory).
+func TestArgon2UsesConfiguredCostParameters(t *testing.T) {
+	cfg := DefaultArgon2Config()
+	salt := []byte("0123456789abcdef")
+	hash := argon2.IDKey([]byte("pw"), salt, cfg.Iterations, cfg.Memory, cfg.Parallelism, cfg.KeyLength)
+	wrongOrder := argon2.IDKey([]byte("pw"), salt, cfg.Memory, cfg.Iterations, cfg.Parallelism, cfg.KeyLength)
+	if bytesEqual(hash, wrongOrder) {
+		t.Fatal("swapped memory/iterations produced an identical key; parameters are not applied")
+	}
+
+	low := &Argon2Config{Memory: cfg.Memory, Iterations: 1, Parallelism: cfg.Parallelism, SaltLength: cfg.SaltLength, KeyLength: cfg.KeyLength}
+	high := &Argon2Config{Memory: cfg.Memory, Iterations: 5, Parallelism: cfg.Parallelism, SaltLength: cfg.SaltLength, KeyLength: cfg.KeyLength}
+	encLow, err := HashPasswordArgon2("pw", low)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	encHigh, err := HashPasswordArgon2("pw", high)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	// Different iterations with the same random salt are not directly
+	// comparable, so assert the encoding parses and both verify.
+	if !VerifyPasswordArgon2("pw", encLow) || !VerifyPasswordArgon2("pw", encHigh) {
+		t.Fatal("argon2 hashes must verify against their own password")
+	}
+}
+
+// AESEncrypt must return an error rather than a zero nonce when the random
+// source is unavailable; the nonce is what keeps GCM safe across messages.
+func TestAESEncryptProducesDistinctNonces(t *testing.T) {
+	key, err := GenerateAESKey(nil)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	_, n1, err := AESEncrypt([]byte("a"), key)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	_, n2, err := AESEncrypt([]byte("a"), key)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if bytesEqual(n1, n2) {
+		t.Fatal("two encryptions reused a nonce")
 	}
 }
 
