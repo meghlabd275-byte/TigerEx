@@ -95,13 +95,26 @@ impl LiquidationBot {
         }
 
         let bonus = repay.mul(Fixed::ratio(position.liquidation_bonus_bps as i128, 10_000)?)?;
-        let seize = repay.add(bonus)?;
+        // A liquidator may never take more collateral than the position holds:
+        // the position's collateral value is the ceiling, and the bonus is what
+        // is left above the repayment once that ceiling binds. Without the
+        // clamp a position whose debt exceeds its collateral — exactly the
+        // deeply underwater case this bot exists for — would report seizing more
+        // collateral than exists, and a negative bonus.
+        let seize = repay
+            .add(bonus)?
+            .clamp(Fixed::ZERO, position.collateral_value)?;
+        let bonus_earned = if seize > repay {
+            seize.sub(repay)?
+        } else {
+            Fixed::ZERO
+        };
 
         Ok(Some(Liquidation {
             position_id: position.id.clone(),
             repay_amount: repay,
             collateral_seized: seize,
-            bonus_earned: bonus,
+            bonus_earned,
             health_factor: position.health_factor()?,
         }))
     }

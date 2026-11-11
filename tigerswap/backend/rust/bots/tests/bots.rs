@@ -608,6 +608,37 @@ fn liquidation_rejects_a_position_with_no_debt() {
     assert!(debt_free.health_factor().is_err());
 }
 
+#[test]
+fn liquidation_seizure_is_capped_at_the_collateral_value() {
+    // Collateral 300, debt 1000: the position is deeply underwater, so the
+    // repayment plus bonus (400 + 20) exceeds the collateral. The seizure must
+    // stop at the collateral, and the bonus must never go negative.
+    let bot = LiquidationBot::new(LiquidationConfig {
+        close_factor_bps: 5_000,
+        min_bonus_bps: 100,
+    })
+    .unwrap();
+
+    let liquidation = bot.evaluate(&position("300", "1000", "0.75")).unwrap().unwrap();
+    assert_eq!(liquidation.repay_amount, fx("500"));
+    assert_eq!(liquidation.collateral_seized, fx("300"));
+    assert_eq!(liquidation.bonus_earned, fx("0"));
+}
+
+#[test]
+fn liquidation_seizure_keeps_the_bonus_when_the_collateral_covers_it() {
+    let bot = LiquidationBot::new(LiquidationConfig {
+        close_factor_bps: 5_000,
+        min_bonus_bps: 100,
+    })
+    .unwrap();
+
+    let liquidation = bot.evaluate(&position("1000", "800", "0.75")).unwrap().unwrap();
+    assert_eq!(liquidation.collateral_seized, fx("420"));
+    assert_eq!(liquidation.bonus_earned, fx("20"));
+    assert!(liquidation.collateral_seized <= fx("1000"));
+}
+
 // ---------------------------------------------------------------- rebalance
 
 fn rebalance_config() -> RebalanceConfig {

@@ -48,6 +48,7 @@ const MODULES = [
   'src/lib/bots/strategies.ts',
   'src/lib/p2p/escrow.ts',
   'src/lib/security/guards.ts',
+  'src/lib/security/csp.ts',
   'src/lib/wallet/address.ts',
   'src/lib/wallet/hd.ts',
   'src/lib/wallet/withdrawals.ts',

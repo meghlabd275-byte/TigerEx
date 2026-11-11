@@ -33,37 +33,12 @@ const nextConfig = {
   },
 
   async headers() {
-    const securityHeaders = [
-      { key: 'X-Content-Type-Options', value: 'nosniff' },
-      { key: 'X-Frame-Options', value: 'DENY' },
-      { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-      { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
-      { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
-      { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
-      {
-        key: 'Content-Security-Policy',
-        value: [
-          "default-src 'self'",
-          "script-src 'self' 'unsafe-inline'",
-          "style-src 'self' 'unsafe-inline'",
-          "img-src 'self' data: blob: https:",
-          "font-src 'self' data: https:",
-          `connect-src 'self' https: wss:${process.env.NODE_ENV === 'production' ? '' : ' ws:'}`,
-          "base-uri 'self'",
-          "object-src 'none'",
-          "frame-ancestors 'none'",
-          "form-action 'self'",
-        ].join('; '),
-      },
-    ];
-    if (process.env.NODE_ENV === 'production') {
-      securityHeaders.push({
-        key: 'Strict-Transport-Security',
-        value: 'max-age=63072000; includeSubDomains; preload',
-      });
-    }
+    // The Content-Security-Policy and the other security headers are set in
+    // `src/middleware.ts`, because the CSP needs a per-request nonce and this
+    // file cannot mint one. Declaring a CSP here as well would emit a second
+    // header, and two CSPs intersect — the weaker one would win, which is how
+    // the old `script-src 'unsafe-inline'` policy would survive.
     return [
-      { source: '/:path*', headers: securityHeaders },
       // Every API response is per-request and must never be stored by a browser,
       // proxy or CDN: balances, order books and account state are all sensitive
       // and time-critical. This is a belt-and-braces guarantee on top of each
