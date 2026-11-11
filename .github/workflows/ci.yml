@@ -42,6 +42,9 @@ jobs:
             TigerEx/rest_api_gateway/go.mod
             TigerEx/websocket_gateway/go.mod
             TigerEx/distributed_exchange_backend/go.mod
+            TigerEx/kyc_aml/go.mod
+            TigerEx/payment_integration/go.mod
+            TigerEx/health_check/go.mod
 
       - name: Test REST gateway internal packages
         working-directory: TigerEx/rest_api_gateway
@@ -54,6 +57,18 @@ jobs:
       - name: Test distributed exchange backend
         working-directory: TigerEx/distributed_exchange_backend
         run: go build ./... && go vet ./... && go test ./...
+
+      - name: Test KYC/AML service (fail-closed)
+        working-directory: TigerEx/kyc_aml
+        run: go vet ./... && go test ./...
+
+      - name: Test payment integration adapters (fail-closed)
+        working-directory: TigerEx/payment_integration
+        run: go vet ./... && go test ./...
+
+      - name: Build health check probes
+        working-directory: TigerEx/health_check
+        run: go vet ./... && go build ./...
 
       - name: Test admin service validation and isolation
         run: GO111MODULE=off go test ./TigerEx/admin_panel
@@ -133,6 +148,12 @@ jobs:
 
       - name: Test Rust exchange engine crate
         run: cargo test --manifest-path TigerEx/core_exchange_engine/Cargo.toml
+
+      - name: Test Rust custody crates fail closed
+        run: |
+          rustc --edition 2021 --crate-type lib --test TigerEx/mpc_wallet/src/lib.rs -o /tmp/mpc_wallet_tests && /tmp/mpc_wallet_tests
+          rustc --edition 2021 --crate-type lib --test TigerEx/hardware_wallet/src/lib.rs -o /tmp/hardware_wallet_tests && /tmp/hardware_wallet_tests
+          rustc --edition 2021 --crate-type lib --test TigerEx/self_custody_wallet/self_custody_wallet.rs -o /tmp/self_custody_tests && /tmp/self_custody_tests
 
   tigerswap-contracts:
     runs-on: ubuntu-latest

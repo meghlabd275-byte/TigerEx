@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -121,6 +122,13 @@ type PaymentGateway interface {
 	GetMinMax(amountType string) (min, max float64)
 }
 
+// ErrProviderNotImplemented is returned by a provider adapter whose HTTP
+// integration has not been wired yet. A provider call that never reached the
+// provider must fail loudly rather than report a fabricated success: a silent
+// nil result previously made RefundPayment dereference a nil payment and crash,
+// and made CancelPayment report a cancellation that never happened.
+var ErrProviderNotImplemented = errors.New("payment provider adapter is not implemented")
+
 // ============================================================================
 // STRIPE GATEWAY
 // ============================================================================
@@ -158,22 +166,22 @@ func (sg *StripeGateway) CreatePayment(ctx context.Context, payment *Payment) (*
 
 func (sg *StripeGateway) GetPaymentStatus(ctx context.Context, paymentID string) (*Payment, error) {
 	// Query Stripe for payment status
-	return nil, nil
+	return nil, fmt.Errorf("stripe: get payment status: %w", ErrProviderNotImplemented)
 }
 
 func (sg *StripeGateway) ConfirmPayment(ctx context.Context, paymentID string) (*Payment, error) {
 	// Confirm with Stripe
-	return nil, nil
+	return nil, fmt.Errorf("stripe: confirm payment: %w", ErrProviderNotImplemented)
 }
 
 func (sg *StripeGateway) CancelPayment(ctx context.Context, paymentID string) error {
 	// Cancel with Stripe
-	return nil
+	return fmt.Errorf("stripe: cancel payment: %w", ErrProviderNotImplemented)
 }
 
 func (sg *StripeGateway) RefundPayment(ctx context.Context, paymentID string, amount float64) (*Payment, error) {
 	// Process refund with Stripe
-	return nil, nil
+	return nil, fmt.Errorf("stripe: refund payment: %w", ErrProviderNotImplemented)
 }
 
 func (sg *StripeGateway) GetSupportedCurrencies() []string {
@@ -232,19 +240,23 @@ func (sg *SimplexGateway) CreatePayment(ctx context.Context, payment *Payment) (
 }
 
 func (sg *SimplexGateway) GetPaymentStatus(ctx context.Context, paymentID string) (*Payment, error) {
-	return nil, nil
+	// Query Simplex for payment status
+	return nil, fmt.Errorf("simplex: get payment status: %w", ErrProviderNotImplemented)
 }
 
 func (sg *SimplexGateway) ConfirmPayment(ctx context.Context, paymentID string) (*Payment, error) {
-	return nil, nil
+	// Confirm with Simplex
+	return nil, fmt.Errorf("simplex: confirm payment: %w", ErrProviderNotImplemented)
 }
 
 func (sg *SimplexGateway) CancelPayment(ctx context.Context, paymentID string) error {
-	return nil
+	// Cancel with Simplex
+	return fmt.Errorf("simplex: cancel payment: %w", ErrProviderNotImplemented)
 }
 
 func (sg *SimplexGateway) RefundPayment(ctx context.Context, paymentID string, amount float64) (*Payment, error) {
-	return nil, nil
+	// Process refund with Simplex
+	return nil, fmt.Errorf("simplex: refund payment: %w", ErrProviderNotImplemented)
 }
 
 func (sg *SimplexGateway) GetSupportedCurrencies() []string {
@@ -294,19 +306,23 @@ func (mg *MoonpayGateway) CreatePayment(ctx context.Context, payment *Payment) (
 }
 
 func (mg *MoonpayGateway) GetPaymentStatus(ctx context.Context, paymentID string) (*Payment, error) {
-	return nil, nil
+	// Query Moonpay for payment status
+	return nil, fmt.Errorf("moonpay: get payment status: %w", ErrProviderNotImplemented)
 }
 
 func (mg *MoonpayGateway) ConfirmPayment(ctx context.Context, paymentID string) (*Payment, error) {
-	return nil, nil
+	// Confirm with Moonpay
+	return nil, fmt.Errorf("moonpay: confirm payment: %w", ErrProviderNotImplemented)
 }
 
 func (mg *MoonpayGateway) CancelPayment(ctx context.Context, paymentID string) error {
-	return nil
+	// Cancel with Moonpay
+	return fmt.Errorf("moonpay: cancel payment: %w", ErrProviderNotImplemented)
 }
 
 func (mg *MoonpayGateway) RefundPayment(ctx context.Context, paymentID string, amount float64) (*Payment, error) {
-	return nil, nil
+	// Process refund with Moonpay
+	return nil, fmt.Errorf("moonpay: refund payment: %w", ErrProviderNotImplemented)
 }
 
 func (mg *MoonpayGateway) GetSupportedCurrencies() []string {
@@ -556,6 +572,9 @@ func (ps *PaymentService) RefundPayment(paymentID string, amount float64) (*Paym
 	refundedPayment, err := gateway.RefundPayment(context.Background(), paymentID, amount)
 	if err != nil {
 		return nil, err
+	}
+	if refundedPayment == nil {
+		return nil, fmt.Errorf("gateway %s returned no refund result", payment.Gateway)
 	}
 
 	refundedPayment.Status = PaymentRefunded

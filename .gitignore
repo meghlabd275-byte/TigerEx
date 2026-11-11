@@ -59,3 +59,6 @@ tigerswap/contracts/cache/
 tigerswap/contracts/lib/
 tigerswap/**/.next/
 tigerswap/frontend/.test-build/
+
+# Go build artifacts
+TigerEx/health_check/health_check

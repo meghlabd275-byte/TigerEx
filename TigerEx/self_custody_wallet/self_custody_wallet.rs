@@ -1,6 +1,9 @@
 //! Self-Custody Wallet
-//! Non-custodial, MPC, WalletConnect
-//! Migration from TypeScript to Rust
+//!
+//! Non-custodial wallet registry. Address derivation, MPC signing and balance
+//! reads are deliberately unimplemented: a non-custodial wallet that cannot run
+//! its real key ceremony or read the chain must refuse, never fabricate an
+//! address, a signature or a balance.
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,6 +21,34 @@ impl Default for WalletType {
         WalletType::Hot
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WalletError {
+    WalletNotFound,
+    /// Address derivation / key ceremony is not wired.
+    KeyCeremonyUnavailable,
+    /// MPC signing is not wired.
+    SigningUnavailable,
+    /// No chain data source is configured.
+    ChainDataUnavailable,
+    InvalidParameters(String),
+}
+
+impl std::fmt::Display for WalletError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WalletError::WalletNotFound => write!(f, "wallet not found"),
+            WalletError::KeyCeremonyUnavailable => {
+                write!(f, "key ceremony is not available; cannot derive an address")
+            }
+            WalletError::SigningUnavailable => write!(f, "MPC signing is not available"),
+            WalletError::ChainDataUnavailable => write!(f, "no chain data source is configured"),
+            WalletError::InvalidParameters(m) => write!(f, "invalid parameters: {}", m),
+        }
+    }
+}
+
+impl std::error::Error for WalletError {}
 
 /// Wallet
 #[derive(Debug, Clone)]
@@ -38,19 +69,28 @@ pub struct SelfCustodyWalletManager {
 }
 
 impl SelfCustodyWalletManager {
-    /// Create new wallet
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Create wallet
-    pub fn create(&mut self, user_id: String, wallet_type: WalletType) -> Wallet {
+    /// Register a wallet around an address produced by the real key ceremony.
+    ///
+    /// Fails closed: with no address there is nothing to register, and a
+    /// fabricated address would be unrecoverable, so this refuses.
+    pub fn create(
+        &mut self,
+        user_id: String,
+        wallet_type: WalletType,
+        address: String,
+    ) -> Result<Wallet, WalletError> {
+        if user_id.trim().is_empty() {
+            return Err(WalletError::InvalidParameters("user id is required".into()));
+        }
+        if address.trim().is_empty() {
+            return Err(WalletError::KeyCeremonyUnavailable);
+        }
         self.wallet_counter += 1;
         let id = format!("WALLET_{}", self.wallet_counter);
-        
-        // Generate random address (simplified)
-        let address = format!("0x{:032x}", self.wallet_counter);
-        
         let wallet = Wallet {
             id: id.clone(),
             user_id,
@@ -59,48 +99,57 @@ impl SelfCustodyWalletManager {
             chains: Vec::new(),
             created_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64,
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
         };
-        
         self.wallets.insert(id, wallet.clone());
-        wallet
+        Ok(wallet)
     }
 
-    /// Sign transaction
-    pub fn sign_transaction(&self, wallet_id: &str, _tx: &[u8]) -> Option<(bool, String)> {
+    /// Sign a transaction.
+    ///
+    /// Fails closed: no signature is returned unless the real MPC protocol
+    /// produced one.
+    pub fn sign_transaction(&self, wallet_id: &str, tx: &[u8]) -> Result<Vec<u8>, WalletError> {
         if !self.wallets.contains_key(wallet_id) {
-            return None;
+            return Err(WalletError::WalletNotFound);
         }
-        
-        // Simplified - real impl would use MPC
-        Some((true, format!("signature_{}", wallet_id)))
+        if tx.is_empty() {
+            return Err(WalletError::InvalidParameters(
+                "transaction payload is empty".into(),
+            ));
+        }
+        Err(WalletError::SigningUnavailable)
     }
 
-    /// Get balance (simulated)
-    pub fn get_balance(&self, wallet_id: &str) -> Option<HashMap<String, f64>> {
+    /// Read a wallet's on-chain balances.
+    ///
+    /// Fails closed: there is no chain data source, so this returns an error
+    /// rather than a hardcoded balance map.
+    pub fn get_balance(
+        &self,
+        wallet_id: &str,
+    ) -> Result<HashMap<String, f64>, WalletError> {
         if !self.wallets.contains_key(wallet_id) {
-            return None;
+            return Err(WalletError::WalletNotFound);
         }
-        
-        let mut balances = HashMap::new();
-        balances.insert("ETH".to_string(), 1.5);
-        balances.insert("BTC".to_string(), 0.1);
-        balances.insert("USDT".to_string(), 5000.0);
-        
-        Some(balances)
+        Err(WalletError::ChainDataUnavailable)
     }
 
     /// Add chain support
     pub fn add_chain(&mut self, wallet_id: &str, chain: String) -> bool {
+        if chain.trim().is_empty() {
+            return false;
+        }
         if let Some(wallet) = self.wallets.get_mut(wallet_id) {
-            wallet.chains.push(chain);
+            if !wallet.chains.contains(&chain) {
+                wallet.chains.push(chain);
+            }
             return true;
         }
         false
     }
 
-    /// Get wallet
     pub fn get_wallet(&self, wallet_id: &str) -> Option<&Wallet> {
         self.wallets.get(wallet_id)
     }
@@ -111,22 +160,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_create_wallet() {
+    fn create_requires_a_real_address() {
         let mut manager = SelfCustodyWalletManager::new();
-        
-        let wallet = manager.create("user1".to_string(), WalletType::Hot);
-        
+        assert!(matches!(
+            manager.create("user1".to_string(), WalletType::Hot, String::new()),
+            Err(WalletError::KeyCeremonyUnavailable)
+        ));
+        assert!(matches!(
+            manager.create(String::new(), WalletType::Hot, "0xabc".to_string()),
+            Err(WalletError::InvalidParameters(_))
+        ));
+    }
+
+    #[test]
+    fn create_registers_the_supplied_address() {
+        let mut manager = SelfCustodyWalletManager::new();
+        let wallet = manager
+            .create("user1".to_string(), WalletType::Hot, "0xdeadbeef".to_string())
+            .unwrap();
+        assert_eq!(wallet.address, "0xdeadbeef");
         assert_eq!(wallet.wallet_type, WalletType::Hot);
     }
 
     #[test]
-    fn test_sign() {
+    fn signing_fails_closed_and_never_fabricates() {
         let mut manager = SelfCustodyWalletManager::new();
-        
-        let wallet = manager.create("user1".to_string(), WalletType::Cold);
-        let result = manager.sign_transaction(&wallet.id, b"tx data");
-        
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().0, true);
+        let wallet = manager
+            .create("user1".to_string(), WalletType::Cold, "0xabc".to_string())
+            .unwrap();
+        assert!(matches!(
+            manager.sign_transaction(&wallet.id, b"tx data"),
+            Err(WalletError::SigningUnavailable)
+        ));
+        assert!(matches!(
+            manager.sign_transaction("missing", b"tx data"),
+            Err(WalletError::WalletNotFound)
+        ));
+    }
+
+    #[test]
+    fn balance_fails_closed_without_a_chain_source() {
+        let mut manager = SelfCustodyWalletManager::new();
+        let wallet = manager
+            .create("user1".to_string(), WalletType::Hot, "0xabc".to_string())
+            .unwrap();
+        assert!(matches!(
+            manager.get_balance(&wallet.id),
+            Err(WalletError::ChainDataUnavailable)
+        ));
     }
 }
