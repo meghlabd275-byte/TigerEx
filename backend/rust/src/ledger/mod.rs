@@ -163,7 +163,6 @@ impl Ledger {
                     account.add_balance(&entry.symbol, entry.amount);
                     entry.balance_after = account.get_available(&entry.symbol);
                 }
-                TxType::Transfer => {} // Handled above
             }
             
             entry.status = "confirmed".to_string();
