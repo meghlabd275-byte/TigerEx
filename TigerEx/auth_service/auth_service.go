@@ -8,7 +8,6 @@ import (
 	"time"
 	
 	"golang.org/x/crypto/bcrypt"
-	"github.com/pquerna/otp/totp"
 )
 
 const (

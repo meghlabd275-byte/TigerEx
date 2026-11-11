@@ -41,6 +41,7 @@ jobs:
           cache-dependency-path: |
             TigerEx/rest_api_gateway/go.mod
             TigerEx/websocket_gateway/go.mod
+            TigerEx/distributed_exchange_backend/go.mod
 
       - name: Test REST gateway internal packages
         working-directory: TigerEx/rest_api_gateway
@@ -49,6 +50,10 @@ jobs:
       - name: Test WebSocket gateway packages
         working-directory: TigerEx/websocket_gateway
         run: go test ./...
+
+      - name: Test distributed exchange backend
+        working-directory: TigerEx/distributed_exchange_backend
+        run: go build ./... && go vet ./... && go test ./...
 
       - name: Test admin service validation and isolation
         run: GO111MODULE=off go test ./TigerEx/admin_panel

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -38,8 +37,8 @@ func main() {
 
 	// Initialize Redis
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     os.Getenv("REDIS_URL", "localhost:6379"),
-		Password: os.Getenv("REDIS_PASSWORD", ""),
+		Addr:     envOr("REDIS_URL", "localhost:6379"),
+		Password: os.Getenv("REDIS_PASSWORD"),
 		DB:       0,
 	})
 
@@ -61,6 +60,12 @@ func main() {
 	router.Use(gin.Recovery())
 	router.Use(middleware.RequestLogger())
 	router.Use(middleware.CORS())
+	router.Use(func(c *gin.Context) {
+		// Expose the Redis client to the auth/rate-limit middleware so a single
+		// connection is shared rather than rebuilt per request.
+		c.Set("redis", rdb)
+		c.Next()
+	})
 	router.Use(middleware.RateLimiter(rdb))
 
 	// Health check
@@ -104,12 +109,12 @@ func main() {
 
 	// Graceful shutdown
 	srv := &http.Server{
-		Addr:    ":" + os.Getenv("PORT", "8080"),
+		Addr:    ":" + envOr("PORT", "8080"),
 		Handler: router,
 	}
 
 	go func() {
-		log.Printf("Server starting on port %s", os.Getenv("PORT", "8080"))
+		log.Printf("Server starting on port %s", envOr("PORT", "8080"))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}
@@ -130,4 +135,13 @@ func main() {
 	}
 
 	log.Println("Server exited properly")
+}
+
+// envOr returns the environment value for key, or fallback when it is unset or
+// empty.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
