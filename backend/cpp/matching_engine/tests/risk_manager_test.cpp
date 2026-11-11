@@ -172,15 +172,70 @@ void test_full_risk_path() {
     RiskManager rm;
 
     Order order = make_order(5, OrderSide::Buy, 100, 1000);
-    RiskCheckResult unknown = check_full_risk(rm, order, book, 1000000000);
+    RiskCheckResult unknown = check_full_risk(rm, order, book, 1000000000, 0);
     assert(!unknown.allowed);
 
     rm.create_user_profile(5, 1);
-    RiskCheckResult ok = check_full_risk(rm, order, book, 1000000000);
+    RiskCheckResult ok = check_full_risk(rm, order, book, 1000000000, 0);
     assert(ok.allowed);
     assert(ok.margin_required >= 0);
 
     std::printf("ok: full risk path rejects unknown users and accepts healthy orders\n");
+}
+
+// ---------------------------------------------------------------------------
+// 5. The position limit must actually use the caller's position. The old code
+//    passed a hardcoded zero, so a user already at their limit was never
+//    stopped.
+// ---------------------------------------------------------------------------
+void test_full_risk_uses_the_caller_position() {
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+
+    OrderBook book(kSymbol, MarketType::Spot);
+    RiskManager rm;
+    rm.create_user_profile(7, 1);
+
+    auto* profile = rm.get_profile(7);
+    assert(profile != nullptr);
+
+    Order order = make_order(7, OrderSide::Buy, 100, 1000);
+    // make_order stores price at scale 2 and quantity at scale 3, so the raw
+    // product — which is what the risk path compares — is 100 * 1000 = 100000.
+    // Set the limit just above it so only the position can push it over.
+    const int64_t order_value = 100 * 1000;
+    profile->limits.max_position = order_value + 5000;
+
+    // Flat position: the order alone is inside the limit.
+    assert(check_full_risk(rm, order, book, 1000000000000LL, 0).allowed);
+
+    // An existing position that pushes the sum past the limit is rejected.
+    RiskCheckResult over =
+        check_full_risk(rm, order, book, 1000000000000LL, 10000);
+    assert(!over.allowed);
+    assert(over.reason == "Position limit exceeded");
+
+    std::printf("ok: full risk path enforces the position limit\n");
+}
+
+// ---------------------------------------------------------------------------
+// 6. A notional that overflows int64 must fail closed, not wrap into a value
+//    that slips past every limit.
+// ---------------------------------------------------------------------------
+void test_full_risk_fails_closed_on_overflow() {
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+
+    OrderBook book(kSymbol, MarketType::Spot);
+    RiskManager rm;
+    rm.create_user_profile(9, 1);
+
+    Order order = make_order(9, OrderSide::Buy, INT64_MAX / 2, 1000);
+    RiskCheckResult result = check_full_risk(rm, order, book, INT64_MAX, 0);
+    assert(!result.allowed);
+    assert(result.reason == "Order value overflow");
+
+    std::printf("ok: full risk path fails closed on an overflowing notional\n");
 }
 
 }  // namespace
@@ -190,6 +245,8 @@ int main() {
     test_restricted_users_are_rejected();
     test_margin_fails_closed();
     test_full_risk_path();
+    test_full_risk_uses_the_caller_position();
+    test_full_risk_fails_closed_on_overflow();
     std::printf("all risk manager tests passed\n");
     return 0;
 }

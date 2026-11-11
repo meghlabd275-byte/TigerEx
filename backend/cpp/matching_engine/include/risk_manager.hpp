@@ -553,8 +553,14 @@ private:
  *
  * @param balance The user's available balance, used for the margin check on
  *                margin and futures orders.
+ * @param current_position The user's current signed position in the order's
+ *                symbol, from the engine's position store. Required: the
+ *                position limit cannot be enforced without it.
+ * @param leverage The order's leverage for margin and futures markets. Pass 0
+ *                to use the user's default leverage.
  */
 RiskCheckResult check_full_risk(RiskManager& rm, const Order& order,
-                                const OrderBook& book, int64_t balance);
+                                const OrderBook& book, int64_t balance,
+                                int64_t current_position, int leverage = 0);
 
 }  // namespace tigerex
