@@ -514,3 +514,40 @@ curve, veTGR decay, locker boost math, oracle median + staleness, vault
 inflation mitigation, and the Go matching engine (price-time priority,
 self-trade prevention, maker pricing). No SQL string concatenation, no
 hardcoded secrets, no fake data.
+
+## Secondary TigerEx/ modules (audited, fail-closed)
+
+The `TigerEx/` tree holds several secondary modules beside the canonical
+`backend/go` + `src/lib` code. They are small, mostly unwired, and were a rich
+source of fail-open stubs. Each of these is now fail-closed and gated in CI
+(`.github/workflows/ci.yml`, job `test` for Go and job `rust` for the crates):
+
+- `TigerEx/kyc_aml` — `VerifyDocument` requires a `DocumentVerifier` and refuses
+  without one; `runInitialAMLScreening` consults an `AMLScreener` and records
+  PENDING (never a fabricated PASS) when none is set; `UpgradeKYC` returns the
+  profile to review; `ScreenTransaction` flags real structuring. Test:
+  `go test ./...` from `TigerEx/kyc_aml`.
+- `TigerEx/payment_integration` — the Stripe/Simplex/Moonpay adapters return
+  `ErrProviderNotImplemented` rather than `(nil, nil)`; a nil refund result is
+  rejected so `RefundPayment` cannot dereference it.
+- `TigerEx/health_check` — `DatabaseCheck`/`RedisCheck`/`APICheck` dial the real
+  dependency and report unhealthy when the address is unset.
+- `TigerEx/mpc_wallet`, `TigerEx/hardware_wallet`, `TigerEx/self_custody_wallet`
+  — key-material operations return a typed error instead of a fabricated
+  address, signature or balance. Run each with
+  `rustc --edition 2021 --crate-type lib --test <path> -o /tmp/x && /tmp/x`.
+
+`TigerEx/compliance_and_regulatory/reporting_system/compliance.py` files a CTR
+only through a real sink and screens only against a loaded sanctions list;
+`pytest` in that directory covers the fail-closed paths.
+
+Deliberately not changed (verified, not defects):
+
+- The WebSocket origin checks in `TigerEx/websocket_gateway/cmd/server.go`,
+  `TigerEx/distributed_exchange_backend` and `backend/go/rest_api_gateway` allow
+  a *missing* `Origin` header for native/mobile clients, which never send one.
+  Browsers always send it, so this is not a cross-site hijack vector; requiring
+  it would break those clients. Lookalike/other-origin requests are rejected.
+- `core/wallet/crypto.rs` is orphaned (no `Cargo.toml`, referenced by nothing) and
+  its `TimeLock`/`SessionToken` use hardcoded AES keys. It is dead code with
+  sample data, not a live path; do not wire it as-is.
