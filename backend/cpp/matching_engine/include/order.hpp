@@ -140,6 +140,11 @@ struct Order {
     Quantity filled_quantity{};
     Quantity remaining_quantity{};
     Quantity iceberg_visible{};
+    // The quantity currently shown on the book. For a normal order it equals
+    // `remaining_quantity`; for an iceberg it is capped at `iceberg_visible` and
+    // is refilled from `remaining_quantity` once fully consumed, so the withheld
+    // size is never stranded and never appears in the public depth.
+    Quantity displayed_quantity{};
     
     // Time settings
     TimeInForce tif;
@@ -181,6 +186,7 @@ struct Order {
           stop_price(other.stop_price), trigger_price(other.trigger_price),
           quantity(other.quantity), filled_quantity(other.filled_quantity),
           remaining_quantity(other.remaining_quantity), iceberg_visible(other.iceberg_visible),
+          displayed_quantity(other.displayed_quantity),
           tif(other.tif), created_at(other.created_at), updated_at(other.updated_at),
           expire_time(other.expire_time), fee_currency(other.fee_currency),
           fee_rate(other.fee_rate), filled_fee(other.filled_fee), user_id(other.user_id),
@@ -195,7 +201,8 @@ struct Order {
         id=other.id; symbol=other.symbol; side=other.side; type=other.type; status=other.status;
         market_type=other.market_type; price=other.price; stop_price=other.stop_price;
         trigger_price=other.trigger_price; quantity=other.quantity; filled_quantity=other.filled_quantity;
-        remaining_quantity=other.remaining_quantity; iceberg_visible=other.iceberg_visible; tif=other.tif;
+        remaining_quantity=other.remaining_quantity; iceberg_visible=other.iceberg_visible;
+        displayed_quantity=other.displayed_quantity; tif=other.tif;
         created_at=other.created_at; updated_at=other.updated_at; expire_time=other.expire_time;
         fee_currency=other.fee_currency; fee_rate=other.fee_rate; filled_fee=other.filled_fee;
         user_id=other.user_id; account_id=other.account_id; subaccount_id=other.subaccount_id;

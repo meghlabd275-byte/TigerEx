@@ -240,7 +240,13 @@ impl Order {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PriceLevel {
     pub price: f64,
+    /// Total open quantity at this price, including any withheld iceberg size.
+    /// This is the settlement authority's view and is never sent to clients.
     pub quantity: f64,
+    /// Sum of the displayed tranches only, i.e. what a client sees in the
+    /// public depth. For non-iceberg orders it equals `quantity`.
+    #[serde(default)]
+    pub visible_quantity: f64,
     pub orders: Vec<RestingOrder>,
 }
 
@@ -249,7 +255,17 @@ pub struct PriceLevel {
 pub struct RestingOrder {
     pub order_id: String,
     pub user_id: String,
+    /// Total open quantity, including the withheld iceberg size.
     pub remaining: f64,
+    /// The tranche currently shown on the book. A non-iceberg order shows its
+    /// whole remaining size; an iceberg shows only `iceberg_visible` and is
+    /// refilled from `remaining` as the tranche is consumed.
+    #[serde(default)]
+    pub displayed: f64,
+    /// The size an iceberg re-displays after each tranche is exhausted. Zero
+    /// means the order is not an iceberg.
+    #[serde(default)]
+    pub iceberg_visible: f64,
     /// Monotonic arrival sequence used to determine which order is the maker
     /// when two orders cross. Lower sequence means it was placed earlier.
     pub seq: u64,
@@ -303,6 +319,19 @@ impl OrderBook {
         if !order.price.is_finite() || order.price <= 0.0 {
             return;
         }
+        let remaining = order.remaining();
+        if !remaining.is_finite() || remaining <= 0.0 {
+            return;
+        }
+        // An iceberg shows only its tip; every other order shows its whole
+        // remaining size. The withheld size stays in `remaining` and is
+        // refilled into `displayed` as the tip is consumed.
+        let iceberg_visible = order.display_quantity;
+        let displayed = if iceberg_visible > 0.0 && iceberg_visible < remaining {
+            iceberg_visible
+        } else {
+            remaining
+        };
         let seq = self.next_seq;
         self.next_seq += 1;
         let key = order.price.to_bits();
@@ -310,13 +339,21 @@ impl OrderBook {
         let level = side.entry(key).or_insert_with(|| PriceLevel {
             price: order.price,
             quantity: 0.0,
+            visible_quantity: 0.0,
             orders: Vec::new(),
         });
-        level.quantity += order.remaining();
+        level.quantity += remaining;
+        level.visible_quantity += displayed;
         level.orders.push(RestingOrder {
             order_id: order.id.clone(),
             user_id: order.user_id.clone(),
-            remaining: order.remaining(),
+            remaining,
+            displayed,
+            iceberg_visible: if iceberg_visible > 0.0 && iceberg_visible < remaining {
+                iceberg_visible
+            } else {
+                0.0
+            },
             seq,
         });
         self.last_update_id += 1;
@@ -330,11 +367,15 @@ impl OrderBook {
         let book = if side == Side::Buy { &mut self.bids } else { &mut self.asks };
         if let Some(level) = book.get_mut(&key) {
             if let Some(pos) = level.orders.iter().position(|o| o.order_id == order_id) {
-                level.quantity -= level.orders[pos].remaining;
+                let removed = level.orders.remove(pos);
+                level.quantity -= removed.remaining;
+                level.visible_quantity -= removed.displayed;
                 if level.quantity < 0.0 {
                     level.quantity = 0.0;
                 }
-                level.orders.remove(pos);
+                if level.visible_quantity < 0.0 {
+                    level.visible_quantity = 0.0;
+                }
             }
             if level.orders.is_empty() {
                 book.remove(&key);
@@ -454,16 +495,37 @@ fn drain_level(level: &mut PriceLevel, budget: &mut f64) -> Vec<(String, String,
         if *budget <= 1e-12 {
             break;
         }
-        let fill = order.remaining.min(*budget);
+        // A resting iceberg only exposes its displayed tranche to a single
+        // pass, so a sweep never reveals the withheld size; the tranche is
+        // refilled below once it is exhausted. Every other order displays its
+        // whole remaining size, so this bound is a no-op for them.
+        if order.displayed <= 1e-12 {
+            order.displayed = order.remaining;
+        }
+        let fill = order.displayed.min(*budget).min(order.remaining);
+        if fill <= 0.0 {
+            continue;
+        }
         order.remaining -= fill;
+        order.displayed -= fill;
         level.quantity -= fill;
         *budget -= fill;
         fills.push((order.order_id.clone(), order.user_id.clone(), fill));
+
+        // Refill the tip from the withheld size so the order stays tradeable.
+        if order.displayed <= 1e-12 && order.remaining > 1e-12 {
+            order.displayed = if order.iceberg_visible > 0.0 {
+                order.iceberg_visible.min(order.remaining)
+            } else {
+                order.remaining
+            };
+        }
     }
     level.orders.retain(|o| o.remaining > 1e-12);
     if level.quantity < 0.0 {
         level.quantity = 0.0;
     }
+    level.visible_quantity = level.orders.iter().map(|o| o.displayed).sum();
     fills
 }
 
@@ -1354,5 +1416,35 @@ mod tests {
         let book = engine.get_order_book("BTC/USDT", 10).unwrap();
         assert_eq!(book.best_bid(), 0.0);
         assert!(book.bids.is_empty());
+    }
+
+    #[test]
+    fn iceberg_shows_its_tip_and_replenishes_the_withheld_size() {
+        let engine = engine_with_market();
+
+        // Resting iceberg ask: 10 total, showing 2 at a time, at 100.
+        let mut ice = limit_order("ice", "maker", Side::Sell, 100.0, 10.0);
+        ice.iceberg_quantity = 2.0;
+        ice.display_quantity = 2.0;
+        engine.place_order(ice).unwrap();
+
+        // The public depth shows the tip only, never the withheld 8.
+        let book = engine.get_order_book("BTC/USDT", 10).unwrap();
+        let level = book.asks.values().next().unwrap();
+        assert!((level.visible_quantity - 2.0).abs() < 1e-9, "visible {}", level.visible_quantity);
+        assert!((level.quantity - 10.0).abs() < 1e-9);
+
+        // Taking the tip refills it: the next 2 become visible.
+        engine.place_order(limit_order("t1", "taker", Side::Buy, 100.0, 2.0)).unwrap();
+        let book = engine.get_order_book("BTC/USDT", 10).unwrap();
+        let level = book.asks.values().next().unwrap();
+        assert!((level.visible_quantity - 2.0).abs() < 1e-9, "visible {}", level.visible_quantity);
+
+        // The remaining 8 are reachable across further sweeps, and the book
+        // empties exactly when the whole order is filled.
+        engine.place_order(limit_order("t2", "taker", Side::Buy, 100.0, 4.0)).unwrap();
+        engine.place_order(limit_order("t3", "taker", Side::Buy, 100.0, 4.0)).unwrap();
+        let book = engine.get_order_book("BTC/USDT", 10).unwrap();
+        assert!(book.asks.is_empty(), "iceberg size was stranded");
     }
 }

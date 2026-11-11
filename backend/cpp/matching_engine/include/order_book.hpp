@@ -565,7 +565,7 @@ inline const LevelAggregation* OrderBook::get_best_bid() const {
     auto it = bids_.begin();
     static LevelAggregation level;
     level.price = it->first;
-    level.quantity = it->second.total_quantity;
+    level.quantity = it->second.visible_quantity;
     level.order_count = it->second.order_count;
     level.last_update_ns = it->second.last_update_ns;
     return &level;
@@ -576,7 +576,7 @@ inline const LevelAggregation* OrderBook::get_best_ask() const {
     auto it = asks_.begin();
     static LevelAggregation level;
     level.price = it->first;
-    level.quantity = it->second.total_quantity;
+    level.quantity = it->second.visible_quantity;
     level.order_count = it->second.order_count;
     level.last_update_ns = it->second.last_update_ns;
     return &level;
@@ -605,7 +605,7 @@ inline std::optional<Price> OrderBook::get_mid_price() const {
 inline Quantity OrderBook::total_bid_quantity() const {
     Quantity total = {0, 0};
     for (const auto& level : bids_) {
-        total[0] += level.second.total_quantity[0];
+        total[0] += level.second.visible_quantity[0];
     }
     return total;
 }
@@ -613,7 +613,7 @@ inline Quantity OrderBook::total_bid_quantity() const {
 inline Quantity OrderBook::total_ask_quantity() const {
     Quantity total = {0, 0};
     for (const auto& level : asks_) {
-        total[0] += level.second.total_quantity[0];
+        total[0] += level.second.visible_quantity[0];
     }
     return total;
 }

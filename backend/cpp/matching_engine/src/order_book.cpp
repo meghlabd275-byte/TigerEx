@@ -76,6 +76,16 @@ bool OrderBook::add_order_locked(Order& order) {
     order.status = OrderStatus::Open;
     order.updated_at = std::chrono::nanoseconds(order.id.timestamp_ns);
 
+    // What the book displays. A normal order shows its whole remaining size; an
+    // iceberg shows its tip, with the rest withheld from the public depth. The
+    // matcher refills this tranche as it is consumed.
+    if (is_iceberg_order(order) && order.iceberg_visible[0] > 0 &&
+        order.iceberg_visible[0] < order.remaining_quantity[0]) {
+        order.displayed_quantity = order.iceberg_visible;
+    } else {
+        order.displayed_quantity = order.remaining_quantity;
+    }
+
     // Store the order in its price level and index the actual list iterator.
     // The index must never contain a default-constructed iterator.
     if (order.side == OrderSide::Buy) {
@@ -263,6 +273,24 @@ uint32_t OrderBook::process_match(Order& incoming, std::vector<Trade>& trades) {
         
         Order& resting = level_data.orders.front();
         
+        // Defensive: an order with nothing left cannot trade. It should never
+        // be in the book, but if it is, drop it so the loop always progresses
+        // instead of spinning on a level it cannot consume.
+        if (resting.remaining_quantity[0] <= 0) {
+            const Price stale_price = resting.price;
+            const OrderId stale_id = resting.id;
+            level_data.orders.pop_front();
+            if (level_data.orders.empty()) {
+                book.erase(level_it);
+            } else if (incoming.side == OrderSide::Buy) {
+                update_level_aggregate(asks_, stale_price);
+            } else {
+                update_level_aggregate(bids_, stale_price);
+            }
+            orders_.erase(stale_id);
+            continue;
+        }
+        
         // Execute match
         process_single_match(incoming, resting, trades);
         match_count++;
@@ -297,12 +325,26 @@ uint32_t OrderBook::process_match(Order& incoming, std::vector<Trade>& trades) {
 
 void OrderBook::process_single_match(Order& incoming, Order& resting, 
                                      std::vector<Trade>& trades) {
-    // Calculate match quantity
+    // Calculate match quantity. A resting iceberg only exposes its displayed
+    // tranche to a single fill, so the withheld size is never revealed by a
+    // sweep; the tranche is refilled below once it is fully consumed. A resting
+    // order whose displayed size was never set (e.g. a restored snapshot) falls
+    // back to its whole remaining size so the match cannot stall.
+    const int64_t resting_displayed =
+        resting.displayed_quantity[0] > 0 ? resting.displayed_quantity[0]
+                                          : resting.remaining_quantity[0];
     Quantity match_qty;
-    if (incoming.remaining_quantity[0] <= resting.remaining_quantity[0]) {
+    if (incoming.remaining_quantity[0] <= resting_displayed) {
         match_qty = incoming.remaining_quantity;
     } else {
-        match_qty = resting.remaining_quantity;
+        match_qty = resting.displayed_quantity[0] > 0 ? resting.displayed_quantity
+                                                      : resting.remaining_quantity;
+    }
+    // Nothing to trade (an empty resting order should not be in the book). Bail
+    // out without emitting a zero-quantity trade so the match loop can make
+    // progress rather than spin on a level it cannot consume.
+    if (match_qty[0] <= 0) {
+        return;
     }
     
     // Determine price (price-time priority)
@@ -393,6 +435,19 @@ void OrderBook::process_single_match(Order& incoming, Order& resting,
     incoming.filled_quantity[0] += match_qty[0];
     resting.remaining_quantity[0] -= match_qty[0];
     resting.filled_quantity[0] += match_qty[0];
+
+    // Reduce what the resting order shows, then refill its tranche from the
+    // withheld size once that tranche is exhausted. Without the refill an
+    // iceberg would display its tip once and strand the rest of its size.
+    resting.displayed_quantity[0] -= match_qty[0];
+    if (resting.displayed_quantity[0] < 0) resting.displayed_quantity[0] = 0;
+    if (resting.remaining_quantity[0] > 0 && resting.displayed_quantity[0] == 0) {
+        resting.displayed_quantity = resting.iceberg_visible[0] > 0 ? resting.iceberg_visible
+                                                                    : resting.remaining_quantity;
+        if (resting.displayed_quantity[0] > resting.remaining_quantity[0]) {
+            resting.displayed_quantity = resting.remaining_quantity;
+        }
+    }
     
     // Update market data
     update_market_data(trade);
@@ -416,13 +471,24 @@ void OrderBook::process_single_match(Order& incoming, Order& resting,
             auto it = bids_.find(resting_price);
             if (it != bids_.end()) {
                 it->second.orders.pop_front();
-                update_level_aggregate(bids_, resting_price);
+                // A level with no orders left must not linger in the map: it
+                // would be reported as a zero-quantity depth row and make an
+                // emptied book look non-empty.
+                if (it->second.orders.empty()) {
+                    bids_.erase(it);
+                } else {
+                    update_level_aggregate(bids_, resting_price);
+                }
             }
         } else {
             auto it = asks_.find(resting_price);
             if (it != asks_.end()) {
                 it->second.orders.pop_front();
-                update_level_aggregate(asks_, resting_price);
+                if (it->second.orders.empty()) {
+                    asks_.erase(it);
+                } else {
+                    update_level_aggregate(asks_, resting_price);
+                }
             }
         }
 
@@ -430,6 +496,14 @@ void OrderBook::process_single_match(Order& incoming, Order& resting,
         orders_.erase(resting_id);
     } else {
         resting.status = OrderStatus::PartiallyFilled;
+        // The level aggregates still hold the pre-fill totals; refresh them so
+        // the public depth reports the reduced displayed size immediately.
+        const Price resting_price = resting.price;
+        if (resting.side == OrderSide::Buy) {
+            update_level_aggregate(bids_, resting_price);
+        } else {
+            update_level_aggregate(asks_, resting_price);
+        }
     }
 }
 
@@ -496,7 +570,9 @@ std::vector<LevelAggregation> OrderBook::get_bid_levels(uint32_t depth) const {
     for (const auto& level : bids_) {
         LevelAggregation agg;
         agg.price = level.first;
-        agg.quantity = level.second.total_quantity;
+        // Public depth reports the displayed size, so an iceberg's withheld
+        // tranche is never revealed.
+        agg.quantity = level.second.visible_quantity;
         agg.order_count = level.second.order_count;
         agg.last_update_ns = level.second.last_update_ns;
         result.push_back(agg);
@@ -521,7 +597,9 @@ std::vector<LevelAggregation> OrderBook::get_ask_levels(uint32_t depth) const {
     for (const auto& level : asks_) {
         LevelAggregation agg;
         agg.price = level.first;
-        agg.quantity = level.second.total_quantity;
+        // Public depth reports the displayed size, so an iceberg's withheld
+        // tranche is never revealed.
+        agg.quantity = level.second.visible_quantity;
         agg.order_count = level.second.order_count;
         agg.last_update_ns = level.second.last_update_ns;
         result.push_back(agg);
@@ -662,8 +740,7 @@ void OrderBook::insert_order_to_level(BookMap& book, const Price& price, Order& 
         PriceLevelData data;
         data.orders.push_back(order);
         data.total_quantity = order.quantity;
-        data.visible_quantity = order.iceberg_visible[0] > 0 ? 
-                                order.iceberg_visible : order.quantity;
+        data.visible_quantity = order.displayed_quantity;
         data.order_count = 1;
         data.last_update_ns = order.id.timestamp_ns;
         book[price] = std::move(data);
@@ -671,8 +748,7 @@ void OrderBook::insert_order_to_level(BookMap& book, const Price& price, Order& 
         // Add to existing level
         it->second.orders.push_back(order);
         it->second.total_quantity[0] += order.quantity[0];
-        it->second.visible_quantity[0] += order.iceberg_visible[0] > 0 ? 
-                                          order.iceberg_visible[0] : order.quantity[0];
+        it->second.visible_quantity[0] += order.displayed_quantity[0];
         it->second.order_count++;
         it->second.last_update_ns = order.id.timestamp_ns;
     }
@@ -721,8 +797,7 @@ void OrderBook::update_level_aggregate(BookMap& book, const Price& price) {
     
     for (const auto& order : it->second.orders) {
         it->second.total_quantity[0] += order.quantity[0];
-        it->second.visible_quantity[0] += order.iceberg_visible[0] > 0 ? 
-                                          order.iceberg_visible[0] : order.quantity[0];
+        it->second.visible_quantity[0] += order.displayed_quantity[0];
         it->second.order_count++;
     }
     
@@ -750,22 +825,29 @@ uint32_t OrderBook::get_priority(const OrderId& order_id) const {
 // ============================================================================
 
 bool OrderBook::process_iceberg(Order& order) {
-    if (!is_iceberg_order(order)) return true;
-    
-    // For iceberg, only show visible quantity
-    if (order.iceberg_visible[0] == 0) {
-        // First time - reveal initial chunk
-        order.iceberg_visible = order.quantity;
+    if (!is_iceberg_order(order)) {
+        order.displayed_quantity = order.remaining_quantity;
+        return true;
     }
-    
+
+    // Show the tip; the rest is withheld from the public depth and refilled as
+    // the tip is consumed.
+    if (order.iceberg_visible[0] <= 0 || order.iceberg_visible[0] >= order.remaining_quantity[0]) {
+        order.displayed_quantity = order.remaining_quantity;
+    } else {
+        order.displayed_quantity = order.iceberg_visible;
+    }
     return true;
 }
 
 bool OrderBook::reveal_iceberg(Order& order) {
     if (!is_iceberg_order(order)) return false;
-    
-    // Reveal next chunk
-    order.iceberg_visible = order.quantity;
+    if (order.remaining_quantity[0] <= 0) return false;
+
+    order.displayed_quantity = order.iceberg_visible[0] > 0 ? order.iceberg_visible : order.remaining_quantity;
+    if (order.displayed_quantity[0] > order.remaining_quantity[0]) {
+        order.displayed_quantity = order.remaining_quantity;
+    }
     return true;
 }
 

@@ -173,3 +173,67 @@ test('trade fees split maker and taker rates', () => {
   assert.ok(Math.abs(fees.makerFee - 0.02) < 1e-12);
   assert.ok(Math.abs(fees.takerFee - 0.05) < 1e-12);
 });
+
+test('an iceberg shows only its tip and replenishes it from the withheld size', () => {
+  const b = book();
+  b.match({ orderId: 'ice', userId: 'm', side: 'sell', type: 'limit', price: 100, quantity: 10, icebergQuantity: 2 });
+  assert.equal(b.depth('sell')[0].quantity, 2); // only the tip is visible
+
+  // Taking the tip must not exhaust the order: the next 2 become visible.
+  const first = b.match({ orderId: 't1', userId: 't', side: 'buy', type: 'limit', price: 100, quantity: 2 });
+  assert.deepEqual(first.fills.map((f) => f.quantity), [2]);
+  assert.equal(b.depth('sell')[0].quantity, 2);
+
+  // The full size is reachable, tip by tip, until the order is done.
+  const second = b.match({ orderId: 't2', userId: 't', side: 'buy', type: 'limit', price: 100, quantity: 4 });
+  assert.deepEqual(second.fills.map((f) => f.quantity), [2, 2]);
+  assert.equal(b.depth('sell')[0].quantity, 2);
+
+  const third = b.match({ orderId: 't3', userId: 't', side: 'buy', type: 'limit', price: 100, quantity: 4 });
+  assert.deepEqual(third.fills.map((f) => f.quantity), [2, 2]);
+  assert.equal(b.bestAsk(), null); // all 10 filled, nothing stranded
+});
+
+test('a partially filled iceberg keeps its remaining hidden size reachable', () => {
+  const b = book();
+  b.match({ orderId: 'ice', userId: 'm', side: 'buy', type: 'limit', price: 99, quantity: 9, icebergQuantity: 4 });
+  assert.equal(b.depth('buy')[0].quantity, 4);
+
+  // A single unit fills the tip down to 3, still within the tip; nothing hidden
+  // should leak into the visible book.
+  b.match({ orderId: 't1', userId: 't', side: 'sell', type: 'limit', price: 99, quantity: 1 });
+  assert.equal(b.depth('buy')[0].quantity, 3);
+
+  // Taking the rest of the tip replenishes to a fresh full tip of 4.
+  b.match({ orderId: 't2', userId: 't', side: 'sell', type: 'limit', price: 99, quantity: 3 });
+  assert.equal(b.depth('buy')[0].quantity, 4);
+
+  // The order still holds 9 - 4 = 5, shown 4 + withheld 1.
+  const last = b.match({ orderId: 't3', userId: 't', side: 'sell', type: 'limit', price: 99, quantity: 10 });
+  assert.deepEqual(last.fills.map((f) => f.quantity), [4, 1]);
+  assert.equal(b.bestBid(), null);
+});
+
+test('fill-or-kill counts an iceberg\'s withheld size', () => {
+  const b = book();
+  b.match({ orderId: 'ice', userId: 'm', side: 'sell', type: 'limit', price: 100, quantity: 10, icebergQuantity: 2 });
+  const fok = b.match({ orderId: 'f', userId: 't', side: 'buy', type: 'limit', price: 100, quantity: 6, timeInForce: 'FOK' });
+  assert.equal(fok.rejected, undefined);
+  assert.deepEqual(fok.fills.map((f) => f.quantity), [2, 2, 2]);
+});
+
+test('an iceberg does not jump an equal-priced order that arrived first', () => {
+  const b = book();
+  b.match({ orderId: 'first', userId: 'u1', side: 'sell', type: 'limit', price: 100, quantity: 1 });
+  b.match({ orderId: 'ice', userId: 'u2', side: 'sell', type: 'limit', price: 100, quantity: 10, icebergQuantity: 2 });
+  const result = b.match({ orderId: 't', userId: 't', side: 'buy', type: 'limit', price: 100, quantity: 2 });
+  assert.deepEqual(result.fills.map((f) => f.makerOrderId), ['first', 'ice']);
+});
+
+test('cancelling an iceberg returns its whole open size once', () => {
+  const b = book();
+  b.match({ orderId: 'ice', userId: 'u', side: 'buy', type: 'limit', price: 99, quantity: 10, icebergQuantity: 3 });
+  // The open size is the full 10 (visible 3 plus withheld 7), never double-counted.
+  assert.equal(b.cancel('ice'), 10);
+  assert.equal(b.bestBid(), null);
+});

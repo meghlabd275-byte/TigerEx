@@ -34,9 +34,20 @@ export interface RestingOrder {
   side: Side;
   price: number;
   quantity: number;
+  /** The order's whole open size (displayed plus withheld). */
   remaining: number;
   sequence: number;
+  /**
+   * The quantity currently displayed on the book. For a normal order it equals
+   * `remaining`. For an iceberg it is capped at the tip and is refilled from
+   * `remaining` once it is fully consumed, so a partial fill of the tip reduces
+   * what is shown and the withheld size is never lost.
+   */
+  visible: number;
+  /** Quantity withheld from the visible book; equals `remaining - visible`. */
   hidden: number;
+  /** Tip size for an iceberg order; absent for a normal order. */
+  icebergQuantity?: number;
 }
 
 export interface Fill {
@@ -97,7 +108,7 @@ export class OrderBook {
     const book = side === 'buy' ? this.bids : this.asks;
     return book.slice(0, levels).map((level) => ({
       price: level.price,
-      quantity: level.orders.reduce((sum, o) => sum + o.remaining, 0),
+      quantity: level.orders.reduce((sum, o) => sum + o.visible, 0),
     }));
   }
 
@@ -148,7 +159,7 @@ export class OrderBook {
     while (remaining > 0 && opposite.length > 0 && crosses(opposite[0].price)) {
       const level = opposite[0];
       const maker = level.orders[0];
-      const tradeQty = Math.min(remaining, maker.remaining);
+      const tradeQty = Math.min(remaining, maker.visible);
 
       fills.push({
         makerOrderId: maker.orderId,
@@ -160,11 +171,17 @@ export class OrderBook {
       });
 
       maker.remaining -= tradeQty;
+      maker.visible -= tradeQty;
       remaining -= tradeQty;
 
       if (maker.remaining <= 0) {
         level.orders.shift();
         if (level.orders.length === 0) opposite.shift();
+      } else {
+        // Refill the displayed size only once the previous tranche is fully
+        // consumed, then derive the withheld size. Without the refill an iceberg
+        // would show its tip once and strand the rest of its size forever.
+        this.replenish(maker);
       }
     }
 
@@ -181,11 +198,30 @@ export class OrderBook {
     for (const level of opposite) {
       if (!crosses(level.price)) break;
       for (const order of level.orders) {
+        // An iceberg's withheld size is still fillable, so a fill-or-kill order
+        // must count it; otherwise a fillable iceberg would be rejected.
         available += order.remaining;
         if (available >= needed) return available;
       }
     }
     return available;
+  }
+
+  /**
+   * Refill an iceberg's displayed size after a fill.
+   *
+   * The withheld size is shown again only once the current tranche is fully
+   * consumed, and a partial fill of the tranche leaves it partially displayed —
+   * so a trader watching the book sees a partial fill, exactly like a normal
+   * order, rather than an instant refill that would reveal the order's size.
+   */
+  private replenish(order: RestingOrder): void {
+    if (order.icebergQuantity === undefined) {
+      order.visible = order.remaining;
+    } else if (order.visible <= 0) {
+      order.visible = Math.min(order.remaining, order.icebergQuantity);
+    }
+    order.hidden = Math.max(0, order.remaining - order.visible);
   }
 
   private restOrDiscard(
@@ -200,7 +236,6 @@ export class OrderBook {
     if (tif === 'IOC' || tif === 'FOK') return 0;
     if (limitPrice === null) return 0;
 
-    const hidden = order.icebergQuantity !== undefined ? Math.max(0, remaining - order.icebergQuantity) : 0;
     const visible = order.icebergQuantity !== undefined ? Math.min(remaining, order.icebergQuantity) : remaining;
 
     const resting: RestingOrder = {
@@ -209,9 +244,11 @@ export class OrderBook {
       side: order.side,
       price: limitPrice,
       quantity: order.quantity,
-      remaining: visible,
+      remaining,
       sequence: this.sequence++,
-      hidden,
+      visible,
+      hidden: remaining - visible,
+      icebergQuantity: order.icebergQuantity,
     };
 
     const book = order.side === 'buy' ? this.bids : this.asks;
@@ -231,7 +268,9 @@ export class OrderBook {
       else book.splice(index, 0, newLevel);
       index = book.findIndex((level) => level.price === order.price);
     }
-    // Price-time priority: equal prices append behind earlier orders.
+    // An iceberg enters a level at the back of its price-time queue, never ahead
+    // of an equal-priced order that already rested, so a hidden order cannot
+    // steal time priority from a visible one.
     book[index].orders.push(order);
   }
 
@@ -243,10 +282,30 @@ export class OrderBook {
    * would be redundant. The order is inserted behind any equal-priced order
    * that arrived earlier, preserving price-time priority.
    */
-  rest(order: Omit<RestingOrder, 'sequence'> & { sequence?: number }): void {
+  rest(order: {
+    orderId: string;
+    userId: string;
+    side: Side;
+    price: number;
+    quantity: number;
+    remaining: number;
+    icebergQuantity?: number;
+    /** The size currently displayed; defaults to the full tip for an iceberg. */
+    visible?: number;
+    sequence?: number;
+  }): void {
     const book = order.side === 'buy' ? this.bids : this.asks;
     const sequence = order.sequence ?? this.sequence++;
-    this.insert(book, { ...order, sequence }, order.side);
+    // `visible` and `hidden` are derived, never trusted from the caller, so a
+    // persisted value cannot disagree with the withheld size after a refill.
+    const visible =
+      order.visible !== undefined
+        ? order.visible
+        : order.icebergQuantity !== undefined
+          ? Math.min(order.remaining, order.icebergQuantity)
+          : order.remaining;
+    const hidden = Math.max(0, order.remaining - visible);
+    this.insert(book, { ...order, visible, hidden, sequence }, order.side);
     if (sequence >= this.sequence) this.sequence = sequence + 1;
   }
 
@@ -258,7 +317,9 @@ export class OrderBook {
         if (index !== -1) {
           const [removed] = level.orders.splice(index, 1);
           if (level.orders.length === 0) book.splice(book.indexOf(level), 1);
-          return removed.remaining + removed.hidden;
+          // `remaining` is the order's whole open size, so the withheld
+          // tranche is already included; it must not be added a second time.
+          return removed.remaining;
         }
       }
     }

@@ -97,6 +97,7 @@ interface OpenOrderRow {
   filled_quantity: number;
   remaining_quantity: number;
   hidden_quantity: number | null;
+  iceberg_quantity: number | null;
   locked_amount: number | null;
   locked_asset: string | null;
   created_at: string;
@@ -212,7 +213,7 @@ function loadBook(symbol: string): OrderBook {
   const rows = getDb()
     .prepare(
       `SELECT order_id, user_id, side, type, price, quantity, filled_quantity, remaining_quantity,
-              hidden_quantity, locked_amount, locked_asset, created_at
+              hidden_quantity, iceberg_quantity, locked_amount, locked_asset, created_at
          FROM orders
         WHERE pair_id = (SELECT pair_id FROM trading_pairs WHERE symbol = ?)
           AND status IN ('open', 'partial')
@@ -222,14 +223,24 @@ function loadBook(symbol: string): OrderBook {
 
   for (const row of rows) {
     if (row.price === null || row.remaining_quantity <= 0) continue;
+    const tipRaw =
+      row.iceberg_quantity === null || row.iceberg_quantity === undefined ? null : Number(row.iceberg_quantity);
+    const icebergQuantity = tipRaw !== null && tipRaw > 0 ? tipRaw : undefined;
+    const remaining = Number(row.remaining_quantity);
+    // Restore the exact displayed size, not just the tip: a tip that was
+    // partially consumed must come back partially shown, so the book after a
+    // reload matches the book before it.
+    const hidden = Number(row.hidden_quantity) || 0;
+    const visible = Math.max(0, remaining - hidden);
     book.rest({
       orderId: row.order_id,
       userId: row.user_id,
       side: row.side === 'buy' ? 'buy' : 'sell',
       price: Number(row.price),
       quantity: Number(row.quantity),
-      remaining: Number(row.remaining_quantity),
-      hidden: Number(row.hidden_quantity) || 0,
+      remaining,
+      icebergQuantity,
+      visible: visible > 0 ? visible : undefined,
     });
   }
   return book;
@@ -660,8 +671,17 @@ function settleFill(ctx: MatchContext, fill: Fill): { makerFee: number; takerFee
   const takerIsBuyer = ctx.side === 'buy';
 
   const makerOrder = db
-    .prepare('SELECT user_id, side, price FROM orders WHERE order_id = ?')
-    .get(fill.makerOrderId) as { user_id: string; side: string; price: number } | undefined;
+    .prepare('SELECT user_id, side, price, iceberg_quantity, hidden_quantity, remaining_quantity FROM orders WHERE order_id = ?')
+    .get(fill.makerOrderId) as
+    | {
+        user_id: string;
+        side: string;
+        price: number;
+        iceberg_quantity: number | null;
+        hidden_quantity: number | null;
+        remaining_quantity: number;
+      }
+    | undefined;
 
   if (!makerOrder) {
     throw new SpotError('BOOK_INCONSISTENT', 'A resting order disappeared before settlement', 500);
@@ -707,10 +727,30 @@ function settleFill(ctx: MatchContext, fill: Fill): { makerFee: number; takerFee
   const makerLockedReduction = makerSide === 'buy' ? makerPrice * fill.quantity : fill.quantity;
   const nextRemaining = Math.max(0, Number(remaining.remaining_quantity) - fill.quantity);
 
+  // Recompute the maker's displayed and withheld sizes from its prior state,
+  // mirroring the book: a partial fill of the tip shrinks what is shown, and the
+  // tip is refilled from the withheld size only once it is fully consumed.
+  // `remaining_quantity` is the whole open size, so it alone backs the
+  // reservation.
+  const makerTip =
+    makerOrder.iceberg_quantity === null || makerOrder.iceberg_quantity === undefined
+      ? null
+      : Number(makerOrder.iceberg_quantity);
+  const priorRemaining = Number(makerOrder.remaining_quantity);
+  const priorHidden = Number(makerOrder.hidden_quantity) || 0;
+  const priorVisible = Math.max(0, priorRemaining - priorHidden);
+  let nextHidden = 0;
+  if (makerTip !== null && makerTip > 0) {
+    const visibleAfter = priorVisible - fill.quantity;
+    const nextVisible = visibleAfter > 0 ? visibleAfter : Math.min(nextRemaining, makerTip);
+    nextHidden = Math.max(0, nextRemaining - nextVisible);
+  }
+
   db.prepare(
     `UPDATE orders
         SET filled_quantity = filled_quantity + ?,
             remaining_quantity = ?,
+            hidden_quantity = ?,
             locked_amount = MAX(0, COALESCE(locked_amount, 0) - ?),
             status = ?,
             updated_at = datetime('now')
@@ -718,6 +758,7 @@ function settleFill(ctx: MatchContext, fill: Fill): { makerFee: number; takerFee
   ).run(
     fill.quantity,
     nextRemaining,
+    nextHidden,
     makerLockedReduction,
     nextRemaining <= 0 ? 'filled' : 'partial',
     fill.makerOrderId,
@@ -880,16 +921,17 @@ export function cancelSpotOrder(userId: string, orderId: string): OrderRecord {
 
     const side = String(row.side);
     const remaining = Number(row.remaining_quantity) || 0;
-    const hidden = Number(row.hidden_quantity) || 0;
     const lockedAmount = Number(row.locked_amount) || 0;
     const price = row.price === null || row.price === undefined ? null : Number(row.price);
 
     let release = 0;
     if (lockedAmount > 0) {
+      // `remaining_quantity` is the order's whole open size, hidden tranche
+      // included, so it alone is what the reservation still covers.
       if (side === 'buy') {
-        release = price !== null ? price * (remaining + hidden) : lockedAmount;
+        release = price !== null ? price * remaining : lockedAmount;
       } else {
-        release = remaining + hidden;
+        release = remaining;
       }
       if (release > lockedAmount) release = lockedAmount;
       if (release > 0) {

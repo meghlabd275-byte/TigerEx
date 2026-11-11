@@ -39,7 +39,12 @@ export function orderBookDepth(symbol: string, levels: number): BookDepth {
 
   const rows = db
     .prepare(
-      `SELECT o.side, o.price, SUM(o.remaining_quantity) AS quantity
+      `SELECT o.side, o.price,
+              SUM(
+                CASE WHEN o.iceberg_quantity IS NOT NULL AND o.iceberg_quantity > 0
+                     THEN MAX(0, o.remaining_quantity - COALESCE(o.hidden_quantity, 0))
+                     ELSE o.remaining_quantity END
+              ) AS quantity
          FROM orders o JOIN trading_pairs p ON p.pair_id = o.pair_id
         WHERE p.symbol = ? AND o.status IN ('open', 'partial')
           AND o.price IS NOT NULL AND o.remaining_quantity > 0

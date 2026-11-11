@@ -389,3 +389,77 @@ test('a fill that does not cross a stop leaves it parked', () => {
   assert.equal(getOrder(stopper, stop.orderId).status, 'pending_trigger');
   assert.equal(lockedBalance(stopper, 'RUSD'), 157.5);
 });
+
+
+test('an iceberg order replenishes its hidden tranche and never shows more than its tip', () => {
+  const symbol = listPair('IBTC', 0.01, 0.0001);
+  const maker = seedUser();
+  const taker = seedUser();
+  credit(maker, 'IBTC', 10);
+  credit(taker, 'RUSD', 2000000);
+
+  const ice = placeSpotOrder(maker, {
+    symbol,
+    side: 'sell',
+    type: 'limit',
+    price: 100,
+    quantity: 10,
+    icebergQuantity: 2,
+  });
+  assert.equal(ice.status, 'open');
+  assert.equal(lockedBalance(maker, 'IBTC'), 10); // the whole size is reserved
+
+  // The public depth shows only the tip, never the withheld size.
+  assert.equal(orderBookDepth(symbol, 10).asks[0].quantity, 2);
+
+  const t1 = placeSpotOrder(taker, { symbol, side: 'buy', type: 'limit', price: 100, quantity: 2 });
+  assert.equal(t1.filledQuantity, 2);
+  assert.equal(getOrder(maker, ice.orderId).remainingQuantity, 8);
+  // The tip is replenished, so the next taker can still see liquidity.
+  assert.equal(orderBookDepth(symbol, 10).asks[0].quantity, 2);
+
+  const t2 = placeSpotOrder(taker, { symbol, side: 'buy', type: 'limit', price: 100, quantity: 8 });
+  assert.equal(t2.filledQuantity, 8);
+  assert.equal(getOrder(maker, ice.orderId).status, 'filled');
+  assert.equal(orderBookDepth(symbol, 10).asks.length, 0);
+
+  // The maker gave up exactly 10 IBTC and received 1,000 RUSD less its 10 bps fee.
+  assert.equal(availableBalance(maker, 'IBTC'), 0);
+  assert.equal(lockedBalance(maker, 'IBTC'), 0);
+  assert.ok(Math.abs(availableBalance(maker, 'RUSD') - (1000 - 1000 * 0.001)) < 1e-9);
+});
+
+test('a partially filled iceberg keeps its remaining hidden size reachable', () => {
+  const symbol = listPair('ICEB2', 0.01, 0.0001);
+  const maker = seedUser();
+  const taker = seedUser();
+  credit(maker, 'RUSD', 2000);
+  credit(taker, 'ICEB2', 20);
+
+  const ice = placeSpotOrder(maker, {
+    symbol,
+    side: 'buy',
+    type: 'limit',
+    price: 99,
+    quantity: 9,
+    icebergQuantity: 4,
+  });
+  assert.equal(orderBookDepth(symbol, 10).bids[0].quantity, 4);
+
+  // One unit eats into the tip without leaking the withheld size.
+  placeSpotOrder(taker, { symbol, side: 'sell', type: 'limit', price: 99, quantity: 1 });
+  assert.equal(orderBookDepth(symbol, 10).bids[0].quantity, 3);
+  assert.equal(getOrder(maker, ice.orderId).remainingQuantity, 8);
+
+  // Taking the rest of the tip replenishes to a fresh full tip.
+  placeSpotOrder(taker, { symbol, side: 'sell', type: 'limit', price: 99, quantity: 3 });
+  assert.equal(orderBookDepth(symbol, 10).bids[0].quantity, 4);
+  assert.equal(getOrder(maker, ice.orderId).remainingQuantity, 5);
+
+  // The withheld size is still fillable: 4 visible then the last 1.
+  const last = placeSpotOrder(taker, { symbol, side: 'sell', type: 'limit', price: 99, quantity: 10 });
+  assert.equal(last.filledQuantity, 5);
+  assert.equal(getOrder(maker, ice.orderId).status, 'filled');
+  assert.equal(orderBookDepth(symbol, 10).bids.length, 0);
+  assert.equal(lockedBalance(maker, 'RUSD'), 0);
+});

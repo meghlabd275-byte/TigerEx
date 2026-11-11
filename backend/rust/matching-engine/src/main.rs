@@ -29,6 +29,14 @@ enum Request {
         order_type: OrderType,
         price: f64,
         quantity: f64,
+        /// Total size withheld across tranches for an iceberg order. Zero (the
+        /// default) places a normal order.
+        #[serde(default)]
+        iceberg_quantity: f64,
+        /// Size of each displayed tranche. Zero (the default) places a normal
+        /// order.
+        #[serde(default)]
+        display_quantity: f64,
     },
     CancelOrder {
         order_id: String,
@@ -69,7 +77,17 @@ fn handle(engine: &Arc<MatchingEngine>, request: Request) -> Response {
             engine.add_market(market);
             Response::ok()
         }
-        Request::PlaceOrder { id, user_id, market, side, order_type, price, quantity } => {
+        Request::PlaceOrder {
+            id,
+            user_id,
+            market,
+            side,
+            order_type,
+            price,
+            quantity,
+            iceberg_quantity,
+            display_quantity,
+        } => {
             let order = Order {
                 id,
                 user_id,
@@ -82,8 +100,8 @@ fn handle(engine: &Arc<MatchingEngine>, request: Request) -> Response {
                 trailing_delta: 0.0,
                 quantity,
                 filled_quantity: 0.0,
-                iceberg_quantity: 0.0,
-                display_quantity: 0.0,
+                iceberg_quantity,
+                display_quantity,
                 status: OrderStatus::New,
                 client_order_id: String::new(),
                 created_at: 0,

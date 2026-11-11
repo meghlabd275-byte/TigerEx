@@ -736,6 +736,58 @@ void test_market_fee_rates_are_charged() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// 16. An iceberg order must show only its tip and refill it from the withheld
+//     size as the tip is consumed.
+//
+// The engine carried dead iceberg helpers and matched against the order's whole
+// remaining size, so a resting iceberg displayed its full size in the public
+// depth and its withheld tranche was never replenished after the tip was taken.
+// ---------------------------------------------------------------------------
+void test_iceberg_display_and_replenishment() {
+    MatchingEngine engine{EngineConfig{}};
+    setup_market(engine);
+
+    // Resting iceberg ask: 10 units total, showing 2 at a time, at 1000.
+    Order ice = make_order(1, OrderSide::Sell, OrderType::Limit, 1000, 10000);
+    ice.iceberg_visible = {2000, kQtyPrecision};
+    ice.displayed_quantity = {2000, kQtyPrecision};
+    assert(engine.submit_order(ice).success);
+
+    auto book = engine.get_order_book(kSymbol);
+    assert(book != nullptr);
+    // The public depth shows the tip only, never the withheld 8 units.
+    auto depth = book->get_depth(1);
+    assert(!depth[1].empty());
+    assert(depth[1][0].quantity[0] == 2000);
+
+    // Taking the tip must not exhaust the order: the next 2 become visible.
+    Order t1 = make_order(2, OrderSide::Buy, OrderType::Limit, 1000, 2000);
+    OrderResult r1 = engine.submit_order(t1);
+    assert(r1.success);
+    assert(r1.filled_quantity[0] == 2000);
+    depth = book->get_depth(1);
+    assert(!depth[1].empty());
+    assert(depth[1][0].quantity[0] == 2000);
+
+    // Sweep 4 more: two tip-sized fills, and the tip is refilled again.
+    Order t2 = make_order(3, OrderSide::Buy, OrderType::Limit, 1000, 4000);
+    OrderResult r2 = engine.submit_order(t2);
+    assert(r2.filled_quantity[0] == 4000);
+    depth = book->get_depth(1);
+    assert(!depth[1].empty());
+    assert(depth[1][0].quantity[0] == 2000);
+
+    // The remaining 4 are reachable, then the book is empty.
+    Order t3 = make_order(4, OrderSide::Buy, OrderType::Limit, 1000, 4000);
+    OrderResult r3 = engine.submit_order(t3);
+    assert(r3.filled_quantity[0] == 4000);
+    depth = book->get_depth(1);
+    assert(depth[1].empty());
+
+    std::printf("ok: iceberg shows its tip and replenishes the withheld size\n");
+}
+
 int main() {
     test_avg_fill_price_is_volume_weighted();
     test_conditional_order_validation();
@@ -753,6 +805,7 @@ int main() {
     test_fixed_point_arithmetic();
     test_order_value_overflow_is_rejected();
     test_market_creation_validation();
+    test_iceberg_display_and_replenishment();
     std::printf("all matching-engine regression tests passed\n");
     return 0;
 }
