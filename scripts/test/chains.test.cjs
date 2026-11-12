@@ -288,7 +288,7 @@ test('TigerSmartChain registers TGR and, when configured, RUSD', () => {
   try {
     const { chain, tokens } = tsc.registerTigerSmartChain('mainnet');
     assert.equal(chain.chainKey, 'tigersmartchain');
-    assert.equal(chain.chainId, 6666);
+    assert.equal(chain.chainId, 9001);
     assert.equal(chain.nativeSymbol, 'TGR');
 
     const symbols = tokens.map((t) => t.symbol).sort();
@@ -306,6 +306,50 @@ test('TigerSmartChain addresses are treated as EVM addresses', () => {
   assert.equal(networks.isEvmChainNetwork('tigersmartchain'), true);
   assert.equal(networks.isEvmChainNetwork('TGR'), true);
   assert.equal(networks.isEvmChainNetwork('solana'), false);
+});
+
+test('TigerSmartChain chain id defaults to the daemon value and honours an override', () => {
+  process.env.TIGEREX_TSC_RPC_URL = 'https://rpc.tigersmartchain.example';
+  process.env.TIGEREX_TSC_TESTNET_RPC_URL = 'https://rpc.testnet.tigersmartchain.example';
+  try {
+    // No override: the chain's own default (9001 mainnet / 9000 testnet).
+    assert.equal(tsc.tigerSmartChainConfig('mainnet').chainId, 9001);
+    assert.equal(tsc.tigerSmartChainConfig('testnet').chainId, 9000);
+
+    // A deployment running `tigersmartchaind --chain-id 4242` records 4242.
+    process.env.TIGEREX_TSC_CHAIN_ID = '4242';
+    assert.equal(tsc.tigerSmartChainConfig('mainnet').chainId, 4242);
+
+    // A junk override is ignored, not recorded as NaN.
+    process.env.TIGEREX_TSC_CHAIN_ID = 'not-a-number';
+    assert.equal(tsc.tigerSmartChainConfig('mainnet').chainId, 9001);
+  } finally {
+    delete process.env.TIGEREX_TSC_RPC_URL;
+    delete process.env.TIGEREX_TSC_TESTNET_RPC_URL;
+    delete process.env.TIGEREX_TSC_CHAIN_ID;
+  }
+});
+
+test('RUSD decimals default to the stablecoin preset (6) and are configurable', () => {
+  process.env.TIGEREX_TSC_RPC_URL = 'https://rpc.tigersmartchain.example';
+  process.env.TIGEREX_TSC_RUSD_ADDRESS = RUSD_ADDRESS;
+  try {
+    let { tokens } = tsc.registerTigerSmartChain('mainnet');
+    assert.equal(tokens.find((t) => t.symbol === 'RUSD').decimals, 6);
+
+    process.env.TIGEREX_TSC_RUSD_DECIMALS = '18';
+    ({ tokens } = tsc.registerTigerSmartChain('mainnet'));
+    assert.equal(tokens.find((t) => t.symbol === 'RUSD').decimals, 18);
+
+    // A junk value falls back to 6 rather than recording NaN.
+    process.env.TIGEREX_TSC_RUSD_DECIMALS = 'x';
+    ({ tokens } = tsc.registerTigerSmartChain('mainnet'));
+    assert.equal(tokens.find((t) => t.symbol === 'RUSD').decimals, 6);
+  } finally {
+    delete process.env.TIGEREX_TSC_RPC_URL;
+    delete process.env.TIGEREX_TSC_RUSD_ADDRESS;
+    delete process.env.TIGEREX_TSC_RUSD_DECIMALS;
+  }
 });
 
 test('registering TigerSmartChain enables deposits for its tokens only', () => {

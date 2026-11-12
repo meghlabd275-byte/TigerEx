@@ -569,12 +569,22 @@ configure.
   `/api/wallet/onchain`.
 - `src/instrumentation.ts` runs the bootstrap in the Node runtime only (pulling
   `better-sqlite3`/`crypto` into Edge broke `next build`; keep the guard).
-- TSC parameters come from the chain's own genesis (mainnet 6666, testnet 6667,
-  native TGR). The node URL and the RUSD contract address are environment
-  variables (`TIGEREX_TSC_RPC_URL`, `TIGEREX_TSC_TESTNET_RPC_URL`,
-  `TIGEREX_TSC_RUSD_ADDRESS`); an unset RPC URL means the chain is simply not
-  served. Never substitute a placeholder address — the wallet would read a
-  contract that does not exist and report a zero balance.
+- TSC parameters come from the chain itself. The chain id is fixed by the
+  daemon: `cmd/tigersmartchaind/src/main.rs` defaults `--chain-id` to **9001**
+  (testnet **9000**, per the chain's Python SDK), and the chain's Go/Python/Rust
+  SDKs agree. Native coin TGR, 18 decimals. RUSD ("Royal Tiger USD") is a 1:1
+  USD stablecoin and the chain's `TokenFactoryWithPresets.Stablecoin` preset
+  creates stablecoins with **6** decimals, so RUSD defaults to 6. The node URL,
+  the explorer URL, the RUSD contract address and the RUSD decimals are
+  environment variables (`TIGEREX_TSC_RPC_URL`, `TIGEREX_TSC_TESTNET_RPC_URL`,
+  `TIGEREX_TSC_EXPLORER_URL`, `TIGEREX_TSC_RUSD_ADDRESS`,
+  `TIGEREX_TSC_RUSD_DECIMALS`); an unset RPC URL means the chain is simply not
+  served, and no explorer URL is invented. A deployment running its own network
+  may pin the id it serves with `TIGEREX_TSC_CHAIN_ID` (testnet
+  `TIGEREX_TSC_TESTNET_CHAIN_ID`); the on-chain reader still refuses a node whose
+  `eth_chainId` differs from whatever is recorded. Never substitute a
+  placeholder address — the wallet would read a contract that does not exist and
+  report a zero balance.
 - Tests: `scripts/test/chains.test.cjs`; `npm run test:logic` includes the chain
   modules via `scripts/build-logic-tests.cjs`.
 

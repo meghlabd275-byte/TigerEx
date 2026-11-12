@@ -23,7 +23,7 @@ const spec: ListingSpec = {
     { name: 'chainKey', label: 'Chain key', type: 'text', required: true, placeholder: 'tigersmartchain', help: 'lowercase letters, digits, dash or underscore' },
     { name: 'name', label: 'Name', type: 'text', required: true, placeholder: 'TigerSmartChain' },
     { name: 'chainType', label: 'Type', type: 'select', options: ['evm', 'non-evm'], required: true },
-    { name: 'chainId', label: 'Chain ID', type: 'number', step: '1', required: true, placeholder: '6666' },
+    { name: 'chainId', label: 'Chain ID', type: 'number', step: '1', required: true, placeholder: '9001', help: 'the id the node reports on eth_chainId (TigerSmartChain mainnet 9001, testnet 9000)' },
     { name: 'nativeSymbol', label: 'Native symbol', type: 'text', required: true, placeholder: 'TGR' },
     { name: 'nativeDecimals', label: 'Native decimals', type: 'number', step: '1', placeholder: '18' },
     { name: 'rpcUrl', label: 'Node URL', type: 'text', required: true, placeholder: 'https://rpc.example.org', help: 'https only; no credentials in the URL' },

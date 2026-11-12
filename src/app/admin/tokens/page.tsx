@@ -23,7 +23,7 @@ const spec: ListingSpec = {
     { name: 'symbol', label: 'Symbol', type: 'text', required: true, placeholder: 'RUSD' },
     { name: 'name', label: 'Name', type: 'text', required: true, placeholder: 'Royal Tiger USD' },
     { name: 'contractAddress', label: 'Contract address', type: 'text', placeholder: '0x…', help: 'blank for the native coin' },
-    { name: 'decimals', label: 'Decimals', type: 'number', step: '1', placeholder: '18' },
+    { name: 'decimals', label: 'Decimals', type: 'number', step: '1', placeholder: '18', help: '18 for most ERC-20, 6 for USD stablecoins (USDT/USDC/RUSD)' },
     { name: 'status', label: 'Status', type: 'select', options: ['active', 'paused', 'delisting'], required: true },
   ],
   defaults: { decimals: 18, status: 'active' },

@@ -206,17 +206,31 @@ impl TigerTokens {
     ///
     /// `tgr_address` is the wrapped/native-bridged TGR contract and
     /// `rusd_address` the RUSD stablecoin contract; both must be real 20-byte
-    /// addresses on the chain the caller names.
+    /// addresses on the chain the caller names. RUSD is a 1:1 USD stablecoin, so
+    /// its decimals default to 6 (the chain's `Stablecoin` factory preset); pass
+    /// the deployed contract's own decimals when they differ.
     pub fn new(chain: &str, tgr_address: &str, rusd_address: &str, tgr_total_supply: f64, rusd_total_supply: f64) -> Self {
+        Self::with_rusd_decimals(chain, tgr_address, rusd_address, tgr_total_supply, rusd_total_supply, 6)
+    }
+
+    /// As [`TigerTokens::new`], with an explicit RUSD decimals value.
+    pub fn with_rusd_decimals(
+        chain: &str,
+        tgr_address: &str,
+        rusd_address: &str,
+        tgr_total_supply: f64,
+        rusd_total_supply: f64,
+        rusd_decimals: u8,
+    ) -> Self {
         let tgr = Token::new_erc20("tgr", "TGR", "Tiger Coin", tgr_address, chain, 18)
             .with_supply(tgr_total_supply);
         let rusd = Token::new_erc20(
             "rusd",
             "RUSD",
-            "Royal Tiger United States Dollar",
+            "Royal Tiger USD",
             rusd_address,
             chain,
-            18,
+            rusd_decimals,
         )
         .with_supply(rusd_total_supply);
 
@@ -1471,7 +1485,7 @@ mod tests {
                 ChainConfig {
                     key: "tigersmartchain".into(),
                     name: "TigerSmartChain".into(),
-                    chain_id: 6666,
+                    chain_id: 9001,
                     rpc_url: "https://rpc.test.invalid".into(),
                     explorer_url: "https://scan.test.invalid".into(),
                     native_symbol: "TGR".into(),
@@ -1503,7 +1517,7 @@ mod tests {
                     name: "Royal Tiger USD".into(),
                     address: "0x2222222222222222222222222222222222222222".into(),
                     chain: "tigersmartchain".into(),
-                    decimals: 18,
+                    decimals: 6,
                     standard: TokenStandard::ERC20,
                     total_supply: 1_000_000_000.0,
                     price_usd: 1.0,
@@ -1708,5 +1722,16 @@ mod tests {
         assert_eq!(tokens.tgr.address, "0x1111111111111111111111111111111111111111");
         assert_eq!(tokens.rusd.address, "0x2222222222222222222222222222222222222222");
         assert_eq!(tokens.tgr.total_supply, "1000000000");
+        // RUSD is a USD stablecoin: 6 decimals by default, overridable.
+        assert_eq!(tokens.rusd.decimals, 6);
+        let eighteen = TigerTokens::with_rusd_decimals(
+            "tigersmartchain",
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+            1.0,
+            1.0,
+            18,
+        );
+        assert_eq!(eighteen.rusd.decimals, 18);
     }
 }

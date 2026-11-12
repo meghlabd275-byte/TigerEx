@@ -1,11 +1,12 @@
 /**
  * TigerSmartChain integration descriptor.
  *
- * TigerSmartChain (TSC) is TigerEx's own EVM chain. Its public parameters are
- * fixed by the chain itself — mainnet chain id 6666, testnet 6667, native coin
- * TGR (Tiger Coin) and the RUSD stablecoin (Royal Tiger USD) — while the node
- * URL the exchange dials and the RUSD contract address are deployment
- * configuration, read from the environment.
+ * TigerSmartChain (TSC) is TigerEx's own EVM chain. Its chain id and native
+ * coin come from the chain itself — the `tigersmartchaind` daemon defaults to
+ * chain id 9001 (testnet 9000), per `cmd/tigersmartchaind/src/main.rs` and the
+ * chain's Go/Python/Rust SDKs — with native coin TGR (Tiger Coin), 18 decimals.
+ * The node URL the exchange dials, the explorer URL and the RUSD stablecoin
+ * contract address are deployment configuration, read from the environment.
  *
  * Nothing here invents an endpoint or a contract address: when
  * `TIGEREX_TSC_RPC_URL` is unset the chain is simply not served, and when the
@@ -17,10 +18,14 @@ import { ChainRecord, TokenRecord, upsertChain, upsertToken, getChain, listToken
 import { isHexAddress } from '@/lib/chains/evm-rpc';
 import { upsertNetwork } from '@/lib/wallet/networks';
 
-/** TigerSmartChain mainnet chain id, per the chain's own genesis. */
-export const TSC_MAINNET_CHAIN_ID = 6666;
-/** TigerSmartChain testnet chain id. */
-export const TSC_TESTNET_CHAIN_ID = 6667;
+/**
+ * TigerSmartChain mainnet chain id. The daemon's `--chain-id` default is 9001
+ * and every SDK (Go `NewClient`, Python `ChainID.MAINNET`) agrees; the chain id
+ * is fixed by the chain, not by TigerEx.
+ */
+export const TSC_MAINNET_CHAIN_ID = 9001;
+/** TigerSmartChain testnet chain id, per the chain's Python SDK (`ChainID.TESTNET`). */
+export const TSC_TESTNET_CHAIN_ID = 9000;
 
 /** The native coin's symbol and decimals. */
 export const TSC_NATIVE_SYMBOL = 'TGR';
@@ -28,7 +33,13 @@ export const TSC_NATIVE_DECIMALS = 18;
 
 /** The stablecoin's symbol and decimals. */
 export const RUSD_SYMBOL = 'RUSD';
-export const RUSD_DECIMALS = 18;
+/**
+ * RUSD decimals. Royal Tiger USD is a 1:1 USD stablecoin, and the chain's own
+ * `TokenFactoryWithPresets.Stablecoin` preset creates stablecoins with 6
+ * decimals (the USDT/USDC convention), so 6 is the default. The operator may
+ * override with `TIGEREX_TSC_RUSD_DECIMALS` when the deployed contract differs.
+ */
+export const RUSD_DECIMALS = 6;
 
 export interface TigerSmartChainConfig {
   chainKey: string;
@@ -62,14 +73,25 @@ export function tigerSmartChainConfig(network: 'mainnet' | 'testnet' = 'mainnet'
   const rawRusd = env('TIGEREX_TSC_RUSD_ADDRESS');
   const rusdAddress = rawRusd && isHexAddress(rawRusd) ? rawRusd : null;
 
-  const explorerDefault = mainnet
-    ? 'https://scan.tigersmartchain.com'
-    : 'https://testnet.scan.tigersmartchain.com';
-  const explorerUrl = env('TIGEREX_TSC_EXPLORER_URL') ?? explorerDefault;
+  // The explorer is optional deployment configuration; nothing is invented.
+  const explorerUrl = env('TIGEREX_TSC_EXPLORER_URL') ?? '';
+
+  // The daemon takes `--chain-id`, so a deployment that runs its own network can
+  // name the id it actually serves. When the override is unset the chain's own
+  // default (9001 / 9000) is used, and the on-chain reader still refuses to trust
+  // a node whose `eth_chainId` differs from whatever is recorded here.
+  const overrideRaw = env(mainnet ? 'TIGEREX_TSC_CHAIN_ID' : 'TIGEREX_TSC_TESTNET_CHAIN_ID');
+  const override = overrideRaw === null ? null : Number(overrideRaw);
+  const chainId =
+    override !== null && Number.isInteger(override) && override >= 0
+      ? override
+      : mainnet
+        ? TSC_MAINNET_CHAIN_ID
+        : TSC_TESTNET_CHAIN_ID;
 
   return {
     chainKey: mainnet ? 'tigersmartchain' : 'tigersmartchain-testnet',
-    chainId: mainnet ? TSC_MAINNET_CHAIN_ID : TSC_TESTNET_CHAIN_ID,
+    chainId,
     name: mainnet ? 'TigerSmartChain' : 'TigerSmartChain Testnet',
     rpcUrl,
     explorerUrl,
@@ -133,13 +155,22 @@ export function registerTigerSmartChain(network: 'mainnet' | 'testnet' = 'mainne
   ];
 
   if (config.rusdAddress) {
+    // The decimals are deployment configuration (the operator knows the
+    // contract); when unset the stablecoin default (6) is used. A wrong value
+    // would only misformat a display amount, never move funds, but the override
+    // exists so a contract that is not the 6-decimal stablecoin preset is still
+    // reported correctly.
+    const rusdDecimals = Number(process.env.TIGEREX_TSC_RUSD_DECIMALS ?? String(RUSD_DECIMALS));
     tokens.push(
       upsertToken({
         chainKey: config.chainKey,
         symbol: RUSD_SYMBOL,
         name: 'Royal Tiger USD',
         contractAddress: config.rusdAddress,
-        decimals: RUSD_DECIMALS,
+        decimals:
+          Number.isInteger(rusdDecimals) && rusdDecimals >= 0 && rusdDecimals <= 255
+            ? rusdDecimals
+            : RUSD_DECIMALS,
         status: 'active',
       }),
     );
