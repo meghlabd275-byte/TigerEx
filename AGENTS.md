@@ -434,9 +434,9 @@ What it adds that the root repo did not have: a **Solidity contract layer**
 (26 contracts: V2/V3 factory, router, stable and weighted pools, zap, TWAP,
 options, perps, lending with flash loans, veTGE vote-escrow, staking, bridge,
 OTC, NFT marketplace, meme launchpad, locker, governance, price oracle, quoter,
-call-based `TigerSwapSafeERC20`) with **27 Foundry test suites / 721 passing
+call-based `TigerSwapSafeERC20`) with **28 Foundry test suites / 731 passing
 tests**, plus an independent Go DEX backend (aggregator, order matching,
-indexer, AMM) and a small Next.js DEX UI.
+indexer, AMM, a Rust-engine bot control plane) and a small Next.js DEX UI.
 
 Wiring rules:
 
