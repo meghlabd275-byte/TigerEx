@@ -65,7 +65,7 @@ func newChainDTO(m models.Blockchain) chainDTO {
 		NativeSymbol:   m.Symbol,
 		NativeDecimals: decimals,
 		RPCURLs:        rpcURLs,
-		ExplorerURL:    optionalString(m.ExplorerURL),
+		ExplorerURL:    optionalString(config.ChainExplorerURL(m.ChainID, m.ExplorerURL)),
 		IsActive:       m.IsActive,
 	}
 }

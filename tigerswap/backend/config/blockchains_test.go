@@ -148,3 +148,36 @@ func TestOperatorTokenOverridesStaticEntry(t *testing.T) {
 		t.Fatalf("USDC address = %q, want the operator override %q", addr, usdc)
 	}
 }
+
+// TestTigerSmartChainHasNoBakedInExplorer verifies the chain's explorer is not a
+// compiled-in host. A hardcoded address that does not resolve would be served to
+// the wallet as a live link; it must come from operator configuration instead.
+func TestTigerSmartChainHasNoBakedInExplorer(t *testing.T) {
+	if url := GetBlockchainConfigs()[6666].ExplorerURL; url != "" {
+		t.Fatalf("TigerSmartChain explorer must not be baked in, got %q", url)
+	}
+}
+
+// TestChainExplorerURLPrefersOperatorConfig verifies the resolver reads the
+// operator's endpoint, falls back to the stored value, and returns nothing when
+// neither is set -- never a third-party host.
+func TestChainExplorerURLPrefersOperatorConfig(t *testing.T) {
+	t.Setenv("TIGERSWAP_EXPLORER_6666", "https://scan.tigersmartchain.example")
+	if got := ChainExplorerURL(6666, "https://stored.example"); got != "https://scan.tigersmartchain.example" {
+		t.Fatalf("explorer = %q, want the operator override", got)
+	}
+
+	t.Setenv("TIGERSWAP_EXPLORER_6666", "")
+	t.Setenv("TIGERSWAP_EXPLORER_URL_6666", "https://alt.tigersmartchain.example")
+	if got := ChainExplorerURL(6666, "https://stored.example"); got != "https://alt.tigersmartchain.example" {
+		t.Fatalf("explorer = %q, want the alternate operator key", got)
+	}
+
+	t.Setenv("TIGERSWAP_EXPLORER_URL_6666", "")
+	if got := ChainExplorerURL(6666, "https://stored.example"); got != "https://stored.example" {
+		t.Fatalf("explorer = %q, want the stored value", got)
+	}
+	if got := ChainExplorerURL(6666, ""); got != "" {
+		t.Fatalf("explorer = %q, want empty when nothing is configured", got)
+	}
+}

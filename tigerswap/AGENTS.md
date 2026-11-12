@@ -178,6 +178,16 @@ The Go module uses `GOFLAGS=-mod=mod` because `go.sum` is not fully vendored.
   same lock for reading. It re-checks the cache after acquiring the lock so two
   callers cannot each dial the same chain and leak one connection.
 
+## Chain explorer URLs
+
+- An explorer is a deployment address, never compiled in. `config.ChainExplorerURL(chainID, stored)`
+  reads `TIGERSWAP_EXPLORER_<chainID>` (or `TIGERSWAP_EXPLORER_URL_<chainID>`),
+  then the `explorer_url` an operator stored on the row, and returns empty when
+  neither is set. `newChainDTO` applies it, so `/chains` reports null rather than
+  a host that may not exist.
+- No chain ships a baked-in explorer. TigerSmartChain (6666) previously carried
+  `https://tigerscan.io`, which does not resolve; a dead host handed to the wallet
+  as a live link is the same class of defect as a fabricated price.
 
 ## Required environment variables
 

@@ -575,8 +575,10 @@ configure.
   `better-sqlite3`/`crypto` into Edge broke `next build`; keep the guard).
 - TSC parameters come from the chain itself. The chain id is fixed by the
   daemon: `cmd/tigersmartchaind/src/main.rs` defaults `--chain-id` to **9001**
-  (testnet **9000**, per the chain's Python SDK), and the chain's Go/Python/Rust
-  SDKs agree. Native coin TGR, 18 decimals. RUSD ("Royal Tiger USD") is a 1:1
+  (testnet **9000**), the chain's Go SDK (`sdk/go/client.go`) and Python SDK
+  (`ChainID.MAINNET = 9001`, `TESTNET = 9000`) agree, and its Helm deployment
+  (`deployment/helm/tigersmartchain/values.yaml`) sets `chainId: 9001`. Native
+  coin TGR, 18 decimals. RUSD ("Royal Tiger USD") is a 1:1
   USD stablecoin and the chain's `TokenFactoryWithPresets.Stablecoin` preset
   creates stablecoins with **6** decimals, so RUSD defaults to 6. The node URL,
   the explorer URL, the RUSD contract address and the RUSD decimals are
@@ -591,6 +593,15 @@ configure.
   report a zero balance.
 - Tests: `scripts/test/chains.test.cjs`; `npm run test:logic` includes the chain
   modules via `scripts/build-logic-tests.cjs`.
+- Two separate surfaces reference TSC and must not be conflated. This one (the
+  wallet/registry) is chain-id agnostic and reads the id from the daemon default
+  or `TIGEREX_TSC_CHAIN_ID` (**9001**). The vendored DEX under `tigerswap/`
+  keeps its own internal chain registry keyed on **6666** (`config/blockchains.go`,
+  `services/services.go`), which is the id TigerSmartChain's README and ENS/bridge
+  modules advertise; the DEX resolves the node URL from
+  `TIGERSWAP_RPC_<chainID>` and does not assert `eth_chainId`, so the two keys do
+  not share state and neither is authoritative over the other. Treat the id as
+  deployment configuration on both surfaces rather than unifying them blindly.
 
 `backend/rust/cmd/tigerex_ecosystem` is the Rust side of the same surface.
 `TigerEcosystem::new()` seeds nothing; a caller supplies chains, tokens, pools

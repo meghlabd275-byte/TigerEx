@@ -624,12 +624,15 @@ func GetBlockchainConfigs() map[int64]*BlockchainConfig {
 		},
 		// TigerSmartChain (TigerEx's own EVM chain; native coin is TGR).
 		6666: {
-			ChainID:           6666,
-			Name:              "TigerSmartChain",
-			Symbol:            "TGR",
-			Type:              ChainTypeEVM,
-			RPCURLs:           nil, // operator-supplied via TIGERSWAP_RPC_6666
-			ExplorerURL:       "https://tigerscan.io",
+			ChainID: 6666,
+			Name:    "TigerSmartChain",
+			Symbol:  "TGR",
+			Type:    ChainTypeEVM,
+			RPCURLs: nil, // operator-supplied via TIGERSWAP_RPC_6666
+			// The explorer is a deployment address, so it comes from
+			// TIGERSWAP_EXPLORER_6666 (see ChainExplorerURL); a host that does not
+			// resolve must not be handed to the wallet as a live link.
+			ExplorerURL:       "",
 			BlockTime:         3,
 			Decimals:          18,
 			ChainIDHex:        "0x1a0a",
@@ -664,6 +667,21 @@ func ChainRPCURLs(chainID int64) []string {
 		}
 	}
 	return urls
+}
+
+// ChainExplorerURL resolves a chain's block-explorer URL from operator
+// configuration (TIGERSWAP_EXPLORER_<chainID>, or TIGERSWAP_EXPLORER_URL_<chainID>),
+// falling back to the value stored on the chain row. It never returns a baked-in
+// host: a chain whose explorer the operator has not configured reports none, so
+// the wallet does not offer a link to a site that does not exist.
+func ChainExplorerURL(chainID int64, stored string) string {
+	if url := os.Getenv(fmt.Sprintf("TIGERSWAP_EXPLORER_%d", chainID)); strings.TrimSpace(url) != "" {
+		return strings.TrimSpace(url)
+	}
+	if url := os.Getenv(fmt.Sprintf("TIGERSWAP_EXPLORER_URL_%d", chainID)); strings.TrimSpace(url) != "" {
+		return strings.TrimSpace(url)
+	}
+	return strings.TrimSpace(stored)
 }
 
 // NativeDecimals returns the native coin's decimal precision for a chain from

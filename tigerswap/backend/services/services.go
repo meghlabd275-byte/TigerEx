@@ -52,7 +52,10 @@ func seedChains(db *gorm.DB) {
 		{ChainID: 9001, Name: "Aptos", Symbol: "APT", Icon: "🔷", ExplorerURL: "https://aptoscan.com", Type: "aptos", IsActive: true},
 		{ChainID: 9002, Name: "Cosmos", Symbol: "ATOM", Icon: "🌌", ExplorerURL: "https://mintscan.io/cosmos", Type: "cosmos", IsActive: true},
 		{ChainID: 9003, Name: "TON", Symbol: "TON", Icon: "📱", ExplorerURL: "https://tonscan.org", Type: "ton", IsActive: true},
-		{ChainID: 6666, Name: "TigerSmartChain", Symbol: "TGR", Icon: "🐯", ExplorerURL: "https://tigerscan.io", Type: "evm", IsActive: true},
+		// TigerSmartChain explorer is a deployment address; leave it empty here
+		// and let the operator set TIGERSWAP_EXPLORER_6666 (or edit the row). A
+		// compiled-in host that does not resolve would be served as a live link.
+		{ChainID: 6666, Name: "TigerSmartChain", Symbol: "TGR", Icon: "🐯", ExplorerURL: "", Type: "evm", IsActive: true},
 	}
 	for _, chain := range chains {
 		// Upsert on the unique chain_id so a chain added to this registry reaches
