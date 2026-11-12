@@ -260,10 +260,14 @@ Audited and made real (each has tests):
   math (were constants, missing validation, or prefix-match bugs).
 - `websocket_v2`, `rest_api_v2` - wired to the real `marketdata` crate.
 
-Known remaining placeholder crates in `cmd/` (not yet audited), e.g.
-`audit`, `subaccount`, `prime_brokerage`, `social_trading`, `yield_optimizer`,
-`metrics`, `reports`, `migrations`, and others. Prefer fixing the ones that
-guard funds, auth, or market data first.
+Also audited and made real (each has tests): `audit` (SHA-256 hash-chained,
+tamper-evident log), `subaccount` (unique ids, 300-per-parent cap, per-parent
+unique names), `prime_brokerage` (tiered fee discount, no flat 10%),
+`social_trading` (no id collision, no self-copy), `yield_optimizer`,
+`metrics` (rejects empty keys and non-finite gauges), `reports` (real gain
+lots, not filename strings) and `migrations` (tracks state, refuses a rollback
+that would skip applied migrations). `cargo test --lib` in each of these eight
+crate directories passes (45 tests total).
 
 Conventions for these crates: return `Result` with a typed error enum, reject
 non-finite and non-positive amounts, fail closed on unknown keys/symbols, and
