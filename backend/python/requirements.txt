@@ -1,0 +1,7 @@
+# Runtime dependencies for the TigerEx Python analytics / ML layer.
+#
+# Only the packages these modules import at module load are listed. The heavier
+# optional models (scikit-learn, torch, xgboost) are imported behind a guard in
+# `ml/__init__.py` and are not required to import or self-test the layer.
+numpy>=1.24
+pandas>=2.0

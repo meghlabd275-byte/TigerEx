@@ -604,3 +604,26 @@ token, are required), basis-point bridge fees, a constant-product pool
 actually recorded. Typed errors with stable codes (`IsCode`). Address
 derivation, signing and chain reads stay in the wallet service that owns the
 keys — this package never generates an address or a signature.
+
+## Python analytics / ML layer (`backend/python`)
+
+`backend/python/src/analytics/*` and `backend/python/src/ml/*` are the AI/ML and
+analytics layer. They are pure computation over caller-supplied data — no
+network, no database, no fabricated prices — and each module also has a
+`__main__` self-test. Until now the layer had no declared dependencies and no CI
+job, so a regression in it would have shipped unnoticed.
+
+- Dependencies are declared in `backend/python/requirements.txt` (`numpy`,
+  `pandas`). The heavy optional models (scikit-learn, torch, xgboost) are
+  imported behind a guard in `ml/__init__.py` and are not needed to import or
+  test the layer; `FraudDetector.predict` raises when no fitted model is
+  available rather than reporting a benign score.
+- Tests live in `backend/python/tests/` and run with `python -m pytest` from
+  `backend/python` (config in `pytest.ini`, path bootstrap in `tests/conftest.py`).
+  CI job `python-analytics` runs the suite and the module self-tests.
+- Fund/compliance invariants the tests pin: an unpriced holding is refused
+  rather than valued at zero; a rebalance refuses an unpriced asset; risk-parity
+  allocation fails closed instead of returning an empty book; the backtester
+  never sees a future bar; the fraud engine scores a listed jurisdiction as
+  decisive (60 points, so it always alerts) and rejects a negative amount.
+

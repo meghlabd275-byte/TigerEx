@@ -135,9 +135,20 @@ class RiskParity:
         self.assets = assets
     
     def allocate(self, total: float, volatilities: Dict[str, float]) -> Dict[str, float]:
+        """Inverse-variance allocation across the assets that have a volatility.
+
+        Assets with a non-positive or missing volatility are excluded. When no
+        asset has a usable volatility the allocation is undefined, so it fails
+        closed rather than returning an empty (silently un-invested) book.
+        """
+        if total <= 0:
+            raise ValueError("total must be positive")
+
         inv_var = {s: 1/v**2 for s, v in volatilities.items() if v > 0}
         total_inv_var = sum(inv_var.values())
-        
+        if total_inv_var <= 0:
+            raise ValueError("at least one asset must have a positive volatility")
+
         return {s: total * iv/total_inv_var for s, iv in inv_var.items()}
 
 class BlackLitterman:

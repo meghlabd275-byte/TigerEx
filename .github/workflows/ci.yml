@@ -209,6 +209,33 @@ jobs:
           rustc --edition 2021 --crate-type lib --test TigerEx/hardware_wallet/src/lib.rs -o /tmp/hardware_wallet_tests && /tmp/hardware_wallet_tests
           rustc --edition 2021 --crate-type lib --test TigerEx/self_custody_wallet/self_custody_wallet.rs -o /tmp/self_custody_tests && /tmp/self_custody_tests
 
+  python-analytics:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python layer dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r backend/python/requirements.txt pytest
+
+      - name: Test Python analytics / ML layer
+        working-directory: backend/python
+        run: python -m pytest -q
+
+      - name: Run module self-tests
+        working-directory: backend/python
+        run: |
+          for module in src/ml/price_prediction.py src/ml/trading_models.py src/ml/advanced_models.py \
+                        src/analytics/fraud_detection.py src/analytics/backtest.py; do
+            python "$module"
+          done
+
   tigerswap-contracts:
     runs-on: ubuntu-latest
     permissions:

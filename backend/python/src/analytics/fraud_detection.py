@@ -140,8 +140,14 @@ class FraudDetectionEngine:
                 score += 25
 
         # Check 3: Jurisdictions flagged by the configured risk list.
+        #
+        # A listed jurisdiction is a sanctions/AML signal, so it is decisive on
+        # its own: it must reach the HIGH band (>= 60) and always raise an
+        # alert. Scoring it below the alert threshold let a transaction to a
+        # sanctioned country pass unflagged unless it also happened to trip an
+        # unrelated heuristic.
         if tx.location_country in self.high_risk_countries:
-            score += 50
+            score += 60
 
         # Check 4: Burst of transactions in the preceding minute.
         window_start = tx.timestamp - timedelta(seconds=60)
