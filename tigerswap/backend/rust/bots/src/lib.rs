@@ -35,6 +35,9 @@
 //! ```
 
 pub mod arbitrage;
+pub mod copy;
+pub mod engine;
+pub mod ffi;
 pub mod fixed;
 pub mod grid;
 pub mod guard;
@@ -44,6 +47,8 @@ pub mod schedule;
 pub mod wide;
 
 pub use arbitrage::{ArbitrageBot, ArbitrageConfig, Opportunity, Venue};
+pub use copy::{CopyBot, CopyConfig, CopySignal, Market as CopyMarket};
+pub use engine::Engine;
 pub use fixed::{BotError, BotResult, Fixed, SCALE};
 pub use grid::{GridBot, GridConfig};
 pub use guard::{

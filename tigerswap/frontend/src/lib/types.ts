@@ -58,6 +58,8 @@ export interface Chain {
   name: string;
   chainType: string;
   nativeSymbol: string;
+  nativeDecimals: number;
+  rpcUrls: string[];
   explorerURL: string | null;
   isActive: boolean;
 }
@@ -67,6 +69,8 @@ export const chainValidator = object<Chain>({
   name: string,
   chainType: string,
   nativeSymbol: string,
+  nativeDecimals: withDefault(integer, 18),
+  rpcUrls: withDefault(arrayLenient(httpURL), []),
   explorerURL: nullable(httpURL),
   isActive: boolean,
 });
@@ -126,16 +130,69 @@ export interface SwapQuote {
   priceImpact: number;
   route: string[];
   gasEstimate: number;
+  /** Present only when the router split the order across several routes. */
+  legs?: SwapQuoteLeg[];
+  /**
+   * The executable hop plan for a single multi-hop route. Present only when the
+   * winning route has more than one hop; a direct single-family quote omits it.
+   */
+  routeHops?: SwapRouteHop[];
 }
 
-export const swapQuoteValidator = object<SwapQuote>({
-  amountIn: string,
-  amountOut: string,
-  amountOutMin: string,
-  priceImpact: nonNegative,
-  route: array(string),
-  gasEstimate: nonNegative,
+/** One executable hop of a route: a token pair and the family to trade it on. */
+export interface SwapRouteHop {
+  tokenIn: string;
+  tokenOut: string;
+  family: string;
+  pool: string;
+}
+
+/**
+ * One leg of a split swap. The server sends it only when the router divided the
+ * input across independent routes to reduce price impact.
+ */
+export interface SwapQuoteLeg {
+  path: string[];
+  family: string;
+  pool: string;
+  amountIn: string;
+  amountOut: string;
+  /** The full executable path for the leg; a multi-hop leg has more than one. */
+  hops?: SwapRouteHop[];
+}
+
+export const swapRouteHopValidator = object<SwapRouteHop>({
+  tokenIn: address,
+  tokenOut: address,
+  family: string,
+  pool: address,
 });
+
+export const swapQuoteLegValidator = object<SwapQuoteLeg>(
+  {
+    path: array(address),
+    family: string,
+    pool: address,
+    amountIn: string,
+    amountOut: string,
+    hops: array(swapRouteHopValidator),
+  },
+  { optional: ["hops"] },
+);
+
+export const swapQuoteValidator = object<SwapQuote>(
+  {
+    amountIn: string,
+    amountOut: string,
+    amountOutMin: string,
+    priceImpact: nonNegative,
+    route: array(address),
+    gasEstimate: nonNegative,
+    legs: array(swapQuoteLegValidator),
+    routeHops: array(swapRouteHopValidator),
+  },
+  { optional: ["legs", "routeHops"] },
+);
 
 /** A recent trade from `/market/trades`. */
 export interface Trade {
@@ -310,6 +367,43 @@ export const perpOpenResultValidator = object<PerpOpenResult>({
   success: literalTrue,
   position: perpPositionValidator,
 });
+
+/**
+ * A perpetual order owned by the authenticated caller, as returned by
+ * `/perpetual/orders`. A pending limit or stop order rests until the mark price
+ * meets its condition or its expiry passes.
+ */
+export interface PerpOrder {
+  id: string;
+  user_address: string;
+  pair: string;
+  side: 'long' | 'short';
+  order_type: string;
+  size: string;
+  price: number;
+  trigger_price: number;
+  status: string;
+  filled_size: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export const perpOrderValidator = object<PerpOrder>({
+  id: string,
+  user_address: withDefault(string, ''),
+  pair: string,
+  side: oneOf(['long', 'short'] as const),
+  order_type: string,
+  size: string,
+  price: withDefault(number, 0),
+  trigger_price: withDefault(number, 0),
+  status: string,
+  filled_size: withDefault(string, '0'),
+  created_at: withDefault(timestamp, new Date(0).toISOString()),
+  expires_at: withDefault(timestamp, new Date(0).toISOString()),
+});
+
+export const perpOrderListValidator = listingArray(perpOrderValidator);
 
 /** A margin account, as returned when one is opened. */
 export interface MarginAccount {

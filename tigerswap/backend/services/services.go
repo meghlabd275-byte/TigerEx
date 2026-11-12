@@ -22,6 +22,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"tigerswap/backend/config"
 	"tigerswap/backend/models"
 )
 
@@ -31,12 +32,7 @@ type BlockchainService struct {
 }
 
 func NewBlockchainService(db *gorm.DB) *BlockchainService {
-	// Seed initial chains if empty
-	var count int64
-	db.Model(&models.Blockchain{}).Count(&count)
-	if count == 0 {
-		seedChains(db)
-	}
+	seedChains(db)
 	return &BlockchainService{db: db}
 }
 
@@ -56,9 +52,14 @@ func seedChains(db *gorm.DB) {
 		{ChainID: 9001, Name: "Aptos", Symbol: "APT", Icon: "🔷", ExplorerURL: "https://aptoscan.com", Type: "aptos", IsActive: true},
 		{ChainID: 9002, Name: "Cosmos", Symbol: "ATOM", Icon: "🌌", ExplorerURL: "https://mintscan.io/cosmos", Type: "cosmos", IsActive: true},
 		{ChainID: 9003, Name: "TON", Symbol: "TON", Icon: "📱", ExplorerURL: "https://tonscan.org", Type: "ton", IsActive: true},
+		{ChainID: 6666, Name: "TigerSmartChain", Symbol: "TGR", Icon: "🐯", ExplorerURL: "https://tigerscan.io", Type: "evm", IsActive: true},
 	}
 	for _, chain := range chains {
-		if err := db.Create(&chain).Error; err != nil {
+		// Upsert on the unique chain_id so a chain added to this registry reaches
+		// an existing deployment. A plain Create would collide on every boot after
+		// the first, and the empty-table guard it replaced meant a newly registered
+		// chain never appeared at all.
+		if err := db.Where("chain_id = ?", chain.ChainID).FirstOrCreate(&chain).Error; err != nil {
 			log.Printf("failed to seed chain %s (chain_id %d): %v", chain.Name, chain.ChainID, err)
 		}
 	}
@@ -89,12 +90,7 @@ type TokenService struct {
 }
 
 func NewTokenService(db *gorm.DB) *TokenService {
-	// Seed initial tokens if empty
-	var count int64
-	db.Model(&models.Token{}).Count(&count)
-	if count == 0 {
-		seedTokens(db)
-	}
+	seedTokens(db)
 	return &TokenService{db: db}
 }
 
@@ -108,13 +104,46 @@ func seedTokens(db *gorm.DB) {
 		{ChainID: 1, Address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", Name: "Uniswap", Symbol: "UNI", Decimals: 18, LogoURI: "https://assets.coingecko.com/coins/images/12504/small/uniswap-uni.png", IsActive: true, IsVerified: true},
 		{ChainID: 137, Address: "0x0000000000000000000000000000000000000000", Name: "Polygon", Symbol: "MATIC", Decimals: 18, LogoURI: "https://assets.coingecko.com/coins/images/4713/small/polygon.png", IsActive: true, IsVerified: true},
 		{ChainID: 56, Address: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", Name: "Wrapped BNB", Symbol: "WBNB", Decimals: 18, LogoURI: "https://assets.coingecko.com/coins/images/825/small/bnb-icon2_2x.png", IsActive: true, IsVerified: true},
+		// TigerSmartChain's native coin is TGR. The token rows for the chain's
+		// ERC-20s (RUSD, RYUSD, the bridged stables) are seeded from the operator's
+		// TIGERSWAP_TOKEN_6666_* declarations, because those addresses are
+		// deployment-specific.
+		{ChainID: 6666, Address: "0x0000000000000000000000000000000000000000", Name: "Tiger Coin", Symbol: "TGR", Decimals: 18, IsActive: true, IsVerified: true},
 	}
+	tokens = append(tokens, operatorTokenRows()...)
 	for _, token := range tokens {
-		if err := db.Create(&token).Error; err != nil {
+		// A token is unique on (chain_id, address). FirstOrCreate keyed on that
+		// pair makes the seed idempotent and lets a token added to this registry --
+		// or declared by the operator via TIGERSWAP_TOKEN_* -- appear on an
+		// existing deployment instead of only on a fresh one.
+		if err := db.Where("chain_id = ? AND address = ?", token.ChainID, token.Address).FirstOrCreate(&token).Error; err != nil {
 			log.Printf("failed to seed token %s on chain %d: %v", token.Symbol, token.ChainID, err)
 		}
 	}
 	log.Println("Seeded token data")
+}
+
+// operatorTokenRows converts the operator's TIGERSWAP_TOKEN_<chainID>_<SYMBOL>
+// declarations into token rows, so a real deployment address (RUSD, RYUSD, a
+// bridged USDT) becomes a tradable listing without a code change.
+func operatorTokenRows() []models.Token {
+	var rows []models.Token
+	for chainID, tokens := range config.OperatorTokens() {
+		for _, tok := range tokens {
+			rows = append(rows, models.Token{
+				ChainID:     chainID,
+				Address:     tok.Address,
+				Name:        tok.Name,
+				Symbol:      tok.Symbol,
+				Decimals:    tok.Decimals,
+				LogoURI:     tok.LogoURI,
+				IsActive:    true,
+				IsVerified:  tok.IsVerified,
+				CoingeckoID: tok.CoingeckoID,
+			})
+		}
+	}
+	return rows
 }
 
 // GetTokens lists active tokens as a bare array of camelCase objects.
@@ -220,6 +249,8 @@ func (s *SwapService) GetQuote(c *gin.Context) {
 		PriceImpact:  quote.PriceImpact,
 		Route:        route,
 		GasEstimate:  int64(quote.GasEstimate),
+		Legs:         quote.Legs,
+		RouteHops:    quote.RouteHops,
 	})
 }
 
@@ -251,7 +282,7 @@ func (s *SwapService) BuildTransaction(c *gin.Context) {
 		chainID = 1
 	}
 
-	to, data, value, gasLimit, err := globalSwapExecutor.BuildSwap(
+	to, data, value, gasLimit, err := globalSwapExecutor.BuildSwapPlan(
 		c.Request.Context(), chainID, req.TokenIn, req.TokenOut, req.AmountIn, req.Recipient, req.SlippageBps,
 	)
 	if err != nil {
@@ -1135,10 +1166,32 @@ func (s *AuthService) RevokeUserSessions(userID string) error {
 type AdminService struct {
 	db   *gorm.DB
 	auth *AuthService
+	// chainRPCs is the live on-chain client. When set, a chain create, update or
+	// deactivate re-registers the stored endpoints so the change takes effect
+	// without a restart.
+	chainRPCs *BlockchainClient
 }
 
 func NewAdminService(db *gorm.DB) *AdminService {
 	return &AdminService{db: db}
+}
+
+// SetBlockchainClient attaches the live on-chain client so chain RPC changes
+// made in the admin panel are dialled immediately.
+func (s *AdminService) SetBlockchainClient(client *BlockchainClient) {
+	s.chainRPCs = client
+}
+
+// refreshChainRPCs re-reads the chain table into the live client. It is
+// best-effort: a failure is logged, and the startup load still applies on the
+// next restart.
+func (s *AdminService) refreshChainRPCs() {
+	if s.chainRPCs == nil {
+		return
+	}
+	if err := s.chainRPCs.LoadChainRPCs(s.db); err != nil {
+		log.Printf("admin: refresh chain RPC endpoints: %v", err)
+	}
 }
 
 // SetAuthService attaches the auth service so an admin action that deactivates
@@ -1384,10 +1437,32 @@ func (s *AdminService) CreateChain(c *gin.Context) {
 		return
 	}
 
-	if err := s.db.Create(&chain).Error; err != nil {
+	// is_active carries `gorm:"default:true"`. A struct insert omits a false
+	// value, so the column default would make the row active and the operator's
+	// choice would be silently dropped. Inserting a column map writes every
+	// field, so the false value is persisted.
+	row := map[string]interface{}{
+		"chain_id":     chain.ChainID,
+		"name":         chain.Name,
+		"symbol":       chain.Symbol,
+		"icon":         chain.Icon,
+		"rpc_url":      chain.RPCURL,
+		"explorer_url": chain.ExplorerURL,
+		"type":         chain.Type,
+		"is_active":    chain.IsActive,
+		"is_testnet":   chain.IsTestnet,
+		"created_at":   time.Now(),
+		"updated_at":   time.Now(),
+	}
+	if err := s.db.Model(&models.Blockchain{}).Create(row).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create chain"})
 		return
 	}
+	if err := s.db.Where("chain_id = ?", chain.ChainID).First(&chain).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load created chain"})
+		return
+	}
+	s.refreshChainRPCs()
 	s.logAdminAction(c, "create_chain", "chain", chain.Name, nil)
 	c.JSON(http.StatusCreated, chain)
 }
@@ -1440,6 +1515,7 @@ func (s *AdminService) UpdateChain(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Chain not found"})
 		return
 	}
+	s.refreshChainRPCs()
 	s.logAdminAction(c, "update_chain", "chain", id, updates)
 	c.JSON(http.StatusOK, chain)
 }
@@ -1458,6 +1534,7 @@ func (s *AdminService) DeleteChain(c *gin.Context) {
 		return
 	}
 
+	s.refreshChainRPCs()
 	s.logAdminAction(c, "deactivate_chain", "chain", id, nil)
 	c.JSON(http.StatusOK, gin.H{"success": true, "id": id})
 }
@@ -1480,8 +1557,29 @@ func (s *AdminService) CreateToken(c *gin.Context) {
 		return
 	}
 
-	if err := s.db.Create(&token).Error; err != nil {
+	// See CreateChain: a column-map insert persists `is_active:false`, which a
+	// struct insert would drop in favour of the column default.
+	row := map[string]interface{}{
+		"address":      token.Address,
+		"chain_id":     token.ChainID,
+		"name":         token.Name,
+		"symbol":       token.Symbol,
+		"decimals":     token.Decimals,
+		"logo_uri":     token.LogoURI,
+		"total_supply": token.TotalSupply,
+		"is_active":    token.IsActive,
+		"is_verified":  token.IsVerified,
+		"coingecko_id": token.CoingeckoID,
+		"created_by":   token.CreatedBy,
+		"created_at":   time.Now(),
+		"updated_at":   time.Now(),
+	}
+	if err := s.db.Model(&models.Token{}).Create(row).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create token"})
+		return
+	}
+	if err := s.db.Where("chain_id = ? AND address = ?", token.ChainID, token.Address).First(&token).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load created token"})
 		return
 	}
 	s.logAdminAction(c, "create_token", "token", token.Symbol, nil)
@@ -1573,8 +1671,34 @@ func (s *AdminService) CreatePool(c *gin.Context) {
 		respondBadRequestError(c, err)
 		return
 	}
-	if err := s.db.Create(&pool).Error; err != nil {
+	// See CreateChain: a column-map insert persists `is_active:false`, which a
+	// struct insert would drop in favour of the column default.
+	row := map[string]interface{}{
+		"token_a_address": pool.TokenAAddress,
+		"token_b_address": pool.TokenBAddress,
+		"chain_id":        pool.ChainID,
+		"factory_address": pool.FactoryAddress,
+		"pool_address":    pool.PoolAddress,
+		"reserve_a":       pool.ReserveA,
+		"reserve_b":       pool.ReserveB,
+		"total_liquidity": pool.TotalLiquidity,
+		"token_0_price":   pool.Token0Price,
+		"token_1_price":   pool.Token1Price,
+		"fee":             pool.Fee,
+		"volume_24h":      pool.Volume24h,
+		"volume_7d":       pool.Volume7d,
+		"tvl_usd":         pool.TvlUSD,
+		"tx_count":        pool.TxCount,
+		"is_active":       pool.IsActive,
+		"created_at":      time.Now(),
+		"updated_at":      time.Now(),
+	}
+	if err := s.db.Model(&models.Pool{}).Create(row).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create pool"})
+		return
+	}
+	if err := s.db.Where("pool_address = ?", pool.PoolAddress).First(&pool).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load created pool"})
 		return
 	}
 	s.logAdminAction(c, "create_pool", "pool", pool.PoolAddress, nil)

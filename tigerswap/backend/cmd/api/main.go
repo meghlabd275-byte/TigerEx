@@ -14,6 +14,7 @@ import (
 	"tigerswap/backend/config"
 	"tigerswap/backend/models"
 	"tigerswap/backend/services"
+	"tigerswap/backend/services/botengine"
 )
 
 // depositWatcherChains returns the chains the deposit watcher should scan.
@@ -22,7 +23,10 @@ import (
 func depositWatcherChains() []int64 {
 	raw := strings.TrimSpace(os.Getenv("DEPOSIT_WATCH_CHAINS"))
 	if raw == "" {
-		return []int64{1, 56, 137, 42161, 10, 8453, 43114}
+		// TigerSmartChain (6666) is the platform's own chain, so it is watched by
+		// default alongside the other enabled networks. A chain with no
+		// TIGERSWAP_RPC_<id> endpoint is skipped at scan time rather than failing.
+		return []int64{1, 56, 137, 42161, 10, 8453, 43114, 6666}
 	}
 
 	var chains []int64
@@ -83,8 +87,14 @@ func main() {
 		&models.Order{},
 		&models.AdminLog{},
 		&models.PerpetualPosition{},
+		&models.PerpetualOrder{},
 		&models.CopyTrade{},
+		&models.CopyTrader{},
+		&models.CopyFollow{},
+		&models.CopyPositionRecord{},
+		&models.FeeRecordModel{},
 		&models.LaunchpadProject{},
+		&models.LaunchpadAllocation{},
 		&models.MasterWallet{},
 		&models.FeeSettings{},
 		&models.SystemSettings{},
@@ -148,10 +158,16 @@ func main() {
 	// Real on-chain and trading services. These share one blockchain client and
 	// one price aggregator; every handler reads live chain or market state.
 	blockchainClient := services.NewBlockchainClient()
+	// Dial the endpoints the operator stored in the admin panel, so an
+	// admin-entered node is used instead of leaving the chain unreachable.
+	if err := blockchainClient.LoadChainRPCs(db); err != nil {
+		log.Printf("warning: could not load stored chain RPC endpoints: %v", err)
+	}
 	priceAggregator := services.NewPriceAggregator(redis)
 	swapExecutor := services.NewSwapExecutor(blockchainClient, priceAggregator, redis)
 	services.SetSwapExecutor(swapExecutor)
 	services.SetBlockchainClient(blockchainClient)
+	adminService.SetBlockchainClient(blockchainClient)
 	// The swap quote and price endpoints read the aggregator through this
 	// package-level handle; without it they can only answer 503.
 	services.SetPriceAggregator(priceAggregator)
@@ -258,6 +274,21 @@ func main() {
 	services.StartPositionMaintenance(realtimeCtx, perpetualEngine, copyTradingEngine, services.DefaultPositionRefreshInterval)
 	services.StartBridgeRelayer(realtimeCtx, bridgeService, services.DefaultBridgeSweepInterval)
 	services.StartPriceSampler(realtimeCtx, priceAggregator, services.DefaultPriceSampleInterval)
+
+	// Drive every active bot against live market data. The Rust engine is the
+	// strategy layer; when the server is built without it the runner reports
+	// that instead of pretending bots trade.
+	botEngine, err := botengine.New()
+	if err != nil {
+		log.Printf("bot engine unavailable: %v", err)
+	}
+	botRunner := services.NewBotRunner(db, botsService, perpetualEngine, botEngine)
+	botRunner.SetVenueSource(services.NewPoolVenueSource(priceAggregator))
+	botRunner.SetListingSource(services.NewPerpListingSource(db, perpetualEngine))
+	botRunner.SetMarginEngine(marginEngine)
+	botRunner.SetPortfolioService(portfolioService)
+	botRunner.SetCopySource(services.NewPerpCopySource(perpetualEngine))
+	go botRunner.Run(realtimeCtx)
 
 	router := setupRouter(apiDeps{
 		redis:              redis,

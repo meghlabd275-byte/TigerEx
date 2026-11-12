@@ -71,7 +71,7 @@ const SERVER_PORTFOLIO = `{"totalValueUSD":4000,"assets":[{"chainId":1,"tokenAdd
 
 const SERVER_TRANSACTIONS = `[{"hash":"0xdeadbeef","chainId":1,"type":"swap","status":"confirmed","amount":"1000000000000000000","tokenSymbol":"ETH","createdAt":"2026-11-08T12:20:36.201140162Z"}]`;
 
-const SERVER_CHAINS = `[{"id":1,"name":"Ethereum","chainType":"evm","nativeSymbol":"ETH","explorerURL":"https://etherscan.io","isActive":true},{"id":10,"name":"Optimism","chainType":"evm","nativeSymbol":"ETH","explorerURL":"https://optimistic.etherscan.io","isActive":true}]`;
+const SERVER_CHAINS = `[{"id":1,"name":"Ethereum","chainType":"evm","nativeSymbol":"ETH","nativeDecimals":18,"rpcUrls":["https://rpc.tigerswap.io/1"],"explorerURL":"https://etherscan.io","isActive":true},{"id":6666,"name":"TigerSmartChain","chainType":"evm","nativeSymbol":"TGR","nativeDecimals":18,"rpcUrls":[],"explorerURL":"https://tigerscan.io","isActive":true}]`;
 
 const SERVER_TOKENS = `[{"address":"0x0000000000000000000000000000000000000000","symbol":"ETH","name":"Ethereum","decimals":18,"chainId":1,"logoURI":"https://assets.coingecko.com/coins/images/279/small/ethereum.png","priceUSD":null},{"address":"0x514910771AF9Ca656af840dff83E8264EcF986CA","symbol":"LINK","name":"Chainlink","decimals":18,"chainId":1,"logoURI":null,"priceUSD":12.5}]`;
 
@@ -102,6 +102,12 @@ const SERVER_PERPS_LIST = `{"count":1,"markets":[{"id":"bbe4240e-bf10-443e-a295-
 const SERVER_MARGIN_LIST = `{"count":1,"markets":[{"id":"2f373904-0de5-4eeb-a2b4-3cf54c585f5d","pair":"BTC/RUSD","base_asset":"BTC","quote_asset":"RUSD","margin_mode":"cross","max_leverage":10,"collateral_assets":"BTC,ETH,RUSD,USDT,USDC","borrowable_assets":"RUSD,USDT,USDC","base_rate_apy":0.05,"kink_utilization":0.8,"jump_multiplier":1,"ltv":0.7,"liquidation_threshold":0.75,"liquidation_bonus":0.05,"close_factor":0.5,"supply_cap":"10000000","borrow_cap":"10000000","risk_tier":"low","status":"paused","created_at":"2026-10-31T04:07:50.490874Z","updated_at":"2026-10-31T04:07:50.490874Z"}]}`;
 
 const SERVER_QUOTE = `{"amountIn":"1000000000000000000","amountOut":"2000000000000000000","amountOutMin":"1990000000000000000","priceImpact":0.12,"route":["0x1111111111111111111111111111111111111111","0x2222222222222222222222222222222222222222"],"gasEstimate":150000}`;
+
+// A split quote, produced by the router when it divides an order across two
+// independent pools. Captured from the same handler as SERVER_QUOTE.
+const SERVER_SPLIT_QUOTE = `{"amountIn":"1000000000000000000","amountOut":"2010000000000000000","amountOutMin":"1999950000000000000","priceImpact":0.09,"route":["0x1111111111111111111111111111111111111111","0x2222222222222222222222222222222222222222"],"gasEstimate":200000,"legs":[{"path":["0x1111111111111111111111111111111111111111","0x2222222222222222222222222222222222222222"],"family":"tigerswap_v2","pool":"0x3333333333333333333333333333333333333333","amountIn":"500000000000000000","amountOut":"1005000000000000000","hops":[{"tokenIn":"0x1111111111111111111111111111111111111111","tokenOut":"0x2222222222222222222222222222222222222222","family":"tigerswap_v2","pool":"0x3333333333333333333333333333333333333333"}]},{"path":["0x1111111111111111111111111111111111111111","0x2222222222222222222222222222222222222222"],"family":"tigerswap_stable","pool":"0x4444444444444444444444444444444444444444","amountIn":"500000000000000000","amountOut":"1005000000000000000","hops":[{"tokenIn":"0x1111111111111111111111111111111111111111","tokenOut":"0x2222222222222222222222222222222222222222","family":"tigerswap_stable","pool":"0x4444444444444444444444444444444444444444"}]}]}`;
+
+const SERVER_MULTIHOP_QUOTE = `{"amountIn":"1000000000000000000","amountOut":"2050000000000000000","amountOutMin":"2039750000000000000","priceImpact":0.05,"route":["0x1111111111111111111111111111111111111111","0x5555555555555555555555555555555555555555","0x2222222222222222222222222222222222222222"],"gasEstimate":250000,"routeHops":[{"tokenIn":"0x1111111111111111111111111111111111111111","tokenOut":"0x5555555555555555555555555555555555555555","family":"tigerswap_v2","pool":"0x6666666666666666666666666666666666666666"},{"tokenIn":"0x5555555555555555555555555555555555555555","tokenOut":"0x2222222222222222222222222222222222222222","family":"tigerswap_stable","pool":"0x7777777777777777777777777777777777777777"}]}`;
 
 // The bots, OTC and TWAMM payloads below were captured by running the real
 // handlers against an in-memory database in
@@ -158,6 +164,12 @@ test("live /chains payload satisfies chainListValidator", () => {
   assert.equal(chains[0].id, 1);
   assert.equal(chains[0].chainType, "evm");
   assert.equal(chains[0].nativeSymbol, "ETH");
+  assert.deepEqual(chains[0].rpcUrls, ["https://rpc.tigerswap.io/1"]);
+  assert.equal(chains[0].nativeDecimals, 18);
+  // A chain with no operator RPC endpoint is still valid to list; the wallet
+  // store is what refuses to add it.
+  assert.equal(chains[1].id, 6666);
+  assert.deepEqual(chains[1].rpcUrls, []);
 });
 
 test("live /tokens payload satisfies tokenListValidator", () => {
@@ -254,6 +266,30 @@ test("live /swap/quote payload satisfies swapQuoteValidator", () => {
   assert.equal(quote.amountOutMin, "1990000000000000000");
   assert.equal(quote.priceImpact, 0.12);
   assert.equal(quote.gasEstimate, 150000);
+  assert.equal(quote.legs, undefined);
+});
+
+test("live split /swap/quote payload satisfies swapQuoteValidator", () => {
+  const quote = parse(swapQuoteValidator, SERVER_SPLIT_QUOTE, "quote");
+  assert.equal(quote.route.length, 2);
+  assert.ok(quote.legs);
+  assert.equal(quote.legs.length, 2);
+  assert.equal(quote.legs[0].family, "tigerswap_v2");
+  assert.equal(quote.legs[0].amountIn, "500000000000000000");
+  assert.equal(quote.legs[1].family, "tigerswap_stable");
+  assert.ok(quote.legs[1].hops);
+  assert.equal(quote.legs[1].hops.length, 1);
+  assert.equal(quote.legs[1].hops[0].family, "tigerswap_stable");
+});
+
+test("live multi-hop /swap/quote payload satisfies swapQuoteValidator", () => {
+  const quote = parse(swapQuoteValidator, SERVER_MULTIHOP_QUOTE, "quote");
+  assert.equal(quote.route.length, 3);
+  assert.equal(quote.legs, undefined);
+  assert.ok(quote.routeHops);
+  assert.equal(quote.routeHops.length, 2);
+  assert.equal(quote.routeHops[0].family, "tigerswap_v2");
+  assert.equal(quote.routeHops[1].family, "tigerswap_stable");
 });
 
 test("live /bots payload satisfies botListValidator", () => {

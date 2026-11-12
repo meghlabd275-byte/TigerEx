@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"math/big"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,6 +84,33 @@ type FundingInfo struct {
 	InterestRate    float64   `json:"interest_rate"`
 }
 
+// clonePosition returns a deep copy of a position. The engine re-marks
+// positions on a background tick while HTTP handlers read them, so an accessor
+// must never hand out a pointer into the live map: the reader would observe a
+// half-written mark price and PnL and, under `-race`, would be flagged as a
+// data race. Every accessor returns a clone.
+func clonePosition(position *PerpetualPosition) *PerpetualPosition {
+	if position == nil {
+		return nil
+	}
+	copied := *position
+	if position.ClosedAt != nil {
+		closedAt := *position.ClosedAt
+		copied.ClosedAt = &closedAt
+	}
+	return &copied
+}
+
+// cloneOrder returns a deep copy of an order for the same reason clonePosition
+// exists: the matching loop mutates orders while handlers serialise them.
+func cloneOrder(order *PerpetualOrder) *PerpetualOrder {
+	if order == nil {
+		return nil
+	}
+	copied := *order
+	return &copied
+}
+
 // perpMarketConfig is the tradable subset of an admin listing. It is derived
 // from a FuturesMarket or PerpsMarket row and carries everything the trading
 // path needs: the oracle symbol, leverage cap, margin rates and fees.
@@ -122,7 +151,203 @@ func NewPerpetualEngine(blockchain *BlockchainClient, priceAgg priceSource) *Per
 // build an engine without a database.
 func (e *PerpetualEngine) SetDB(db *gorm.DB) error {
 	e.db = db
-	return e.RefreshMarkets()
+	if err := e.RefreshMarkets(); err != nil {
+		return err
+	}
+	if err := e.RestoreOpenPositions(); err != nil {
+		return err
+	}
+	return e.RestoreOpenOrders()
+}
+
+// RestoreOpenOrders reloads every live order from the database into the
+// in-memory book. A pending order that is not restored can never be filled or
+// cancelled, so it would sit in the database as "pending" forever.
+func (e *PerpetualEngine) RestoreOpenOrders() error {
+	if e.db == nil {
+		return errors.New("perpetual engine has no database configured")
+	}
+
+	var stored []models.PerpetualOrder
+	if err := e.db.Where("status = ?", "pending").Find(&stored).Error; err != nil {
+		return fmt.Errorf("load pending orders: %w", err)
+	}
+
+	restored := make(map[string]*PerpetualOrder, len(stored))
+	for i := range stored {
+		restored[stored[i].ID] = orderFromModel(&stored[i])
+	}
+
+	e.mu.Lock()
+	e.orders = restored
+	e.mu.Unlock()
+	return nil
+}
+
+// persistPosition writes a position's current state. A nil database is allowed
+// so the engine still works without one. The write is an upsert keyed by the
+// position id, so a close or a liquidation updates the row the position was
+// opened with rather than inserting a second one.
+func (e *PerpetualEngine) persistPosition(position *PerpetualPosition) error {
+	if e.db == nil {
+		return nil
+	}
+	id, err := uuid.Parse(position.ID)
+	if err != nil {
+		return fmt.Errorf("position %s has an invalid id: %w", position.ID, err)
+	}
+	row := models.PerpetualPosition{
+		ID:          id,
+		UserID:      position.UserAddress,
+		Pair:        position.Pair,
+		Side:        position.Side,
+		Size:        position.Size,
+		Collateral:  position.Collateral,
+		EntryPrice:  strconv.FormatFloat(position.EntryPrice, 'f', -1, 64),
+		MarkPrice:   strconv.FormatFloat(position.MarkPrice, 'f', -1, 64),
+		Leverage:    position.Leverage,
+		Status:      position.Status,
+		PNL:         position.UnrealizedPNL,
+		FundingPaid: position.FundingPaid,
+		OpenedAt:    position.OpenedAt,
+		ClosedAt:    position.ClosedAt,
+	}
+	if err := e.db.Save(&row).Error; err != nil {
+		return fmt.Errorf("persist position %s: %w", position.ID, err)
+	}
+	return nil
+}
+
+// orderFromModel rebuilds an in-memory order from its persisted row.
+func orderFromModel(m *models.PerpetualOrder) *PerpetualOrder {
+	price, _ := strconv.ParseFloat(strings.TrimSpace(m.Price), 64)
+	trigger, _ := strconv.ParseFloat(strings.TrimSpace(m.TriggerPrice), 64)
+	return &PerpetualOrder{
+		ID:           m.ID,
+		UserAddress:  m.UserID,
+		Pair:         m.Pair,
+		Side:         m.Side,
+		OrderType:    m.OrderType,
+		Size:         m.Size,
+		Price:        price,
+		TriggerPrice: trigger,
+		Status:       m.Status,
+		FilledSize:   m.FilledSize,
+		CreatedAt:    m.CreatedAt,
+		ExpiresAt:    m.ExpiresAt,
+	}
+}
+
+// persistOrder writes an order's current state. A nil database is allowed so
+// the engine still works without one.
+func (e *PerpetualEngine) persistOrder(order *PerpetualOrder) error {
+	if e.db == nil {
+		return nil
+	}
+	row := models.PerpetualOrder{
+		ID:           order.ID,
+		UserID:       order.UserAddress,
+		Pair:         order.Pair,
+		Side:         order.Side,
+		OrderType:    order.OrderType,
+		Size:         order.Size,
+		Price:        strconv.FormatFloat(order.Price, 'f', -1, 64),
+		TriggerPrice: strconv.FormatFloat(order.TriggerPrice, 'f', -1, 64),
+		Status:       order.Status,
+		FilledSize:   order.FilledSize,
+		CreatedAt:    order.CreatedAt,
+		ExpiresAt:    order.ExpiresAt,
+	}
+	if err := e.db.Save(&row).Error; err != nil {
+		return fmt.Errorf("persist order %s: %w", order.ID, err)
+	}
+	return nil
+}
+
+// RestoreOpenPositions reloads every live position from the database into the
+// in-memory book. The engine prices, liquidates and closes positions from
+// memory, so without this a restart would silently drop every open position:
+// it would stop being marked, could never be closed and could never be
+// liquidated. Positions are rebuilt with the same risk parameters the open path
+// uses so a restored position is indistinguishable from a freshly opened one.
+func (e *PerpetualEngine) RestoreOpenPositions() error {
+	if e.db == nil {
+		return errors.New("perpetual engine has no database configured")
+	}
+
+	var stored []models.PerpetualPosition
+	if err := e.db.Where("status IN ?", []string{"open", "liquidatable"}).Find(&stored).Error; err != nil {
+		return fmt.Errorf("load open positions: %w", err)
+	}
+
+	restored := make(map[string]*PerpetualPosition, len(stored))
+	for i := range stored {
+		position, err := e.positionFromModel(&stored[i])
+		if err != nil {
+			// A row that cannot be reconstructed (a truncated amount, an unknown
+			// market) is skipped rather than loaded with an invented value; it is
+			// reported so an operator can act on it.
+			log.Printf("perpetual engine: skipping unrestorable position %s: %v", stored[i].ID, err)
+			continue
+		}
+		restored[position.ID] = position
+	}
+
+	e.mu.Lock()
+	e.positions = restored
+	e.mu.Unlock()
+	return nil
+}
+
+// positionFromModel rebuilds an in-memory position from its persisted row. The
+// liquidation price is recomputed from the listing's risk parameters because it
+// is derived state, and the mark price is seeded from the stored value so a
+// position is immediately usable before the first oracle refresh.
+func (e *PerpetualEngine) positionFromModel(m *models.PerpetualPosition) (*PerpetualPosition, error) {
+	entryPrice, err := strconv.ParseFloat(strings.TrimSpace(m.EntryPrice), 64)
+	if err != nil || math.IsNaN(entryPrice) || math.IsInf(entryPrice, 0) || entryPrice <= 0 {
+		return nil, fmt.Errorf("entry price %q is not a positive number", m.EntryPrice)
+	}
+	if _, err := perpAmountValue(m.Size); err != nil {
+		return nil, fmt.Errorf("size is invalid: %w", err)
+	}
+	if _, err := perpAmountValue(m.Collateral); err != nil {
+		return nil, fmt.Errorf("collateral is invalid: %w", err)
+	}
+
+	markPrice := entryPrice
+	if parsed, perr := strconv.ParseFloat(strings.TrimSpace(m.MarkPrice), 64); perr == nil &&
+		!math.IsNaN(parsed) && !math.IsInf(parsed, 0) && parsed > 0 {
+		markPrice = parsed
+	}
+
+	status := m.Status
+	if status != "liquidatable" {
+		status = "open"
+	}
+
+	leverage := m.Leverage
+	if leverage < 1 {
+		leverage = 1
+	}
+
+	return &PerpetualPosition{
+		ID:               m.ID.String(),
+		UserAddress:      m.UserID,
+		Pair:             m.Pair,
+		Side:             m.Side,
+		Size:             m.Size,
+		Collateral:       m.Collateral,
+		EntryPrice:       entryPrice,
+		MarkPrice:        markPrice,
+		IndexPrice:       markPrice,
+		LiquidationPrice: e.calculateLiquidationPrice(entryPrice, leverage, m.Side == "long"),
+		Leverage:         leverage,
+		UnrealizedPNL:    "0",
+		FundingPaid:      m.FundingPaid,
+		Status:           status,
+		OpenedAt:         m.OpenedAt,
+	}, nil
 }
 
 // RefreshMarkets reloads the active market registry from the listing tables.
@@ -367,7 +592,14 @@ func (e *PerpetualEngine) OpenPosition(ctx context.Context, ownerID string, chai
 	e.positions[position.ID] = position
 	e.mu.Unlock()
 
-	return position, nil
+	if err := e.persistPosition(position); err != nil {
+		e.mu.Lock()
+		delete(e.positions, position.ID)
+		e.mu.Unlock()
+		return nil, err
+	}
+
+	return clonePosition(position), nil
 }
 
 // ClosePosition closes an existing position
@@ -426,7 +658,11 @@ func (e *PerpetualEngine) ClosePosition(ctx context.Context, ownerID, positionID
 	position.MarkPrice = markPrice
 	position.UnrealizedPNL = pnl
 
-	return position, nil
+	if err := e.persistPosition(position); err != nil {
+		return nil, err
+	}
+
+	return clonePosition(position), nil
 }
 
 // GetPosition returns a specific position
@@ -439,7 +675,7 @@ func (e *PerpetualEngine) GetPosition(positionID string) (*PerpetualPosition, er
 		return nil, fmt.Errorf("position not found")
 	}
 
-	return position, nil
+	return clonePosition(position), nil
 }
 
 // GetUserPositions returns all positions for a user
@@ -450,7 +686,7 @@ func (e *PerpetualEngine) GetUserPositions(userAddress string) []*PerpetualPosit
 	var userPositions []*PerpetualPosition
 	for _, pos := range e.positions {
 		if pos.UserAddress == userAddress && positionIsLive(pos.Status) {
-			userPositions = append(userPositions, pos)
+			userPositions = append(userPositions, clonePosition(pos))
 		}
 	}
 
@@ -496,8 +732,11 @@ func (e *PerpetualEngine) UpdatePositions(ctx context.Context) error {
 	}
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
+	// Collect status transitions under the lock, then persist them after it is
+	// released: a database write under the engine lock would stall every other
+	// position operation for the duration of the write.
+	var transitions []*PerpetualPosition
 	for _, position := range e.positions {
 		if !positionIsLive(position.Status) {
 			continue
@@ -512,12 +751,27 @@ func (e *PerpetualEngine) UpdatePositions(ctx context.Context) error {
 		// A position that has crossed its liquidation price is flagged for
 		// settlement; one that has recovered is returned to open, so a temporary
 		// wick does not leave a healthy position permanently untradable.
+		previousStatus := position.Status
 		if e.isLiquidatable(position) {
 			position.Status = "liquidatable"
 		} else if position.Status == "liquidatable" {
 			position.Status = "open"
 		}
 		position.UnrealizedPNL = e.calculatePNL(position, markPrice)
+
+		// Persist only a real transition, not every re-mark: the mark price and PnL
+		// change on every tick, and rewriting every row each interval would be pure
+		// write amplification. The status flag is what must survive a restart.
+		if position.Status != previousStatus {
+			transitions = append(transitions, position)
+		}
+	}
+	e.mu.Unlock()
+
+	for _, position := range transitions {
+		if err := e.persistPosition(position); err != nil {
+			log.Printf("perpetual engine: failed to persist status change for %s: %v", position.ID, err)
+		}
 	}
 
 	return nil
@@ -533,7 +787,7 @@ func (e *PerpetualEngine) LiquidatablePositions() []*PerpetualPosition {
 	var liquidatable []*PerpetualPosition
 	for _, position := range e.positions {
 		if position.Status == "liquidatable" {
-			liquidatable = append(liquidatable, position)
+			liquidatable = append(liquidatable, clonePosition(position))
 		}
 	}
 	return liquidatable
@@ -615,6 +869,10 @@ func (e *PerpetualEngine) LiquidatePosition(ctx context.Context, positionID stri
 	position.ClosedAt = &now
 	position.UnrealizedPNL = formatDecimal(pnl, 8)
 
+	if err := e.persistPosition(position); err != nil {
+		return nil, err
+	}
+
 	// The fee is the liquidator's reward; the remainder is the trader's returned
 	// margin. Both are reported in settlement terms.
 	return fee, nil
@@ -680,7 +938,7 @@ func (e *PerpetualEngine) CreateOrder(ctx context.Context, userAddress, pair, si
 	}
 
 	order := &PerpetualOrder{
-		ID:           fmt.Sprintf("ord_%d", time.Now().UnixNano()),
+		ID:           "ord_" + uuid.NewString(),
 		UserAddress:  userAddress,
 		Pair:         pair,
 		Side:         side,
@@ -694,6 +952,10 @@ func (e *PerpetualEngine) CreateOrder(ctx context.Context, userAddress, pair, si
 		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second),
 	}
 
+	if err := e.persistOrder(order); err != nil {
+		return nil, err
+	}
+
 	e.mu.Lock()
 	e.orders[order.ID] = order
 	e.mu.Unlock()
@@ -703,31 +965,37 @@ func (e *PerpetualEngine) CreateOrder(ctx context.Context, userAddress, pair, si
 		return e.executeOrder(ctx, order)
 	}
 
-	return order, nil
+	return cloneOrder(order), nil
 }
 
 // CancelOrder cancels a pending order. When owner is non-empty the order must
 // belong to that caller, so one trader cannot cancel another's order.
 func (e *PerpetualEngine) CancelOrder(orderID, owner string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	order, exists := e.orders[orderID]
 	if !exists {
+		e.mu.Unlock()
 		return ErrPerpOrderNotFound
 	}
 	if owner != "" && order.UserAddress != owner {
 		// Report a missing order rather than a permission error so the endpoint
 		// cannot be used to probe which order ids exist.
+		e.mu.Unlock()
 		return ErrPerpOrderNotFound
 	}
 
 	if order.Status != "pending" {
+		e.mu.Unlock()
 		return ErrPerpOrderNotCancellable
 	}
 
 	order.Status = "cancelled"
-	return nil
+	e.mu.Unlock()
+
+	// Persist after releasing the lock: a database write under the engine lock
+	// would stall every other trading operation for the duration of the write.
+	return e.persistOrder(order)
 }
 
 func (e *PerpetualEngine) executeOrder(ctx context.Context, order *PerpetualOrder) (*PerpetualOrder, error) {
@@ -737,12 +1005,139 @@ func (e *PerpetualEngine) executeOrder(ctx context.Context, order *PerpetualOrde
 		return nil, err
 	}
 
-	// Execute at mark price
+	// Mutate and persist under the write lock so a concurrent match tick cannot
+	// observe a half-updated order or fill it twice.
+	e.mu.Lock()
 	order.Status = "filled"
 	order.FilledSize = order.Size
 	order.Price = markPrice
 
-	return order, nil
+	if err := e.persistOrder(order); err != nil {
+		e.mu.Unlock()
+		return nil, err
+	}
+	e.mu.Unlock()
+
+	return cloneOrder(order), nil
+}
+
+// MatchPendingOrders evaluates every resting order against the live oracle price
+// and acts on the ones whose condition is now met. An order whose expiry has
+// passed is cancelled. A limit order fills when the market trades through its
+// price; a stop order fills when the market reaches its trigger.
+//
+// A pending order that is never evaluated is a promise the venue cannot keep:
+// the trader sees it as resting while it can never fill and never expire. This
+// is the loop that makes a resting order real.
+func (e *PerpetualEngine) MatchPendingOrders(ctx context.Context) error {
+	e.mu.RLock()
+	pending := make([]*PerpetualOrder, 0, len(e.orders))
+	for _, order := range e.orders {
+		if order.Status == "pending" {
+			pending = append(pending, order)
+		}
+	}
+	e.mu.RUnlock()
+
+	now := time.Now()
+	for _, order := range pending {
+		if !order.ExpiresAt.IsZero() && now.After(order.ExpiresAt) {
+			e.expireOrder(order.ID)
+			continue
+		}
+
+		markPrice, err := e.getMarkPrice(ctx, order.Pair)
+		if err != nil {
+			// A market whose price feed is unavailable must not trigger an order; the
+			// order simply waits for the next tick rather than filling at a guess.
+			continue
+		}
+		if !orderConditionMet(order, markPrice) {
+			continue
+		}
+
+		if _, err := e.fillRestingOrder(ctx, order.ID); err != nil {
+			log.Printf("perpetual engine: failed to fill order %s: %v", order.ID, err)
+		}
+	}
+	return nil
+}
+
+// orderConditionMet reports whether a resting order's condition is met at the
+// given price. It mirrors the semantics TigerSwapAdvancedOrders enforces
+// on-chain: a buy limit fills at or below its price, a sell limit at or above
+// it, and a stop fills once the market reaches its trigger.
+func orderConditionMet(order *PerpetualOrder, markPrice float64) bool {
+	switch order.OrderType {
+	case "limit":
+		if order.Side == "long" {
+			return markPrice <= order.Price
+		}
+		return markPrice >= order.Price
+	case "stop":
+		if order.Side == "long" {
+			return markPrice >= order.TriggerPrice
+		}
+		return markPrice <= order.TriggerPrice
+	default:
+		return false
+	}
+}
+
+// expireOrder cancels a pending order whose expiry has passed. The transition
+// is persisted so a restart does not resurrect it.
+func (e *PerpetualEngine) expireOrder(orderID string) {
+	e.mu.Lock()
+	order, exists := e.orders[orderID]
+	if !exists || order.Status != "pending" {
+		e.mu.Unlock()
+		return
+	}
+	order.Status = "expired"
+	e.mu.Unlock()
+
+	if err := e.persistOrder(order); err != nil {
+		log.Printf("perpetual engine: failed to persist expiry of order %s: %v", orderID, err)
+	}
+}
+
+// fillRestingOrder executes a pending order that has met its condition. It
+// re-checks the order is still pending and still met under the lock so a
+// concurrent cancel or a second tick cannot fill it twice.
+func (e *PerpetualEngine) fillRestingOrder(ctx context.Context, orderID string) (*PerpetualOrder, error) {
+	e.mu.RLock()
+	order, exists := e.orders[orderID]
+	if !exists || order.Status != "pending" {
+		e.mu.RUnlock()
+		return nil, nil
+	}
+	pair := order.Pair
+	e.mu.RUnlock()
+
+	markPrice, err := e.getMarkPrice(ctx, pair)
+	if err != nil {
+		return nil, err
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	order, exists = e.orders[orderID]
+	if !exists || order.Status != "pending" {
+		return nil, nil
+	}
+	if !orderConditionMet(order, markPrice) {
+		return nil, nil
+	}
+
+	order.Status = "filled"
+	order.FilledSize = order.Size
+	order.Price = markPrice
+
+	if err := e.persistOrder(order); err != nil {
+		return nil, err
+	}
+	return cloneOrder(order), nil
 }
 
 func (e *PerpetualEngine) getMarkPrice(ctx context.Context, pair string) (float64, error) {
@@ -1039,6 +1434,35 @@ func (e *PerpetualEngine) CreateOrderHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, order)
+}
+
+// GetUserOrders returns every order the given caller has placed, newest first,
+// so the trader can see their resting, filled and cancelled orders. It is
+// scoped to the owner and never returns another trader's orders.
+func (e *PerpetualEngine) GetUserOrders(owner string) []*PerpetualOrder {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	orders := make([]*PerpetualOrder, 0)
+	for _, order := range e.orders {
+		if order.UserAddress == owner {
+			orders = append(orders, cloneOrder(order))
+		}
+	}
+	sort.Slice(orders, func(i, j int) bool {
+		return orders[i].CreatedAt.After(orders[j].CreatedAt)
+	})
+	return orders
+}
+
+// GetOrdersHandler lists the authenticated caller's own perpetual orders.
+func (e *PerpetualEngine) GetOrdersHandler(c *gin.Context) {
+	owner, ok := authenticatedUserID(c)
+	if !ok {
+		return
+	}
+	orders := e.GetUserOrders(owner)
+	c.JSON(200, gin.H{"orders": orders, "count": len(orders)})
 }
 
 // CancelOrderHandler cancels one of the caller's own pending orders.

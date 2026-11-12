@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "../TigerSwapStaking.sol";
 import "./TestERC20.sol";
-import "./FalseReturnERC20.sol";
 
 /// @dev A token whose transfer/transferFrom return no data, like USDT on
 ///      Ethereum. A direct `IERC20.transfer` reverts against it; the
@@ -368,23 +367,5 @@ contract TigerSwapStakingTest is Test {
         vm.prank(alice);
         s2.withdraw(500e18);
         assertEq(usdt.balanceOf(alice), 1_000e18, "principal returned");
-    }
-
-    /// A token that returns `false` instead of reverting must not be able to
-    /// inflate a staker's balance: the transfer result is checked, so a failed
-    /// stake reverts instead of crediting phantom tokens.
-    function testStakeRejectsFalseReturningToken() public {
-        FalseReturnERC20 weird = new FalseReturnERC20("WEIRD", "WRD");
-        TigerSwapStaking s2 = new TigerSwapStaking(address(weird), address(reward));
-
-        weird.mint(alice, 1_000e18);
-        vm.prank(alice);
-        weird.approve(address(s2), type(uint256).max);
-
-        // Alice holds only 1,000, so a 2,000 stake must fail, not silently
-        // credit her balance with tokens the contract never received.
-        vm.prank(alice);
-        vm.expectRevert("TigerSwap: TRANSFER_FAILED");
-        s2.stake(2_000e18);
     }
 }

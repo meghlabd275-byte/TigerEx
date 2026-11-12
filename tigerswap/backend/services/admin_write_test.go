@@ -163,3 +163,84 @@ func TestLogAdminActionStoresDetails(t *testing.T) {
 		t.Fatalf("expected chain_id 4243 in details, got %v", decoded["chain_id"])
 	}
 }
+
+// TestCreateChainPersistsInactiveFlag pins that a chain created with
+// `is_active:false` is stored inactive. `is_active` carries `gorm:"default:true"`,
+// so without an explicit column selection GORM omits the zero value and the row
+// would come back active, silently ignoring the operator's choice.
+func TestCreateChainPersistsInactiveFlag(t *testing.T) {
+	db := newAdminWriteTestDB(t)
+	svc := NewAdminService(db)
+
+	rec := postJSONBody(t, svc.CreateChain, "/api/v1/admin/chains",
+		`{"chain_id":7007,"name":"Paused Chain","symbol":"PAU","type":"evm","is_active":false}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var stored models.Blockchain
+	if err := db.Where("chain_id = ?", 7007).First(&stored).Error; err != nil {
+		t.Fatalf("load chain: %v", err)
+	}
+	if stored.IsActive {
+		t.Fatalf("chain created with is_active:false was stored active")
+	}
+	// The insert goes through a column map, so GORM's automatic timestamps are
+	// bypassed and must be supplied explicitly.
+	if stored.CreatedAt.IsZero() || stored.UpdatedAt.IsZero() {
+		t.Fatalf("created chain is missing timestamps: created=%v updated=%v", stored.CreatedAt, stored.UpdatedAt)
+	}
+}
+
+// TestCreateChainRefreshesLiveRPCClient pins that a chain created through the
+// admin endpoint is dialled without a restart: the stored endpoint reaches the
+// live on-chain client immediately.
+func TestCreateChainRefreshesLiveRPCClient(t *testing.T) {
+	db := newAdminWriteTestDB(t)
+	client := NewBlockchainClient()
+	svc := NewAdminService(db)
+	svc.SetBlockchainClient(client)
+
+	body := `{"chain_id":6666,"name":"TigerSmartChain","symbol":"TGR","type":"evm","rpc_url":"https://rpc.tigerswap.io/6666","is_active":true}`
+	rec := postJSONBody(t, svc.CreateChain, "/api/v1/admin/chains", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := client.RPCURLForChain(6666); err != nil {
+		t.Fatalf("created chain endpoint not registered with the live client: %v", err)
+	}
+
+	// Deactivating the chain must drop it from the live client too.
+	gin.SetMode(gin.TestMode)
+	rec2 := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec2)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/api/v1/admin/chains/1", nil)
+	c.Params = gin.Params{{Key: "id", Value: "1"}}
+	svc.DeleteChain(c)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("deactivate: expected 200, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+	if _, err := client.RPCURLForChain(6666); err == nil {
+		t.Fatalf("deactivated chain must be unregistered from the live client")
+	}
+}
+
+// TestCreateTokenPersistsInactiveFlag is the token counterpart.
+func TestCreateTokenPersistsInactiveFlag(t *testing.T) {
+	db := newAdminWriteTestDB(t)
+	svc := NewAdminService(db)
+
+	rec := postJSONBody(t, svc.CreateToken, "/api/v1/admin/tokens",
+		`{"chain_id":1,"address":"0x2222222222222222222222222222222222222222","name":"Paused","symbol":"PAU","decimals":18,"is_active":false}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var stored models.Token
+	if err := db.Where("chain_id = ? AND address = ?", 1, "0x2222222222222222222222222222222222222222").First(&stored).Error; err != nil {
+		t.Fatalf("load token: %v", err)
+	}
+	if stored.IsActive {
+		t.Fatalf("token created with is_active:false was stored active")
+	}
+}

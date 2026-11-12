@@ -101,6 +101,14 @@ The Go module uses `GOFLAGS=-mod=mod` because `go.sum` is not fully vendored.
 - API responses are validated on the frontend. When a handler's JSON shape
   changes, update the matching validator in `src/lib/types.ts` and the
   corresponding test (e.g. `services/perp_market_view_test.go`).
+- A boolean column tagged `gorm:"default:true"` (`Blockchain.IsActive`,
+  `Token.IsActive`, `Pool.IsActive`, `SystemSettings.TradingEnabled`, ...) is
+  omitted by GORM on a struct insert when its value is `false`, so the column
+  default wins and the flag comes back `true`. Neither `Select("*")` nor an
+  explicit column list overrides this. An admin create that must honour a
+  `false` value inserts a `map[string]interface{}` instead — which also means
+  `created_at`/`updated_at` are no longer filled automatically and have to be
+  set explicitly. Reads and `Update`/`Update("col", false)` calls are unaffected.
 
 ## Contracts
 
@@ -153,6 +161,23 @@ The Go module uses `GOFLAGS=-mod=mod` because `go.sum` is not fully vendored.
 - `WalletService.Withdraw` debits under the row lock before signing. A caller
   with no balance is rejected with 409 and never reaches the signer.
 - Chain selection for the watcher comes from `DEPOSIT_WATCH_CHAINS`.
+
+## On-chain RPC endpoints
+
+- TigerSwap dials only its own nodes; no third-party endpoint is baked in. An
+  endpoint comes from `TIGERSWAP_RPC_<chainID>` (or `TIGERSWAP_RPC_URL_<chainID>`),
+  which takes precedence, or from the `rpc_url` an operator stored on the
+  `blockchains` row.
+- `BlockchainClient.LoadChainRPCs(db)` is a full refresh, not a merge: it
+  registers every active chain's endpoint and unregisters a chain that was
+  deactivated or had its endpoint cleared. It runs at startup and again from the
+  chain admin handlers (`SetBlockchainClient` wires it), so a change made in the
+  admin panel is dialled without a restart.
+- `GetClient` resolves the endpoint before taking the write lock — calling
+  `RPCURLForChain` while holding it would deadlock, because that method takes the
+  same lock for reading. It re-checks the cache after acquiring the lock so two
+  callers cannot each dial the same chain and leak one connection.
+
 
 ## Required environment variables
 
@@ -467,3 +492,57 @@ and the wallet page reads the same hook.
 - Contract fixtures live in `frontend/src/lib/serverContract.test.ts` and are
   captured from the handlers by `TestPortfolioWireFormat` in
   `backend/services/portfolio_service_test.go` (run with `-v` to regenerate).
+
+## Trading bots (Rust engine, Go control plane)
+
+`backend/rust/bots` is the strategy layer: pure strategies plus a stateful
+`Engine` that remembers a grid's filled levels and a DCA bot's schedule. The Go
+side (`services/bots_service.go`, `services/bot_runner.go`,
+`services/botengine/`) is only the control plane — it never reimplements a
+strategy.
+
+- The engine is a `cdylib`, not a `staticlib`. Go's cgo linker rejects the LLVM
+  bitcode a staticlib embeds (a disallowed `.llvmbc` LTO section), so the crate
+  builds `["rlib", "cdylib"]` and the server links `libtigerswap_bots.so`.
+- The bridge is build-tagged `rust` (`services/botengine/bridge_cgo.go`); a
+  default build uses `bridge_stub.go`, whose `New` returns `ErrUnavailable`.
+  Build the library first, then the server:
+  `cd backend/rust && cargo build --release -p tigerswap-bots`, then
+  `cd backend && go build -tags rust ./cmd/api`.
+- Every FFI call takes and returns JSON in an envelope
+  (`{"ok":true,"data":...}` / `{"ok":false,"error":"..."}`). A null return only
+  ever means allocation failed. Prices and quantities are exact decimal strings,
+  never floats.
+- `BotRunner.Run` sweeps every active bot on an interval. The dispatch is by
+  strategy and each reads a real source; a strategy whose source is not wired is
+  skipped with a log, never run against invented data:
+  - snapshot strategies (market maker, grid, DCA, TWAP) build a snapshot from
+    the perp engine's own resting orders plus the oracle mark
+    (`PerpetualEngine.BookSnapshot`), step the engine, and turn the returned
+    orders into real resting orders via `PerpetualEngine.CreateOrder`.
+  - arbitrage (`NewPoolVenueSource`) builds one venue per AMM family from the
+    aggregator's real on-chain family quotes.
+  - sniper (`NewPerpListingSource`) reads the newest active perp listing and its
+    real resting depth.
+  - rebalance reads the owner's real portfolio valued at the live oracle
+    (`PortfolioService.Holdings`); an unpriced holding is reported as zero.
+  - liquidation (`SetMarginEngine`) reads each candidate account's real
+    collateral, debt and its own listing's threshold/bonus.
+  - copy (`NewPerpCopySource`) mirrors the followed trader's own working orders,
+    filtered to the bot's configured symbol.
+  A bot with no priceable market is skipped, never fed a fabricated book.
+- A single-symbol bot only trades its own symbol; a rebalance plan may trade any
+  listed symbol. A market order prices at its own market's oracle mark, read
+  fresh per symbol.
+- `validateStrategyConfig` in `services/bots_service.go` is the per-strategy
+  config schema; a rebalance `targets` set must total 10000 bps.
+- The runner enforces the operator's `max_order_size` and `max_open_orders`
+  before placing anything; a paused or stopped bot is unloaded from the engine
+  on the next sweep so it stops trading.
+- `services/bot_runner_test.go` drives the control plane against a real database
+  and a real `PerpetualEngine`. `services/botengine/bridge_cgo_test.go` (built
+  with `-tags rust`) drives the real Rust library through cgo. CI builds and
+  tests the `rust`-tagged path so the bridge cannot rot.
+- The C++ matching engine (`backend/cpp`) exposes exact-string depth
+  (`Book.DepthExact`) alongside the float view, so a consumer that needs an
+  unrounded price reads it without a `float64` round-trip.

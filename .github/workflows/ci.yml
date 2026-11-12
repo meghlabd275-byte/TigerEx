@@ -281,6 +281,23 @@ jobs:
         working-directory: tigerswap/backend
         run: go test ./...
 
+      # The bots crate is a cdylib that the Go control plane links through cgo
+      # behind the `rust` build tag. Build the library first, then build and test
+      # the tagged packages so the bridge and the engine are exercised together,
+      # not only compiled in isolation.
+      - name: Setup Rust for the tagged Go control plane
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the Rust bots library
+        working-directory: tigerswap/backend/rust
+        run: cargo build --release -p tigerswap-bots
+
+      - name: Build and test the Rust-tagged Go control plane
+        working-directory: tigerswap/backend
+        run: |
+          go build -tags rust ./cmd/api
+          go test -tags rust ./services/botengine/
+
   tigerswap-rust:
     runs-on: ubuntu-latest
     permissions:

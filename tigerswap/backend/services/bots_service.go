@@ -72,6 +72,7 @@ var strategyConfigKeys = map[models.BotStrategy]map[string]string{
 	},
 	models.StrategyRebalance: {
 		"drift_threshold_bps": "int",
+		"targets":             "targets",
 	},
 	models.StrategyLiquidation: {
 		"close_factor_bps": "int",
@@ -150,6 +151,12 @@ func validateStrategyConfig(strategy models.BotStrategy, raw json.RawMessage) (s
 				return "", fmt.Errorf("config %q: %w", key, err)
 			}
 			canonical[key] = text
+		case "targets":
+			targets, err := decodeRebalanceTargets(value)
+			if err != nil {
+				return "", fmt.Errorf("config %q: %w", key, err)
+			}
+			canonical[key] = targets
 		}
 	}
 
@@ -175,6 +182,48 @@ func decodeInt(raw json.RawMessage) (int64, error) {
 		return parsed, nil
 	}
 	return 0, errors.New("must be an integer")
+}
+
+// decodeRebalanceTargets validates a rebalance bot's target portfolio. Each
+// target carries a symbol, its share of the portfolio in basis points, and the
+// current holding value; the weights must total 100% so the planner is never
+// asked to normalise a mis-specified portfolio.
+func decodeRebalanceTargets(raw json.RawMessage) ([]map[string]any, error) {
+	var targets []struct {
+		Symbol    string `json:"symbol"`
+		WeightBps int64  `json:"weight_bps"`
+		Value     string `json:"value"`
+	}
+	if err := json.Unmarshal(raw, &targets); err != nil {
+		return nil, errors.New("targets must be an array of {symbol, weight_bps, value}")
+	}
+	if len(targets) == 0 {
+		return nil, errors.New("targets cannot be empty")
+	}
+	var totalWeight int64
+	canonical := make([]map[string]any, 0, len(targets))
+	for _, target := range targets {
+		symbol := strings.TrimSpace(target.Symbol)
+		if symbol == "" {
+			return nil, errors.New("each target needs a symbol")
+		}
+		if target.WeightBps < 0 || target.WeightBps > 10_000 {
+			return nil, fmt.Errorf("target %s weight_bps must be within 0..10000", symbol)
+		}
+		if _, err := parseDecimalString(target.Value); err != nil {
+			return nil, fmt.Errorf("target %s value: %w", symbol, err)
+		}
+		totalWeight += target.WeightBps
+		canonical = append(canonical, map[string]any{
+			"symbol":     symbol,
+			"weight_bps": target.WeightBps,
+			"value":      target.Value,
+		})
+	}
+	if totalWeight != 10_000 {
+		return nil, fmt.Errorf("target weights must total 10000 basis points, got %d", totalWeight)
+	}
+	return canonical, nil
 }
 
 // isHexAddress reports whether the value is a 0x-prefixed 40-hex-character
@@ -791,3 +840,40 @@ func (s *BotsService) AvailableStrategies(c *gin.Context) {
 // sweepInterval is how often a caller should poll for scheduled work. Exposed
 // so a client does not invent its own cadence.
 const sweepInterval = 5 * time.Second
+
+// activeBots returns every active bot, oldest first, so the runner processes a
+// bot in the order it was created. It reads the database rather than a cache so
+// a status change made through the API takes effect on the next tick.
+func (s *BotsService) activeBots() ([]models.BotInstance, error) {
+	var bots []models.BotInstance
+	if err := s.db.Where("status = ?", models.BotStatusActive).
+		Order("id ASC").Find(&bots).Error; err != nil {
+		return nil, err
+	}
+	return bots, nil
+}
+
+// pendingOrderCount is the number of the bot's orders that are still working.
+func (s *BotsService) pendingOrderCount(botID uint) (int64, error) {
+	var count int64
+	err := s.db.Model(&models.BotOrder{}).
+		Where("bot_id = ? AND status = ?", botID, "pending").Count(&count).Error
+	return count, err
+}
+
+// recordBotOrders persists the orders a bot decided to place. They are written
+// in one transaction so a partial batch cannot leave a bot's audit trail
+// inconsistent with its position in the market.
+func (s *BotsService) recordBotOrders(bot models.BotInstance, orders []models.BotOrder) error {
+	if len(orders) == 0 {
+		return nil
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&orders).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.BotInstance{}).
+			Where("id = ?", bot.ID).
+			Update("last_run_at", time.Now().UTC()).Error
+	})
+}
