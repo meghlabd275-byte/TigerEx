@@ -2222,10 +2222,19 @@ export function encrypt(text: string): string {
 }
 
 export function decrypt(text: string): string {
-  const parts = text.split(':');
-  const iv = Buffer.from(parts[0], 'hex');
-  const authTag = Buffer.from(parts[1], 'hex');
-  const encrypted = parts[2];
+  const parts = typeof text === 'string' ? text.split(':') : [];
+  // A stored value is `iv:authTag:ciphertext`. Anything else is corrupt or
+  // tampered with, so fail closed with a clear error instead of letting a
+  // missing segment surface as an opaque TypeError.
+  if (parts.length !== 3 || parts.some((part) => part.length === 0)) {
+    throw new Error('encrypted value is malformed');
+  }
+  const [ivHex, authTagHex, encrypted] = parts;
+  const iv = Buffer.from(ivHex, 'hex');
+  const authTag = Buffer.from(authTagHex, 'hex');
+  if (iv.length !== 16 || authTag.length !== 16) {
+    throw new Error('encrypted value has an invalid IV or authentication tag');
+  }
   const decipher = createDecipheriv('aes-256-gcm', getEncryptionKey(), iv);
   decipher.setAuthTag(authTag);
   let decrypted = decipher.update(encrypted, 'hex', 'utf8');
