@@ -1,6 +1,7 @@
 import { createHash, randomInt } from 'crypto';
 import { getDb, generateId } from '@/lib/db';
 import { getEmailSender } from '@/lib/security/email';
+import { getSmsSender } from '@/lib/security/sms';
 
 /**
  * Verification codes (OTP).
@@ -65,8 +66,8 @@ export async function issueOtp(
   if (email && !sender) {
     return { delivered: false, reason: 'EMAIL_DELIVERY_NOT_CONFIGURED' };
   }
-  if (!email && phone) {
-    // SMS delivery has no configured provider; fail closed rather than pretend.
+  const smsSender = !email && phone ? getSmsSender() : null;
+  if (!email && phone && !smsSender) {
     return { delivered: false, reason: 'SMS_DELIVERY_NOT_CONFIGURED' };
   }
 
@@ -89,17 +90,19 @@ export async function issueOtp(
   ).run(generateId(), options.userId ?? null, email, phone, digestCode(accountKey, code), purpose, maxAttempts, expiresAt);
 
   try {
-    await sender!.send(
-      email!,
-      'Your TigerEx verification code',
-      `Your TigerEx verification code is ${code}. It expires in ${Math.round(ttlSeconds / 60)} minutes. If you did not request this, ignore this message.`,
-    );
+    const message = `Your TigerEx verification code is ${code}. It expires in ${Math.round(ttlSeconds / 60)} minutes. If you did not request this, ignore this message.`;
+    if (email) {
+      await sender!.send(email, 'Your TigerEx verification code', message);
+    } else {
+      await smsSender!.send(phone!, message);
+    }
   } catch (error) {
     // Delivery failed: remove the code so the flow cannot proceed.
-    db.prepare(`DELETE FROM otp_codes WHERE email = ? AND purpose = ? AND verified_at IS NULL`).run(
-      email,
-      purpose,
-    );
+    db.prepare(
+      `DELETE FROM otp_codes
+        WHERE purpose = ? AND verified_at IS NULL
+          AND ((email IS NOT NULL AND email = ?) OR (phone IS NOT NULL AND phone = ?))`,
+    ).run(purpose, email, phone);
     console.error('OTP delivery failed:', error);
     return { delivered: false, reason: 'DELIVERY_FAILED' };
   }

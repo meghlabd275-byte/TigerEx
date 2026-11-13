@@ -78,6 +78,7 @@ const MODULES = [
   'src/lib/security/totp.ts',
   'src/lib/security/otp.ts',
   'src/lib/security/email.ts',
+  'src/lib/security/sms.ts',
   'src/lib/security/session-issue.ts',
   'src/lib/p2p/profile.ts',
   'src/lib/api/api-auth.ts',
