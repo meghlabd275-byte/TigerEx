@@ -389,6 +389,8 @@ function initializeSchema() {
       front_image TEXT,
       back_image TEXT,
       selfie_image TEXT,
+      mrz_verified INTEGER NOT NULL DEFAULT 0,
+      mrz_data TEXT,
       status TEXT DEFAULT 'pending',
       reviewed_at TEXT,
       reviewer_id TEXT,
@@ -2297,6 +2299,10 @@ function applyColumnMigrations(database: Database.Database) {
     // 2FA existed.
     { table: 'admin_users', column: 'two_factor_enabled', definition: 'INTEGER DEFAULT 0' },
     { table: 'admin_users', column: 'two_factor_secret', definition: 'TEXT' },
+    // The verified machine-readable zone, so a reviewer can see that the
+    // document's own check digits were checked rather than assuming they were.
+    { table: 'kyc_documents', column: 'mrz_verified', definition: 'INTEGER NOT NULL DEFAULT 0' },
+    { table: 'kyc_documents', column: 'mrz_data', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {

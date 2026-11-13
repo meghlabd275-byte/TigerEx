@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
       personalInfo: body.personalInfo,
       documentType: body.documentType,
       documents: body.documents,
+      mrz: body.mrz,
     });
     return NextResponse.json({ success: true, data: result }, { status: 201, headers: NO_STORE });
   } catch (error) {

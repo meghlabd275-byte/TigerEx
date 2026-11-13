@@ -13,6 +13,7 @@
 
 import { getDb, generateId, encrypt } from '@/lib/db';
 import { isOtpVerified } from '@/lib/security/otp';
+import { parseMrz, isExpired, MrzError, type MrzFields } from '@/lib/kyc/mrz';
 
 export class KycError extends Error {
   constructor(
@@ -56,6 +57,42 @@ export interface SubmitInput {
   personalInfo: unknown;
   documentType: unknown;
   documents: unknown;
+  /** The document's machine-readable zone, when the client could read one. */
+  mrz?: unknown;
+}
+
+/**
+ * Verify a supplied MRZ against the declared details.
+ *
+ * A submission that supplies an MRZ is held to it: the check digits must pass,
+ * the document must not be expired, and the date of birth must match what the
+ * applicant declared. Supplying no MRZ is allowed (the document then rests on
+ * manual review), but supplying one that does not validate is refused — an
+ * unreadable MRZ on a document that has one is a forgery signal, not a reason
+ * to fall back to a human.
+ */
+export function verifyMrzForSubmission(raw: unknown, dateOfBirth: string): MrzFields | null {
+  if (raw === undefined || raw === null) return null;
+  const text = String(raw).trim();
+  if (!text) return null;
+
+  let fields: MrzFields;
+  try {
+    fields = parseMrz(text);
+  } catch (error) {
+    if (error instanceof MrzError) {
+      throw new KycError(error.code, `Document MRZ failed verification: ${error.message}`);
+    }
+    throw error;
+  }
+
+  if (isExpired(fields)) {
+    throw new KycError('DOCUMENT_EXPIRED', 'The identity document has expired');
+  }
+  if (fields.dateOfBirth !== dateOfBirth) {
+    throw new KycError('MRZ_MISMATCH', 'The MRZ date of birth does not match the declared date of birth');
+  }
+  return fields;
 }
 
 function requireText(value: unknown, field: string, max = 128): string {
@@ -189,6 +226,7 @@ export function submitApplication(userId: string, input: SubmitInput): { status:
 
   const personal = parsePersonalInfo(input.personalInfo);
   const documents = parseDocuments(input.documents, documentType);
+  const mrz = verifyMrzForSubmission(input.mrz, personal.dateOfBirth);
 
   const now = new Date().toISOString();
   db.transaction(() => {
@@ -199,16 +237,19 @@ export function submitApplication(userId: string, input: SubmitInput): { status:
     const selfie = documents.find((doc) => doc.kind === 'selfie');
     db.prepare(
       `INSERT INTO kyc_documents
-         (document_id, user_id, document_type, document_number, front_image, back_image, selfie_image, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`,
+         (document_id, user_id, document_type, document_number, front_image, back_image, selfie_image,
+          mrz_verified, mrz_data, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`,
     ).run(
       generateId(),
       userId,
       documentType,
-      null,
+      mrz ? mrz.documentNumber : null,
       front ? encrypt(front.data) : null,
       back ? encrypt(back.data) : null,
       selfie ? encrypt(selfie.data) : null,
+      mrz ? 1 : 0,
+      mrz ? encrypt(JSON.stringify(mrz)) : null,
     );
 
     db.prepare(
@@ -242,8 +283,8 @@ export function applicationStatus(userId: string): Record<string, unknown> {
   if (!user) throw new KycError('NOT_FOUND', 'Account not found', 404);
 
   const documents = db
-    .prepare('SELECT document_type, status, created_at FROM kyc_documents WHERE user_id = ? ORDER BY created_at DESC')
-    .all(userId) as Array<{ document_type: string; status: string; created_at: string }>;
+    .prepare('SELECT document_type, status, created_at, mrz_verified FROM kyc_documents WHERE user_id = ? ORDER BY created_at DESC')
+    .all(userId) as Array<{ document_type: string; status: string; created_at: string; mrz_verified: number | null }>;
 
   return {
     level: user.kyc_level === 'none' || user.kyc_level === null ? 0 : Number(user.kyc_level) || 0,
@@ -255,6 +296,7 @@ export function applicationStatus(userId: string): Record<string, unknown> {
       type: doc.document_type,
       status: doc.status,
       submittedAt: doc.created_at,
+      mrzVerified: doc.mrz_verified === 1,
     })),
   };
 }
