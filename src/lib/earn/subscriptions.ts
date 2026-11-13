@@ -28,6 +28,7 @@ import {
   recordTransaction,
   LedgerError,
 } from '@/lib/db/ledger';
+import { recordPoolMove } from '@/lib/db/accounting';
 import {
   accrueForProduct,
   lockedRedeemable,
@@ -267,6 +268,9 @@ export function redeem(userId: string, subscriptionId: string): RedeemResult {
     if (payable > 0) {
       debitFund(EARN_REWARD_FUND, row.asset, payable);
       creditAvailable(userId, row.asset, payable);
+      // The reward comes from the venue's reward account; the principal unlock
+      // is net-zero and is not journaled.
+      recordPoolMove(userId, row.asset, payable, 'earn_rewards', `Earn reward ${id}`);
       recordTransaction(userId, 'earn_reward', row.asset, payable, 0, 'completed', `Earn reward ${id}`);
     }
     db.prepare(
@@ -395,6 +399,12 @@ function redeemStructured(
     if (payable > 0) {
       debitFund(EARN_REWARD_FUND, rewardAsset, payable);
       creditAvailable(userId, payoutAsset, payable);
+      recordPoolMove(userId, payoutAsset, payable, 'earn_rewards', `Structured settle ${id}`);
+    }
+    // A base-settled product consumes the quote principal to buy the base; the
+    // quote leaves the user into the venue's earn account.
+    if (!unlockPrincipal) {
+      recordPoolMove(userId, row.asset, -principal, 'earn_principal', `Structured settle ${id}`);
     }
     recordTransaction(
       userId,

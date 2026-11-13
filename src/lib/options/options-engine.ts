@@ -13,6 +13,7 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { debitAvailable, creditAvailable, recordTransaction } from '@/lib/db/ledger';
+import { recordPoolMove } from '@/lib/db/accounting';
 import { usdPrice } from '@/lib/db/portfolio';
 import { blackScholes, settlementValue, impliedVolatility, type OptionGreeks } from '@/lib/options/pricing';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
@@ -312,6 +313,7 @@ export function openPosition(input: OpenPositionInput): OptionsPositionView {
   db.transaction(() => {
     // A long buyer pays the premium; a short writer posts it as collateral.
     debitAvailable(input.userId, market.settlementAsset, totalPremium + fee);
+    recordPoolMove(input.userId, market.settlementAsset, -(totalPremium + fee), 'options', `options open ${market.symbol}`);
     recordTransaction(
       input.userId,
       side === 'long' ? 'options_buy' : 'options_write',
@@ -418,6 +420,7 @@ export function closePosition(input: ClosePositionInput): { closed: number; real
       // A short closed above its entry owes the difference.
       debitAvailable(input.userId, market.settlementAsset, -proceeds);
     }
+    recordPoolMove(input.userId, market.settlementAsset, proceeds, 'options', `options close ${market.symbol}`);
     recordTransaction(
       input.userId,
       'options_close',
@@ -505,9 +508,11 @@ export function settleExpired(market: OptionsMarket, nowMs: number = Date.now())
       if (side === 'short') {
         if (returnedCollateral > 0) {
           creditAvailable(String(position.user_id), market.settlementAsset, returnedCollateral);
+          recordPoolMove(String(position.user_id), market.settlementAsset, returnedCollateral, 'options', `options settle ${market.symbol}`);
         }
       } else if (value > 0) {
         creditAvailable(String(position.user_id), market.settlementAsset, value);
+        recordPoolMove(String(position.user_id), market.settlementAsset, value, 'options', `options settle ${market.symbol}`);
       }
 
       db.prepare(

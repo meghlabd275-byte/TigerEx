@@ -1,6 +1,7 @@
 import { getDb, generateId, generateReferralCode } from '@/lib/db';
 import { creditFund } from '@/lib/dex/pool-service';
 import { creditAvailable } from '@/lib/db/ledger';
+import { recordPoolMove } from '@/lib/db/accounting';
 
 /**
  * Referral tiers. Commission rates are the share of the referee's trading fee
@@ -358,6 +359,8 @@ export function payoutReferralCommissions(referrerId: string): CommissionPayout[
         pool.account_id,
       );
       creditAvailable(referrerId, asset, amount);
+      // The commission is paid out of the venue's referral reward account.
+      recordPoolMove(referrerId, asset, amount, 'referral_rewards', `Referral commission ${row.commission_id}`);
       return true;
     });
 

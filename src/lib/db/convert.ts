@@ -1,5 +1,6 @@
 import { getDb, generateId } from '@/lib/db';
 import { availableBalance, debitAvailable, creditAvailable } from '@/lib/db/ledger';
+import { recordConvert } from '@/lib/db/accounting';
 
 export const CONVERT_FEE_RATE = 0.001; // 0.1% conversion fee
 
@@ -107,6 +108,7 @@ export function executeConvert(userId: string, fromAsset: string, toAsset: strin
     }
     debitAvailable(userId, from, amount);
     creditAvailable(userId, to, quote.toAmount);
+    recordConvert(userId, from, to, amount, quote.toAmount, quote.fee, `Convert ${from}->${to}`);
     db.prepare(
       `INSERT INTO transactions (transaction_id, user_id, type, currency, amount, fee, status, memo)
        VALUES (?, ?, 'convert', ?, ?, ?, 'completed', ?)`,

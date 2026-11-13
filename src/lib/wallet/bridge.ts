@@ -11,6 +11,7 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { debitAvailable, recordTransaction, LedgerError } from '@/lib/db/ledger';
+import { recordBridgeOut } from '@/lib/db/accounting';
 import { validateAddress } from '@/lib/wallet/address';
 
 export class BridgeError extends Error {
@@ -133,6 +134,7 @@ export function initiateTransfer(input: {
   try {
     db.transaction(() => {
       debitAvailable(input.userId, asset, total);
+      recordBridgeOut(input.userId, asset, input.amount, fee, `Bridge ${transferId} ${fromChain}->${toChain}`);
       recordTransaction(
         input.userId,
         'bridge_out',

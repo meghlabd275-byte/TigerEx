@@ -16,6 +16,7 @@
 
 import { getDb } from '@/lib/db';
 import { consumeLocked, creditAvailable, recordTransaction, LedgerError } from '@/lib/db/ledger';
+import { recordAdl } from '@/lib/db/accounting';
 import { adlQueue, insuranceFundStatus, type AdlPosition } from '@/lib/risk/engine';
 import { markPriceFor } from '@/lib/trading/futures-engine';
 
@@ -164,6 +165,9 @@ export function runAdl(contract: string): AdlResult {
         // deleveraging left it; the fund keeps the clawback.
         consumeLocked(entry.row.user_id, settlement, margin);
         creditAvailable(entry.row.user_id, settlement, margin + paidOut);
+        // The margin release is net-zero; the profit the pool would have paid is
+        // split between the trader and the insurance fund.
+        recordAdl(entry.row.user_id, settlement, contract, entry.profit, clawback, `ADL ${contract}`);
 
         db.prepare(
           `UPDATE futures_positions

@@ -15,6 +15,7 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { debitAvailable, creditAvailable, recordTransaction } from '@/lib/db/ledger';
+import { recordEtfSubscribe, recordEtfRedeem } from '@/lib/db/accounting';
 import { usdPrice } from '@/lib/db/portfolio';
 import {
   applyMove,
@@ -234,6 +235,7 @@ export function subscribe(input: SubscribeInput): EtfPositionView {
   const db = getDb();
   db.transaction(() => {
     debitAvailable(input.userId, market.settlementAsset, amount);
+    recordEtfSubscribe(input.userId, market.settlementAsset, amount, `subscribe ${tokens} ${market.symbol}`);
     recordTransaction(input.userId, 'etf_subscribe', market.settlementAsset, amount, 0, 'completed', `subscribe ${tokens} ${market.symbol}`);
 
     const existing = db
@@ -294,6 +296,7 @@ export function redeem(input: RedeemInput): { redeemed: number; proceeds: number
 
   db.transaction(() => {
     creditAvailable(input.userId, market.settlementAsset, proceeds);
+    recordEtfRedeem(input.userId, market.settlementAsset, proceeds, fee, `redeem ${tokens} ${market.symbol}`);
     recordTransaction(input.userId, 'etf_redeem', market.settlementAsset, proceeds, fee, 'completed', `redeem ${tokens} ${market.symbol}`);
 
     const remaining = held - tokens;

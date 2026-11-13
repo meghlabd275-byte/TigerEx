@@ -13,6 +13,8 @@
 import { getDb, generateId } from '@/lib/db';
 import { randomInt } from 'crypto';
 import { lockAvailable, unlockAvailable, creditAvailable, consumeLocked, recordTransaction } from '@/lib/db/ledger';
+import { recordPoolMove, recordBalanced } from '@/lib/db/accounting';
+import { userAccount } from '@/lib/db/journal';
 
 export class RewardsError extends Error {
   constructor(
@@ -137,6 +139,8 @@ export function redeemCoupon(userId: string, code: string): Coupon {
 
   db.transaction(() => {
     creditAvailable(userId, coupon.currency, coupon.amount);
+    // A coupon is funded by the venue's promotions account, not minted.
+    recordPoolMove(userId, coupon.currency, coupon.amount, 'promo', `Coupon ${coupon.code}`);
     recordTransaction(userId, 'coupon', coupon.currency, coupon.amount, 0, 'completed', `Coupon ${coupon.code}`);
     db.prepare("UPDATE coupons SET used_at = datetime('now'), status = 'used' WHERE coupon_id = ?").run(coupon.id);
   })();
@@ -304,6 +308,12 @@ export function claimRedPacket(userId: string, packetId: string): { amount: numb
   db.transaction(() => {
     consumeLocked(packet.creatorId, packet.asset, share);
     creditAvailable(userId, packet.asset, share);
+    // A red-packet claim moves value between two users, so it is zero-sum for
+    // the journal but each user's holding must still be recorded.
+    recordBalanced(packet.asset, [
+      { account: userAccount(packet.creatorId), amount: -share },
+      { account: userAccount(userId), amount: share },
+    ], `Red packet ${id}`);
     db.prepare(
       'INSERT INTO red_packet_claims (claim_id, packet_id, user_id, amount) VALUES (?, ?, ?, ?)',
     ).run(generateId(), id, userId, share);

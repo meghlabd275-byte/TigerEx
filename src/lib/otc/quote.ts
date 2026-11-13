@@ -15,6 +15,7 @@ import { orderBookDepth, lastTradePrice, type DepthLevel } from '@/lib/trading/m
 import { parseUtcTimestamp } from '@/lib/trading/candles';
 import { creditAvailable, debitAvailable, covers, availableBalance, recordTransaction } from '@/lib/db/ledger';
 import { creditFund, debitFund, fundBalance, recordDexRevenue } from '@/lib/dex/pool-service';
+import { recordPoolMove } from '@/lib/db/accounting';
 
 export class OtcError extends Error {
   constructor(
@@ -228,11 +229,13 @@ export function executeQuote(userId: string, quoteId: string): OtcFillResult {
 
   db.transaction(() => {
     debitAvailable(userId, clientPaysAsset, clientPays);
+    recordPoolMove(userId, clientPaysAsset, -clientPays, 'otc_desk', `otc ${row.symbol}`);
     recordTransaction(userId, 'otc_block', clientPaysAsset, clientPays, 0, 'completed', `otc ${row.symbol}`);
     creditFund(otcDeskAccount(clientPaysAsset), clientPaysAsset, clientPays);
 
     debitFund(otcDeskAccount(clientReceivesAsset), clientReceivesAsset, clientReceives);
     creditAvailable(userId, clientReceivesAsset, clientReceives);
+    recordPoolMove(userId, clientReceivesAsset, clientReceives, 'otc_desk', `otc ${row.symbol}`);
     recordTransaction(userId, 'otc_block', clientReceivesAsset, clientReceives, 0, 'completed', `otc ${row.symbol}`);
 
     // The quote's spread is the desk's revenue; book it to the treasury.

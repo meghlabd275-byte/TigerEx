@@ -25,6 +25,16 @@ import {
   covers,
   LedgerError,
 } from '@/lib/db/ledger';
+import {
+  recordFee,
+  recordFunding,
+  recordFuturesClose,
+  recordFuturesLiquidation,
+  recordBalanced,
+  recordInsuranceShare,
+  futuresPoolAccount,
+  insuranceAccount,
+} from '@/lib/db/accounting';
 import { positionRisk, selectRiskTier, type RiskTier } from '@/lib/risk/engine';
 import { futuresRates } from '@/lib/trading/spot-engine';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
@@ -362,6 +372,7 @@ function openOrIncrease(
     const run = db.transaction(() => {
       lockAvailable(userId, settlement, requiredMargin);
       debitAvailable(userId, settlement, fee);
+      recordFee(userId, settlement, fee, `Open fee ${market.symbol}`);
       if (existing) {
         db.prepare(
           `UPDATE futures_positions
@@ -448,6 +459,10 @@ function reducePosition(
         debitAvailable(userId, settlement, -grossPnl);
       }
       if (fee > 0) debitAvailable(userId, settlement, fee);
+      // The margin release above is net-zero (locked -> available). The realised
+      // PnL is settled against the venue's counterparty pool and the fee accrues
+      // to the venue; the journal records both.
+      recordFuturesClose(userId, settlement, market.symbol, grossPnl, fee, `Close ${market.symbol}`);
 
       db.prepare(
         `UPDATE futures_positions
@@ -683,6 +698,7 @@ export function applyFunding(
       if (availableBalance(payer.user_id, settlement) + 1e-9 >= owed) {
         debitAvailable(payer.user_id, settlement, owed);
         pot += owed;
+        recordFunding(payer.user_id, settlement, market.symbol, -owed, `Funding paid on ${market.symbol}`);
         recordTransaction(payer.user_id, 'funding', settlement, owed, 0, 'completed', `Funding paid on ${market.symbol} at ${clamped}`);
       } else {
         // The position cannot pay funding; the loss is booked against margin and
@@ -692,6 +708,7 @@ export function applyFunding(
           consumeLocked(payer.user_id, settlement, payable);
           db.prepare('UPDATE futures_positions SET margin = margin - ? WHERE position_id = ?').run(payable, payer.position_id);
           pot += payable;
+          recordFunding(payer.user_id, settlement, market.symbol, -payable, `Funding shortfall on ${market.symbol}`);
         }
         recordTransaction(payer.user_id, 'funding', settlement, owed, 0, 'completed', `Funding shortfall on ${market.symbol} at ${clamped}`);
       }
@@ -708,13 +725,20 @@ export function applyFunding(
       if (amount <= 0) continue;
       creditAvailable(positions[index].user_id, settlement, amount);
       paid += amount;
+      recordFunding(positions[index].user_id, settlement, market.symbol, amount, `Funding received on ${market.symbol}`);
       recordTransaction(positions[index].user_id, 'funding', settlement, amount, 0, 'completed', `Funding received on ${market.symbol} at ${clamped}`);
     }
 
     // Only a shortfall surplus (payers who could not settle) remains; it is the
     // insurance fund's, not the receivers'.
     const surplus = pot - paid;
-    if (surplus > 1e-12) addToInsuranceFund(market.symbol, surplus);
+    if (surplus > 1e-12) {
+      addToInsuranceFund(market.symbol, surplus);
+      recordBalanced(settlement, [
+        { account: futuresPoolAccount(market.symbol), amount: -surplus },
+        { account: insuranceAccount(market.symbol), amount: surplus },
+      ], `Funding surplus on ${market.symbol}`);
+    }
 
     db.prepare(
       `INSERT INTO funding_rates
@@ -772,6 +796,7 @@ function accrueFeeRevenue(db: ReturnType<typeof getDb>, market: MarketRow, fee: 
     contribution,
     market.symbol,
   );
+  recordInsuranceShare(market.settlement_asset, market.symbol, contribution);
 }
 
 // ---------------------------------------------------------------------------

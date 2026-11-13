@@ -67,6 +67,262 @@ function nonZero(legs: JournalLeg[]): JournalLeg[] {
   return legs.filter((leg) => leg.amount !== 0);
 }
 
+/** The venue account a borrowed asset is drawn from and repaid into. */
+export function poolAccount(kind: string): string {
+  return `pool:${kind}`;
+}
+
+/**
+ * A margin loan draw: the venue pool lends `asset` to the borrower.
+ *
+ * Lending credits the borrower an asset the pool holds (matching the engine's
+ * `total_supply - total_borrow` cap); repayment burns it back, so the two always
+ * cancel and no value is minted.
+ */
+export function recordMarginBorrow(userId: string, asset: string, amount: number, memo = 'margin borrow'): void {
+  if (amount === 0) return;
+  recordEntry(asset, nonZero([
+    { account: userAccount(userId), amount },
+    { account: poolAccount('lending'), amount: -amount },
+  ]), memo);
+}
+
+/** A margin loan repayment: the borrower returns `asset` to the venue pool. */
+export function recordMarginRepay(userId: string, asset: string, amount: number, memo = 'margin repay'): void {
+  if (amount === 0) return;
+  recordEntry(asset, nonZero([
+    { account: userAccount(userId), amount: -amount },
+    { account: poolAccount('lending'), amount },
+  ]), memo);
+}
+
+/** A margin liquidation: the borrower's collateral moves to the liquidator. */
+export function recordMarginLiquidation(
+  borrowerId: string,
+  receiverId: string,
+  asset: string,
+  amount: number,
+  memo = 'margin liquidation',
+): void {
+  if (amount === 0) return;
+  recordEntry(asset, nonZero([
+    { account: userAccount(borrowerId), amount: -amount },
+    { account: userAccount(receiverId), amount },
+  ]), memo);
+}
+
+/**
+ * An auto-deleveraging close, in its settlement asset.
+ *
+ * The position's profit would have been paid by the venue pool; ADL pays the
+ * trader `profit - clawback` and keeps the rest in the insurance fund, so the
+ * pool is relieved of the whole profit: user + (profit - clawback),
+ * insurance + clawback, pool - profit.
+ */
+export function recordAdl(
+  userId: string,
+  asset: string,
+  symbol: string,
+  profit: number,
+  clawback: number,
+  memo = 'auto-deleverage',
+): void {
+  recordEntry(asset, nonZero([
+    { account: userAccount(userId), amount: profit - clawback },
+    { account: insuranceAccount(symbol), amount: clawback },
+    { account: futuresPoolAccount(symbol), amount: -profit },
+  ]), memo);
+}
+
+/**
+ * An ETF subscription: the settlement asset moves from the user to the venue's
+ * ETF pool, which the minted tokens are backed by.
+ */
+export function recordEtfSubscribe(userId: string, asset: string, amount: number, memo = 'etf subscribe'): void {
+  if (amount === 0) return;
+  recordEntry(asset, nonZero([
+    { account: userAccount(userId), amount: -amount },
+    { account: poolAccount('etf'), amount },
+  ]), memo);
+}
+
+/** An ETF redemption: the pool pays the user and the exit fee goes to revenue. */
+export function recordEtfRedeem(userId: string, asset: string, proceeds: number, fee: number, memo = 'etf redeem'): void {
+  recordEntry(asset, nonZero([
+    { account: userAccount(userId), amount: proceeds },
+    { account: FEE_ACCOUNT, amount: fee },
+    { account: poolAccount('etf'), amount: -(proceeds + fee) },
+  ]), memo);
+}
+
+/**
+ * A user-to-venue-pool movement where the exact balance delta is already known.
+ *
+ * Used by engines whose settlement nets several components (an options premium
+ * and its fee, a pool payout) into one balance change. `delta` is signed: a
+ * positive value credits the user from the pool, a negative value debits them
+ * into it. The pool takes the exact opposite leg, so the entry always balances.
+ */
+export function recordPoolMove(
+  userId: string,
+  asset: string,
+  delta: number,
+  poolKind: string,
+  memo = 'pool move',
+): void {
+  if (delta === 0) return;
+  recordEntry(asset, nonZero([
+    { account: userAccount(userId), amount: delta },
+    { account: poolAccount(poolKind), amount: -delta },
+  ]), memo);
+}
+
+/**
+ * An asset conversion: the fee is taken in the source asset, the net source
+ * goes to the venue's conversion pool, and the pool pays out the target asset.
+ */
+export function recordConvert(
+  userId: string,
+  fromAsset: string,
+  toAsset: string,
+  amount: number,
+  toAmount: number,
+  fee: number,
+  memo = 'convert',
+): void {
+  const pool = poolAccount('convert');
+  recordEntry(fromAsset, nonZero([
+    { account: userAccount(userId), amount: -amount },
+    { account: pool, amount: amount - fee },
+    { account: FEE_ACCOUNT, amount: fee },
+  ]), memo);
+  if (toAmount !== 0) {
+    recordEntry(toAsset, nonZero([
+      { account: userAccount(userId), amount: toAmount },
+      { account: pool, amount: -toAmount },
+    ]), memo);
+  }
+}
+
+/** A user-to-user transfer: two users, one asset, zero-sum. */
+export function recordTransfer(senderId: string, receiverId: string, asset: string, amount: number, memo = 'transfer'): void {
+  if (amount === 0) return;
+  recordBalanced(asset, [
+    { account: userAccount(senderId), amount: -amount },
+    { account: userAccount(receiverId), amount },
+  ], memo);
+}
+
+/**
+ * A bridge out: the asset (plus the bridge fee) leaves the user for the bridge
+ * account, and the fee is booked as revenue in the same asset.
+ */
+export function recordBridgeOut(userId: string, asset: string, amount: number, fee: number, memo = 'bridge out'): void {
+  recordEntry(asset, nonZero([
+    { account: userAccount(userId), amount: -(amount + fee) },
+    { account: poolAccount('bridge'), amount },
+    { account: FEE_ACCOUNT, amount: fee },
+  ]), memo);
+}
+
+/** The venue's counterparty account for a derivatives contract. */
+export function futuresPoolAccount(symbol: string): string {
+  return `futures_pool:${symbol}`;
+}
+
+/** A contract's insurance fund, mirroring the `insurance_funds` row. */
+export function insuranceAccount(symbol: string): string {
+  return `insurance:${symbol}`;
+}
+
+/**
+ * Record an already-balanced leg set.
+ *
+ * Derivatives settlement spans more accounts than a spot fill (the venue's
+ * counterparty pool, a contract's insurance fund), so the engine builds the
+ * legs and this records them. It is the same guard as every other entry: the
+ * legs must sum to zero.
+ */
+export function recordBalanced(asset: string, legs: JournalLeg[], memo = ''): void {
+  recordEntry(asset, nonZero(legs), memo);
+}
+
+/**
+ * A funding movement, in the settlement asset.
+ *
+ * `amount` is positive when the user receives and negative when the user pays;
+ * the venue's counterparty pool takes the other side, so the entry balances.
+ */
+export function recordFunding(userId: string, asset: string, symbol: string, amount: number, memo = 'funding'): void {
+  if (amount === 0) return;
+  recordEntry(asset, nonZero([
+    { account: userAccount(userId), amount },
+    { account: futuresPoolAccount(symbol), amount: -amount },
+  ]), memo);
+}
+
+/** The part of a charged fee set aside into a contract's insurance fund. */
+export function recordInsuranceShare(asset: string, symbol: string, amount: number): void {
+  if (amount === 0) return;
+  recordEntry(asset, nonZero([
+    { account: FEE_ACCOUNT, amount: -amount },
+    { account: insuranceAccount(symbol), amount },
+  ]), `Insurance share ${symbol}`);
+}
+
+/** A fee charged in `asset`: the user pays, the venue's fee account receives. */
+export function recordFee(userId: string, asset: string, fee: number, memo = 'fee'): void {
+  if (fee === 0) return;
+  recordEntry(asset, nonZero([
+    { account: userAccount(userId), amount: -fee },
+    { account: FEE_ACCOUNT, amount: fee },
+  ]), memo);
+}
+
+/**
+ * A derivatives close, in its settlement asset.
+ *
+ * The margin release is net-zero (locked to available) and is not journaled.
+ * The realised PnL is settled against the venue's counterparty pool and the fee
+ * accrues to the venue: user + (pnl - fee), pool - pnl, fees + fee.
+ */
+export function recordFuturesClose(
+  userId: string,
+  asset: string,
+  symbol: string,
+  grossPnl: number,
+  fee: number,
+  memo = 'futures close',
+): void {
+  recordEntry(asset, nonZero([
+    { account: userAccount(userId), amount: grossPnl - fee },
+    { account: futuresPoolAccount(symbol), amount: -grossPnl },
+    { account: FEE_ACCOUNT, amount: fee },
+  ]), memo);
+}
+
+/**
+ * A liquidation, in its settlement asset.
+ *
+ * The margin is consumed, the position's loss is the venue pool's gain, and the
+ * insurance fund covers whatever the margin could not. The three legs sum to
+ * zero by construction: -margin - pnl + (pnl + margin) = 0.
+ */
+export function recordFuturesLiquidation(
+  userId: string,
+  asset: string,
+  symbol: string,
+  margin: number,
+  grossPnl: number,
+  memo = 'futures liquidation',
+): void {
+  recordEntry(asset, nonZero([
+    { account: userAccount(userId), amount: -margin },
+    { account: futuresPoolAccount(symbol), amount: -grossPnl },
+    { account: insuranceAccount(symbol), amount: grossPnl + margin },
+  ]), memo);
+}
+
 /**
  * A spot fill, as two balanced entries — one per asset.
  *

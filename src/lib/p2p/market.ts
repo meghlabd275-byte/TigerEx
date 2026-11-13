@@ -12,6 +12,8 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { lockAvailable, unlockAvailable, consumeLocked, creditAvailable, recordTransaction } from '@/lib/db/ledger';
+import { recordBalanced } from '@/lib/db/accounting';
+import { userAccount } from '@/lib/db/journal';
 import { transition, type P2pStatus } from '@/lib/p2p/escrow';
 import { isBlocked } from '@/lib/p2p/profile';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
@@ -406,6 +408,10 @@ export function advanceOrder(
     if (event === 'release') {
       consumeLocked(order.seller_id, order.asset, amount);
       creditAvailable(order.buyer_id, order.asset, amount);
+      recordBalanced(order.asset, [
+        { account: userAccount(order.seller_id), amount: -amount },
+        { account: userAccount(order.buyer_id), amount },
+      ], `P2P release ${orderId}`);
       recordTransaction(order.seller_id, 'p2p_sell', order.asset, amount, 0, 'completed', `P2P ${orderId}`);
       recordTransaction(order.buyer_id, 'p2p_buy', order.asset, amount, 0, 'completed', `P2P ${orderId}`);
       db.prepare("UPDATE p2p_orders SET status = 'released', released_at = ? WHERE order_id = ?").run(
@@ -484,6 +490,14 @@ function applyResolve(
   consumeLocked(order.seller_id, order.asset, amount);
   if (toBuyer > 0) creditAvailable(order.buyer_id, order.asset, toBuyer);
   if (amount - toBuyer > 0) creditAvailable(order.seller_id, order.asset, amount - toBuyer);
+  // The seller's escrow leaves entirely; the buyer and the returned remainder
+  // receive it, so only the buyer's net gain moves between the two users.
+  if (toBuyer > 0) {
+    recordBalanced(order.asset, [
+      { account: userAccount(order.seller_id), amount: -toBuyer },
+      { account: userAccount(order.buyer_id), amount: toBuyer },
+    ], `P2P dispute ${order.order_id}`);
+  }
   db.prepare("UPDATE p2p_orders SET status = 'released', released_at = ? WHERE order_id = ?").run(
     new Date().toISOString(),
     order.order_id,

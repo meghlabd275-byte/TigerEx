@@ -9,6 +9,7 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { debitAvailable, creditAvailable, recordTransaction } from '@/lib/db/ledger';
+import { recordTransfer } from '@/lib/db/accounting';
 
 export class TransferError extends Error {
   constructor(
@@ -83,6 +84,7 @@ export function internalTransfer(
   db.transaction(() => {
     debitAvailable(senderId, upperAsset, value);
     creditAvailable(target.userId, upperAsset, value);
+    recordTransfer(senderId, target.userId, upperAsset, value, `Transfer ${transferId}`);
     recordTransaction(senderId, 'transfer_out', upperAsset, value, 0, 'completed', `Transfer ${transferId} to ${target.label}`);
     recordTransaction(target.userId, 'transfer_in', upperAsset, value, 0, 'completed', `Transfer ${transferId}`);
   })();

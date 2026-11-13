@@ -19,6 +19,7 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { consumeLocked, recordTransaction, LedgerError } from '@/lib/db/ledger';
+import { recordFuturesLiquidation } from '@/lib/db/accounting';
 import { positionRisk } from '@/lib/risk/engine';
 import { riskTiers, markPriceFor, FuturesError } from '@/lib/trading/futures-engine';
 
@@ -225,6 +226,16 @@ export function processQueue(limit = 50): ProcessResult {
     try {
       const run = db.transaction(() => {
         consumeLocked(position.user_id, settlement, margin);
+        // The margin is consumed, the loss is the venue pool's gain, and the
+        // insurance fund covers whatever the margin could not.
+        recordFuturesLiquidation(
+          position.user_id,
+          settlement,
+          entry.symbol,
+          margin,
+          grossPnl,
+          `Liquidated ${position.side} ${quantity} ${entry.symbol}`,
+        );
         if (insuranceDraw > 0) {
           db.prepare(
             "UPDATE insurance_funds SET balance = MAX(0, balance - ?), updated_at = datetime('now') WHERE contract = ?",

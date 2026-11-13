@@ -227,6 +227,21 @@ separate backend. `admin-system.js` is real but is not mounted by
   to the insurance fund, and a shortfall scales receivers down instead of being
   conjured. Rewards likewise come from a funded account (`earn_rewards` in
   `treasury_accounts`), never from nothing.
+- The authoritative record of a money movement is the append-only double-entry
+  journal (`src/lib/db/journal.ts` + `src/lib/db/accounting.ts`), not the
+  `balances` table. `balances` is a materialised view; the journal is the source
+  of truth. `recordEntry` refuses a leg set that does not sum to zero per asset,
+  and chains each entry to the one before it by SHA-256, so an edited or
+  re-ordered entry is detectable with `verifyChain()`. Every entry is meant to
+  be written in the same SQLite transaction as the balance move it describes.
+  Custody moves call `recordDeposit`/`reverseDeposit`/`recordWithdrawal`/
+  `reverseWithdrawal`; a spot fill calls `recordTrade` (two balanced entries,
+  one per asset, each fee accruing to the `fees` account). `reconcileJournal()`
+  compares the journal's net user holding per asset against `balances` and
+  reports drift; `GET /api/admin/journal` exposes both. Removing the newest
+  entry is a valid chain prefix, so the head hash needs an external anchor to
+  catch a truncated tail. Do not write a balance outside the ledger, and do not
+  add a balance-mutating path without a matching journal entry.
 - Read a zone-less DB timestamp in JS through `parseUtcTimestamp` in
   `src/lib/trading/candles.ts`, not `Date.parse`. `Date.parse` treats
   `YYYY-MM-DD HH:MM:SS` as local time, shifting it by the host offset; the

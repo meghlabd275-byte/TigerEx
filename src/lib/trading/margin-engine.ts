@@ -25,6 +25,11 @@ import {
   covers,
   LedgerError,
 } from '@/lib/db/ledger';
+import {
+  recordMarginBorrow,
+  recordMarginRepay,
+  recordMarginLiquidation,
+} from '@/lib/db/accounting';
 import { priceInQuote, valueInQuote } from '@/lib/trading/valuation';
 import { borrowInterest } from '@/lib/trading/fees';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
@@ -342,6 +347,9 @@ export function borrow(userId: string, input: BorrowInput): MarginLoanView {
     const run = db.transaction(() => {
       lockAvailable(userId, collateralAsset, collateralAmount);
       creditAvailable(userId, asset, amount);
+      // The collateral lock is net-zero; the borrowed asset is drawn from the
+      // venue's lending pool, so the loan is a pool-to-user transfer.
+      recordMarginBorrow(userId, asset, amount, `Borrow ${amount} ${asset}`);
       db.prepare(
         `INSERT INTO margin_loans
            (loan_id, user_id, symbol, asset, principal, interest_accrued,
@@ -411,6 +419,9 @@ export function repay(userId: string, loanId: string, amount: number): MarginLoa
   try {
     const run = db.transaction(() => {
       debitAvailable(userId, row.asset, applied);
+      // The borrower returns what was drawn to the pool; the collateral release
+      // is net-zero and is not journaled.
+      recordMarginRepay(userId, row.asset, applied, `Repay ${row.asset}`);
       if (releasedCollateral > 0) {
         unlockAvailable(userId, row.collateral_asset, Math.min(releasedCollateral, Number(row.collateral_amount)));
       }
@@ -478,6 +489,7 @@ function seizeLoan(
     // The receiver (the liquidator, or the venue's own account) takes the seized
     // collateral; the part above the debt is their compensation.
     creditAvailable(receiverId, row.collateral_asset, seizeAmount);
+    recordMarginLiquidation(row.user_id, receiverId, row.collateral_asset, seizeAmount, `Liquidated loan ${row.loan_id}`);
     db.prepare(
       `UPDATE margin_loans SET status = 'liquidated', principal = 0, interest_accrued = 0,
               collateral_amount = MAX(0, collateral_amount - ?), updated_at = datetime('now')
