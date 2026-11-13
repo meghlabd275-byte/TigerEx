@@ -25,6 +25,7 @@ import {
   recordTransaction,
   LedgerError,
 } from '@/lib/db/ledger';
+import { recordTrade } from '@/lib/db/accounting';
 import { resolveFeeTier, ratesFor, splitReferralCommission, type FeeTier } from '@/lib/trading/fees';
 import { recordReferredTrade } from '@/lib/db/referral';
 import { OrderBook, type Fill, type OrderRequest, type TimeInForce } from '@/lib/trading/orderbook';
@@ -793,6 +794,19 @@ function settleFill(ctx: MatchContext, fill: Fill): { makerFee: number; takerFee
     'completed',
     `${takerIsBuyer ? 'Buy' : 'Sell'} ${fill.quantity} ${ctx.base} at ${fill.price} ${ctx.quote}`,
   );
+
+  // The journal is the authoritative record of the fill: base and quote each
+  // move in a balanced entry, with the fee accruing to the venue.
+  recordTrade({
+    base: ctx.base,
+    quote: ctx.quote,
+    buyerId,
+    sellerId,
+    quantity: fill.quantity,
+    grossQuote,
+    buyerFeeBase,
+    sellerFeeQuote,
+  });
 
   const takerFee = takerIsBuyer ? buyerFeeBase : sellerFeeQuote;
   const makerFee = takerIsBuyer ? sellerFeeQuote : buyerFeeBase;
