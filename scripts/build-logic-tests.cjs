@@ -140,6 +140,7 @@ const MODULES = [
   'src/lib/compliance/sanctions.ts',
   'src/lib/compliance/reserves.ts',
   'src/lib/kyc/mrz.ts',
+  'src/lib/kyc/image.ts',
   'src/lib/kyc/submission.ts',
   'src/lib/security/freeze.ts',
   'src/lib/wallet/scanner.ts',

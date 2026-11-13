@@ -125,6 +125,16 @@ test('an MRZ whose date of birth disagrees with the declared one is refused', ()
   );
 });
 
+test('a document whose bytes disagree with its declared type is refused', () => {
+  const { userId } = seedVerifiedUser();
+  const mismatched = docs().map((d) => ({ ...d, contentType: 'image/jpeg' })); // PNG bytes
+  assert.throws(
+    () => submitApplication(userId, { personalInfo: PERSONAL, documentType: 'passport', documents: mismatched, mrz: VALID }),
+    (e) => e instanceof KycError && e.code === 'DOCUMENT_TYPE_MISMATCH',
+  );
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM kyc_documents WHERE user_id = ?').get(userId).n, 0);
+});
+
 test('a submission without an MRZ still reaches manual review', () => {
   const { userId } = seedVerifiedUser();
   const result = submitApplication(userId, {

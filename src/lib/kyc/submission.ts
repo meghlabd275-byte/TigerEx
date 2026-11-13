@@ -14,6 +14,7 @@
 import { getDb, generateId, encrypt } from '@/lib/db';
 import { isOtpVerified } from '@/lib/security/otp';
 import { parseMrz, isExpired, MrzError, type MrzFields } from '@/lib/kyc/mrz';
+import { decodeBase64, contentMatchesType } from '@/lib/kyc/image';
 
 export class KycError extends Error {
   constructor(
@@ -177,6 +178,14 @@ function parseDocuments(raw: unknown, documentType: DocumentType): SubmittedDocu
     if (byteLength <= 0) throw new KycError('VALIDATION_FAILED', `${kind} document is empty`);
     if (byteLength > MAX_DOCUMENT_BYTES) {
       throw new KycError('DOCUMENT_TOO_LARGE', `${kind} document exceeds 10 MB`);
+    }
+
+    // The declared type must match what the bytes actually are, so a script or
+    // HTML payload renamed to image/png is refused rather than queued for a
+    // reviewer to open.
+    const bytes = decodeBase64(data);
+    if (!contentMatchesType(bytes, contentType)) {
+      throw new KycError('DOCUMENT_TYPE_MISMATCH', `The ${kind} document is not a valid ${contentType} file`);
     }
 
     seen.add(kind);
