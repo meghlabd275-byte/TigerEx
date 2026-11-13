@@ -38,7 +38,9 @@ function buildTd3({ docNo, nationality, dob, sex, expiry, personal }) {
 }
 
 // Valid, unexpired (expires 2030-04-15), birth date 1974-08-12.
-const VALID = buildTd3({ docNo: 'L898902C3', nationality: 'UTO', dob: '740812', sex: 'F', expiry: '300415', personal: 'ZE184226B<<<<<' });
+const validMrz = (docNo) =>
+  buildTd3({ docNo, nationality: 'UTO', dob: '740812', sex: 'F', expiry: '300415', personal: 'ZE184226B<<<<<' });
+const VALID = validMrz('L898902C3');
 // The same document, expired 2012-04-15.
 const EXPIRED = buildTd3({ docNo: 'L898902C3', nationality: 'UTO', dob: '740812', sex: 'F', expiry: '120415', personal: 'ZE184226B<<<<<' });
 
@@ -133,6 +135,32 @@ test('a document whose bytes disagree with its declared type is refused', () => 
     (e) => e instanceof KycError && e.code === 'DOCUMENT_TYPE_MISMATCH',
   );
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM kyc_documents WHERE user_id = ?').get(userId).n, 0);
+});
+
+test('the same verified document cannot be registered to two accounts', () => {
+  const a = seedVerifiedUser();
+  const b = seedVerifiedUser();
+  const shared = validMrz('M00000001');
+  submitApplication(a.userId, { personalInfo: PERSONAL, documentType: 'passport', documents: docs(), mrz: shared });
+  assert.throws(
+    () => submitApplication(b.userId, { personalInfo: PERSONAL, documentType: 'passport', documents: docs(), mrz: shared }),
+    (e) => e instanceof KycError && e.code === 'DOCUMENT_ALREADY_USED',
+  );
+  // The first account keeps its application; the second wrote nothing.
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM kyc_documents WHERE user_id = ?').get(a.userId).n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM kyc_documents WHERE user_id = ?').get(b.userId).n, 0);
+});
+
+test('a rejected earlier application does not block a new applicant', () => {
+  const a = seedVerifiedUser();
+  const b = seedVerifiedUser();
+  const docNo = 'M00000002';
+  db.prepare(
+    `INSERT INTO kyc_documents (document_id, user_id, document_type, document_number, status)
+     VALUES (?, ?, 'passport', ?, 'rejected')`,
+  ).run(generateId(), a.userId, docNo);
+  const result = submitApplication(b.userId, { personalInfo: PERSONAL, documentType: 'passport', documents: docs(), mrz: validMrz(docNo) });
+  assert.equal(result.status, 'pending');
 });
 
 test('a submission without an MRZ still reaches manual review', () => {

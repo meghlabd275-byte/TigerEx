@@ -237,6 +237,22 @@ export function submitApplication(userId: string, input: SubmitInput): { status:
   const documents = parseDocuments(input.documents, documentType);
   const mrz = verifyMrzForSubmission(input.mrz, personal.dateOfBirth);
 
+  // A verified document number must belong to exactly one account. Two live
+  // applications for the same document are multi-accounting, not a re-scan, so
+  // the second is refused (a rejected earlier attempt may be re-submitted).
+  if (mrz) {
+    const clash = db
+      .prepare(
+        `SELECT user_id FROM kyc_documents
+          WHERE document_number = ? AND user_id <> ? AND status IN ('pending', 'approved')
+          LIMIT 1`,
+      )
+      .get(mrz.documentNumber, userId) as { user_id: string } | undefined;
+    if (clash) {
+      throw new KycError('DOCUMENT_ALREADY_USED', 'This identity document is already registered to another account', 409);
+    }
+  }
+
   const now = new Date().toISOString();
   db.transaction(() => {
     db.prepare("DELETE FROM kyc_documents WHERE user_id = ? AND status IN ('pending', 'rejected')").run(userId);
