@@ -642,3 +642,50 @@ job, so a regression in it would have shipped unnoticed.
   never sees a future bar; the fraud engine scores a listed jurisdiction as
   decisive (60 points, so it always alerts) and rejects a negative amount.
 
+
+## Custody: deposits, withdrawals and the worker loop
+
+The on-chain custody layer lives in `src/lib/wallet/` and is driven by the
+scheduler in `src/lib/ops/scheduler.ts` (`/api/worker/tick` in production).
+
+- `scanner.ts` — deposit scanning. A per-chain cursor in `chain_cursors` bounds
+  the block range; ERC-20 `Transfer` logs and native transfers to a known
+  deposit address are recorded in `deposits` once, keyed on
+  `(network, tx_hash, address)`. A deposit is credited exactly once, only after
+  `confirmations >= required_confirmations`, and the credit is written under a
+  status guard (`pending` → `crediting` → `credited`) so a concurrent sweep
+  cannot double-credit. `deposits.block_number` records the height it was
+  credited from.
+- `reverseReorgedDeposits` — reorg safety. Each cycle it re-validates the
+  most recently credited deposits (`TIGEREX_REORG_DEPTH`, default 100) against
+  `eth_getTransactionReceipt`: a transaction that has vanished, or that now
+  sits at a different height, is no longer backed by the canonical chain, so the
+  credit is withdrawn through `debitAvailable`. The reversal is idempotent
+  (status guard). When the user already spent the credit the debit fails, the
+  deposit is marked `reorg_shortfall`, and a withdrawal hold is placed rather
+  than letting a negative balance stand.
+- `payout.ts` — withdrawal signing. The key is HD-derived per user
+  (`src/lib/wallet/hd.ts`, BIP-32/44); a withdrawal is signed EIP-155, sent from
+  the user's own address, and recorded in `chain_transactions`. The reservation
+  is consumed in the same transaction that records the hash. A mined
+  transaction completes the withdrawal; a reverted one returns the reservation.
+- **Nonce allocation must be atomic.** `allocateNonce` reads the node's pending
+  nonce as a floor and keeps a monotonic counter per `(chain_key, address)` in
+  `chain_nonces`, advancing it inside one write transaction. Two payouts signed
+  from the same address in the same instant would otherwise read the same
+  `eth_getTransactionCount` and sign the same nonce: the chain accepts one and
+  drops the other, and the dropped withdrawal is recorded as broadcast while the
+  funds never leave. The counter resyncs to the node when it runs more than
+  `TIGEREX_NONCE_MAX_DRIFT` (default 16) ahead, so a transaction dropped from
+  the mempool does not stall every later payout.
+- **2FA on the money-out path.** `createWithdrawal`
+  (`src/lib/wallet/withdrawals.ts`) verifies a TOTP code when the account has
+  `two_factor_enabled`, unless the caller marks the request `apiKeyAuthorized`
+  (the programmatic `/api/v1/withdraw` path, where the API key is the
+  credential). Keep the bypass explicit so it stays auditable.
+
+Tests: `scripts/test/custody.test.cjs` (deposits, withdrawals, nonce allocation,
+reorg reversal), plus `freeze`, `payout`, `scanner`, `sanctions`,
+`health-metrics`, `market-seed` and `wallet-withdrawals`. Each fund-safety fix
+has a regression test that fails against the old code and asserts the resulting
+balances, not just a status column.
