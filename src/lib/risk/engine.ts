@@ -69,8 +69,11 @@ export function positionRisk(input: PositionRiskInput): PositionRisk | { error: 
 
   // Equity at liquidation = maintenanceMargin, i.e.
   // margin + (P - entry) * q * dir = P * q * mmr
-  // Solve for P.
-  const denominator = quantity * (direction - mmr);
+  // Solve for P: P = (margin - entry * q * dir) / (q * (mmr - dir)).
+  // The sign of the denominator is `mmr - dir`, not `dir - mmr`; the latter
+  // negates the result, so every price clamped to zero and a trader saw a
+  // liquidation price of 0.
+  const denominator = quantity * (mmr - direction);
   const liquidationPrice =
     denominator === 0 ? 0 : Math.max(0, (margin - entryPrice * quantity * direction) / denominator);
 

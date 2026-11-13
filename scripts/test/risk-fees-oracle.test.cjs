@@ -113,6 +113,26 @@ test('a non-positive quantity or price is an error, not a zero position', () => 
   assert.ok('error' in risk.positionRisk({ side: 'long', quantity: 1, entryPrice: 100, markPrice: 100, leverage: 10, margin: 10, maintenanceMarginRate: 1.5 }));
 });
 
+test('the liquidation price is where equity equals the maintenance margin, not zero', () => {
+  // A 10x long at 2000 with 0.1 ETH and 20 USDT margin. Equity at price P is
+  // margin + (P - entry) * q; it equals P * q * mmr at P = 1809.05. An inverted
+  // denominator made this negative, and the clamp turned it into 0.
+  const long = risk.positionRisk({ side: 'long', quantity: 0.1, entryPrice: 2000, markPrice: 2000, leverage: 10, margin: 20, maintenanceMarginRate: 0.005 });
+  assert.ok(!('error' in long));
+  assert.ok(Math.abs(long.liquidationPrice - 1809.05) < 0.01, `expected ~1809.05, got ${long.liquidationPrice}`);
+
+  // A short's liquidation price sits above its entry.
+  const short = risk.positionRisk({ side: 'short', quantity: 0.1, entryPrice: 2000, markPrice: 2000, leverage: 10, margin: 20, maintenanceMarginRate: 0.005 });
+  assert.ok(!('error' in short));
+  assert.ok(Math.abs(short.liquidationPrice - 2189.05) < 0.01, `expected ~2189.05, got ${short.liquidationPrice}`);
+
+  // Equity at the computed price must equal the maintenance margin, which is
+  // the definition the position is liquidated against.
+  const atLiq = risk.positionRisk({ side: 'long', quantity: 0.1, entryPrice: 2000, markPrice: long.liquidationPrice, leverage: 10, margin: 20, maintenanceMarginRate: 0.005 });
+  assert.ok(!('error' in atLiq));
+  assert.ok(Math.abs(atLiq.equity - atLiq.maintenanceMargin) < 1e-6, `equity ${atLiq.equity} != maintenance ${atLiq.maintenanceMargin}`);
+});
+
 test('risk tier selection picks the first cap that covers the notional', () => {
   const tiers = [
     { tier: 1, maxPositionNotional: 1_000_000, maxLeverage: 125, maintenanceMarginRate: 0.004 },
