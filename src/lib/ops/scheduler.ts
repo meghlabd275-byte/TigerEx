@@ -21,6 +21,7 @@ import { syncBroadcastWithdrawals } from '@/lib/wallet/payout';
 import { runSettlementCycle } from '@/lib/trading/settlement';
 import { scanPositions, processQueue } from '@/lib/trading/risk-supervisor';
 import { runKeeperCycle } from '@/lib/dex/keeper';
+import { runReconciliation } from '@/lib/compliance/reserves';
 
 export interface JobResult {
   job: string;
@@ -111,6 +112,23 @@ export async function runScheduledCycle(): Promise<CycleReport> {
     jobs.push(await runJob('risk.scan', () => scanPositions()));
     jobs.push(await runJob('risk.process', () => processQueue()));
     jobs.push(await runJob('dex.keeper', () => runKeeperCycle()));
+
+    // Reconcile user liabilities against recorded treasury holdings every cycle.
+    // A shortfall is reported (and surfaced to the operator) rather than hidden.
+    jobs.push(
+      await runJob('reserves.reconcile', () => {
+        const result = runReconciliation();
+        if (!result.ok) {
+          throw new Error(
+            `reserve shortfall: ${result.entries
+              .filter((e) => !e.covered)
+              .map((e) => `${e.asset} short ${(e.userLiabilities - e.recordedAssets).toFixed(8)}`)
+              .join(', ')}`,
+          );
+        }
+        return { assets: result.entries.length };
+      }),
+    );
 
     return { startedAt, durationMs: Date.now() - start, jobs };
   } finally {

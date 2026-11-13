@@ -137,6 +137,7 @@ const MODULES = [
   'src/lib/ops/health.ts',
   'src/lib/ops/metrics.ts',
   'src/lib/compliance/sanctions.ts',
+  'src/lib/compliance/reserves.ts',
   'src/lib/security/freeze.ts',
   'src/lib/wallet/scanner.ts',
   'src/lib/wallet/payout.ts',
