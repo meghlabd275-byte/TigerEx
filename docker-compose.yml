@@ -1,27 +1,32 @@
+# TigerEx local/staging stack.
+#
+# Only services that real code depends on are declared. PostgreSQL and Redis are
+# used by the Go gateway (`backend/go/cmd/tigerex-api`); the Next.js frontend
+# owns its own SQLite database on a persistent volume. The former Kafka,
+# Zookeeper, Elasticsearch and Kibana services were referenced by no live code
+# and have been removed.
 version: '3.8'
 
 services:
-  # PostgreSQL Database
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: dev
-      POSTGRES_DB: tigerex
+      POSTGRES_USER: ${DB_USER:-tigerex}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-change-me-in-production}
+      POSTGRES_DB: ${DB_NAME:-tigerex}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./TigerEx/migrations:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-tigerex}"]
       interval: 10s
       timeout: 5s
       retries: 5
-      
-  # Redis Cache
+
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
     volumes:
@@ -32,43 +37,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # Kafka for event streaming
-  kafka:
-    image: confluentinc/cp-kafka:7.5.0
-    ports:
-      - "9092:9092"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
-    depends_on:
-      - zookeeper
-      
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.0
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      
-  # Elasticsearch for logging
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
-    ports:
-      - "9200:9200"
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-    volumes:
-      - es_data:/usr/share/elasticsearch/data
-      
-  # Kibana for log visualization
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.11.0
-    ports:
-      - "5601:5601"
-    depends_on:
-      - elasticsearch
-
-  # TigerEx API Server
+  # Canonical Go HTTP/WebSocket gateway.
   api:
     build:
       context: .
@@ -77,20 +46,21 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: tigerex
-      DB_USER: postgres
-      DB_PASSWORD: dev
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      TIGEREX_PORT: "8080"
+      TIGEREX_TLS_ENABLED: "false"
+      TIGEREX_DATABASE_DSN: postgres://${DB_USER:-tigerex}:${DB_PASSWORD:-change-me-in-production}@postgres:5432/${DB_NAME:-tigerex}?sslmode=disable
+      TIGEREX_REDIS_URL: redis://redis:6379
+      TIGEREX_JWT_SECRET: ${TIGEREX_JWT_SECRET:-change-me-please-use-a-32-char-secret}
+      TIGEREX_MASTER_KEY: ${TIGEREX_MASTER_KEY:-}
+      TIGEREX_CORS_ORIGINS: ${TIGEREX_CORS_ORIGINS:-http://localhost:3000}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
 
-  # WebSocket Server
+  # A dedicated socket replica. It runs the same gateway; the WebSocket upgrader
+  # lives once in `internal/ws` and there is no second server to drift from it.
   websocket:
     build:
       context: .
@@ -98,10 +68,21 @@ services:
     container_name: tigerex-websocket
     ports:
       - "8081:8081"
+    environment:
+      TIGEREX_PORT: "8081"
+      TIGEREX_TLS_ENABLED: "false"
+      TIGEREX_DATABASE_DSN: postgres://${DB_USER:-tigerex}:${DB_PASSWORD:-change-me-in-production}@postgres:5432/${DB_NAME:-tigerex}?sslmode=disable
+      TIGEREX_REDIS_URL: redis://redis:6379
+      TIGEREX_JWT_SECRET: ${TIGEREX_JWT_SECRET:-change-me-please-use-a-32-char-secret}
+      TIGEREX_CORS_ORIGINS: ${TIGEREX_CORS_ORIGINS:-http://localhost:3000}
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
-  # Frontend
+  # Next.js application (trader UI, REST API, admin console). The in-process
+  # maintenance timer runs here, so exactly one replica must have it enabled.
   frontend:
     build:
       context: .
@@ -109,10 +90,25 @@ services:
     container_name: tigerex-frontend
     ports:
       - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DB_PATH: /data/tigerex.db
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      TIGEREX_BOOTSTRAP_ADMIN_EMAIL: ${TIGEREX_BOOTSTRAP_ADMIN_EMAIL:-}
+      TIGEREX_BOOTSTRAP_ADMIN_PASSWORD: ${TIGEREX_BOOTSTRAP_ADMIN_PASSWORD:-}
+      TIGEREX_CUSTODY_MNEMONIC: ${TIGEREX_CUSTODY_MNEMONIC:-}
+      TIGEREX_MARKETS: ${TIGEREX_MARKETS:-}
+      TIGEREX_WORKER_TOKEN: ${TIGEREX_WORKER_TOKEN:-}
+      # Run the maintenance cycle in this process. Set to 0 and use the worker
+      # endpoint when running more than one frontend replica.
+      TIGEREX_SCHEDULER_INTERVAL_MS: ${TIGEREX_SCHEDULER_INTERVAL_MS:-15000}
+    volumes:
+      - frontend_data:/data
     depends_on:
       - api
 
-  # Admin Panel
+  # The admin console is the same application under /admin; run it as its own
+  # replica when the admin surface must be isolated from public traffic.
   admin:
     build:
       context: .
@@ -120,13 +116,23 @@ services:
     container_name: tigerex-admin
     ports:
       - "3001:3001"
+    environment:
+      NODE_ENV: production
+      DB_PATH: /data/tigerex.db
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      TIGEREX_BOOTSTRAP_ADMIN_EMAIL: ${TIGEREX_BOOTSTRAP_ADMIN_EMAIL:-}
+      TIGEREX_BOOTSTRAP_ADMIN_PASSWORD: ${TIGEREX_BOOTSTRAP_ADMIN_PASSWORD:-}
+      # The admin replica does not run the maintenance timer.
+      TIGEREX_SCHEDULER_INTERVAL_MS: "0"
+    volumes:
+      - frontend_data:/data
     depends_on:
       - api
 
 volumes:
   postgres_data:
-  es_data:
   redis_data:
+  frontend_data:
 
 networks:
   default:

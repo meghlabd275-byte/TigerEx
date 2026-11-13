@@ -304,7 +304,7 @@ func main() {
 
 	// Create router
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+	r.Use(gin.Logger(), gin.Recovery(), countRequests())
 
 	// Credentialed CORS must use explicit allowlisted origins, never "*".
 	trustedOrigins := strings.Split(os.Getenv("TIGEREX_CORS_ORIGINS"), ",")
@@ -320,14 +320,10 @@ func main() {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	// Health check endpoint (no auth required)
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":    "healthy",
-			"timestamp": time.Now().Unix(),
-			"version":   "1.0.0",
-		})
-	})
+	// Health, readiness and metrics (no auth required). Readiness pings the
+	// configured dependencies so a load balancer stops routing to an instance
+	// whose database or cache is unreachable.
+	registerHealthRoutes(r)
 
 	// API v1 routes
 	v1 := r.Group("/api/v1")

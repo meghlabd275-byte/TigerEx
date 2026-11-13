@@ -1,0 +1,20 @@
+# TigerEx Go API gateway.
+#
+# Builds the `tigerex-api` binary from `backend/go/cmd/tigerex-api`, which is the
+# canonical HTTP/WebSocket gateway the frontend's NEXT_PUBLIC_API_URL points at.
+FROM golang:1.23-bookworm AS builder
+WORKDIR /src
+COPY backend/go/go.mod backend/go/go.sum ./
+RUN go mod download
+COPY backend/go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tigerex-api ./cmd/tigerex-api
+
+FROM gcr.io/distroless/static-debian12:nonroot
+WORKDIR /app
+COPY --from=builder /out/tigerex-api /app/tigerex-api
+# TIGEREX_PORT defaults to 8443 with TLS; behind a terminating proxy the gateway
+# runs plain HTTP on the port the platform sets.
+ENV TIGEREX_PORT=8080
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/app/tigerex-api"]

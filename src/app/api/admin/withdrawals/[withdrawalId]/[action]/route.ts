@@ -2,16 +2,22 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 import { settleWithdrawal, WithdrawalError } from '@/lib/wallet/withdrawals';
+import { broadcastWithdrawal, PayoutError } from '@/lib/wallet/payout';
 
 /**
- * Approve or reject a pending withdrawal.
+ * Approve, reject or broadcast a pending withdrawal.
  *
- * Settlement is delegated to `settleWithdrawal`, which consumes the reserved
- * funds on approval and returns them on rejection across every balance row the
- * reservation was spread over, inside one database transaction.
+ * `approve` and `reject` settle the internal ledger through `settleWithdrawal`,
+ * which consumes the reserved funds on approval and returns them on rejection
+ * across every balance row the reservation was spread over.
+ *
+ * `broadcast` is the on-chain step: it signs and sends the transaction from the
+ * exchange's custody key and consumes the reservation in the same transaction
+ * that records the hash. A broadcast withdrawal is then settled automatically
+ * once it is mined, so approval afterwards only records the outcome.
  */
 
-const ACTIONS = ['approve', 'reject'];
+const ACTIONS = ['approve', 'reject', 'broadcast'];
 
 export async function POST(
   request: NextRequest,
@@ -37,6 +43,19 @@ export async function POST(
   const reason = body && typeof body.reason === 'string' ? body.reason.trim() : '';
 
   try {
+    if (action === 'broadcast') {
+      const result = await broadcastWithdrawal(withdrawalId);
+      recordAdminAction(request, auth.admin, 'withdrawal.broadcast', {
+        type: 'withdrawal',
+        id: withdrawalId,
+        detail: { txHash: result.txHash },
+      });
+      return NextResponse.json(
+        { success: true, withdrawalId: result.withdrawalId, txHash: result.txHash, status: 'broadcast' },
+        { headers: NO_STORE },
+      );
+    }
+
     const result = settleWithdrawal(withdrawalId, action as 'approve' | 'reject', { txHash: txHash || null });
 
     recordAdminAction(request, auth.admin, action === 'approve' ? 'withdrawal.approve' : 'withdrawal.reject', {
@@ -51,6 +70,7 @@ export async function POST(
     );
   } catch (error) {
     if (error instanceof WithdrawalError) return fail(error.code, error.message, error.status);
+    if (error instanceof PayoutError) return fail(error.code, error.message, error.status);
     throw error;
   }
 }

@@ -1,0 +1,47 @@
+# TigerEx admin console.
+#
+# The admin console is served by the same Next.js application under `/admin`
+# (its routes live in `src/app/admin` and `src/app/api/admin`), so this image is
+# the frontend image with the admin surface enabled. There is no separate admin
+# server; the former `Dockerfile.admin` referenced by docker-compose never
+# existed, and a distinct service would only duplicate the one app.
+FROM node:20-bookworm-slim AS deps
+WORKDIR /app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM node:20-bookworm-slim AS builder
+WORKDIR /app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+FROM node:20-bookworm-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3001
+ENV HOSTNAME=0.0.0.0
+RUN groupadd --system --gid 1001 nodejs \
+  && useradd --system --uid 1001 --gid nodejs nextjs \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends curl \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/public ./public
+# A data directory the runtime user owns, so DB_PATH=/data/tigerex.db works
+# without running as root.
+RUN mkdir -p /data && chown nextjs:nodejs /data
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+USER nextjs
+EXPOSE 3001
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:3001/api/health/live || exit 1
+CMD ["node", "server.js"]

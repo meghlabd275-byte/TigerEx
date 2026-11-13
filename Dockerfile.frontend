@@ -1,0 +1,48 @@
+# TigerEx frontend (Next.js) production image.
+#
+# Multi-stage: dependencies and the build run in the builder, and only the
+# standalone server plus its static assets ship in the runtime. The runtime runs
+# as a non-root user.
+FROM node:20-bookworm-slim AS deps
+WORKDIR /app
+# better-sqlite3 compiles a native addon, so a toolchain is needed to install it.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+FROM node:20-bookworm-slim AS builder
+WORKDIR /app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+# The production build must not fail for a missing runtime secret; every secret is
+# read at request time, not build time.
+RUN npm run build
+
+FROM node:20-bookworm-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+RUN groupadd --system --gid 1001 nodejs \
+  && useradd --system --uid 1001 --gid nodejs nextjs \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends curl \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/public ./public
+# A data directory the runtime user owns, so DB_PATH=/data/tigerex.db works
+# without running as root.
+RUN mkdir -p /data && chown nextjs:nodejs /data
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+USER nextjs
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:3000/api/health/live || exit 1
+CMD ["node", "server.js"]

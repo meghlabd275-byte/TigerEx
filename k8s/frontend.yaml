@@ -1,0 +1,136 @@
+# TigerEx — frontend / REST API / admin console (Next.js).
+#
+# The Next.js application serves the trader UI, the same-origin REST API under
+# /api and the admin console under /admin. Its database is SQLite on a
+# PersistentVolumeClaim; run exactly one replica with the in-process maintenance
+# timer enabled (TIGEREX_SCHEDULER_INTERVAL_MS > 0) and scale out only with the
+# timer disabled plus the CronJob below driving /api/worker/tick.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tigerex
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tigerex-data
+  namespace: tigerex
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tigerex-frontend
+  namespace: tigerex
+type: Opaque
+stringData:
+  # Replace before applying. See .env.example for the full set.
+  ENCRYPTION_KEY: "replace-me-with-a-32-byte-hex-key"
+  TIGEREX_CUSTODY_MNEMONIC: ""
+  TIGEREX_WORKER_TOKEN: "replace-me-with-a-16-char-secret"
+  TIGEREX_BOOTSTRAP_ADMIN_EMAIL: ""
+  TIGEREX_BOOTSTRAP_ADMIN_PASSWORD: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tigerex-frontend-config
+  namespace: tigerex
+data:
+  NODE_ENV: "production"
+  DB_PATH: "/data/tigerex.db"
+  TIGEREX_SCHEDULER_INTERVAL_MS: "15000"
+  TIGEREX_SANCTIONS_ENFORCE: "true"
+  # A JSON array of listing objects. Empty means no market is listed.
+  TIGEREX_MARKETS: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tigerex-frontend
+  namespace: tigerex
+  labels: { app: tigerex, component: frontend }
+spec:
+  replicas: 1
+  strategy:
+    # The SQLite volume is ReadWriteOnce, so a rolling update must not start the
+    # new pod before the old one has released it.
+    type: Recreate
+  selector:
+    matchLabels: { app: tigerex, component: frontend }
+  template:
+    metadata:
+      labels: { app: tigerex, component: frontend }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+        - name: frontend
+          image: ghcr.io/tigerex/tigerex-frontend:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef: { name: tigerex-frontend-config }
+            - secretRef: { name: tigerex-frontend }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits: { cpu: "2000m", memory: "4Gi" }
+          livenessProbe:
+            httpGet: { path: /api/health/live, port: 3000 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /api/health/ready, port: 3000 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: tigerex-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tigerex-frontend
+  namespace: tigerex
+spec:
+  selector: { app: tigerex, component: frontend }
+  ports:
+    - { protocol: TCP, port: 80, targetPort: 3000 }
+  type: ClusterIP
+---
+# Drives the maintenance cycle externally when more than one replica runs (each
+# with TIGEREX_SCHEDULER_INTERVAL_MS unset). The endpoint authenticates with the
+# shared TIGEREX_WORKER_TOKEN.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tigerex-maintenance
+  namespace: tigerex
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: tick
+              image: curlimages/curl:8.10.1
+              envFrom:
+                - secretRef: { name: tigerex-frontend }
+              command:
+                - sh
+                - -c
+                - >-
+                  curl -fsS -X POST
+                  -H "Authorization: Bearer ${TIGEREX_WORKER_TOKEN}"
+                  http://tigerex-frontend.tigerex.svc.cluster.local/api/worker/tick

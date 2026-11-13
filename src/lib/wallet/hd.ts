@@ -190,3 +190,27 @@ export function deriveEvmAddress(mnemonic: string, index: number): string {
 export function isEvmNetwork(network: string): boolean {
   return isEvmChainNetwork(network);
 }
+
+/**
+ * Derive the EVM private key at `m/44'/60'/0'/0/index` for a mnemonic.
+ *
+ * This is the signing counterpart to `deriveEvmAddress` and is used only by the
+ * payout path. The returned value is secret key material: it must never be
+ * logged, serialized into a response, or written to a row.
+ */
+export function deriveEvmPrivateKey(mnemonic: string, index: number): string {
+  const words = mnemonic.trim().toLowerCase().split(/\s+/);
+  if (![12, 15, 18, 21, 24].includes(words.length)) {
+    throw new Error('a mnemonic must contain 12, 15, 18, 21 or 24 words');
+  }
+  if (words.some((word) => !/^[a-z]+$/.test(word))) {
+    throw new Error('a mnemonic may only contain lowercase letters');
+  }
+  if (!Number.isInteger(index) || index < 0 || index >= HARDENED) {
+    throw new Error('derivation index must be an unsigned 31-bit integer');
+  }
+
+  const seed = mnemonicToSeed(words.join(' '));
+  const privateKey = derivePath(seed, `m/44'/60'/0'/0/${index}`);
+  return `0x${privateKey.toString(16).padStart(64, '0')}`;
+}

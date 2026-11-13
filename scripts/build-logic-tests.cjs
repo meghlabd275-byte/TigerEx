@@ -132,6 +132,14 @@ const MODULES = [
   'src/lib/chains/onchain.ts',
   'src/lib/chains/tigersmartchain.ts',
   'src/lib/chains/bootstrap.ts',
+  'src/lib/ops/health.ts',
+  'src/lib/ops/metrics.ts',
+  'src/lib/compliance/sanctions.ts',
+  'src/lib/security/freeze.ts',
+  'src/lib/wallet/scanner.ts',
+  'src/lib/wallet/payout.ts',
+  'src/lib/ops/scheduler.ts',
+  'src/lib/markets/seed.ts',
 ];
 
 fs.rmSync(OUT, { recursive: true, force: true });

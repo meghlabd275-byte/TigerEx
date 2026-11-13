@@ -1,0 +1,24 @@
+# Keep the build context small and free of secrets and generated trees.
+.git
+.github
+node_modules
+**/node_modules
+.next
+.test-build
+tigerswap/contracts/out
+tigerswap/contracts/cache
+tigerswap/contracts/lib
+tigerswap/**/.next
+tigerswap/frontend/.test-build
+backend/cpp/**/build
+backend/rust/target
+**/target
+*.log
+tigerex.db
+*.sqlite
+*.sqlite3
+.env
+.env.local
+.env.*.local
+coverage
+dist

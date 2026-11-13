@@ -1,0 +1,92 @@
+# TigerEx — Go HTTP/WebSocket gateway.
+#
+# This is the canonical backend the frontend's NEXT_PUBLIC_API_URL points at. It
+# needs PostgreSQL and Redis; both are pinged by /health/ready, so an instance
+# whose database or cache is unreachable is taken out of rotation.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tigerex-api
+  namespace: tigerex
+type: Opaque
+stringData:
+  TIGEREX_DATABASE_DSN: "postgres://tigerex:replace-me@postgres:5432/tigerex?sslmode=require"
+  TIGEREX_JWT_SECRET: "replace-me-with-at-least-32-characters"
+  TIGEREX_MASTER_KEY: "replace-me-with-64-hex-characters"
+  TIGEREX_REDIS_URL: "redis://redis:6379"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tigerex-api-config
+  namespace: tigerex
+data:
+  TIGEREX_PORT: "8080"
+  TIGEREX_TLS_ENABLED: "false"
+  TIGEREX_CORS_ORIGINS: "https://app.tigerex.example"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tigerex-api
+  namespace: tigerex
+  labels: { app: tigerex, component: api }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: tigerex, component: api }
+  template:
+    metadata:
+      labels: { app: tigerex, component: api }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: api
+          image: ghcr.io/tigerex/tigerex-api:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef: { name: tigerex-api-config }
+            - secretRef: { name: tigerex-api }
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits: { cpu: "2000m", memory: "2Gi" }
+          livenessProbe:
+            httpGet: { path: /health/live, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tigerex-api
+  namespace: tigerex
+spec:
+  selector: { app: tigerex, component: api }
+  ports:
+    - { protocol: TCP, port: 8080, targetPort: 8080 }
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: tigerex-api
+  namespace: tigerex
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: tigerex-api
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }

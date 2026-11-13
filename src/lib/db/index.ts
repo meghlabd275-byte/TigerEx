@@ -273,6 +273,7 @@ function initializeSchema() {
       status TEXT DEFAULT 'pending',
       created_at TEXT DEFAULT (datetime('now')),
       credited_at TEXT,
+      block_number INTEGER,
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
       FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE SET NULL
     );
@@ -2101,6 +2102,89 @@ function initializeSchema() {
 
   // Do not seed fabricated markets or prices. Market metadata and prices must come from the configured live market-data service.
 
+  // Operational tables: health/readiness support, sanctions screening, the
+  // deposit scanner's per-chain cursor and the withdrawal security hold. None of
+  // these hold fabricated data; each is written only by a real operation.
+  database.exec(`
+    -- Generic key/value store for operational markers (for example whether a
+    -- sanctions list has been loaded). Distinct from the seeded settings table
+    -- because these values are written at runtime, not at first migration.
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Sanctions list entries. The list is operator data, loaded through the
+    -- admin console; screening is a lookup over these rows, never a network call.
+    CREATE TABLE IF NOT EXISTS sanctions_entries (
+      entry_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      value TEXT NOT NULL,
+      list_name TEXT NOT NULL,
+      reason TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(kind, value)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sanctions_value ON sanctions_entries(kind, value);
+
+    -- One row per chain the deposit scanner watches. The cursor is the last
+    -- block whose logs have been processed, so a restart resumes rather than
+    -- rescanning from genesis or skipping a block.
+    CREATE TABLE IF NOT EXISTS chain_cursors (
+      chain_key TEXT PRIMARY KEY,
+      last_scanned_block INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- The next unused transaction nonce for a hot-wallet address on a chain.
+    -- Allocated under a write transaction so two concurrent payouts from the
+    -- same address can never reuse a nonce (which would make the chain accept
+    -- one and drop the other). next_nonce is the value to hand out; it is
+    -- seeded from the chain the first time an address is used.
+    CREATE TABLE IF NOT EXISTS chain_nonces (
+      chain_key TEXT NOT NULL,
+      address TEXT NOT NULL,
+      next_nonce INTEGER NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (chain_key, address)
+    );
+
+    -- A transaction that has been broadcast on chain. Recorded so a restart does
+    -- not rebroadcast, and so a confirmation sweep can settle it once it is
+    -- mined. Keyed by the withdrawal or deposit it belongs to.
+    CREATE TABLE IF NOT EXISTS chain_transactions (
+      tx_id TEXT PRIMARY KEY,
+      direction TEXT NOT NULL,
+      reference_id TEXT NOT NULL,
+      chain_key TEXT NOT NULL,
+      tx_hash TEXT NOT NULL,
+      from_address TEXT,
+      to_address TEXT,
+      asset TEXT NOT NULL,
+      amount TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'broadcast',
+      confirmations INTEGER NOT NULL DEFAULT 0,
+      required_confirmations INTEGER NOT NULL DEFAULT 6,
+      block_number INTEGER,
+      error TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(chain_key, tx_hash)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chain_tx_reference ON chain_transactions(reference_id);
+    CREATE INDEX IF NOT EXISTS idx_chain_tx_status ON chain_transactions(status);
+
+    -- One row per scheduler job name while it is running, so two instances do
+    -- not run the maintenance cycle at once. A stale lock is taken over by TTL.
+    CREATE TABLE IF NOT EXISTS scheduler_locks (
+      name TEXT PRIMARY KEY,
+      holder TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
   // `CREATE TABLE IF NOT EXISTS` cannot add columns to a database created by an
   // earlier schema, so additive columns are applied explicitly. Each ALTER is
   // guarded by a column existence check because SQLite has no `ADD COLUMN IF
@@ -2193,6 +2277,17 @@ function applyColumnMigrations(database: Database.Database) {
     // bounds) so a database created before the column settles from the same
     // parameters the admin wrote.
     { table: 'earn_products', column: 'params', definition: 'TEXT' },
+    // The withdrawal security hold: a cooling-off window placed after a
+    // security-sensitive account change. Stored as a zone-less UTC timestamp so
+    // it compares through `datetime()` like every other row.
+    { table: 'users', column: 'withdrawal_hold_until', definition: 'TEXT' },
+    { table: 'users', column: 'withdrawal_hold_reason', definition: 'TEXT' },
+    // The last time a sanctions screen was recorded for the account, so an
+    // operator can prove the check ran rather than assuming it did.
+    { table: 'users', column: 'sanctions_checked_at', definition: 'TEXT' },
+    // The block a deposit was found at, so a later sweep can tell whether the
+    // transaction is still on the canonical chain at that height.
+    { table: 'deposits', column: 'block_number', definition: 'INTEGER' },
   ];
 
   for (const { table, column, definition } of migrations) {

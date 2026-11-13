@@ -2,6 +2,9 @@
 const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ['lucide-react'],
+  // The production image ships only the standalone server and its traced
+  // dependencies, so the runtime layer is small and does not carry the source.
+  output: 'standalone',
   images: {
     domains: ['assets.tigerex.com', 'static.tigerex.io'],
     remotePatterns: [

@@ -27,6 +27,7 @@ export async function POST(request: NextRequest) {
   const network = String(body.network ?? '').trim().toUpperCase();
   const address = String(body.address ?? '').trim();
   const memo = body.memo === undefined || body.memo === null ? null : String(body.memo);
+  const twoFactorCode = body.twoFactorCode ?? body.totp ?? body.code;
   const amount = Number(body.amount);
 
   if (!coin) return fail('VALIDATION_FAILED', 'A coin is required');
@@ -48,6 +49,7 @@ export async function POST(request: NextRequest) {
       fee: policy.fee,
       address,
       memo,
+      twoFactorCode: twoFactorCode === undefined || twoFactorCode === null ? null : String(twoFactorCode),
       usdPrice,
     });
 

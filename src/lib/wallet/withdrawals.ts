@@ -13,6 +13,9 @@
 import { getDb, generateId } from '@/lib/db';
 import { lockAvailable, recordTransaction } from '@/lib/db/ledger';
 import { validateAddress } from '@/lib/wallet/address';
+import { withdrawalHoldStatus } from '@/lib/security/freeze';
+import { assertNotSanctioned, SanctionsError } from '@/lib/compliance/sanctions';
+import { decryptSecret, verifyTotp } from '@/lib/security/totp';
 
 export interface WithdrawalPolicy {
   asset: string;
@@ -285,6 +288,15 @@ export interface CreateWithdrawalInput {
   fee: number;
   address: string;
   memo?: string | null;
+  /** Authenticator code, required when the account has 2FA enabled. */
+  twoFactorCode?: string | null;
+  /**
+   * Set by the API-key route only. A signed API key that carries the `withdraw`
+   * permission (and, when configured, an IP allowlist) is the second factor on
+   * that path, so the interactive authenticator gate is not applied. The web
+   * session route never sets this, so a browser session alone still requires 2FA.
+   */
+  apiKeyAuthorized?: boolean;
   usdPrice: (asset: string) => number | null;
 }
 
@@ -333,6 +345,51 @@ export function createWithdrawal(input: CreateWithdrawalInput): CreateWithdrawal
   const gate = withdrawalsEnabled();
   if (!gate.enabled) throw new WithdrawalError('WITHDRAWALS_PAUSED', gate.reason ?? 'Withdrawals are paused', 503);
 
+  // A cooling-off hold placed after a security-sensitive account change blocks
+  // withdrawals until it lifts, so a compromised account cannot be drained at
+  // once.
+  const hold = withdrawalHoldStatus(input.userId);
+  if (hold.held) {
+    throw new WithdrawalError(
+      'WITHDRAWAL_HOLD',
+      `Withdrawals are held for ${hold.hoursRemaining} more hour(s) after a recent security change`,
+      403,
+    );
+  }
+
+  // Second-factor gate. When the account has 2FA enabled the request must carry
+  // a valid authenticator code, so a stolen session alone cannot move funds out.
+  // The check fails closed: an enabled account with a missing secret is refused
+  // rather than treated as unenrolled.
+  const account = getDb()
+    .prepare('SELECT two_factor_enabled, two_factor_secret, two_factor_type FROM users WHERE user_id = ?')
+    .get(input.userId) as
+    | { two_factor_enabled: number; two_factor_secret: string | null; two_factor_type: string | null }
+    | undefined;
+  if (!account) throw new WithdrawalError('NOT_FOUND', 'Account not found', 404);
+
+  if (account.two_factor_enabled && !input.apiKeyAuthorized) {
+    const code = String(input.twoFactorCode ?? '').trim();
+    if (!code) {
+      throw new WithdrawalError('TOTP_REQUIRED', 'Enter your authenticator code to withdraw', 403);
+    }
+    const type = account.two_factor_type || 'totp';
+    if (type !== 'totp') {
+      // Email/SMS second factors are verified at sign-in and are not accepted
+      // here; a withdrawal requires the authenticator app.
+      throw new WithdrawalError('TOTP_REQUIRED', 'Withdrawals require an authenticator app code', 403);
+    }
+    let secret = '';
+    try {
+      secret = account.two_factor_secret ? decryptSecret(account.two_factor_secret) : '';
+    } catch {
+      secret = '';
+    }
+    if (!secret || !verifyTotp(secret, code)) {
+      throw new WithdrawalError('TOTP_INVALID', 'Invalid authenticator code', 403);
+    }
+  }
+
   const policy = withdrawalPolicy(asset, network);
   if (!policy) {
     throw new WithdrawalError(
@@ -345,6 +402,18 @@ export function createWithdrawal(input: CreateWithdrawalInput): CreateWithdrawal
   const checked = validateAddress(network, input.address ?? '');
   if (!checked.valid || !checked.normalized) {
     throw new WithdrawalError('INVALID_ADDRESS', checked.reason ?? 'The withdrawal address is not valid');
+  }
+
+  // Screen the destination against the loaded sanctions list. Enforcement is on
+  // in production, so a listed address is refused and an unloaded list is a
+  // refusal rather than a silent pass.
+  try {
+    assertNotSanctioned(checked.normalized, 'address');
+  } catch (error) {
+    if (error instanceof SanctionsError) {
+      throw new WithdrawalError(error.code, error.message, error.status);
+    }
+    throw error;
   }
 
   if (
@@ -403,15 +472,26 @@ export function createWithdrawal(input: CreateWithdrawalInput): CreateWithdrawal
   const withdrawalId = generateId();
   const now = new Date().toISOString();
 
+  // Record the user's custody wallet for this asset and network when one exists,
+  // so the on-chain step signs with a known key rather than re-deriving the row.
+  const wallet = db
+    .prepare(
+      `SELECT wallet_id FROM wallets
+        WHERE user_id = ? AND currency = ? AND UPPER(network) = ? AND address_index IS NOT NULL
+        ORDER BY created_at LIMIT 1`,
+    )
+    .get(input.userId, asset, network) as { wallet_id: string } | undefined;
+
   db.transaction(() => {
     lockAvailable(input.userId, asset, total);
     db.prepare(
       `INSERT INTO withdrawals
          (withdrawal_id, user_id, wallet_id, currency, network, amount, fee, address, memo, status, created_at)
-       VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
     ).run(
       withdrawalId,
       input.userId,
+      wallet?.wallet_id ?? null,
       asset,
       network,
       amount,
@@ -462,8 +542,15 @@ export function settleWithdrawal(
     | { withdrawal_id: string; user_id: string; currency: string; amount: number; fee: number; wallet_id: string | null; status: string }
     | undefined;
   if (!withdrawal) throw new WithdrawalError('UNKNOWN_WITHDRAWAL', 'No such withdrawal', 404);
-  if (withdrawal.status !== 'pending') {
+  if (withdrawal.status !== 'pending' && withdrawal.status !== 'broadcast') {
     throw new WithdrawalError('ALREADY_PROCESSED', `This withdrawal is already ${withdrawal.status}`, 409);
+  }
+  const alreadyBroadcast = withdrawal.status === 'broadcast';
+  if (action === 'reject' && alreadyBroadcast) {
+    // A withdrawal that has already been broadcast on chain cannot be rejected:
+    // the funds are out of the exchange's hands, and returning the reservation
+    // would mint them a second time.
+    throw new WithdrawalError('ALREADY_BROADCAST', 'A broadcast withdrawal cannot be rejected', 409);
   }
 
   const total = (Number(withdrawal.amount) || 0) + (Number(withdrawal.fee) || 0);
@@ -494,30 +581,35 @@ export function settleWithdrawal(
     }
 
     if (action === 'approve') {
-      const lockedTotal = rows.reduce((sum, row) => sum + Number(row.locked), 0);
-      const availableTotal = rows.reduce((sum, row) => sum + Number(row.available), 0);
-      if (lockedTotal + availableTotal + 1e-9 < total) {
-        throw new WithdrawalError('INSUFFICIENT_FUNDS', 'The account does not hold enough to settle this withdrawal', 409);
-      }
+      // When the withdrawal was already broadcast, its reservation was consumed
+      // at broadcast time; approval only records the transaction hash. Consuming
+      // again here would take the amount a second time.
+      if (!alreadyBroadcast) {
+        const lockedTotal = rows.reduce((sum, row) => sum + Number(row.locked), 0);
+        const availableTotal = rows.reduce((sum, row) => sum + Number(row.available), 0);
+        if (lockedTotal + availableTotal + 1e-9 < total) {
+          throw new WithdrawalError('INSUFFICIENT_FUNDS', 'The account does not hold enough to settle this withdrawal', 409);
+        }
 
-      let remaining = total;
-      for (const row of rows) {
-        if (remaining <= 1e-12) break;
-        const fromLocked = Math.min(Number(row.locked), remaining);
-        remaining -= fromLocked;
-        const fromAvailable = Math.min(Number(row.available), remaining);
-        remaining -= fromAvailable;
-        if (fromLocked > 0 || fromAvailable > 0) {
-          db.prepare(
-            `UPDATE balances
-                SET locked = locked - ?, available = available - ?, updated_at = datetime('now')
-              WHERE balance_id = ?`,
-          ).run(fromLocked, fromAvailable, row.balance_id);
+        let remaining = total;
+        for (const row of rows) {
+          if (remaining <= 1e-12) break;
+          const fromLocked = Math.min(Number(row.locked), remaining);
+          remaining -= fromLocked;
+          const fromAvailable = Math.min(Number(row.available), remaining);
+          remaining -= fromAvailable;
+          if (fromLocked > 0 || fromAvailable > 0) {
+            db.prepare(
+              `UPDATE balances
+                  SET locked = locked - ?, available = available - ?, updated_at = datetime('now')
+                WHERE balance_id = ?`,
+            ).run(fromLocked, fromAvailable, row.balance_id);
+          }
         }
       }
 
       db.prepare(
-        `UPDATE withdrawals SET status = 'completed', tx_hash = ?, processed_at = ? WHERE withdrawal_id = ?`,
+        `UPDATE withdrawals SET status = 'completed', tx_hash = COALESCE(?, tx_hash), processed_at = ? WHERE withdrawal_id = ?`,
       ).run(options.txHash || null, now, withdrawalId);
     } else {
       // Rejection returns whatever was locked to the available balance.

@@ -420,3 +420,124 @@ test('a settled withdrawal cannot be settled twice', () => {
     (error) => error instanceof WithdrawalError && error.code === 'ALREADY_PROCESSED',
   );
 });
+
+// --- Second-factor gate on the money-out path --------------------------------
+
+const { generateTotpSecret, encryptSecret } = require('../../.test-build/totp.js');
+const { authenticator } = require('otplib');
+
+/** Enrol TOTP on an account and return the secret so a code can be generated. */
+function enrol2fa(userId) {
+  const secret = generateTotpSecret();
+  db.prepare(
+    `UPDATE users SET two_factor_enabled = 1, two_factor_type = 'totp', two_factor_secret = ? WHERE user_id = ?`,
+  ).run(encryptSecret(secret), userId);
+  return secret;
+}
+
+test('an enrolled account cannot withdraw without a valid authenticator code', () => {
+  setFees({ 'RUSD:ERC20': { fee: 0, minAmount: 1, enabled: true } });
+  const user = seedUser('3');
+  fund(user, 'RUSD', 1000);
+  enrol2fa(user);
+
+  // No code: refused, and no funds move.
+  assert.throws(
+    () =>
+      createWithdrawal({
+        userId: user,
+        kycLevel: '3',
+        asset: 'RUSD',
+        network: 'ERC20',
+        amount: 100,
+        fee: 0,
+        address: EVM_ADDRESS,
+        usdPrice: USD_PRICE,
+      }),
+    (error) => error instanceof WithdrawalError && error.code === 'TOTP_REQUIRED',
+  );
+
+  // Wrong code: refused, and no funds move.
+  assert.throws(
+    () =>
+      createWithdrawal({
+        userId: user,
+        kycLevel: '3',
+        asset: 'RUSD',
+        network: 'ERC20',
+        amount: 100,
+        fee: 0,
+        address: EVM_ADDRESS,
+        twoFactorCode: '000000',
+        usdPrice: USD_PRICE,
+      }),
+    (error) => error instanceof WithdrawalError && error.code === 'TOTP_INVALID',
+  );
+
+  assert.equal(availableBalance(user, 'RUSD'), 1000);
+  assert.equal(lockedBalance(user, 'RUSD'), 0);
+});
+
+test('an enrolled account withdraws with a valid authenticator code', () => {
+  setFees({ 'RUSD:ERC20': { fee: 0, minAmount: 1, enabled: true } });
+  const user = seedUser('3');
+  fund(user, 'RUSD', 1000);
+  const secret = enrol2fa(user);
+
+  const result = createWithdrawal({
+    userId: user,
+    kycLevel: '3',
+    asset: 'RUSD',
+    network: 'ERC20',
+    amount: 100,
+    fee: 0,
+    address: EVM_ADDRESS,
+    twoFactorCode: authenticator.generate(secret),
+    usdPrice: USD_PRICE,
+  });
+
+  assert.equal(result.status, 'pending');
+  assert.equal(availableBalance(user, 'RUSD'), 900);
+  assert.equal(lockedBalance(user, 'RUSD'), 100);
+});
+
+test('an account without 2FA withdraws without a code', () => {
+  setFees({ 'RUSD:ERC20': { fee: 0, minAmount: 1, enabled: true } });
+  const user = seedUser('3');
+  fund(user, 'RUSD', 1000);
+
+  const result = createWithdrawal({
+    userId: user,
+    kycLevel: '3',
+    asset: 'RUSD',
+    network: 'ERC20',
+    amount: 100,
+    fee: 0,
+    address: EVM_ADDRESS,
+    usdPrice: USD_PRICE,
+  });
+
+  assert.equal(result.status, 'pending');
+  assert.equal(lockedBalance(user, 'RUSD'), 100);
+});
+
+test('the API-key path is authorized by the key, not the authenticator code', () => {
+  setFees({ 'RUSD:ERC20': { fee: 0, minAmount: 1, enabled: true } });
+  const user = seedUser('3');
+  fund(user, 'RUSD', 1000);
+  enrol2fa(user);
+
+  // A signed API key carrying the withdraw permission is the second factor.
+  const result = createWithdrawal({
+    userId: user,
+    kycLevel: '3',
+    asset: 'RUSD',
+    network: 'ERC20',
+    amount: 100,
+    fee: 0,
+    address: EVM_ADDRESS,
+    apiKeyAuthorized: true,
+    usdPrice: USD_PRICE,
+  });
+  assert.equal(result.status, 'pending');
+});

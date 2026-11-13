@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
       fee: policy.fee,
       address,
       memo,
+      apiKeyAuthorized: true,
       usdPrice,
     });
     return v1Ok({ withdrawal: result });

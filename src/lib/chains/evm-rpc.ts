@@ -319,3 +319,170 @@ export async function rpcErc20Metadata(
   ]);
   return { symbol: decodeAbiString(symbolRaw), decimals: decodeUint8(decimalsRaw) };
 }
+
+/** The Keccak-256 topic hash of `Transfer(address,address,uint256)`. */
+export const ERC20_TRANSFER_TOPIC =
+  '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+export interface LogEntry {
+  address: string;
+  topics: string[];
+  data: string;
+  blockNumber: string;
+  transactionHash: string;
+  logIndex: string;
+}
+
+/**
+ * `eth_getLogs` over a block range.
+ *
+ * The range is bounded by the caller; a node that caps the range returns an
+ * error which surfaces as `EvmRpcError` rather than a silent empty result, so a
+ * scanner can shrink the window rather than believe it found nothing.
+ */
+export async function rpcGetLogs(
+  url: string,
+  filter: { fromBlock: bigint; toBlock: bigint; address?: string; topics?: (string | null)[] },
+  options: JsonRpcOptions = {},
+): Promise<LogEntry[]> {
+  const params: Record<string, unknown> = {
+    fromBlock: toHexQuantity(filter.fromBlock),
+    toBlock: toHexQuantity(filter.toBlock),
+  };
+  if (filter.address) {
+    if (!isHexAddress(filter.address)) {
+      throw new EvmRpcError('INVALID_ADDRESS', 'The log filter address is not a valid address', 400);
+    }
+    params.address = filter.address;
+  }
+  if (filter.topics) params.topics = filter.topics;
+
+  const result = await jsonRpc(url, 'eth_getLogs', [params], options);
+  if (!Array.isArray(result)) {
+    throw new EvmRpcError('RPC_INVALID_RESPONSE', 'eth_getLogs did not return an array');
+  }
+  return result as LogEntry[];
+}
+
+/** The receipt of a transaction, or null when it is not yet mined. */
+export async function rpcTransactionReceipt(
+  url: string,
+  txHash: string,
+  options: JsonRpcOptions = {},
+): Promise<{ status: string; blockNumber: string } | null> {
+  const result = await jsonRpc(url, 'eth_getTransactionReceipt', [txHash], options);
+  if (result === null) return null;
+  if (typeof result !== 'object') {
+    throw new EvmRpcError('RPC_INVALID_RESPONSE', 'eth_getTransactionReceipt returned an invalid value');
+  }
+  const receipt = result as { status?: unknown; blockNumber?: unknown };
+  if (typeof receipt.status !== 'string' || typeof receipt.blockNumber !== 'string') {
+    throw new EvmRpcError('RPC_INVALID_RESPONSE', 'The receipt is missing its status or block number');
+  }
+  return { status: receipt.status, blockNumber: receipt.blockNumber };
+}
+
+/** Broadcast a signed raw transaction, returning its hash. */
+export async function rpcSendRawTransaction(
+  url: string,
+  rawTx: string,
+  options: JsonRpcOptions = {},
+): Promise<string> {
+  if (typeof rawTx !== 'string' || !/^0x[0-9a-fA-F]+$/.test(rawTx)) {
+    throw new EvmRpcError('INVALID_TRANSACTION', 'A signed raw transaction is required', 400);
+  }
+  const result = await jsonRpc(url, 'eth_sendRawTransaction', [rawTx], options);
+  if (typeof result !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(result)) {
+    throw new EvmRpcError('RPC_INVALID_RESPONSE', 'eth_sendRawTransaction returned no transaction hash');
+  }
+  return result;
+}
+
+/** The transaction count (nonce) of an address, for building the next transaction. */
+export async function rpcTransactionCount(
+  url: string,
+  address: string,
+  options: JsonRpcOptions = {},
+): Promise<bigint> {
+  if (!isHexAddress(address)) {
+    throw new EvmRpcError('INVALID_ADDRESS', 'A 0x-prefixed 20-byte address is required', 400);
+  }
+  const value = hexToBigInt(await jsonRpc(url, 'eth_getTransactionCount', [address, 'pending'], options));
+  if (value === null) {
+    throw new EvmRpcError('RPC_INVALID_RESPONSE', 'eth_getTransactionCount returned an invalid value');
+  }
+  return value;
+}
+
+/** The current gas price, in wei. */
+export async function rpcGasPrice(url: string, options: JsonRpcOptions = {}): Promise<bigint> {
+  const value = hexToBigInt(await jsonRpc(url, 'eth_gasPrice', [], options));
+  if (value === null) throw new EvmRpcError('RPC_INVALID_RESPONSE', 'eth_gasPrice returned an invalid value');
+  return value;
+}
+
+/** `eth_estimateGas` for a call, as a bigint. */
+export async function rpcEstimateGas(
+  url: string,
+  call: { from: string; to: string; value?: bigint; data?: string },
+  options: JsonRpcOptions = {},
+): Promise<bigint> {
+  const params: Record<string, unknown> = { from: call.from, to: call.to };
+  if (call.value !== undefined) params.value = toHexQuantity(call.value);
+  if (call.data !== undefined) params.data = call.data;
+  const value = hexToBigInt(await jsonRpc(url, 'eth_estimateGas', [params], options));
+  if (value === null) throw new EvmRpcError('RPC_INVALID_RESPONSE', 'eth_estimateGas returned an invalid value');
+  return value;
+}
+
+/** Decode a `Transfer` log's `from`, `to` and base-unit value. */
+export function decodeTransferLog(log: LogEntry): { from: string; to: string; value: bigint } | null {
+  if (!Array.isArray(log.topics) || log.topics.length < 3) return null;
+  if (log.topics[0]?.toLowerCase() !== ERC20_TRANSFER_TOPIC) return null;
+  const from = topicToAddress(log.topics[1]);
+  const to = topicToAddress(log.topics[2]);
+  const value = decodeUint256(log.data);
+  if (!from || !to || value === null) return null;
+  return { from, to, value };
+}
+
+/** The address encoded in a 32-byte log topic. */
+export function topicToAddress(topic: unknown): string | null {
+  if (typeof topic !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(topic)) return null;
+  return `0x${topic.slice(26).toLowerCase()}`;
+}
+
+/** A block's header plus its full transaction list. */
+export async function rpcGetBlockByNumber(
+  url: string,
+  blockNumber: bigint,
+  options: JsonRpcOptions = {},
+): Promise<{ number: string; transactions: Array<{ hash: string; from: string; to: string | null; value: string }> } | null> {
+  const result = await jsonRpc(url, 'eth_getBlockByNumber', [toHexQuantity(blockNumber), true], options);
+  if (result === null) return null;
+  if (typeof result !== 'object') {
+    throw new EvmRpcError('RPC_INVALID_RESPONSE', 'eth_getBlockByNumber returned an invalid value');
+  }
+  const block = result as { number?: unknown; transactions?: unknown };
+  if (typeof block.number !== 'string' || !Array.isArray(block.transactions)) {
+    throw new EvmRpcError('RPC_INVALID_RESPONSE', 'The block is missing its number or transactions');
+  }
+  const transactions = (block.transactions as Array<Record<string, unknown>>).map((tx) => ({
+    hash: String(tx.hash ?? ''),
+    from: String(tx.from ?? '').toLowerCase(),
+    to: tx.to === null || tx.to === undefined ? null : String(tx.to).toLowerCase(),
+    value: String(tx.value ?? '0x0'),
+  }));
+  return { number: block.number, transactions };
+}
+
+/** The `transfer(address,uint256)` selector, for building an ERC-20 payout. */
+export const ERC20_TRANSFER_SELECTOR = '0xa9059cbb';
+
+/** Encode `transfer(address,uint256)` call data. */
+export function encodeTransfer(to: string, amount: bigint): string {
+  if (amount < 0n) {
+    throw new EvmRpcError('INVALID_AMOUNT', 'A non-negative amount is required', 400);
+  }
+  return `${ERC20_TRANSFER_SELECTOR}${encodeAddressWord(to)}${amount.toString(16).padStart(64, '0')}`;
+}
