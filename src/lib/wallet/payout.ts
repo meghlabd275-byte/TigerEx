@@ -22,6 +22,7 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { consumeLocked, creditAvailable, recordTransaction } from '@/lib/db/ledger';
+import { recordWithdrawal, reverseWithdrawal } from '@/lib/db/accounting';
 import { getChain, listTokens, ChainRecord, TokenRecord } from '@/lib/chains/registry';
 import {
   EvmRpcError,
@@ -374,6 +375,7 @@ export async function broadcastWithdrawal(
     }
 
     consumeLocked(withdrawal.user_id, withdrawal.currency.toUpperCase(), total, 'spot');
+    recordWithdrawal(withdrawal.user_id, withdrawal.currency.toUpperCase(), total, `Withdrawal ${txHash}`);
     recordTransaction(
       withdrawal.user_id,
       'withdrawal',
@@ -453,6 +455,7 @@ export async function syncBroadcastWithdrawals(options: JsonRpcOptions = {}): Pr
         // longer holds it, and unlocking would both fail the balance check and
         // move an unrelated reservation.
         creditAvailable(row.user_id, row.currency.toUpperCase(), total, 'spot');
+        reverseWithdrawal(row.user_id, row.currency.toUpperCase(), total, `Withdrawal ${row.tx_hash} reverted`);
         recordTransaction(
           row.user_id,
           'withdrawal',

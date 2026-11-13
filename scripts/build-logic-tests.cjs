@@ -139,6 +139,8 @@ const MODULES = [
   'src/lib/ops/metrics.ts',
   'src/lib/compliance/sanctions.ts',
   'src/lib/compliance/reserves.ts',
+  'src/lib/db/journal.ts',
+  'src/lib/db/accounting.ts',
   'src/lib/kyc/mrz.ts',
   'src/lib/kyc/image.ts',
   'src/lib/kyc/submission.ts',

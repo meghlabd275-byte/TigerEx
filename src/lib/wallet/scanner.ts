@@ -19,6 +19,7 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { creditAvailable, debitAvailable, recordTransaction, LedgerError } from '@/lib/db/ledger';
+import { recordDeposit as journalDeposit, reverseDeposit as journalReverseDeposit } from '@/lib/db/accounting';
 import { placeWithdrawalHold } from '@/lib/security/freeze';
 import { activeChains, listTokens, ChainRecord, TokenRecord } from '@/lib/chains/registry';
 import {
@@ -360,6 +361,7 @@ export async function confirmDeposits(options: JsonRpcOptions = {}): Promise<Con
       if (claimed.changes !== 1) return;
 
       creditAvailable(deposit.user_id, deposit.currency.toUpperCase(), amount, 'spot');
+      journalDeposit(deposit.user_id, deposit.currency.toUpperCase(), amount, `On-chain deposit ${deposit.tx_hash}`);
       recordTransaction(
         deposit.user_id,
         'deposit',
@@ -459,6 +461,7 @@ export async function reverseReorgedDeposits(options: JsonRpcOptions = {}): Prom
 
       try {
         debitAvailable(deposit.user_id, deposit.currency.toUpperCase(), amount, 'spot');
+        journalReverseDeposit(deposit.user_id, deposit.currency.toUpperCase(), amount, `Deposit ${deposit.tx_hash} reorged out`);
         recordTransaction(
           deposit.user_id,
           'deposit',

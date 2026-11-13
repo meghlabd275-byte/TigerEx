@@ -103,6 +103,10 @@ function initializeSchema() {
       available REAL DEFAULT 0,
       locked REAL DEFAULT 0,
       updated_at TEXT DEFAULT (datetime('now')),
+      -- A balance is never negative. The ledger spreads a movement across rows
+      -- so it cannot go under zero; this is the storage-level backstop for any
+      -- path that writes a row directly.
+      CHECK (available >= 0 AND locked >= 0),
       FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE CASCADE,
       UNIQUE(wallet_id, currency)
     );
@@ -257,6 +261,31 @@ function initializeSchema() {
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
       FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE SET NULL
     );
+
+    -- Double-entry journal
+    --
+    -- Balances are a materialised view; this is the authoritative record of how
+    -- they got there. Each journal entry is one balanced transaction (its legs
+    -- sum to zero per asset), appended only, never updated or deleted, and
+    -- hash-chained to the entry before it so a tampered row is detectable.
+    CREATE TABLE IF NOT EXISTS journal_entries (
+      entry_id TEXT PRIMARY KEY,
+      sequence INTEGER NOT NULL,
+      asset TEXT NOT NULL,
+      memo TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      prev_hash TEXT,
+      hash TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS journal_legs (
+      leg_id TEXT PRIMARY KEY,
+      entry_id TEXT NOT NULL,
+      account TEXT NOT NULL,
+      amount REAL NOT NULL,
+      FOREIGN KEY (entry_id) REFERENCES journal_entries(entry_id) ON DELETE RESTRICT
+    );
+    CREATE INDEX IF NOT EXISTS idx_journal_legs_entry ON journal_legs(entry_id);
+    CREATE INDEX IF NOT EXISTS idx_journal_legs_account ON journal_legs(account);
 
     -- Deposits
     CREATE TABLE IF NOT EXISTS deposits (
