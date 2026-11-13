@@ -7,7 +7,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { WS_BASE_URL } from '@/lib/config';
 import { readAuthToken } from '@/lib/auth/token';
 
 // Types
@@ -554,18 +553,26 @@ export default function TradingTerminalPage() {
 
     fetchData();
 
-    // WebSocket for real-time updates
-    const ws = new WebSocket(`${WS_BASE_URL}/${symbol.toLowerCase()}`);
-    ws.onopen = () => setWsConnected(true);
-    ws.onclose = () => setWsConnected(false);
-    ws.onmessage = (e) => {
-      const data = JSON.parse(e.data);
-      if (data.type === 'ticker') setTicker(data);
-      if (data.type === 'order_update') setOrders(prev => [...prev.filter(o => o.id !== data.order.id), data.order]);
-      if (data.type === 'position_update') setPositions(prev => [...prev.filter(p => p.id !== data.position.id), data.position]);
-    };
+    // Real-time market stream (same-origin SSE). The server sends the live
+    // book/trades/ticker; the polling above remains as a fallback if the
+    // stream cannot connect.
+    const stream = new EventSource(
+      `/api/market/stream?symbol=${encodeURIComponent(symbol)}`,
+    );
+    stream.onopen = () => setWsConnected(true);
+    stream.onerror = () => setWsConnected(false);
+    stream.addEventListener('market', (event) => {
+      try {
+        const frame = JSON.parse((event as MessageEvent).data);
+        const snapshot = frame?.data;
+        if (!snapshot) return;
+        setTicker(normaliseTicker({ ...snapshot.ticker, symbol: snapshot.symbol }));
+      } catch {
+        // ignore a malformed frame; the stream will send the next one
+      }
+    });
 
-    return () => ws.close();
+    return () => stream.close();
   }, [symbol]);
 
   const handleCancelOrder = (orderId: string) => setOrders(prev => prev.filter(o => o.id !== orderId));
