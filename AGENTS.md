@@ -689,3 +689,31 @@ reorg reversal), plus `freeze`, `payout`, `scanner`, `sanctions`,
 `health-metrics`, `market-seed` and `wallet-withdrawals`. Each fund-safety fix
 has a regression test that fails against the old code and asserts the resulting
 balances, not just a status column.
+
+## Admin console 2FA and verification-code delivery
+
+- **Admin 2FA.** An admin session can approve withdrawals, so the console
+  requires an authenticator (TOTP) once enrolled. `src/lib/auth/admin-2fa.ts`
+  (framework-free, unit tested) stores the secret AES-256-GCM encrypted and
+  enables 2FA only after a code proves possession. `authenticateAdmin` returns
+  `two_factor_required` when the password is right but the code is missing and
+  opens no session; `/api/admin/auth/2fa` (requireAdmin) manages enrolment.
+  `admin_users.two_factor_enabled` / `two_factor_secret` carry the state, with a
+  migration for existing databases.
+- **Verification codes go out by email or SMS.** `src/lib/security/email.ts`
+  (SMTP, `nodemailer`) and `src/lib/security/sms.ts` (a provider-neutral HTTPS
+  carrier gateway) each build a sender from environment config and return none
+  when unconfigured, so `issueOtp` fails closed rather than reporting an
+  undelivered code as sent. A provider error removes the record. Phone sign-up
+  is a supported path, so `TIGEREX_SMS_WEBHOOK_URL` / `TIGEREX_SMS_API_KEY` must
+  be set for it to complete.
+- Tests: `scripts/test/admin-2fa.test.cjs`, `scripts/test/sms-otp.test.cjs`
+  (the SMS test drives a real local HTTP gateway).
+
+## Verified toolchain matrix (this environment)
+
+Every layer builds and its tests pass: TypeScript (`npx tsc --noEmit`,
+`npm run test:logic` 964, `npm run build`), Go 1.23 (`go build ./...`,
+`go test ./...`), C++ (`cmake --build`, `ctest` 2 suites), Rust
+(`cargo test --lib` in `backend/rust/matching-engine`, 13), Python
+(`python -m pytest` in `backend/python`). No layer is a placeholder.
