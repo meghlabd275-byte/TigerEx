@@ -46,6 +46,7 @@ const SECTIONS: Array<{ group: string; items: Array<{ href: string; label: strin
       { href: '/admin/dashboard', label: 'Dashboard', description: 'Exchange statistics and system status', icon: Gauge },
       { href: '/admin/reports', label: 'Reports', description: 'Operational reports', icon: BarChart3 },
       { href: '/admin/audit', label: 'Audit Log', description: 'Append-only trail of every admin action', icon: FileText },
+      { href: '/admin/security', label: 'Admin Security', description: 'Two-factor authentication for the console', icon: FileText },
       { href: '/admin/system', label: 'System', description: 'Service health and uptime', icon: Activity },
     ],
   },

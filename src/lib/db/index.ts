@@ -465,6 +465,11 @@ function initializeSchema() {
       status TEXT DEFAULT 'active',
       created_at TEXT DEFAULT (datetime('now')),
       last_login_at TEXT,
+      -- Admin authenticator (TOTP). An admin session can move customer funds,
+      -- so the console supports 2FA on the same RFC 6238 scheme as a trader
+      -- account. The secret is AES-256-GCM encrypted at rest.
+      two_factor_enabled INTEGER DEFAULT 0,
+      two_factor_secret TEXT,
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
     );
 
@@ -2288,6 +2293,10 @@ function applyColumnMigrations(database: Database.Database) {
     // The block a deposit was found at, so a later sweep can tell whether the
     // transaction is still on the canonical chain at that height.
     { table: 'deposits', column: 'block_number', definition: 'INTEGER' },
+    // Admin authenticator (TOTP) columns, for databases created before admin
+    // 2FA existed.
+    { table: 'admin_users', column: 'two_factor_enabled', definition: 'INTEGER DEFAULT 0' },
+    { table: 'admin_users', column: 'two_factor_secret', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {

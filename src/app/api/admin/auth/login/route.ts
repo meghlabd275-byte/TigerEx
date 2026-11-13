@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { email, password } = (body ?? {}) as { email?: unknown; password?: unknown };
+  const { email, password, code } = (body ?? {}) as { email?: unknown; password?: unknown; code?: unknown };
   if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) {
     return NextResponse.json(
       { success: false, error: { code: 'INVALID_CREDENTIALS', message: 'Email and password are required' } },
@@ -30,8 +30,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const result = authenticateAdmin(request, email, password);
-  if (!result) {
+  const result = authenticateAdmin(request, email, password, typeof code === 'string' ? code : undefined);
+  if (result.status === 'two_factor_required') {
+    return NextResponse.json(
+      { success: false, error: { code: 'TWO_FACTOR_REQUIRED', message: 'Enter the code from your authenticator app' } },
+      { status: 401, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
+  if (result.status === 'invalid') {
     return NextResponse.json(
       { success: false, error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' } },
       { status: 401, headers: { 'Cache-Control': 'no-store' } },

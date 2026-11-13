@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { getDb, generateId } from '@/lib/db';
+import { verifyAdminTotp } from '@/lib/auth/admin-2fa';
 
 export interface AdminIdentity {
   adminId: string;
@@ -77,17 +78,25 @@ export async function requireAdmin(
   };
 }
 
+export type AdminAuthResult =
+  | { status: 'ok'; accessToken: string; expiresAt: string; admin: AdminIdentity }
+  | { status: 'two_factor_required' }
+  | { status: 'invalid' };
+
 /**
  * Verify an administrator's credentials and open a durable admin session.
  *
- * Returns null when the credentials are wrong, so the caller can respond
- * without revealing whether the address exists.
+ * When the account has an authenticator enrolled, a valid TOTP code is required
+ * as well; a correct password without the code returns `two_factor_required`
+ * and no session is opened. A wrong password or code returns `invalid`, so the
+ * caller can respond without revealing whether the address exists.
  */
 export function authenticateAdmin(
   request: NextRequest,
   email: string,
   password: string,
-): { accessToken: string; expiresAt: string; admin: AdminIdentity } | null {
+  code?: string,
+): AdminAuthResult {
   const db = getDb();
   const normalizedEmail = email.trim().toLowerCase();
 
@@ -101,11 +110,17 @@ export function authenticateAdmin(
         role: string;
         permissions: string | null;
         status: string;
+        two_factor_enabled: number | null;
       }
     | undefined;
 
-  if (!row || row.status !== 'active') return null;
-  if (!bcrypt.compareSync(password, row.password_hash)) return null;
+  if (!row || row.status !== 'active') return { status: 'invalid' };
+  if (!bcrypt.compareSync(password, row.password_hash)) return { status: 'invalid' };
+
+  if (Number(row.two_factor_enabled) === 1) {
+    if (!code || !code.trim()) return { status: 'two_factor_required' };
+    if (!verifyAdminTotp(row.admin_id, code)) return { status: 'invalid' };
+  }
 
   const accessToken = randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString();
@@ -127,6 +142,7 @@ export function authenticateAdmin(
   );
 
   return {
+    status: 'ok',
     accessToken,
     expiresAt,
     admin: {

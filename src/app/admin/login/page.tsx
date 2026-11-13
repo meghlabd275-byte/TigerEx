@@ -18,6 +18,8 @@ export default function AdminLoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [needsCode, setNeedsCode] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -29,9 +31,17 @@ export default function AdminLoginPage() {
       const response = await fetch('/api/admin/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, code: code || undefined }),
       });
       const body = await response.json().catch(() => null);
+
+      // The account has an authenticator enrolled: ask for the code and retry.
+      if (body?.error?.code === 'TWO_FACTOR_REQUIRED') {
+        setNeedsCode(true);
+        setError('Enter the 6-digit code from your authenticator app.');
+        return;
+      }
+
       if (!response.ok || !body?.accessToken) {
         throw new Error(body?.error?.message ?? 'Sign-in failed');
       }
@@ -77,6 +87,21 @@ export default function AdminLoginPage() {
             className="mt-1 w-full rounded border border-white/10 bg-transparent p-2"
           />
         </label>
+
+        {needsCode && (
+          <label className="mb-5 block text-sm">
+            Authenticator code
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              value={code}
+              onChange={(event) => setCode(event.target.value.replace(/\D/g, ''))}
+              className="mt-1 w-full rounded border border-white/10 bg-transparent p-2 tracking-widest"
+            />
+          </label>
+        )}
 
         <button
           type="submit"
