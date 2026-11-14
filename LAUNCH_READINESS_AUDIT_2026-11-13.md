@@ -16,13 +16,13 @@ audit, liquidity, insurance, banking, support).
 
 | Layer | Evidence | Count |
 | --- | --- | --- |
-| Frontend API route handlers | `src/app/api/**/route.ts` | 468 |
+| Frontend API route handlers | `src/app/api/**/route.ts` | 472 |
 | — DB-backed handlers (`src/lib/db`) | no external backend needed | 260 |
 | — Proxies to `TIGEREX_BACKEND_URL` (fail-closed 503) | `src/lib/backend-url.ts` | 133 |
 | Frontend pages | `src/app/**/page.tsx` | 138 |
 | Frontend components | `src/components/**/*.tsx` | 42 |
-| Frontend logic modules | `src/lib/**/*.ts` | 154 |
-| Logic tests | `scripts/test/*.test.cjs` (71 files) | 1023 pass |
+| Frontend logic modules | `src/lib/**/*.ts` | 158 |
+| Logic tests | `scripts/test/*.test.cjs` (73 files) | 1045 pass |
 | Go tests | `backend/go` `func Test*` | 305 |
 | Secondary module dirs | `TigerEx/*` | 173 (many overlapping) |
 | Environment variables | `.env.example` | 94 |
@@ -33,7 +33,7 @@ in this session; their status below is taken from CI configuration and prior
 sessions, not re-measured now.
 
 Build/test results re-measured today: `npx tsc --noEmit` clean;
-`npm run test:logic` = 1023 pass / 0 fail.
+`npm run test:logic` = 1045 pass / 0 fail.
 
 ---
 
@@ -112,6 +112,20 @@ Build/test results re-measured today: `npx tsc --noEmit` clean;
 - **KYC** is in-house (`src/lib/kyc/image.ts`, `mrz.ts`, `submission.ts`), with
   an admin review queue; **sanctions** (`compliance/sanctions.ts`) and
   **proof-of-reserves** reconciliation (`compliance/reserves.ts`) exist.
+- **Market-integrity surveillance** (`compliance/surveillance.ts`): detects
+  self-matching, wash trading, layering and spoofing over a rolling
+  `spot_trades`/`orders` window; alerts persist idempotently and are read from
+  `GET/POST/PUT /api/admin/surveillance`. Wired into the scheduler cycle.
+- **FATF travel rule** (`compliance/travel-rule.ts`): enforced inside
+  `createWithdrawal` at a configurable USD threshold, refusing incomplete
+  originator/beneficiary data and recording a hash-committed message.
+- **Destination risk scoring** (`compliance/address-risk.ts`): scores a
+  withdrawal destination from local data only (sanctions match, operator list,
+  first-seen, address book) and blocks or queues it accordingly.
+- **Withdrawal maker-checker** (`wallet/approvals.ts`): a withdrawal's USD value
+  maps to the number of *distinct* admin approvals it needs; the admin action
+  route refuses `broadcast` until the tier is met. Tiers at
+  `GET/PUT /api/admin/withdrawal-tiers`.
 - **API keys** (`api/api-auth.ts`, `api/v1-guard.ts`) with IP allowlists,
   scopes and no secret material returned.
 
@@ -240,7 +254,9 @@ launch:
 5. **Liquidity**: real market-making and order-book depth (no self-hosted MM bot
    yet; cannot mirror other exchanges).
 6. **KYC/AML operations**: analyst staffing, sanctions/watchlist data licensing,
-   transaction-monitoring tuning, travel-rule solution.
+   transaction-monitoring tuning. The transaction-monitoring (market-integrity
+   surveillance), travel-rule and destination-risk engines now exist in-repo, but
+   a live watchlist feed and analyst staffing remain operations work.
 7. **Customer support** (24/7), incident response, and a documented runbook.
 8. **Market-integrity monitoring**, delisting policy, and listing review process.
 9. **Penetration testing**, WAF/DDoS protection, and rate-limit tuning at load.
