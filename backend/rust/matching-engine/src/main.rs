@@ -45,6 +45,12 @@ enum Request {
         market: String,
         limit: usize,
     },
+    /// Aggregated, visible-only depth for clients. Distinct from `order_book`,
+    /// which returns the raw book including withheld iceberg size.
+    Depth {
+        market: String,
+        limit: usize,
+    },
     Stats,
 }
 
@@ -56,6 +62,8 @@ struct Response {
     #[serde(skip_serializing_if = "Option::is_none")]
     book: Option<tigerex_matching_engine::OrderBook>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    depth: Option<tigerex_matching_engine::DepthSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stats: Option<tigerex_matching_engine::EngineStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -63,11 +71,11 @@ struct Response {
 
 impl Response {
     fn ok() -> Self {
-        Self { ok: true, trades: None, book: None, stats: None, error: None }
+        Self { ok: true, trades: None, book: None, depth: None, stats: None, error: None }
     }
 
     fn error(message: impl Into<String>) -> Self {
-        Self { ok: false, trades: None, book: None, stats: None, error: Some(message.into()) }
+        Self { ok: false, trades: None, book: None, depth: None, stats: None, error: Some(message.into()) }
     }
 }
 
@@ -121,12 +129,21 @@ fn handle(engine: &Arc<MatchingEngine>, request: Request) -> Response {
             Some(book) => Response { book: Some(book), ..Response::ok() },
             None => Response::error("market not found"),
         },
+        Request::Depth { market, limit } => match engine.depth(&market, limit) {
+            Some(depth) => Response { depth: Some(depth), ..Response::ok() },
+            None => Response::error("market not found"),
+        },
         Request::Stats => Response { stats: Some(engine.get_stats()), ..Response::ok() },
     }
 }
 
 fn main() {
-    tracing_subscriber::fmt::init();
+    // Logs go to stderr: stdout carries the JSON protocol, so a single log line
+    // written there would corrupt the very next response a client reads.
+    tracing_subscriber::fmt()
+        .with_writer(io::stderr)
+        .with_ansi(false)
+        .init();
     tracing::info!("TigerEx matching engine service starting");
 
     let engine = MatchingEngine::new();

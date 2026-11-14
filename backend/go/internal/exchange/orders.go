@@ -135,9 +135,10 @@ func (s *Store) PlaceOrder(ctx context.Context, req *OrderRequest) (*api.Order, 
 		row := tx.QueryRow(ctx, `
 			INSERT INTO orders
 				(user_id, market_id, symbol, side, type, price, stop_price, quantity,
-				 status, time_in_force, client_order_id, reduce_only)
+				 status, time_in_force, client_order_id, reduce_only,
+				 reserved_amount, reserved_asset)
 			VALUES ($1, (SELECT id FROM markets WHERE symbol = $2::text), $2, $3, $4, $5, $6, $7,
-			        'new', $8, $9, $10)
+			        'new', $8, $9, $10, $11, $12)
 			RETURNING id, user_id, symbol, side, type,
 			          COALESCE(price,0)::float8, COALESCE(stop_price,0)::float8,
 			          quantity::float8, filled_quantity::float8, status,
@@ -145,7 +146,8 @@ func (s *Store) PlaceOrder(ctx context.Context, req *OrderRequest) (*api.Order, 
 			          EXTRACT(EPOCH FROM created_at)::bigint,
 			          EXTRACT(EPOCH FROM updated_at)::bigint`,
 			req.UserID, symbol, side, orderType, price,
-			stopPrice, decString(toDec(req.Quantity)), tif, clientOrderID, req.ReduceOnly)
+			stopPrice, decString(toDec(req.Quantity)), tif, clientOrderID, req.ReduceOnly,
+			decString(toDec(lockAmount)), lockAsset)
 		order, err = scanOrder(row)
 		if err != nil {
 			return err
@@ -252,33 +254,24 @@ func (s *Store) CancelOrder(ctx context.Context, userID, orderID string) (*api.O
 			return ErrOrderNotCancelable
 		}
 
-		market, err := s.getMarketTx(ctx, tx, o.Symbol)
-		if err != nil {
+		// Release exactly the reservation the order still holds. Settlement has
+		// already decremented it by every fill, so recomputing the amount from the
+		// order price would strand or over-release a partially filled order.
+		var reservedAsset string
+		var reserved float64
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(reserved_asset,''), COALESCE(reserved_amount,0)::float8
+			  FROM orders WHERE id = $1`, orderID).Scan(&reservedAsset, &reserved); err != nil {
 			return err
 		}
-		unfilled := o.Quantity - o.FilledQuantity
-		if unfilled < 0 {
-			unfilled = 0
-		}
-		if unfilled > 0 {
-			var unlockAsset string
-			var unlockAmount float64
-			if o.Side == "buy" {
-				unlockAsset = market.QuoteAsset
-				unlockAmount = o.Price * unfilled
-			} else {
-				unlockAsset = market.BaseAsset
-				unlockAmount = unfilled
-			}
-			if unlockAmount > 0 {
-				if err := unlockTx(ctx, tx, userID, unlockAsset, unlockAmount, "order_cancel"); err != nil {
-					return err
-				}
+		if reserved > 0 && reservedAsset != "" {
+			if err := unlockTx(ctx, tx, userID, reservedAsset, reserved, "order_cancel"); err != nil {
+				return err
 			}
 		}
 
 		if _, err := tx.Exec(ctx, `
-			UPDATE orders SET status = 'canceled', updated_at = NOW()
+			UPDATE orders SET status = 'canceled', reserved_amount = 0, updated_at = NOW()
 			 WHERE id = $1`, orderID); err != nil {
 			return fmt.Errorf("cancel order: %w", err)
 		}

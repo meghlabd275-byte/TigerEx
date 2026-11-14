@@ -131,6 +131,10 @@ func (s *Service) GetOrderBookDepth(ctx context.Context, symbol string, limit in
 	if s.store == nil {
 		return nil, ErrMarketDataUnavailable
 	}
+	// The engine holds the live book; it is authoritative for resting depth.
+	if s.store.Engine() != nil {
+		return s.store.EngineOrderBook(ctx, symbol, limit)
+	}
 	return s.store.OrderBook(ctx, symbol, limit)
 }
 
@@ -227,9 +231,10 @@ func (s *Service) CreateOrder(ctx context.Context, req *OrderRequest) (*api.Orde
 	if s.store == nil {
 		return nil, ErrTradingPaused
 	}
-	// Persist the order and reserve its funds in one transaction. Matching is the
-	// canonical engine's job; this never fabricates a fill.
-	return s.store.PlaceOrder(ctx, &exchange.OrderRequest{
+	// Persist the order and reserve its funds in one transaction, submit it to
+	// the canonical matching engine, and settle whatever it matched. A missing
+	// engine fails closed rather than resting an order that can never trade.
+	return s.store.PlaceOrderAndMatch(ctx, &exchange.OrderRequest{
 		UserID:        req.UserID,
 		Symbol:        req.Symbol,
 		Side:          side,
@@ -301,7 +306,13 @@ func (s *Service) CancelOrder(ctx context.Context, userID, orderID string) (*api
 	if s.store == nil {
 		return nil, ErrPersistenceUnavailable
 	}
-	return s.store.CancelOrder(ctx, userID, orderID)
+	order, err := s.store.CancelOrder(ctx, userID, orderID)
+	if err != nil {
+		return nil, err
+	}
+	// Remove it from the engine's book so it can no longer trade.
+	s.store.CancelInEngine(ctx, orderID)
+	return order, nil
 }
 
 // CancelAllOrders cancels every open order for a user, releasing their funds.

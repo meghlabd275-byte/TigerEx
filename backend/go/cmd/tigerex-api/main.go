@@ -35,6 +35,7 @@ import (
 	"tigerex/backend/internal/earn"
 	"tigerex/backend/internal/exchange"
 	"tigerex/backend/internal/kyc"
+	"tigerex/backend/internal/matching"
 	"tigerex/backend/internal/security"
 	"tigerex/backend/internal/totp"
 	"tigerex/backend/internal/trading"
@@ -236,6 +237,27 @@ func init() {
 		}
 		exchangeStore = store
 		log.Printf("exchange persistence enabled")
+
+		// The canonical matching engine is a Rust binary speaking line JSON over
+		// stdin/stdout. With it attached the gateway prices and settles real
+		// orders; without it, order placement fails closed rather than resting an
+		// order that can never trade.
+		if bin := os.Getenv("TIGEREX_MATCHING_ENGINE_BIN"); bin != "" {
+			engine, err := matching.Start(bin)
+			if err != nil {
+				log.Fatalf("failed to start matching engine %q: %v", bin, err)
+			}
+			exchangeStore = store.WithEngine(engine)
+			if err := exchangeStore.LoadMarketsIntoEngine(context.Background()); err != nil {
+				log.Fatalf("failed to register markets with the matching engine: %v", err)
+			}
+			if err := exchangeStore.ReplayOpenOrders(context.Background()); err != nil {
+				log.Fatalf("failed to replay open orders into the matching engine: %v", err)
+			}
+			log.Printf("matching engine attached (%s); markets registered and open orders replayed", bin)
+		} else {
+			log.Printf("TIGEREX_MATCHING_ENGINE_BIN is not set; order placement will report unavailable")
+		}
 	} else {
 		log.Printf("TIGEREX_DATABASE_DSN is not set; market data, orders, balances and custody will report unavailable")
 	}

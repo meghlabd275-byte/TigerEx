@@ -14,6 +14,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"tigerex/backend/internal/matching"
 )
 
 // ErrUnavailable is returned when a backing dependency is not configured or
@@ -22,8 +24,9 @@ var ErrUnavailable = errors.New("exchange store is not available")
 
 // Store is a PostgreSQL-backed implementation of the exchange data layer.
 type Store struct {
-	pool *pgxpool.Pool
-	hd   *HDDeriver
+	pool   *pgxpool.Pool
+	hd     *HDDeriver
+	engine *matching.Client
 }
 
 // New connects to PostgreSQL and verifies the connection.

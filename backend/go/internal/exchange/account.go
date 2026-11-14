@@ -61,6 +61,34 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 			created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (user_id, asset, network)
 		);
+
+		-- The venue's fee account. Fees are withheld from the amount a trader
+		-- receives, so this balance is backed by value actually taken, never minted.
+		CREATE TABLE IF NOT EXISTS exchange_treasury (
+			asset       VARCHAR(20) NOT NULL,
+			network     VARCHAR(50) NOT NULL DEFAULT 'main',
+			balance     DECIMAL(30,15) NOT NULL DEFAULT 0,
+			updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (asset, network)
+		);
+
+		CREATE TABLE IF NOT EXISTS exchange_treasury_entries (
+			id          BIGSERIAL PRIMARY KEY,
+			asset       VARCHAR(20) NOT NULL,
+			network     VARCHAR(50) NOT NULL,
+			kind        VARCHAR(30) NOT NULL,
+			amount      DECIMAL(30,15) NOT NULL,
+			balance_after DECIMAL(30,15) NOT NULL,
+			reference   VARCHAR(120),
+			created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+		);
+
+		-- An order's outstanding reservation: the funds it still holds locked.
+		-- It is decremented by each fill and released in full when the order
+		-- becomes terminal, so a partially filled or cancelled order never
+		-- strands a trader's funds.
+		ALTER TABLE orders ADD COLUMN IF NOT EXISTS reserved_amount DECIMAL(30,15) NOT NULL DEFAULT 0;
+		ALTER TABLE orders ADD COLUMN IF NOT EXISTS reserved_asset VARCHAR(20);
 	`)
 	if err != nil {
 		return fmt.Errorf("ensure exchange schema: %w", err)

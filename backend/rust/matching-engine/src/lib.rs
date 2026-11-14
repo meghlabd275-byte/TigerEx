@@ -579,6 +579,22 @@ impl Trade {
     }
 }
 
+/// A single aggregated price level in a public depth snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepthLevel {
+    pub price: f64,
+    pub quantity: f64,
+}
+
+/// A bounded, aggregated view of a market's visible book for clients. Bids are
+/// ordered best (highest) first, asks best (lowest) first.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepthSnapshot {
+    pub market: String,
+    pub bids: Vec<DepthLevel>,
+    pub asks: Vec<DepthLevel>,
+}
+
 /// Position
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Position {
@@ -712,19 +728,25 @@ impl Market {
             )));
         }
 
-        if order.price < self.min_price || order.price > self.max_price {
-            return Err(MatchingError::PriceOutOfRange(format!(
-                "{} - {}",
-                self.min_price, self.max_price
-            )));
-        }
+        // A market order carries no limit price: it executes at whatever the book
+        // offers. Checking its price against the band, or its notional against a
+        // price of zero, would reject every market order. Its notional is bounded
+        // by the reservation the caller placed, not by a price band here.
+        if order.order_type != OrderType::Market {
+            if order.price < self.min_price || order.price > self.max_price {
+                return Err(MatchingError::PriceOutOfRange(format!(
+                    "{} - {}",
+                    self.min_price, self.max_price
+                )));
+            }
 
-        let notional = order.price * order.quantity;
-        if notional < self.min_notional {
-            return Err(MatchingError::AmountTooSmall(format!(
-                "notional: {}",
-                self.min_notional
-            )));
+            let notional = order.price * order.quantity;
+            if notional < self.min_notional {
+                return Err(MatchingError::AmountTooSmall(format!(
+                    "notional: {}",
+                    self.min_notional
+                )));
+            }
         }
 
         Ok(())
@@ -1027,6 +1049,29 @@ impl MatchingEngine {
             None => return Err(MatchingError::InvalidOrder("Market not found".to_string())),
         };
 
+        // A market order fills fully or is rejected. Check the opposite side has
+        // enough depth *before* consuming anything: the matching loop below
+        // drains levels as it goes, so discovering a shortfall afterwards would
+        // have already removed liquidity from the book without settling it.
+        let available: f64 = if opposite_is_bids {
+            book.bids
+                .values()
+                .map(|l| l.orders.iter().map(|o| o.remaining).sum::<f64>())
+                .sum()
+        } else {
+            book.asks
+                .values()
+                .map(|l| l.orders.iter().map(|o| o.remaining).sum::<f64>())
+                .sum()
+        };
+        if available + 1e-12 < order.remaining() {
+            self.remove_order_record(&order.id);
+            return Err(MatchingError::InsufficientLiquidity(format!(
+                "{} unfilled",
+                order.remaining() - available
+            )));
+        }
+
         loop {
             if remaining <= 1e-12 {
                 break;
@@ -1141,6 +1186,48 @@ impl MatchingEngine {
             book.asks.remove(&key);
         }
         Some(book)
+    }
+
+    /// Aggregate the visible book into price levels for a client depth snapshot.
+    ///
+    /// Only the displayed tranches are summed, so an iceberg never leaks its
+    /// withheld size. Levels with no displayed quantity are omitted, and the
+    /// snapshot is bounded to `limit` levels per side.
+    pub fn depth(&self, market_id: &str, limit: usize) -> Option<DepthSnapshot> {
+        let order_books = self.order_books.read().unwrap();
+        let book = order_books.get(market_id)?;
+        let limit = if limit == 0 { 100 } else { limit };
+
+        let mut bids: Vec<DepthLevel> = book
+            .bids
+            .iter()
+            .rev()
+            .filter_map(|(k, l)| {
+                let qty: f64 = l.orders.iter().map(|o| o.displayed).sum();
+                if qty > 1e-12 {
+                    Some(DepthLevel { price: f64::from_bits(*k), quantity: qty })
+                } else {
+                    None
+                }
+            })
+            .take(limit)
+            .collect();
+
+        let asks: Vec<DepthLevel> = book
+            .asks
+            .iter()
+            .filter_map(|(k, l)| {
+                let qty: f64 = l.orders.iter().map(|o| o.displayed).sum();
+                if qty > 1e-12 {
+                    Some(DepthLevel { price: f64::from_bits(*k), quantity: qty })
+                } else {
+                    None
+                }
+            })
+            .take(limit)
+            .collect();
+
+        Some(DepthSnapshot { market: book.market.clone(), bids, asks })
     }
 
     /// Get recent trades
@@ -1446,5 +1533,52 @@ mod tests {
         engine.place_order(limit_order("t3", "taker", Side::Buy, 100.0, 4.0)).unwrap();
         let book = engine.get_order_book("BTC/USDT", 10).unwrap();
         assert!(book.asks.is_empty(), "iceberg size was stranded");
+    }
+
+    #[test]
+    fn depth_aggregates_levels_and_hides_iceberg_size() {
+        let engine = engine_with_market();
+        engine.place_order(limit_order("b1", "u1", Side::Buy, 100.0, 1.0)).unwrap();
+        engine.place_order(limit_order("b2", "u2", Side::Buy, 100.0, 2.0)).unwrap();
+        engine.place_order(limit_order("b3", "u3", Side::Buy, 99.0, 5.0)).unwrap();
+        engine.place_order(limit_order("a1", "u4", Side::Sell, 101.0, 3.0)).unwrap();
+        let mut ice = limit_order("a2", "u5", Side::Sell, 102.0, 10.0);
+        ice.iceberg_quantity = 2.0;
+        ice.display_quantity = 2.0;
+        engine.place_order(ice).unwrap();
+
+        let snap = engine.depth("BTC/USDT", 10).unwrap();
+        // Bids: best (highest) first, same-price orders aggregated.
+        assert_eq!(snap.bids.len(), 2);
+        assert_eq!(snap.bids[0].price, 100.0);
+        assert!((snap.bids[0].quantity - 3.0).abs() < 1e-9);
+        assert_eq!(snap.bids[1].price, 99.0);
+        // Asks: best (lowest) first; the iceberg shows only its 2-unit tip.
+        assert_eq!(snap.asks.len(), 2);
+        assert_eq!(snap.asks[0].price, 101.0);
+        assert_eq!(snap.asks[1].price, 102.0);
+        assert!((snap.asks[1].quantity - 2.0).abs() < 1e-9, "iceberg leaked {}", snap.asks[1].quantity);
+
+        // The snapshot is bounded per side.
+        let bounded = engine.depth("BTC/USDT", 1).unwrap();
+        assert_eq!(bounded.bids.len(), 1);
+        assert_eq!(bounded.asks.len(), 1);
+    }
+
+    #[test]
+    fn market_order_larger_than_depth_is_rejected_without_consuming_liquidity() {
+        let engine = engine_with_market();
+        engine.place_order(limit_order("ask", "maker", Side::Sell, 100.0, 1.0)).unwrap();
+
+        // A market buy for more than the 1.0 resting must be rejected whole.
+        let mut big = limit_order("m1", "taker", Side::Buy, 100.0, 5.0);
+        big.order_type = OrderType::Market;
+        assert!(engine.place_order(big).is_err());
+
+        // The maker's liquidity must still be on the book, untouched.
+        let snap = engine.depth("BTC/USDT", 10).unwrap();
+        assert_eq!(snap.asks.len(), 1);
+        assert!((snap.asks[0].quantity - 1.0).abs() < 1e-9, "liquidity was consumed: {}", snap.asks[0].quantity);
+        assert!(engine.get_recent_trades(10).is_empty());
     }
 }
