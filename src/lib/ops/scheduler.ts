@@ -20,6 +20,7 @@ import { scanAllChains, confirmDeposits, reverseReorgedDeposits } from '@/lib/wa
 import { syncBroadcastWithdrawals } from '@/lib/wallet/payout';
 import { runSettlementCycle } from '@/lib/trading/settlement';
 import { scanPositions, processQueue } from '@/lib/trading/risk-supervisor';
+import { runDueOrderPlans } from '@/lib/trading/spot-engine';
 import { runKeeperCycle } from '@/lib/dex/keeper';
 import { runReconciliation } from '@/lib/compliance/reserves';
 import { runSurveillanceCycle } from '@/lib/compliance/surveillance';
@@ -113,6 +114,8 @@ export async function runScheduledCycle(): Promise<CycleReport> {
     jobs.push(await runJob('settlement.cycle', () => runSettlementCycle()));
     jobs.push(await runJob('risk.scan', () => scanPositions()));
     jobs.push(await runJob('risk.process', () => processQueue()));
+    // Advance due TWAP and scale plans; each due slice is a real spot order.
+    jobs.push(await runJob('orders.plans', () => ({ placed: runDueOrderPlans() })));
     jobs.push(await runJob('dex.keeper', () => runKeeperCycle()));
 
     // Watch the venue's own markets for manipulation. The pass is idempotent per

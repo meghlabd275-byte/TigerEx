@@ -25,6 +25,13 @@ const {
   listOpenOrders,
   listTrades,
   getOrder,
+  placeOcoOrder,
+  placeTwapOrder,
+  placeScaleOrder,
+  listOrderPlans,
+  cancelOrderPlan,
+  runDueOrderPlans,
+  activateStopOrders,
   SpotError,
 } = require('../../.test-build/spot-engine.js');
 const { orderBookDepth, rolling24h } = require('../../.test-build/market-view.js');
@@ -427,6 +434,175 @@ test('an iceberg order replenishes its hidden tranche and never shows more than 
   assert.equal(availableBalance(maker, 'IBTC'), 0);
   assert.equal(lockedBalance(maker, 'IBTC'), 0);
   assert.ok(Math.abs(availableBalance(maker, 'RUSD') - (1000 - 1000 * 0.001)) < 1e-9);
+});
+
+/** Record an observed price so stop/OCO orders can bracket against it. */
+function setLastPrice(symbol, price) {
+  db.prepare(
+    `INSERT INTO market_data (id, symbol, price, updated_at) VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(symbol) DO UPDATE SET price = excluded.price, updated_at = datetime('now')`,
+  ).run(generateId(), symbol, price);
+}
+
+test('a sell OCO brackets a position and one leg filling cancels the other', () => {
+  const symbol = listPair('OCO1');
+  setLastPrice(symbol, 100);
+  const user = seedUser();
+  credit(user, 'OCO1', 10);
+
+  const oco = placeOcoOrder(user, {
+    symbol,
+    side: 'sell',
+    quantity: 2,
+    stopPrice: 90,
+    takeProfitPrice: 110,
+  });
+  assert.equal(oco.takeProfit.status, 'open');
+  assert.equal(oco.stop.status, 'pending_trigger');
+  // The resting take-profit leg holds the whole reservation; the stop holds none.
+  assert.equal(lockedBalance(user, 'OCO1'), 2);
+  assert.equal(getOrder(user, oco.stop.orderId).remainingQuantity, 2);
+
+  // The market falls through the stop. The stop triggers, sells, and the
+  // take-profit sibling is cancelled, releasing its reservation.
+  const buyer = seedUser();
+  credit(buyer, 'RUSD', 100000);
+  // The stop is a market sell; provide book liquidity by resting a buy first.
+  placeSpotOrder(buyer, { symbol, side: 'buy', type: 'limit', price: 88, quantity: 2 });
+  activateStopOrders(symbol, 89);
+
+  const stopOrder = getOrder(user, oco.stop.orderId);
+  assert.equal(stopOrder.status, 'filled');
+  assert.equal(stopOrder.filledQuantity, 2);
+  assert.equal(getOrder(user, oco.takeProfit.orderId).status, 'cancelled');
+  assert.equal(lockedBalance(user, 'OCO1'), 0);
+  assert.equal(availableBalance(user, 'OCO1'), 8);
+});
+
+test('an OCO take-profit leg filling cancels the parked stop', () => {
+  const symbol = listPair('OCO2');
+  setLastPrice(symbol, 100);
+  const user = seedUser();
+  credit(user, 'OCO2', 5);
+
+  const oco = placeOcoOrder(user, {
+    symbol,
+    side: 'sell',
+    quantity: 1,
+    stopPrice: 95,
+    takeProfitPrice: 105,
+  });
+
+  // A buyer lifts the take-profit limit; the stop must be cancelled.
+  const buyer = seedUser();
+  credit(buyer, 'RUSD', 100000);
+  placeSpotOrder(buyer, { symbol, side: 'buy', type: 'limit', price: 105, quantity: 1 });
+
+  assert.equal(getOrder(user, oco.takeProfit.orderId).status, 'filled');
+  assert.equal(getOrder(user, oco.stop.orderId).status, 'cancelled');
+  assert.equal(lockedBalance(user, 'OCO2'), 0);
+  assert.equal(availableBalance(user, 'OCO2'), 4);
+});
+
+test('an OCO that is not two-sided is refused', () => {
+  const symbol = listPair('OCO3');
+  setLastPrice(symbol, 100);
+  const user = seedUser();
+  credit(user, 'OCO3', 5);
+
+  assert.throws(
+    () => placeOcoOrder(user, { symbol, side: 'sell', quantity: 1, stopPrice: 105, takeProfitPrice: 110 }),
+    (error) => error instanceof SpotError && error.code === 'INVALID_OCO',
+  );
+});
+
+test('a trailing stop rides the market and triggers on a reversal', () => {
+  const symbol = listPair('TRAIL1');
+  setLastPrice(symbol, 100);
+  const user = seedUser();
+  credit(user, 'TRAIL1', 3);
+  const buyer = seedUser();
+  credit(buyer, 'RUSD', 100000);
+  // Provide book liquidity for the eventual market sell.
+  placeSpotOrder(buyer, { symbol, side: 'buy', type: 'limit', price: 100, quantity: 3 });
+
+  const trail = placeSpotOrder(user, {
+    symbol,
+    side: 'sell',
+    type: 'stop_market',
+    stopPrice: 100,
+    quantity: 1,
+    trailingDistance: 5,
+  });
+  assert.equal(trail.status, 'pending_trigger');
+
+  // The market rises; the trigger follows to 105 - 5 = 100... then 110 - 5 = 105.
+  activateStopOrders(symbol, 105);
+  assert.equal(getOrder(user, trail.orderId).status, 'pending_trigger');
+  activateStopOrders(symbol, 110);
+  assert.equal(getOrder(user, trail.orderId).status, 'pending_trigger');
+
+  // A fall to 105 (the trailing trigger) fires the sell.
+  activateStopOrders(symbol, 105);
+  assert.equal(getOrder(user, trail.orderId).status, 'filled');
+});
+
+test('a TWAP plan places its slices on the clock', () => {
+  const symbol = listPair('TWAP1', 0.01, 0.0001);
+  setLastPrice(symbol, 100);
+  const user = seedUser();
+  const buyer = seedUser();
+  credit(user, 'TWAP1', 4);
+  credit(buyer, 'RUSD', 1000000);
+  // Resting bids for the TWAP's market sells to hit.
+  placeSpotOrder(buyer, { symbol, side: 'buy', type: 'limit', price: 100, quantity: 100 });
+
+  const plan = placeTwapOrder(user, { symbol, side: 'sell', quantity: 4, slices: 4, intervalMs: 0 });
+  assert.equal(plan.kind, 'twap');
+  // With intervalMs 0 every slice is due; each scheduler pass places one.
+  for (let i = 0; i < 6; i += 1) runDueOrderPlans();
+  const done = listOrderPlans(user).find((p) => p.planId === plan.planId);
+  assert.equal(done.status, 'completed');
+  assert.equal(done.slicesDone, 4);
+  // All 4 units sold.
+  assert.equal(availableBalance(user, 'TWAP1'), 0);
+});
+
+test('a scale plan places a ladder of limit rungs', () => {
+  const symbol = listPair('SCALE1', 0.01, 0.0001);
+  setLastPrice(symbol, 100);
+  const user = seedUser();
+  credit(user, 'SCALE1', 4);
+
+  const plan = placeScaleOrder(user, {
+    symbol,
+    side: 'sell',
+    quantity: 4,
+    startPrice: 110,
+    endPrice: 140,
+    slices: 4,
+  });
+  assert.equal(plan.kind, 'scale');
+  // Each scheduler pass places one rung.
+  for (let i = 0; i < 4; i += 1) runDueOrderPlans();
+  const orders = listOpenOrders(user, symbol);
+  assert.equal(orders.length, 4);
+  const prices = orders.map((o) => o.price).sort((a, b) => a - b);
+  assert.deepEqual(prices, [110, 120, 130, 140]);
+  // The whole quantity is reserved across the four rungs.
+  assert.equal(lockedBalance(user, 'SCALE1'), 4);
+});
+
+test('cancelling a plan stops future slices but leaves placed orders', () => {
+  const symbol = listPair('TWAP2', 0.01, 0.0001);
+  setLastPrice(symbol, 100);
+  const user = seedUser();
+  credit(user, 'TWAP2', 4);
+
+  const plan = placeTwapOrder(user, { symbol, side: 'sell', quantity: 4, slices: 4, intervalMs: 60000 });
+  const cancelled = cancelOrderPlan(user, plan.planId);
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(runDueOrderPlans(), 0);
 });
 
 test('a partially filled iceberg keeps its remaining hidden size reachable', () => {

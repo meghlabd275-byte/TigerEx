@@ -243,6 +243,34 @@ function initializeSchema() {
       FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE
     );
 
+    -- Scheduled order plans: TWAP and scale. Each due slice places a real spot
+    -- order through the normal engine, so a slice reserves and settles exactly
+    -- like a manually placed order; the plan is only a schedule over them.
+    CREATE TABLE IF NOT EXISTS spot_order_plans (
+      plan_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      pair_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      side TEXT NOT NULL,
+      order_type TEXT NOT NULL,
+      total_quantity REAL NOT NULL,
+      slice_quantity REAL NOT NULL,
+      slices_total INTEGER NOT NULL,
+      slices_done INTEGER NOT NULL DEFAULT 0,
+      interval_ms INTEGER NOT NULL,
+      limit_price REAL,
+      params TEXT,
+      next_run_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      last_error TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+      FOREIGN KEY (pair_id) REFERENCES trading_pairs(pair_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_spot_order_plans_due ON spot_order_plans(status, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_spot_order_plans_user ON spot_order_plans(user_id, status);
+
     -- Transactions
     CREATE TABLE IF NOT EXISTS transactions (
       transaction_id TEXT PRIMARY KEY,
@@ -2406,6 +2434,15 @@ function applyColumnMigrations(database: Database.Database) {
     // Bot orders are attributable to the bot that placed them, so the runner can
     // tell whether one is already resting instead of stacking duplicates.
     { table: 'orders', column: 'bot_id', definition: 'TEXT' },
+    // A trailing stop records the distance it trails by and the extreme price it
+    // has observed so far; the trigger is recomputed from the extreme on every
+    // trade. `trailing_activated` gates a trailing stop that waits for a profit.
+    { table: 'orders', column: 'trailing_distance', definition: 'REAL' },
+    { table: 'orders', column: 'trailing_watermark', definition: 'REAL' },
+    { table: 'orders', column: 'trailing_activated', definition: 'INTEGER DEFAULT 1' },
+    // OCO: two child orders linked by a group id. Only one leg carries the
+    // reservation at a time; a fill cancels the sibling and releases it.
+    { table: 'orders', column: 'oco_group_id', definition: 'TEXT' },
     // A bot's run state (step index, last run) so a scheduled strategy resumes
     // where it left off rather than restarting on every sweep.
     { table: 'trading_bots', column: 'state', definition: "TEXT NOT NULL DEFAULT '{}'" },

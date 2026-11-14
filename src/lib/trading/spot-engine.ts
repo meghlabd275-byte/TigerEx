@@ -52,6 +52,18 @@ export interface PlaceOrderInput {
   timeInForce?: TimeInForce;
   postOnly?: boolean;
   icebergQuantity?: number;
+  /** Trailing stop: the distance (quote units) the trigger trails the extreme. */
+  trailingDistance?: number;
+  /** Trailing stop: false arms the trigger only after the market moves favourably. */
+  trailingActivateOnProfit?: boolean;
+  /** OCO: link this order to a sibling under one group id. */
+  ocoGroupId?: string;
+  /**
+   * Do not reserve funds for a stop order at placement. Used by the OCO stop
+   * leg, whose sibling already holds the reservation; the leg reserves when it
+   * actually triggers.
+   */
+  deferReservation?: boolean;
   /** Set when a trading bot places the order, so the runner can track it. */
   botId?: string;
 }
@@ -70,6 +82,28 @@ export interface OrderRecord {
   status: string;
   timeInForce: string;
   createdAt: string;
+}
+
+export interface OcoOrderInput {
+  symbol: string;
+  side: 'buy' | 'sell';
+  quantity: number;
+  /** The stop leg: triggers a market/limit exit when price crosses the stop. */
+  stopPrice: number;
+  stopLimitPrice?: number;
+  /** The take-profit leg: a resting limit order above (sell) / below (buy). */
+  takeProfitPrice: number;
+  /** Take-profit limit price; defaults to the trigger price. */
+  takeProfitLimitPrice?: number;
+  timeInForce?: TimeInForce;
+}
+
+export interface OcoOrderResult {
+  groupId: string;
+  /** The resting take-profit leg (carries the reservation). */
+  takeProfit: OrderRecord;
+  /** The parked stop leg (reserves nothing until it triggers). */
+  stop: OrderRecord;
 }
 
 interface PairRow {
@@ -367,6 +401,28 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
     icebergQuantity = parsed;
   }
 
+  // A trailing stop is a stop whose trigger follows the market. It is only
+  // meaningful on a stop type, and the distance must be positive.
+  let trailingDistance: number | null = null;
+  if (input.trailingDistance !== undefined) {
+    if (!isStop) {
+      throw new SpotError('VALIDATION_FAILED', 'trailingDistance is only valid on a stop order');
+    }
+    const parsed = requireFinite(input.trailingDistance, 'VALIDATION_FAILED', 'trailingDistance must be a number');
+    if (parsed <= 0) throw new SpotError('VALIDATION_FAILED', 'trailingDistance must be positive');
+    trailingDistance = parsed;
+  }
+  const trailingActivated = input.trailingActivateOnProfit === true ? 0 : 1;
+  // A trailing stop with no fixed trigger is seeded from the last observed
+  // price; without one there is nothing to trail from.
+  if (trailingDistance !== null && stopPrice === null) {
+    const reference = lastPrice(symbol);
+    if (reference === null) {
+      throw new SpotError('NO_PRICE', `${symbol} has no observed price to seed a trailing stop`, 409);
+    }
+    stopPrice = reference;
+  }
+
   const db = getDb();
   const base = pair.base_currency;
   const quote = pair.quote_currency;
@@ -377,6 +433,9 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
   // orders are triggered once the transaction has committed rather than from
   // inside it (a trigger places its own orders and must not nest).
   let lastFillPrice: number | null = null;
+  // Resting orders this order consumed, so their OCO siblings are cancelled
+  // after the transaction commits (a sibling cancel is its own transaction).
+  let filledMakerOrderIds: string[] = [];
 
   const run = db.transaction(() => {
     const book = loadBook(symbol);
@@ -422,7 +481,14 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
       }
     }
 
-    lockAvailable(userId, lockedAsset, lockedAmount);
+    // An OCO stop leg defers its reservation to trigger time because the
+    // sibling take-profit leg already holds the funds.
+    const defer = isStop && input.deferReservation === true;
+    if (defer) {
+      lockedAmount = 0;
+    } else {
+      lockAvailable(userId, lockedAsset, lockedAmount);
+    }
 
     const orderId = generateId();
     const createdAt = new Date().toISOString();
@@ -430,8 +496,9 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
     db.prepare(
       `INSERT INTO orders
          (order_id, user_id, pair_id, side, type, price, quantity, filled_quantity, remaining_quantity,
-          status, time_in_force, stop_price, iceberg_quantity, hidden_quantity, locked_amount, locked_asset, bot_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, datetime('now'))`,
+          status, time_in_force, stop_price, iceberg_quantity, hidden_quantity, locked_amount, locked_asset,
+          trailing_distance, trailing_watermark, trailing_activated, oco_group_id, bot_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
     ).run(
       orderId,
       userId,
@@ -447,6 +514,10 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
       icebergQuantity ?? null,
       lockedAmount,
       lockedAsset,
+      trailingDistance,
+      trailingDistance !== null ? stopPrice : null,
+      trailingActivated,
+      input.ocoGroupId ?? null,
       input.botId ?? null,
       createdAt,
     );
@@ -491,6 +562,7 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
 
     const filled = outcome.filled;
     const resting = outcome.resting;
+    filledMakerOrderIds = outcome.filledMakerOrderIds;
     if (outcome.filled > 0 && outcome.averagePrice !== null) lastFillPrice = outcome.averagePrice;
     const status = outcome.rejected
       ? 'rejected'
@@ -561,6 +633,16 @@ export function placeSpotOrder(userId: string, input: PlaceOrderInput): OrderRec
     throw error;
   }
 
+  // A resting order this order consumed may belong to an OCO group; its sibling
+  // is cancelled now, after commit, through the same cancel path a manual cancel
+  // uses (so the sibling's own reservation is released).
+  for (const makerId of filledMakerOrderIds) {
+    const group = getDb().prepare('SELECT oco_group_id, user_id FROM orders WHERE order_id = ?').get(makerId) as
+      | { oco_group_id: string | null; user_id: string }
+      | undefined;
+    if (group?.oco_group_id) cancelOcoSibling(group.oco_group_id, makerId, group.user_id);
+  }
+
   // A fill can cross the trigger of stop orders parked on this symbol. They are
   // activated now, after the transaction has committed, so each triggered order
   // reserves and matches on a consistent view of the book.
@@ -595,6 +677,8 @@ interface MatchOutcome {
   averagePrice: number | null;
   takerFeePaid: number;
   rejected: string | null;
+  /** Resting orders this match consumed, so their OCO siblings can be cancelled. */
+  filledMakerOrderIds: string[];
 }
 
 /**
@@ -623,12 +707,14 @@ function matchAndSettle(ctx: MatchContext): MatchOutcome {
   let filled = 0;
   let notional = 0;
   let takerFeePaid = 0;
+  const filledMakerOrderIds: string[] = [];
 
   for (const fill of result.fills) {
     const fee = settleFill(ctx, fill);
     filled += fill.quantity;
     notional += fill.price * fill.quantity;
     takerFeePaid += fee.takerFee;
+    if (!filledMakerOrderIds.includes(fill.makerOrderId)) filledMakerOrderIds.push(fill.makerOrderId);
   }
 
   // Reconcile the reservation with what is left open. Whatever was reserved for
@@ -654,6 +740,7 @@ function matchAndSettle(ctx: MatchContext): MatchOutcome {
     averagePrice: filled > 0 ? notional / filled : null,
     takerFeePaid,
     rejected: result.rejected ?? null,
+    filledMakerOrderIds,
   };
 }
 
@@ -1046,7 +1133,8 @@ export function activateStopOrders(symbol: string, tradedPrice: number): number 
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT o.order_id, o.user_id, o.side, o.type, o.price, o.quantity, o.stop_price, o.time_in_force
+      `SELECT o.order_id, o.user_id, o.side, o.type, o.price, o.quantity, o.stop_price, o.time_in_force,
+              o.trailing_distance, o.trailing_watermark, o.trailing_activated
          FROM orders o JOIN trading_pairs p ON p.pair_id = o.pair_id
         WHERE p.symbol = ? AND o.status = 'pending_trigger'`,
     )
@@ -1059,19 +1147,49 @@ export function activateStopOrders(symbol: string, tradedPrice: number): number 
     quantity: number;
     stop_price: number;
     time_in_force: string;
+    trailing_distance: number | null;
+    trailing_watermark: number | null;
+    trailing_activated: number | null;
   }>;
 
   let activated = 0;
   for (const row of rows) {
-    const triggers =
-      row.side === 'buy' ? tradedPrice >= Number(row.stop_price) : tradedPrice <= Number(row.stop_price);
+    const side: 'buy' | 'sell' = row.side === 'buy' ? 'buy' : 'sell';
+    const trailing = row.trailing_distance === null || row.trailing_distance === undefined ? null : Number(row.trailing_distance);
+
+    let trigger = Number(row.stop_price);
+    if (trailing !== null) {
+      // A trailing sell rides below the highest price seen; a trailing buy
+      // rides above the lowest. The watermark is stored on the order so it
+      // survives across cycles, and the trigger is the watermark offset by the
+      // distance. A profit-armed trail does not move until the market first
+      // moves favourably past the seed.
+      const seed = row.trailing_watermark === null || row.trailing_watermark === undefined ? Number(row.stop_price) : Number(row.trailing_watermark);
+      let watermark = seed;
+      let armed = (row.trailing_activated ?? 1) === 1;
+      if (side === 'sell') {
+        if (!armed && tradedPrice > seed) armed = true;
+        if (armed && tradedPrice > watermark) watermark = tradedPrice;
+        trigger = watermark - trailing;
+      } else {
+        if (!armed && tradedPrice < seed) armed = true;
+        if (armed && tradedPrice < watermark) watermark = tradedPrice;
+        trigger = watermark + trailing;
+      }
+      db.prepare(
+        "UPDATE orders SET trailing_watermark = ?, trailing_activated = ? WHERE order_id = ?",
+      ).run(watermark, armed ? 1 : 0, row.order_id);
+      if (!armed) continue;
+    }
+
+    const triggers = side === 'buy' ? tradedPrice >= trigger : tradedPrice <= trigger;
     if (!triggers) continue;
 
     // Mark it live before matching so a re-entrant trigger check cannot see it twice.
     db.prepare("UPDATE orders SET status = 'open', updated_at = datetime('now') WHERE order_id = ?").run(row.order_id);
 
     try {
-      matchRestingOrder(row.order_id, row.user_id, symbol, row.side === 'buy' ? 'buy' : 'sell', row.type);
+      matchRestingOrder(row.order_id, row.user_id, symbol, side, row.type);
       activated += 1;
     } catch {
       // A stop that cannot be filled stays cancelled rather than retrying forever.
@@ -1093,12 +1211,50 @@ function matchRestingOrder(
   const pair = getPair(symbol);
   const book = loadBook(symbol);
   const order = db.prepare('SELECT * FROM orders WHERE order_id = ?').get(orderId) as
-    | { price: number | null; quantity: number; time_in_force: string; locked_amount: number; locked_asset: string }
+    | {
+        price: number | null;
+        quantity: number;
+        time_in_force: string;
+        locked_amount: number;
+        locked_asset: string | null;
+        oco_group_id: string | null;
+      }
     | undefined;
   if (!order) return;
 
   const rates = spotRates(userId);
   const quantity = Number(order.quantity);
+
+  // A stop leg that carried no reservation (the sibling of an OCO held it)
+  // reserves now, at its own limit price for a buy or the base quantity for a
+  // sell. If the balance is short the order is cancelled rather than filled
+  // without settlement.
+  let lockedAsset = order.locked_asset;
+  let lockedAmount = Number(order.locked_amount) || 0;
+  if (lockedAmount <= 0) {
+    const isBuy = side === 'buy';
+    lockedAsset = isBuy ? pair.quote_currency : pair.base_currency;
+    if (!isBuy) {
+      lockedAmount = quantity;
+    } else if (order.price !== null) {
+      lockedAmount = Number(order.price) * quantity;
+    } else {
+      // A market buy reserves against the last observed price plus a slippage
+      // buffer, because the fill price is unknown until it matches.
+      const reference = lastPrice(symbol);
+      lockedAmount = reference === null ? 0 : reference * quantity * 1.05;
+    }
+    if (lockedAmount <= 0) {
+      db.prepare("UPDATE orders SET status = 'cancelled', updated_at = datetime('now') WHERE order_id = ?").run(orderId);
+      return;
+    }
+    lockAvailable(userId, lockedAsset, lockedAmount);
+    db.prepare('UPDATE orders SET locked_amount = ?, locked_asset = ? WHERE order_id = ?').run(
+      lockedAmount,
+      lockedAsset,
+      orderId,
+    );
+  }
 
   const outcome = matchAndSettle({
     orderId,
@@ -1113,8 +1269,8 @@ function matchRestingOrder(
     tif: (order.time_in_force as TimeInForce) ?? 'GTC',
     postOnly: false,
     book,
-    lockedAsset: order.locked_asset,
-    lockedAmount: Number(order.locked_amount),
+    lockedAsset,
+    lockedAmount,
     takerRate: rates.taker,
   });
 
@@ -1126,7 +1282,426 @@ function matchRestingOrder(
             updated_at = datetime('now') WHERE order_id = ?`,
   ).run(outcome.filled, Math.max(0, quantity - outcome.filled), outcome.averagePrice, status, orderId);
 
+  // One leg of an OCO filling cancels the sibling and releases whatever it held.
+  if (order.oco_group_id) cancelOcoSibling(order.oco_group_id, orderId, userId);
+
   if (outcome.filled > 0 && outcome.averagePrice !== null) {
     activateStopOrders(symbol, outcome.averagePrice);
   }
+}
+
+/**
+ * Cancel the other leg of an OCO group after one leg has traded.
+ *
+ * The sibling is cancelled through `cancelSpotOrder` so whatever reservation it
+ * still holds is released by the same code path a manual cancel uses. The leg
+ * that just filled is skipped (it is already terminal).
+ */
+function cancelOcoSibling(groupId: string, filledOrderId: string, userId: string): void {
+  const db = getDb();
+  const siblings = db
+    .prepare(
+      `SELECT order_id FROM orders
+        WHERE oco_group_id = ? AND order_id != ? AND status IN ('open', 'partial', 'pending_trigger')`,
+    )
+    .all(groupId, filledOrderId) as Array<{ order_id: string }>;
+  for (const sibling of siblings) {
+    try {
+      cancelSpotOrder(userId, sibling.order_id);
+    } catch {
+      // A sibling already terminal (or owned by another actor) needs no action.
+    }
+  }
+}
+
+/**
+ * Place a one-cancels-other pair.
+ *
+ * An OCO brackets a position with two exits: a take-profit limit that rests on
+ * the book, and a stop that parks off-book until the market moves against it.
+ * Only one can fill; when either does, the other is cancelled. The resting
+ * take-profit leg carries the whole reservation (the base for a sell, the quote
+ * for a buy), so the stop leg reserves nothing until it triggers, at which
+ * point it takes the reservation the take-profit released.
+ *
+ * The take-profit must sit on the profitable side of the current price and the
+ * stop on the losing side, so the pair is a genuine bracket rather than two
+ * orders on the same side of the market.
+ */
+export function placeOcoOrder(userId: string, input: OcoOrderInput): OcoOrderResult {
+  assertSpotOpen();
+
+  const symbol = String(input.symbol ?? '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,20}\/[A-Z0-9]{1,20}$/.test(symbol)) {
+    throw new SpotError('VALIDATION_FAILED', 'symbol must be of the form BASE/QUOTE');
+  }
+  const side: 'buy' | 'sell' = input.side === 'sell' ? 'sell' : input.side === 'buy' ? 'buy' : ('' as 'buy');
+  if (side !== 'buy' && side !== 'sell') throw new SpotError('VALIDATION_FAILED', 'side must be buy or sell');
+
+  const quantity = requireFinite(input.quantity, 'VALIDATION_FAILED', 'quantity must be a number');
+  if (quantity <= 0) throw new SpotError('VALIDATION_FAILED', 'quantity must be positive');
+
+  const stopPrice = requireFinite(input.stopPrice, 'VALIDATION_FAILED', 'stopPrice must be a number');
+  if (stopPrice <= 0) throw new SpotError('VALIDATION_FAILED', 'stopPrice must be positive');
+  const takeProfitPrice = requireFinite(input.takeProfitPrice, 'VALIDATION_FAILED', 'takeProfitPrice must be a number');
+  if (takeProfitPrice <= 0) throw new SpotError('VALIDATION_FAILED', 'takeProfitPrice must be positive');
+
+  const pair = getPair(symbol);
+  validateQuantity(pair, quantity);
+  validatePrice(pair, stopPrice);
+  validatePrice(pair, takeProfitPrice);
+
+  const reference = lastPrice(symbol);
+  if (reference === null) {
+    throw new SpotError('NO_PRICE', `${symbol} has no observed price to bracket`, 409);
+  }
+  // A sell brackets with a take-profit above the market and a stop below it; a
+  // buy is the mirror. Anything else is not a bracket.
+  if (side === 'sell' && !(takeProfitPrice > reference && stopPrice < reference)) {
+    throw new SpotError('INVALID_OCO', 'a sell OCO needs takeProfitPrice above and stopPrice below the market', 400);
+  }
+  if (side === 'buy' && !(takeProfitPrice < reference && stopPrice > reference)) {
+    throw new SpotError('INVALID_OCO', 'a buy OCO needs takeProfitPrice below and stopPrice above the market', 400);
+  }
+
+  const groupId = generateId();
+  const stopLimitPrice = input.stopLimitPrice === undefined ? undefined : requireFinite(input.stopLimitPrice, 'VALIDATION_FAILED', 'stopLimitPrice must be a number');
+  const takeProfitLimitPrice =
+    input.takeProfitLimitPrice === undefined
+      ? takeProfitPrice
+      : requireFinite(input.takeProfitLimitPrice, 'VALIDATION_FAILED', 'takeProfitLimitPrice must be a number');
+
+  // The take-profit leg rests and holds the reservation.
+  const takeProfit = placeSpotOrder(userId, {
+    symbol,
+    side,
+    type: 'limit',
+    price: takeProfitLimitPrice,
+    quantity,
+    timeInForce: input.timeInForce ?? 'GTC',
+    ocoGroupId: groupId,
+  });
+
+  // The stop leg parks and reserves nothing (its sibling holds the funds).
+  const stop = placeSpotOrder(userId, {
+    symbol,
+    side,
+    type: stopLimitPrice !== undefined ? 'stop_limit' : 'stop_market',
+    price: stopLimitPrice,
+    stopPrice,
+    quantity,
+    timeInForce: 'GTC',
+    ocoGroupId: groupId,
+    deferReservation: true,
+  });
+
+  return { groupId, takeProfit, stop };
+}
+
+export interface TwapOrderInput {
+  symbol: string;
+  side: 'buy' | 'sell';
+  quantity: number;
+  /** Number of equal slices to place. */
+  slices: number;
+  /** Milliseconds between slices. */
+  intervalMs: number;
+  /** Rest each slice as a limit at or better than this price; omit for market. */
+  limitPrice?: number;
+}
+
+export interface ScaleOrderInput {
+  symbol: string;
+  side: 'buy' | 'sell';
+  quantity: number;
+  /** Lowest limit price in the ladder. */
+  startPrice: number;
+  /** Highest limit price in the ladder. */
+  endPrice: number;
+  /** Number of rungs. */
+  slices: number;
+  /** Milliseconds between rungs; 0 places them all at once. */
+  intervalMs?: number;
+}
+
+export interface OrderPlanRecord {
+  planId: string;
+  symbol: string;
+  kind: string;
+  side: string;
+  orderType: string;
+  totalQuantity: number;
+  sliceQuantity: number;
+  slicesTotal: number;
+  slicesDone: number;
+  intervalMs: number;
+  limitPrice: number | null;
+  nextRunAt: string;
+  status: string;
+  lastError: string | null;
+  createdAt: string;
+}
+
+/** Validate the shared shape of a scheduled plan before it is stored. */
+function validatePlan(input: { symbol: string; side: string; quantity: number; slices: number; intervalMs: number }): {
+  symbol: string;
+  side: 'buy' | 'sell';
+  quantity: number;
+  slices: number;
+  intervalMs: number;
+  pair: PairRow;
+} {
+  const symbol = String(input.symbol ?? '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,20}\/[A-Z0-9]{1,20}$/.test(symbol)) {
+    throw new SpotError('VALIDATION_FAILED', 'symbol must be of the form BASE/QUOTE');
+  }
+  const side: 'buy' | 'sell' = input.side === 'sell' ? 'sell' : input.side === 'buy' ? 'buy' : ('' as 'buy');
+  if (side !== 'buy' && side !== 'sell') throw new SpotError('VALIDATION_FAILED', 'side must be buy or sell');
+
+  const quantity = requireFinite(input.quantity, 'VALIDATION_FAILED', 'quantity must be a number');
+  if (quantity <= 0) throw new SpotError('VALIDATION_FAILED', 'quantity must be positive');
+
+  const slices = Number(input.slices);
+  if (!Number.isInteger(slices) || slices < 2 || slices > 1000) {
+    throw new SpotError('VALIDATION_FAILED', 'slices must be an integer between 2 and 1000');
+  }
+  const intervalMs = Number(input.intervalMs);
+  if (!Number.isFinite(intervalMs) || intervalMs < 0) {
+    throw new SpotError('VALIDATION_FAILED', 'intervalMs must be zero or positive');
+  }
+  const pair = getPair(symbol);
+  validateQuantity(pair, quantity);
+  return { symbol, side, quantity, slices, intervalMs, pair };
+}
+
+function insertPlan(row: {
+  userId: string;
+  symbol: string;
+  kind: 'twap' | 'scale';
+  side: string;
+  orderType: string;
+  pairId: string;
+  totalQuantity: number;
+  sliceQuantity: number;
+  slices: number;
+  intervalMs: number;
+  limitPrice: number | null;
+  params: Record<string, unknown> | null;
+  nextRunAt: string;
+}): string {
+  const planId = generateId();
+  getDb()
+    .prepare(
+      `INSERT INTO spot_order_plans
+         (plan_id, user_id, pair_id, symbol, kind, side, order_type, total_quantity, slice_quantity,
+          slices_total, slices_done, interval_ms, limit_price, params, next_run_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'active')`,
+    )
+    .run(
+      planId,
+      row.userId,
+      row.pairId,
+      row.symbol,
+      row.kind,
+      row.side,
+      row.orderType,
+      row.totalQuantity,
+      row.sliceQuantity,
+      row.slices,
+      row.intervalMs,
+      row.limitPrice,
+      row.params === null ? null : JSON.stringify(row.params),
+      row.nextRunAt,
+    );
+  return planId;
+}
+
+/**
+ * Create a TWAP plan: split a total quantity into equal slices placed every
+ * `intervalMs` until the total is done. The first slice runs immediately.
+ */
+export function placeTwapOrder(userId: string, input: TwapOrderInput): OrderPlanRecord {
+  assertSpotOpen();
+  const v = validatePlan(input);
+
+  let limitPrice: number | null = null;
+  if (input.limitPrice !== undefined) {
+    limitPrice = requireFinite(input.limitPrice, 'VALIDATION_FAILED', 'limitPrice must be a number');
+    if (limitPrice <= 0) throw new SpotError('VALIDATION_FAILED', 'limitPrice must be positive');
+    validatePrice(v.pair, limitPrice);
+  }
+
+  const sliceQuantity = v.quantity / v.slices;
+  const planId = insertPlan({
+    userId,
+    symbol: v.symbol,
+    kind: 'twap',
+    side: v.side,
+    orderType: limitPrice === null ? 'market' : 'limit',
+    pairId: v.pair.pair_id,
+    totalQuantity: v.quantity,
+    sliceQuantity,
+    slices: v.slices,
+    intervalMs: v.intervalMs,
+    limitPrice,
+    params: null,
+    nextRunAt: new Date().toISOString(),
+  });
+  runDueOrderPlans();
+  return getOrderPlan(userId, planId)!;
+}
+
+/**
+ * Create a scale (ladder) plan: split a total quantity across `slices` limit
+ * rungs spaced evenly between `startPrice` and `endPrice`.
+ */
+export function placeScaleOrder(userId: string, input: ScaleOrderInput): OrderPlanRecord {
+  assertSpotOpen();
+  const v = validatePlan({ ...input, intervalMs: input.intervalMs ?? 0 });
+
+  const startPrice = requireFinite(input.startPrice, 'VALIDATION_FAILED', 'startPrice must be a number');
+  const endPrice = requireFinite(input.endPrice, 'VALIDATION_FAILED', 'endPrice must be a number');
+  if (startPrice <= 0 || endPrice <= 0) throw new SpotError('VALIDATION_FAILED', 'prices must be positive');
+  if (startPrice === endPrice) throw new SpotError('VALIDATION_FAILED', 'startPrice and endPrice must differ');
+  validatePrice(v.pair, Math.min(startPrice, endPrice));
+  validatePrice(v.pair, Math.max(startPrice, endPrice));
+
+  const sliceQuantity = v.quantity / v.slices;
+  const planId = insertPlan({
+    userId,
+    symbol: v.symbol,
+    kind: 'scale',
+    side: v.side,
+    orderType: 'limit',
+    pairId: v.pair.pair_id,
+    totalQuantity: v.quantity,
+    sliceQuantity,
+    slices: v.slices,
+    intervalMs: v.intervalMs,
+    limitPrice: null,
+    params: { startPrice, endPrice },
+    nextRunAt: new Date().toISOString(),
+  });
+  runDueOrderPlans();
+  return getOrderPlan(userId, planId)!;
+}
+
+function toPlanRecord(row: Record<string, unknown>): OrderPlanRecord {
+  return {
+    planId: String(row.plan_id),
+    symbol: String(row.symbol),
+    kind: String(row.kind),
+    side: String(row.side),
+    orderType: String(row.order_type),
+    totalQuantity: Number(row.total_quantity),
+    sliceQuantity: Number(row.slice_quantity),
+    slicesTotal: Number(row.slices_total),
+    slicesDone: Number(row.slices_done),
+    intervalMs: Number(row.interval_ms),
+    limitPrice: row.limit_price === null || row.limit_price === undefined ? null : Number(row.limit_price),
+    nextRunAt: String(row.next_run_at),
+    status: String(row.status),
+    lastError: row.last_error === null || row.last_error === undefined ? null : String(row.last_error),
+    createdAt: String(row.created_at),
+  };
+}
+
+export function getOrderPlan(userId: string, planId: string): OrderPlanRecord | null {
+  const row = getDb()
+    .prepare('SELECT * FROM spot_order_plans WHERE plan_id = ? AND user_id = ?')
+    .get(planId, userId) as Record<string, unknown> | undefined;
+  return row ? toPlanRecord(row) : null;
+}
+
+export function listOrderPlans(userId: string): OrderPlanRecord[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM spot_order_plans WHERE user_id = ? ORDER BY created_at DESC LIMIT 200')
+    .all(userId) as Array<Record<string, unknown>>;
+  return rows.map(toPlanRecord);
+}
+
+export function cancelOrderPlan(userId: string, planId: string): OrderPlanRecord {
+  const plan = getOrderPlan(userId, planId);
+  if (!plan) throw new SpotError('UNKNOWN_PLAN', 'No such order plan', 404);
+  if (plan.status !== 'active') throw new SpotError('TERMINAL_PLAN', `This plan is already ${plan.status}`, 409);
+  getDb()
+    .prepare("UPDATE spot_order_plans SET status = 'cancelled' WHERE plan_id = ?")
+    .run(planId);
+  return getOrderPlan(userId, planId)!;
+}
+
+/**
+ * Run every active plan whose next slice is due.
+ *
+ * A slice places a real spot order through `placeSpotOrder`, so it reserves and
+ * settles exactly like a manual order; a slice that cannot be placed (no
+ * liquidity, insufficient balance) records the error and is retried on the next
+ * cycle rather than being silently skipped. Returns the number of slices placed.
+ */
+export function runDueOrderPlans(nowMs = Date.now()): number {
+  const db = getDb();
+  const nowIso = new Date(nowMs).toISOString();
+  const due = db
+    .prepare(
+      `SELECT * FROM spot_order_plans
+        WHERE status = 'active' AND datetime(next_run_at) <= datetime(?)
+        ORDER BY next_run_at ASC LIMIT 500`,
+    )
+    .all(nowIso) as Array<Record<string, unknown>>;
+
+  let placed = 0;
+  for (const row of due) {
+    const plan = toPlanRecord(row);
+    const done = plan.slicesDone;
+    if (done >= plan.slicesTotal) {
+      db.prepare("UPDATE spot_order_plans SET status = 'completed' WHERE plan_id = ?").run(plan.planId);
+      continue;
+    }
+
+    // The final slice carries any rounding remainder so the total is exact.
+    const isLast = done === plan.slicesTotal - 1;
+    const sliceQty = isLast ? plan.totalQuantity - plan.sliceQuantity * done : plan.sliceQuantity;
+
+    let price: number | undefined;
+    if (plan.kind === 'scale') {
+      const params = JSON.parse(String(row.params ?? '{}')) as { startPrice?: number; endPrice?: number };
+      const start = Number(params.startPrice);
+      const end = Number(params.endPrice);
+      // Rung `done` interpolates from start to end; the last rung lands exactly
+      // on the end price.
+      price = done === plan.slicesTotal - 1 ? end : start + ((end - start) * done) / (plan.slicesTotal - 1);
+    } else if (plan.limitPrice !== null) {
+      price = plan.limitPrice;
+    }
+
+    try {
+      placeSpotOrder(String(row.user_id), {
+        symbol: plan.symbol,
+        side: plan.side === 'sell' ? 'sell' : 'buy',
+        type: plan.orderType === 'market' ? 'market' : 'limit',
+        price,
+        quantity: sliceQty,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'slice failed';
+      const next = new Date(nowMs + Math.max(plan.intervalMs, 60000)).toISOString();
+      db.prepare('UPDATE spot_order_plans SET last_error = ?, next_run_at = ? WHERE plan_id = ?').run(
+        message,
+        next,
+        plan.planId,
+      );
+      continue;
+    }
+
+    const nextDone = done + 1;
+    const finished = nextDone >= plan.slicesTotal;
+    const nextRunAt = new Date(nowMs + plan.intervalMs).toISOString();
+    db.prepare(
+      `UPDATE spot_order_plans
+          SET slices_done = ?, last_error = NULL, status = ?, next_run_at = ?
+        WHERE plan_id = ?`,
+    ).run(nextDone, finished ? 'completed' : 'active', nextRunAt, plan.planId);
+    placed += 1;
+  }
+  return placed;
 }
