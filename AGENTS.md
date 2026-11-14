@@ -725,10 +725,39 @@ balances, not just a status column.
 - Tests: `scripts/test/admin-2fa.test.cjs`, `scripts/test/sms-otp.test.cjs`
   (the SMS test drives a real local HTTP gateway).
 
+## Market integrity, travel rule and destination risk (`src/lib/compliance`)
+
+Three self-contained compliance engines, all reading only the venue's own
+tables and all unit tested (`scripts/test/compliance-surveillance.test.cjs`):
+
+- `surveillance.ts` — market-integrity surveillance. `runSurveillanceCycle()`
+  scans a rolling window of `spot_trades` and `orders` and raises alerts for
+  self-matching, wash trading (two accounts round-tripping with no net position),
+  layering and spoofing (large short-lived far-from-mid cancels against a small
+  fill). Alerts persist to `surveillance_alerts` with a
+  `UNIQUE(kind, user_id, symbol, bucket)` key so a re-run of the same minute
+  raises nothing new. Wired into `runScheduledCycle` (`surveillance.scan`) and
+  `GET/POST/PUT /api/admin/surveillance`.
+- `travel-rule.ts` — FATF Recommendation 16. `assertTravelRuleSatisfied()` is
+  required for a transfer at or above `travel_rule_threshold_usd` (default 1000
+  USD) or for any unpriced transfer, and refuses a missing originator
+  name/account/country or beneficiary account. `createWithdrawal` calls it after
+  the KYC-limit checks and records a hash-committed message in
+  `travel_rule_messages`. Admin: `GET/PUT /api/admin/travel-rule`.
+- `address-risk.ts` — destination scoring from local data only (sanctions match,
+  operator `address_risk_entries`, first-seen, and the user's own
+  address-book/history in `withdrawal_whitelist`). A blocked address or a
+  first-time high-value destination (`HIGH_VALUE_USD`, default 10000) is refused
+  in `createWithdrawal`; an accepted transfer records the outcome so the next
+  withdrawal to it is trusted. Admin: `GET/POST/DELETE /api/admin/address-risk`.
+
+No third-party risk API is consulted; every signal is derived from a table the
+venue owns.
+
 ## Verified toolchain matrix (this environment)
 
 Every layer builds and its tests pass: TypeScript (`npx tsc --noEmit`,
-`npm run test:logic` 964, `npm run build`), Go 1.23 (`go build ./...`,
+`npm run test:logic` 1040, `npm run build`), Go 1.23 (`go build ./...`,
 `go test ./...`), C++ (`cmake --build`, `ctest` 2 suites), Rust
 (`cargo test --lib` in `backend/rust/matching-engine`, 13), Python
 (`python -m pytest` in `backend/python`). No layer is a placeholder.

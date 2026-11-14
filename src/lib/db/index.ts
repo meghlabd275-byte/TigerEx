@@ -2164,6 +2164,80 @@ function initializeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_sanctions_value ON sanctions_entries(kind, value);
 
+    -- Market-integrity surveillance alerts raised by the surveillance cycle.
+    -- One row per (kind, user, symbol, minute) so re-running the cycle does not
+    -- duplicate an alert the same window already recorded; the detail column
+    -- holds the evidence (counts, notionals) the alert was derived from.
+    CREATE TABLE IF NOT EXISTS surveillance_alerts (
+      alert_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      symbol TEXT,
+      user_id TEXT NOT NULL,
+      counterparty_id TEXT,
+      score REAL NOT NULL,
+      detail TEXT,
+      bucket TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      window_start TEXT NOT NULL,
+      window_end TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(kind, user_id, symbol, bucket)
+    );
+    CREATE INDEX IF NOT EXISTS idx_surveillance_status ON surveillance_alerts(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_surveillance_user ON surveillance_alerts(user_id, created_at DESC);
+
+    -- FATF travel-rule messages the venue sent or received. The payload holds the
+    -- originator/beneficiary data and the hash makes the record tamper-evident.
+    -- Read only by an admin route.
+    CREATE TABLE IF NOT EXISTS travel_rule_messages (
+      message_id TEXT PRIMARY KEY,
+      direction TEXT NOT NULL,
+      reference_id TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      amount TEXT NOT NULL,
+      amount_usd REAL,
+      payload TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_travel_rule_reference ON travel_rule_messages(reference_id, created_at DESC);
+
+    -- Operator-managed destination risk list. A 'blocked' entry refuses a
+    -- withdrawal; medium/high entries raise the score so the transfer is held.
+    CREATE TABLE IF NOT EXISTS address_risk_entries (
+      address TEXT NOT NULL,
+      network TEXT NOT NULL,
+      band TEXT NOT NULL,
+      reason TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (address, network)
+    );
+
+    -- Every destination the venue has screened, so "first seen" is a real fact.
+    CREATE TABLE IF NOT EXISTS screened_addresses (
+      address TEXT NOT NULL,
+      network TEXT NOT NULL,
+      first_seen TEXT NOT NULL,
+      last_seen TEXT NOT NULL,
+      times_screened INTEGER NOT NULL DEFAULT 0,
+      last_band TEXT,
+      PRIMARY KEY (address, network)
+    );
+
+    -- Per-user history of destinations an accepted withdrawal used, so a repeat
+    -- destination is trusted and a brand-new one scores higher.
+    CREATE TABLE IF NOT EXISTS address_risk_history (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      address TEXT NOT NULL,
+      network TEXT NOT NULL,
+      last_band TEXT,
+      first_seen TEXT NOT NULL,
+      last_seen TEXT NOT NULL,
+      UNIQUE(user_id, address)
+    );
+    CREATE INDEX IF NOT EXISTS idx_address_risk_history_user ON address_risk_history(user_id, address);
+
     -- One row per chain the deposit scanner watches. The cursor is the last
     -- block whose logs have been processed, so a restart resumes rather than
     -- rescanning from genesis or skipping a block.

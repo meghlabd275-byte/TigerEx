@@ -15,6 +15,13 @@ import { lockAvailable, recordTransaction } from '@/lib/db/ledger';
 import { validateAddress } from '@/lib/wallet/address';
 import { withdrawalHoldStatus } from '@/lib/security/freeze';
 import { assertNotSanctioned, SanctionsError } from '@/lib/compliance/sanctions';
+import { assessAddress, recordAddressOutcome } from '@/lib/compliance/address-risk';
+import {
+  assertTravelRuleSatisfied,
+  originatorFromUser,
+  recordTravelRuleMessage,
+  TravelRuleError,
+} from '@/lib/compliance/travel-rule';
 import { decryptSecret, verifyTotp } from '@/lib/security/totp';
 
 export interface WithdrawalPolicy {
@@ -288,6 +295,12 @@ export interface CreateWithdrawalInput {
   fee: number;
   address: string;
   memo?: string | null;
+  /**
+   * Beneficiary name for the travel-rule message. Required only when the
+   * transfer is at or above the travel-rule threshold and the destination is
+   * custodial; for a self-hosted address the address is the account reference.
+   */
+  beneficiaryName?: string | null;
   /** Authenticator code, required when the account has 2FA enabled. */
   twoFactorCode?: string | null;
   /**
@@ -453,6 +466,32 @@ export function createWithdrawal(input: CreateWithdrawalInput): CreateWithdrawal
 
   const usage = withdrawalUsage(input.userId, input.kycLevel, input.usdPrice);
   const requestedUsd = total * unit;
+
+  // Destination risk. A sanctions match or an operator-blocked address is a
+  // hard refusal; a first-time high-value destination is held for review rather
+  // than released. The score is derived from the venue's own data, never an
+  // external risk API.
+  const risk = assessAddress({
+    userId: input.userId,
+    address: checked.normalized,
+    network,
+    amountUsd: requestedUsd,
+  });
+  if (risk.blocked) {
+    throw new WithdrawalError(
+      'ADDRESS_BLOCKED',
+      `This destination is blocked: ${risk.reasons.join('; ') || 'risk policy'}`,
+      403,
+    );
+  }
+  if (risk.requiresReview) {
+    throw new WithdrawalError(
+      'ADDRESS_UNDER_REVIEW',
+      `This destination needs a manual review before funds can be sent: ${risk.reasons.join('; ')}`,
+      403,
+    );
+  }
+
   if (usage.dailyUsd + requestedUsd > usage.dailyLimitUsd) {
     throw new WithdrawalError(
       'DAILY_LIMIT_EXCEEDED',
@@ -466,6 +505,23 @@ export function createWithdrawal(input: CreateWithdrawalInput): CreateWithdrawal
       `This withdrawal exceeds the remaining monthly limit of ${Math.max(0, usage.remainingMonthlyUsd).toFixed(2)} USD for your verification level`,
       409,
     );
+  }
+
+  // FATF travel rule. At or above the threshold the originator/beneficiary data
+  // must be present and a message is recorded; below it the check is skipped.
+  // This runs after the account-limit checks so an over-limit request is refused
+  // for the amount, not for missing party data.
+  let travelRule: ReturnType<typeof assertTravelRuleSatisfied>;
+  try {
+    travelRule = assertTravelRuleSatisfied({
+      direction: 'withdrawal',
+      amountUsd: requestedUsd,
+      originator: originatorFromUser(input.userId),
+      beneficiary: { accountRef: checked.normalized, name: input.beneficiaryName ?? null },
+    });
+  } catch (error) {
+    if (error instanceof TravelRuleError) throw new WithdrawalError(error.code, error.message, error.status);
+    throw error;
   }
 
   const db = getDb();
@@ -502,6 +558,28 @@ export function createWithdrawal(input: CreateWithdrawalInput): CreateWithdrawal
     );
     recordTransaction(input.userId, 'withdrawal', asset, total, 0, 'pending', `Withdrawal ${withdrawalId}`);
   })();
+
+  // Persist the travel-rule message (when in scope) and mark the destination as
+  // used, so the next withdrawal to it is trusted. Both are outside the balance
+  // transaction: a failure here must not un-reserve the funds, and the message
+  // is keyed to the withdrawal id so it can be tied back.
+  if (travelRule.required) {
+    recordTravelRuleMessage({
+      direction: 'withdrawal',
+      originator: originatorFromUser(input.userId),
+      beneficiary: { accountRef: checked.normalized, name: input.beneficiaryName ?? null },
+      amountUsd: requestedUsd,
+      asset,
+      amount: String(amount),
+      referenceId: withdrawalId,
+    });
+  }
+  recordAddressOutcome({
+    userId: input.userId,
+    address: checked.normalized,
+    network,
+    amountUsd: requestedUsd,
+  });
 
   return {
     withdrawalId,

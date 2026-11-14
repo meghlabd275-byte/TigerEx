@@ -22,6 +22,7 @@ import { runSettlementCycle } from '@/lib/trading/settlement';
 import { scanPositions, processQueue } from '@/lib/trading/risk-supervisor';
 import { runKeeperCycle } from '@/lib/dex/keeper';
 import { runReconciliation } from '@/lib/compliance/reserves';
+import { runSurveillanceCycle } from '@/lib/compliance/surveillance';
 
 export interface JobResult {
   job: string;
@@ -112,6 +113,15 @@ export async function runScheduledCycle(): Promise<CycleReport> {
     jobs.push(await runJob('risk.scan', () => scanPositions()));
     jobs.push(await runJob('risk.process', () => processQueue()));
     jobs.push(await runJob('dex.keeper', () => runKeeperCycle()));
+
+    // Watch the venue's own markets for manipulation. The pass is idempotent per
+    // minute, so a redundant cycle raises nothing new.
+    jobs.push(
+      await runJob('surveillance.scan', () => {
+        const result = runSurveillanceCycle();
+        return { scanned: result.scanned, raised: result.alerts.length };
+      }),
+    );
 
     // Reconcile user liabilities against recorded treasury holdings every cycle.
     // A shortfall is reported (and surfaced to the operator) rather than hidden.
