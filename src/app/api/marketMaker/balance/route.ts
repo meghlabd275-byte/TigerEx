@@ -1,49 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { marketMakerStatus } from '@/lib/trading/venue-market-maker';
+import { NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
 
-// Get market maker balance
+/**
+ * Venue market-maker status for an authenticated client.
+ *
+ * This is the venue's own desk, so the figures are the venue's public liquidity
+ * state (spread, quoted size, live inventory), not a user's account. It is
+ * served same-origin from the venue's own database; there is no backend hop.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/marketMaker/balance`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch market maker balance' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Market maker balance API error:', error);
-    return NextResponse.json(
-      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ success: true, markets: marketMakerStatus() }, { headers: NO_STORE });
 }

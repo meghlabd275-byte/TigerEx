@@ -65,6 +65,7 @@ const MODULES = [
   'src/lib/leaderboard/traders.ts',
   'src/lib/bots/instances.ts',
   'src/lib/bots/runner.ts',
+  'src/lib/trading/venue-market-maker.ts',
   'src/lib/earn/launchpool.ts',
   'src/lib/earn/holdings.ts',
   'src/lib/wallet/bridge.ts',

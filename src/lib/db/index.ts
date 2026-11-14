@@ -1006,6 +1006,21 @@ function initializeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_trading_bots_user ON trading_bots(user_id);
 
+    -- Venue market-maker configuration: one row per market the desk quotes.
+    -- The desk is the venue's own liquidity provider; it is off until an
+    -- operator enables a market here.
+    CREATE TABLE IF NOT EXISTS market_maker_config (
+      symbol TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      spread REAL NOT NULL,
+      quote_quantity REAL NOT NULL,
+      max_inventory REAL NOT NULL,
+      target_inventory REAL NOT NULL DEFAULT 0,
+      max_deviation REAL NOT NULL DEFAULT 0.1,
+      target_price REAL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     -- Copy-trading leader profiles.
     CREATE TABLE IF NOT EXISTS copy_traders (
       trader_id TEXT PRIMARY KEY,
@@ -2502,6 +2517,9 @@ function applyColumnMigrations(database: Database.Database) {
     // it compares through `datetime()` like every other row.
     { table: 'users', column: 'withdrawal_hold_until', definition: 'TEXT' },
     { table: 'users', column: 'withdrawal_hold_reason', definition: 'TEXT' },
+    // Marks an operational account the venue owns (the market-maker desk), so it
+    // can be excluded from user statistics and protected from client login.
+    { table: 'users', column: 'is_system', definition: 'INTEGER NOT NULL DEFAULT 0' },
     // The last time a sanctions screen was recorded for the account, so an
     // operator can prove the check ran rather than assuming it did.
     { table: 'users', column: 'sanctions_checked_at', definition: 'TEXT' },
