@@ -7,16 +7,16 @@ import (
 	"math"
 	"strings"
 
-
 	"tigerex/backend/internal/api"
+	"tigerex/backend/internal/exchange"
 )
 
 var (
-	ErrInvalidSymbol = errors.New("invalid symbol")
-	ErrInvalidOrder = errors.New("invalid order")
-	ErrNoLiquidity = errors.New("no liquidity")
-	ErrTradingPaused = errors.New("trading paused")
-	ErrMarketDataUnavailable = errors.New("market data provider is not configured")
+	ErrInvalidSymbol          = errors.New("invalid symbol")
+	ErrInvalidOrder           = errors.New("invalid order")
+	ErrNoLiquidity            = errors.New("no liquidity")
+	ErrTradingPaused          = errors.New("trading paused")
+	ErrMarketDataUnavailable  = errors.New("market data provider is not configured")
 	ErrPersistenceUnavailable = errors.New("durable trading persistence is not configured")
 )
 
@@ -26,22 +26,22 @@ type Config struct {
 
 // OrderRequest represents an order request
 type OrderRequest struct {
-	UserID            string
+	UserID           string
 	Symbol           string
 	Side             string
 	Type             string
-	Quantity        float64
-	Price           float64
-	StopPrice       float64
-	TimeInForce     string
-	ClientOrderID   string
+	Quantity         float64
+	Price            float64
+	StopPrice        float64
+	TimeInForce      string
+	ClientOrderID    string
 	TrailingDistance float64
-	ReduceOnly      bool
+	ReduceOnly       bool
 }
 
 // StakeRequest represents a stake request
 type StakeRequest struct {
-	UserID     string
+	UserID    string
 	Asset     string
 	Amount    float64
 	ProductID string
@@ -55,23 +55,55 @@ type UnstakeRequest struct {
 	Amount     float64
 }
 
-// Service handles trading operations
+// Service handles trading operations.
 type Service struct {
 	config Config
+	store  *exchange.Store
 }
 
-// NewService creates a new trading service
+// NewService creates a new trading service. Without a store every market-data
+// and order call fails closed.
 func NewService(config Config) *Service {
 	return &Service{config: config}
 }
 
-// GetMarkets returns no markets until an authoritative market repository is configured.
-// Never advertise hard-coded or illustrative instruments as tradable.
-func (s *Service) GetMarkets(ctx context.Context) []api.Market {
-	return nil
+// WithStore attaches the durable PostgreSQL data layer. When set, market data,
+// orders, balances and custody reads and writes go to the database instead of
+// returning "unavailable".
+func (s *Service) WithStore(store *exchange.Store) *Service {
+	s.store = store
+	return s
 }
 
-// GetTicker retrieves ticker for a symbol.
+// Store returns the attached data layer, or nil when unconfigured.
+func (s *Service) Store() *exchange.Store {
+	return s.store
+}
+
+// GetMarkets returns every tradable market. With no store configured it returns
+// an empty list rather than advertising hard-coded or illustrative instruments.
+func (s *Service) GetMarkets(ctx context.Context) []api.Market {
+	markets, err := s.ListMarkets(ctx)
+	if err != nil {
+		return nil
+	}
+	return markets
+}
+
+// ListMarkets returns every tradable market, or an error when the market
+// repository is unreachable so the caller can report unavailable rather than an
+// empty exchange.
+func (s *Service) ListMarkets(ctx context.Context) ([]api.Market, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.store == nil {
+		return nil, ErrMarketDataUnavailable
+	}
+	return s.store.ListMarkets(ctx)
+}
+
+// GetTicker retrieves 24-hour ticker data for a symbol from the trade tape.
 func (s *Service) GetTicker(ctx context.Context, symbol string) (*api.Ticker, error) {
 	if strings.TrimSpace(symbol) == "" {
 		return nil, ErrInvalidSymbol
@@ -79,7 +111,10 @@ func (s *Service) GetTicker(ctx context.Context, symbol string) (*api.Ticker, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, ErrMarketDataUnavailable
+	if s.store == nil {
+		return nil, ErrMarketDataUnavailable
+	}
+	return s.store.Ticker24h(ctx, symbol)
 }
 
 // GetOrderBookDepth retrieves order book depth.
@@ -93,7 +128,10 @@ func (s *Service) GetOrderBookDepth(ctx context.Context, symbol string, limit in
 	if limit <= 0 || limit > 1000 {
 		return nil, ErrInvalidOrder
 	}
-	return nil, ErrMarketDataUnavailable
+	if s.store == nil {
+		return nil, ErrMarketDataUnavailable
+	}
+	return s.store.OrderBook(ctx, symbol, limit)
 }
 
 // GetRecentTrades retrieves recent trades from durable market-data storage.
@@ -104,7 +142,10 @@ func (s *Service) GetRecentTrades(ctx context.Context, symbol string, limit int,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, ErrMarketDataUnavailable
+	if s.store == nil {
+		return nil, ErrMarketDataUnavailable
+	}
+	return s.store.RecentTrades(ctx, symbol, limit, fromID)
 }
 
 // GetKlines retrieves kline/candlestick data
@@ -115,17 +156,33 @@ func (s *Service) GetKlines(ctx context.Context, symbol, interval string, startT
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, ErrMarketDataUnavailable
+	if s.store == nil {
+		return nil, ErrMarketDataUnavailable
+	}
+	return s.store.Klines(ctx, symbol, interval, startTime, endTime, limit)
 }
 
-// GetExchangeInfo reports degraded service state until market metadata is sourced from storage.
+// GetExchangeInfo reports live exchange metadata from storage. When the store is
+// unavailable it reports a degraded status rather than a frozen symbol list.
 func (s *Service) GetExchangeInfo(ctx context.Context) *api.ExchangeInfo {
-	return &api.ExchangeInfo{
-		Timezone: "UTC",
-		ServerTime: api.Now(),
-		ExchangeStatus: "degraded",
-		Symbols: nil,
+	if s.store == nil {
+		return &api.ExchangeInfo{
+			Timezone:       "UTC",
+			ServerTime:     api.Now(),
+			ExchangeStatus: "degraded",
+			Symbols:        nil,
+		}
 	}
+	info, err := s.store.ExchangeInfo(ctx)
+	if err != nil {
+		return &api.ExchangeInfo{
+			Timezone:       "UTC",
+			ServerTime:     api.Now(),
+			ExchangeStatus: "degraded",
+			Symbols:        nil,
+		}
+	}
+	return info
 }
 
 // CreateOrder validates request shape but refuses execution until live market metadata,
@@ -167,7 +224,23 @@ func (s *Service) CreateOrder(ctx context.Context, req *OrderRequest) (*api.Orde
 	default:
 		return nil, ErrInvalidOrder
 	}
-	return nil, ErrTradingPaused
+	if s.store == nil {
+		return nil, ErrTradingPaused
+	}
+	// Persist the order and reserve its funds in one transaction. Matching is the
+	// canonical engine's job; this never fabricates a fill.
+	return s.store.PlaceOrder(ctx, &exchange.OrderRequest{
+		UserID:        req.UserID,
+		Symbol:        req.Symbol,
+		Side:          side,
+		Type:          orderType,
+		Quantity:      req.Quantity,
+		Price:         req.Price,
+		StopPrice:     req.StopPrice,
+		TimeInForce:   req.TimeInForce,
+		ClientOrderID: req.ClientOrderID,
+		ReduceOnly:    req.ReduceOnly,
+	})
 }
 
 // getMarket retrieves market by symbol
@@ -197,7 +270,10 @@ func (s *Service) GetOrders(ctx context.Context, userID, symbol, side, status st
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, ErrPersistenceUnavailable
+	if s.store == nil {
+		return nil, ErrPersistenceUnavailable
+	}
+	return s.store.GetOrders(ctx, userID, symbol, side, status, limit)
 }
 
 // GetOrder retrieves a single order from durable storage.
@@ -208,10 +284,13 @@ func (s *Service) GetOrder(ctx context.Context, userID, orderID string) (*api.Or
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, ErrPersistenceUnavailable
+	if s.store == nil {
+		return nil, ErrPersistenceUnavailable
+	}
+	return s.store.GetOrder(ctx, userID, orderID)
 }
 
-// CancelOrder refuses to claim a cancellation without durable order and ledger state.
+// CancelOrder cancels a resting order and releases the funds it locked.
 func (s *Service) CancelOrder(ctx context.Context, userID, orderID string) (*api.Order, error) {
 	if strings.TrimSpace(userID) == "" || strings.TrimSpace(orderID) == "" {
 		return nil, ErrInvalidOrder
@@ -219,10 +298,13 @@ func (s *Service) CancelOrder(ctx context.Context, userID, orderID string) (*api
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, ErrPersistenceUnavailable
+	if s.store == nil {
+		return nil, ErrPersistenceUnavailable
+	}
+	return s.store.CancelOrder(ctx, userID, orderID)
 }
 
-// CancelAllOrders refuses to claim cancellations without durable order and ledger state.
+// CancelAllOrders cancels every open order for a user, releasing their funds.
 func (s *Service) CancelAllOrders(ctx context.Context, userID, symbol string) ([]api.Order, error) {
 	if strings.TrimSpace(userID) == "" {
 		return nil, ErrInvalidOrder
@@ -230,7 +312,10 @@ func (s *Service) CancelAllOrders(ctx context.Context, userID, symbol string) ([
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, ErrPersistenceUnavailable
+	if s.store == nil {
+		return nil, ErrPersistenceUnavailable
+	}
+	return s.store.CancelAllOrders(ctx, userID, symbol)
 }
 
 // GetUserTrades retrieves trades from durable trade history.
@@ -241,7 +326,10 @@ func (s *Service) GetUserTrades(ctx context.Context, userID, symbol string, limi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, ErrPersistenceUnavailable
+	if s.store == nil {
+		return nil, ErrPersistenceUnavailable
+	}
+	return s.store.GetUserTrades(ctx, userID, symbol, limit)
 }
 
 // GetStakingProducts returns no products until configured products are loaded from
@@ -295,8 +383,8 @@ func (s *Service) GetLendingProducts(ctx context.Context) []api.LendingProduct {
 
 // StakingPosition represents a staking position (for API compatibility)
 type StakingPosition struct {
-	ID              string  `json:"id"`
-	UserID          string  `json:"userId"`
+	ID             string  `json:"id"`
+	UserID         string  `json:"userId"`
 	Asset          string  `json:"asset"`
 	Amount         float64 `json:"amount"`
 	APY            float64 `json:"apy"`

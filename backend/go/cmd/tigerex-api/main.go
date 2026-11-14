@@ -33,6 +33,7 @@ import (
 	"tigerex/backend/internal/api"
 	"tigerex/backend/internal/auth"
 	"tigerex/backend/internal/earn"
+	"tigerex/backend/internal/exchange"
 	"tigerex/backend/internal/kyc"
 	"tigerex/backend/internal/security"
 	"tigerex/backend/internal/totp"
@@ -214,11 +215,42 @@ func init() {
 		log.Printf("TIGEREX_KYC_DB is not set; KYC endpoints will report unavailable")
 	}
 
+	// The exchange data layer backs market data, orders, balances and custody.
+	// It shares the same database as authentication and the admin console; with
+	// no DSN it stays nil and every dependent endpoint reports unavailable rather
+	// than serving fabricated data.
+	var exchangeStore *exchange.Store
+	if dsn := os.Getenv("TIGEREX_DATABASE_DSN"); dsn != "" {
+		store, err := exchange.New(context.Background(), dsn)
+		if err != nil {
+			log.Fatalf("failed to initialise exchange store: %v", err)
+		}
+		if err := store.EnsureSchema(context.Background()); err != nil {
+			log.Fatalf("failed to initialise exchange schema: %v", err)
+		}
+		if mnemonic := os.Getenv("TIGEREX_HD_MNEMONIC"); mnemonic != "" {
+			store = store.WithHD(exchange.NewHDDeriver(mnemonic, os.Getenv("TIGEREX_HD_PASSPHRASE")))
+			log.Printf("HD deposit-address derivation enabled")
+		} else {
+			log.Printf("TIGEREX_HD_MNEMONIC is not set; deposit-address requests will report unavailable")
+		}
+		exchangeStore = store
+		log.Printf("exchange persistence enabled")
+	} else {
+		log.Printf("TIGEREX_DATABASE_DSN is not set; market data, orders, balances and custody will report unavailable")
+	}
+
 	walletSvc = wallet.NewService(wallet.Config{
 		MasterKey: masterKey,
 	})
+	if exchangeStore != nil {
+		walletSvc = walletSvc.WithStore(exchangeStore)
+	}
 
 	tradingSvc = trading.NewService(trading.Config{})
+	if exchangeStore != nil {
+		tradingSvc = tradingSvc.WithStore(exchangeStore)
+	}
 
 	// Savings, lending, and sub-accounts need durable storage: a position
 

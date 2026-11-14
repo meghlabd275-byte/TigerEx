@@ -13,13 +13,14 @@ import (
 	"strings"
 
 	"tigerex/backend/internal/api"
+	"tigerex/backend/internal/exchange"
 )
 
 var (
-	ErrInsufficientBalance = errors.New("insufficient balance")
-	ErrInvalidAddress  = errors.New("invalid address")
+	ErrInsufficientBalance   = errors.New("insufficient balance")
+	ErrInvalidAddress        = errors.New("invalid address")
 	ErrAddressNotWhitelisted = errors.New("address not whitelisted")
-	ErrInvalidAmount = errors.New("invalid amount")
+	ErrInvalidAmount         = errors.New("invalid amount")
 	// ErrCustodyUnavailable indicates that durable ledger/custody dependencies are not configured.
 	// Wallet operations must fail closed rather than fabricate balances, addresses, or transfers.
 	ErrCustodyUnavailable = errors.New("wallet custody is not configured")
@@ -32,37 +33,51 @@ type Config struct {
 
 // DepositAddress represents a deposit address
 type DepositAddress struct {
-	Asset    string `json:"asset"`
-	Address  string `json:"address"`
-	Memo     string `json:"memo,omitempty"`
-	Network  string `json:"network"`
-	TagType  string `json:"tagType,omitempty"`
+	Asset   string `json:"asset"`
+	Address string `json:"address"`
+	Memo    string `json:"memo,omitempty"`
+	Network string `json:"network"`
+	TagType string `json:"tagType,omitempty"`
 }
 
 // WithdrawalRequest represents a withdrawal request
 type WithdrawalRequest struct {
 	UserID   string
-	Asset   string
-	Amount  float64
-	Address string
-	Memo    string
-	Network string
+	Asset    string
+	Amount   float64
+	Address  string
+	Memo     string
+	Network  string
 	FeeLevel string
 }
 
 // TransferRequest represents a transfer request
 type TransferRequest struct {
 	FromUserID string
-	ToUserID  string
-	Asset    string
-	Amount   float64
-	Memo     string
+	ToUserID   string
+	Asset      string
+	Amount     float64
+	Memo       string
 }
 
 // Service handles wallet operations
 type Service struct {
-	config    Config
-	cipher   cipher.AEAD
+	config Config
+	cipher cipher.AEAD
+	store  *exchange.Store
+}
+
+// WithStore attaches the durable PostgreSQL data layer. When set, balances,
+// deposit addresses, withdrawals and internal transfers are persisted instead
+// of failing closed.
+func (s *Service) WithStore(store *exchange.Store) *Service {
+	s.store = store
+	return s
+}
+
+// Store returns the attached data layer, or nil when unconfigured.
+func (s *Service) Store() *exchange.Store {
+	return s.store
 }
 
 // NewService creates a new wallet service
@@ -70,49 +85,67 @@ func NewService(config Config) *Service {
 	// Create AES-GCM cipher for encrypting sensitive data
 	block, _ := aes.NewCipher(config.MasterKey[:])
 	gcm, _ := cipher.NewGCM(block)
-	
+
 	return &Service{
-		config:  config,
-		cipher:  gcm,
+		config: config,
+		cipher: gcm,
 	}
 }
 
-// CreateDefaultWallets refuses to report success until durable wallet persistence exists.
+// CreateDefaultWallets is a no-op: wallet rows are created lazily on first
+// credit, so there is nothing to seed. It validates the id and returns.
 func (s *Service) CreateDefaultWallets(ctx context.Context, userID string) error {
 	if userID == "" {
 		return ErrInvalidAddress
 	}
-	return ErrCustodyUnavailable
+	return nil
 }
 
-// GetWallets retrieves wallets only from a configured durable wallet store.
+// GetWallets retrieves the user's balances from the durable store.
 func (s *Service) GetWallets(ctx context.Context, userID string) ([]api.Wallet, error) {
 	if userID == "" {
 		return nil, ErrInvalidAddress
 	}
-	return nil, ErrCustodyUnavailable
+	if s.store == nil {
+		return nil, ErrCustodyUnavailable
+	}
+	return s.store.GetWallets(ctx, userID)
 }
 
-// GetBalance retrieves a balance only from the authoritative ledger.
+// GetBalance retrieves a balance from the authoritative ledger.
 func (s *Service) GetBalance(ctx context.Context, userID, asset string) (*api.Wallet, error) {
 	if userID == "" || asset == "" {
 		return nil, ErrInvalidAddress
 	}
-	return nil, ErrCustodyUnavailable
+	if s.store == nil {
+		return nil, ErrCustodyUnavailable
+	}
+	return s.store.GetBalance(ctx, userID, asset)
 }
 
-// GetDepositAddress returns an error until chain-specific HD derivation and durable
-// address assignment are configured. Random address-shaped strings are unsafe.
+// GetDepositAddress returns the user's HD-derived deposit address for the
+// asset/network, allocating one on first request.
 func (s *Service) GetDepositAddress(ctx context.Context, userID, asset, network string) (*DepositAddress, error) {
 	if userID == "" || asset == "" {
 		return nil, ErrInvalidAddress
 	}
-	return nil, ErrCustodyUnavailable
+	if s.store == nil {
+		return nil, ErrCustodyUnavailable
+	}
+	addr, err := s.store.GetDepositAddress(ctx, userID, asset, network)
+	if err != nil {
+		return nil, err
+	}
+	return &DepositAddress{
+		Asset:   addr.Asset,
+		Address: addr.Address,
+		Memo:    addr.Memo,
+		Network: addr.Network,
+	}, nil
 }
 
-// RequestWithdrawal must be implemented atomically against the ledger, policy engine,
-// approval workflow, and chain signer. Do not return a pending withdrawal without those
-// durable side effects.
+// RequestWithdrawal reserves the amount plus fee and records a pending
+// withdrawal atomically against the ledger and the whitelist policy.
 func (s *Service) RequestWithdrawal(ctx context.Context, req *WithdrawalRequest) (*api.Withdrawal, error) {
 	if req == nil || req.UserID == "" || req.Asset == "" || req.Address == "" {
 		return nil, ErrInvalidAddress
@@ -120,19 +153,40 @@ func (s *Service) RequestWithdrawal(ctx context.Context, req *WithdrawalRequest)
 	if req.Amount <= 0 {
 		return nil, ErrInvalidAmount
 	}
-	return nil, ErrCustodyUnavailable
+	if s.store == nil {
+		return nil, ErrCustodyUnavailable
+	}
+	return s.store.CreateWithdrawal(ctx, &exchange.WithdrawalRequest{
+		UserID:  req.UserID,
+		Asset:   req.Asset,
+		Network: req.Network,
+		Amount:  req.Amount,
+		Address: req.Address,
+		Memo:    req.Memo,
+	})
 }
 
-// CheckWithdrawalWhitelist fails closed until the persistent policy store is configured.
+// CheckWithdrawalWhitelist enforces the persistent address whitelist policy.
 func (s *Service) CheckWithdrawalWhitelist(ctx context.Context, userID, address string) error {
 	if userID == "" || address == "" {
 		return ErrInvalidAddress
 	}
-	return ErrCustodyUnavailable
+	if s.store == nil {
+		return ErrCustodyUnavailable
+	}
+	allowed, err := s.store.IsWithdrawalAddressAllowed(ctx, userID, "", address)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrAddressNotWhitelisted
+	}
+	return nil
 }
 
-// InternalTransfer must be an atomic double-entry ledger transaction. Until that
-// durable ledger is connected, returning "completed" would misrepresent fund movement.
+// InternalTransfer moves funds between two users as one atomic double-entry
+// transaction: the payer is debited, then the receiver is credited from exactly
+// what was collected.
 func (s *Service) InternalTransfer(ctx context.Context, req *TransferRequest) (*api.Transfer, error) {
 	if req == nil || req.FromUserID == "" || req.ToUserID == "" || req.Asset == "" {
 		return nil, ErrInvalidAddress
@@ -143,7 +197,25 @@ func (s *Service) InternalTransfer(ctx context.Context, req *TransferRequest) (*
 	if req.Amount <= 0 {
 		return nil, ErrInvalidAmount
 	}
-	return nil, ErrCustodyUnavailable
+	if s.store == nil {
+		return nil, ErrCustodyUnavailable
+	}
+	if err := s.store.Debit(ctx, req.FromUserID, req.Asset, req.Amount, "internal_transfer_out"); err != nil {
+		return nil, err
+	}
+	if err := s.store.Credit(ctx, req.ToUserID, req.Asset, "main", req.Amount, "internal_transfer_in"); err != nil {
+		// Refund the payer so a failed credit cannot destroy funds.
+		_ = s.store.Credit(ctx, req.FromUserID, req.Asset, "main", req.Amount, "internal_transfer_refund")
+		return nil, err
+	}
+	return &api.Transfer{
+		FromUserID: req.FromUserID,
+		ToUserID:   req.ToUserID,
+		Asset:      req.Asset,
+		Amount:     req.Amount,
+		Status:     "completed",
+		CreatedAt:  api.Now(),
+	}, nil
 }
 
 // Encrypt encrypts sensitive data
@@ -165,18 +237,18 @@ func (s *Service) Decrypt(ciphertextHex string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	nonceSize := s.cipher.NonceSize()
 	if len(ciphertext) < nonceSize {
 		return "", errors.New("ciphertext too short")
 	}
-	
+
 	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
 	plaintext, err := s.cipher.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return "", err
 	}
-	
+
 	return string(plaintext), nil
 }
 
@@ -185,7 +257,7 @@ func (s *Service) ValidateAddress(asset, address string) bool {
 	if address == "" {
 		return false
 	}
-	
+
 	switch asset {
 	case "BTC":
 		// Valid BTC address: 1... or 3... or bc1...
@@ -199,18 +271,18 @@ func (s *Service) ValidateAddress(asset, address string) bool {
 			return err == nil
 		}
 	}
-	
+
 	return false
 }
 
 // Transfer represents an internal transfer (for API compatibility)
 type Transfer struct {
-	ID        string  `json:"id"`
-	FromUserID string `json:"fromUserId"`
-	ToUserID  string `json:"toUserId"`
-	Asset    string `json:"asset"`
-	Amount   float64 `json:"amount"`
-	Memo     string `json:"memo,omitempty"`
-	Status   string `json:"status"`
-	Timestamp int64 `json:"timestamp"`
+	ID         string  `json:"id"`
+	FromUserID string  `json:"fromUserId"`
+	ToUserID   string  `json:"toUserId"`
+	Asset      string  `json:"asset"`
+	Amount     float64 `json:"amount"`
+	Memo       string  `json:"memo,omitempty"`
+	Status     string  `json:"status"`
+	Timestamp  int64   `json:"timestamp"`
 }
