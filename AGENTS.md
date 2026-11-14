@@ -179,10 +179,54 @@ uses `level`, and `users` has `jurisdiction` (not `country`).
 
 ## Admin backends (two exist)
 
-The canonical API is the Go gateway (`backend/go/internal/api/gateway.go`,
-served on 8080; the frontend's `NEXT_PUBLIC_API_URL` points at it). Its order,
-balance, deposit and withdrawal handlers are deliberate fail-closed stubs that
-return `unavailable` — this is the "no simulation" rule, not a bug.
+The canonical API is the Go gateway. Note there are **two** Go HTTP servers:
+
+- `backend/go/internal/api/gateway.go` — `api.NewServer`, never called anywhere.
+  **Dead code**; do not treat it as the live server.
+- `backend/go/cmd/tigerex-api/main.go` (Gin, ~2700 lines) — the real server the
+  frontend's `NEXT_PUBLIC_API_URL` points at.
+
+### Go exchange data layer (`internal/exchange`)
+
+`internal/exchange` is the durable PostgreSQL store behind market data, orders,
+balances and custody. `cmd/tigerex-api/main.go` wires it from
+`TIGEREX_DATABASE_DSN`; with no DSN the store is nil and every dependent
+endpoint reports `unavailable` rather than fabricating data.
+
+- Market data: `ListMarkets`, `Ticker24h` (from the trade tape), `OrderBook`
+  (aggregated resting orders), `RecentTrades`, `Klines` (bucketed trades).
+- Ledger: `Credit`/`Debit`/`Lock`/`Unlock`/`ConsumeLocked` spread a movement
+  across **every** wallet row that holds the asset and append to
+  `exchange_ledger_entries`. A debit that cannot be covered fails closed with
+  `ErrInsufficientFunds`.
+- Orders: `PlaceOrder` reserves funds in the same transaction that writes the
+  order; `CancelOrder`/`CancelAllOrders` release the reservation. Matching is
+  the Rust engine's job — this never fabricates a fill.
+- Custody: `GetDepositAddress` derives addresses with the audited BIP-39/BIP-32
+  code in `services/wallet` and stores only the public address. The derivation
+  index is **global per `(asset, network)`** — a per-user index would hand two
+  users the same address. `CreateWithdrawal` consumes the reservation and
+  enforces the canonical `withdrawal_addresses` whitelist (the same table
+  `internal/auth` writes; the whitelist is enforced at both layers).
+- `TIGEREX_HD_MNEMONIC` enables address derivation; unset means deposit-address
+  requests report unavailable. Tests live in `internal/exchange/store_test.go`
+  and run against a live database when `TIGEREX_TEST_DSN` is set (skipped
+  otherwise) — never mocked.
+
+`trading.Service` and `wallet.Service` (in `internal/`) carry the store via
+`WithStore`; `services/trading` and `services/wallet` are a separate, larger
+(and currently unwired) set.
+
+### Frontend proxy routes vs the Go gateway
+
+`src/app/api/**/route.ts` has two kinds: DB-backed handlers (`src/lib/db`, no
+external backend) and proxies to `TIGEREX_BACKEND_URL`. **126 proxy routes
+exist; 125 are unreferenced by any view** and their target paths do not match
+the Go gateway's routes (e.g. the proxy `/api/market/kline` calls
+`GET /market/kline`, but the gateway serves `GET /markets/:symbol/klines`), so
+they would 404 or 503. The views actually call the DB-backed routes
+(`/api/market/klines`, `/api/market/ticker24h`, `/api/wallet/balance`, ...).
+Do not build new views against the proxy routes; they are dead weight.
 
 `server/index.js` (Node, port 3000) and `server/admin-system.js` are a second,
 separate backend. `admin-system.js` is real but is not mounted by
