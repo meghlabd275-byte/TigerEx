@@ -40,6 +40,12 @@ import { futuresRates } from '@/lib/trading/spot-engine';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
 import { markPriceForContract, indexPriceFor } from '@/lib/trading/mark-price';
 import { fundingPayment } from '@/lib/oracle/aggregator';
+import {
+  isInverseContract,
+  notionalUsd,
+  positionValue,
+  unrealizedPnl as unrealizedPnlOf,
+} from '@/lib/trading/contract-math';
 import { recordRevenue } from '@/lib/trading/revenue';
 
 export class FuturesError extends Error {
@@ -260,7 +266,10 @@ export function placeFuturesOrder(userId: string, input: FuturesOrderInput): Fut
 
   const settlement = market.settlement_asset;
   const contractSize = Number(market.contract_size) || 1;
-  const notional = price * quantity * contractSize;
+  const inverse = isInverseContract(market.contract_type);
+  // The notional is quoted in USD for both contract kinds; an inverse
+  // contract's size is already USD, so its notional does not scale with price.
+  const notional = notionalUsd(quantity, price, contractSize, inverse);
 
   const db = getDb();
   // Hedge mode keeps a long and a short book per contract; one-way mode keeps a
@@ -293,7 +302,10 @@ export function placeFuturesOrder(userId: string, input: FuturesOrderInput): Fut
   // bps are the fallback when no fee schedule is installed.
   const rates = futuresRates(userId);
   const feeBps = rates.taker > 0 ? rates.taker * 10000 : Number(market.taker_fee_bps);
-  const takerFee = (notional * feeBps) / 10000;
+  // The fee is charged in the settlement asset, so an inverse contract's USD
+  // notional is converted to coin before the rate is applied.
+  const feeNotional = inverse ? positionValue(quantity, price, contractSize, inverse) : notional;
+  const takerFee = (feeNotional * feeBps) / 10000;
 
   if (reducing) {
     return reducePosition(db, market, existing!, quantity, price, takerFee, mark);
@@ -313,6 +325,7 @@ export function placeFuturesOrder(userId: string, input: FuturesOrderInput): Fut
     input.leverage,
     settlement,
     contractSize,
+    inverse,
     mark,
   );
 }
@@ -332,6 +345,7 @@ function openOrIncrease(
   requestedLeverage: number | undefined,
   settlement: string,
   contractSize: number,
+  inverse: boolean,
   mark: number,
 ): FuturesFillResult {
   const leverage = Number.isFinite(Number(requestedLeverage)) && Number(requestedLeverage) > 0
@@ -341,7 +355,9 @@ function openOrIncrease(
       : 10;
 
   const risk = resolveRisk(market, notional, leverage);
-  const requiredMargin = notional / risk.leverage;
+  // Margin is denominated in the settlement asset: for an inverse contract the
+  // USD notional is divided by the price to reach coin.
+  const requiredMargin = positionValue(quantity, price, contractSize, inverse) / risk.leverage;
 
   if (!covers(availableBalance(userId, settlement), requiredMargin + fee)) {
     throw new FuturesError('INSUFFICIENT_MARGIN', `Insufficient ${settlement} margin`);
@@ -365,6 +381,8 @@ function openOrIncrease(
     leverage: risk.leverage,
     margin: newMargin,
     maintenanceMarginRate: risk.maintenanceMarginRate,
+    contractSize,
+    inverse,
   });
   const liquidationPrice = 'error' in riskView ? 0 : riskView.liquidationPrice;
 
@@ -432,12 +450,23 @@ function reducePosition(
   mark: number,
 ): FuturesFillResult {
   const userId = existing.user_id;
-  const direction = existing.side === 'long' ? 1 : -1;
   const closeQuantity = Math.min(quantity, Number(existing.quantity));
   const entry = Number(existing.entry_price);
   const contractSize = Number(market.contract_size) || 1;
+  const inverse = isInverseContract(market.contract_type);
 
-  const grossPnl = (price - entry) * closeQuantity * direction * contractSize;
+  // Realised P&L in the settlement asset. A linear contract moves with the
+  // price difference; an inverse one is worth more coin as the price falls, so
+  // a short gains when the price rises. Getting this wrong overpays a winning
+  // short and underpays a losing long.
+  const grossPnl = unrealizedPnlOf({
+    inverse,
+    side: existing.side === 'long' ? 'long' : 'short',
+    quantity: closeQuantity,
+    entryPrice: entry,
+    markPrice: price,
+    contractSize,
+  });
   const releasedMargin = Number(existing.margin) * (closeQuantity / Number(existing.quantity));
   const remainingQuantity = Number(existing.quantity) - closeQuantity;
   const closing = remainingQuantity <= 1e-9;
@@ -558,8 +587,10 @@ export function closePosition(userId: string, positionId: string): FuturesFillRe
 
   const rates = futuresRates(userId);
   const feeBps = rates.taker > 0 ? rates.taker * 10000 : Number(market.taker_fee_bps);
-  const notional = mark * Number(existing.quantity) * (Number(market.contract_size) || 1);
-  const fee = (notional * feeBps) / 10000;
+  const contractSize = Number(market.contract_size) || 1;
+  const inverse = isInverseContract(market.contract_type);
+  const feeNotional = positionValue(Number(existing.quantity), mark, contractSize, inverse);
+  const fee = (feeNotional * feeBps) / 10000;
 
   return reducePosition(db, market, existing, Number(existing.quantity), mark, fee, mark);
 }
@@ -577,7 +608,9 @@ export function setLeverage(userId: string, symbol: string, leverage: number): P
     .get(userId, market.symbol) as PositionRow | undefined;
   if (!row) throw new FuturesError('NO_POSITION', 'No open position for this contract', 404);
 
-  const notional = Number(row.entry_price) * Number(row.quantity) * (Number(market.contract_size) || 1);
+  const contractSize = Number(market.contract_size) || 1;
+  const inverse = isInverseContract(market.contract_type);
+  const notional = notionalUsd(Number(row.quantity), Number(row.entry_price), contractSize, inverse);
   const risk = resolveRisk(market, notional, requested);
   if (risk.leverage < requested) {
     throw new FuturesError(
@@ -586,7 +619,7 @@ export function setLeverage(userId: string, symbol: string, leverage: number): P
     );
   }
 
-  const requiredMargin = notional / risk.leverage;
+  const requiredMargin = positionValue(Number(row.quantity), Number(row.entry_price), contractSize, inverse) / risk.leverage;
   const settlement = market.settlement_asset;
   const extra = requiredMargin - Number(row.margin);
 
@@ -602,6 +635,8 @@ export function setLeverage(userId: string, symbol: string, leverage: number): P
     leverage: risk.leverage,
     margin: requiredMargin,
     maintenanceMarginRate: risk.maintenanceMarginRate,
+    contractSize,
+    inverse,
   });
 
   try {
@@ -678,7 +713,12 @@ export function applyFunding(
     // from that pot — never credited out of thin air — so the book cannot mint
     // the settlement asset.
     const payments = positions.map((position) => {
-      const notional = Number(position.mark_price) * Number(position.quantity) * contractSize;
+      const notional = notionalUsd(
+        Number(position.quantity),
+        Number(position.mark_price),
+        contractSize,
+        isInverseContract(market.contract_type),
+      );
       // A negative payment is what the position owes; a positive one is what it
       // receives. `fundingPayment` already applies the long/short direction.
       return fundingPayment(notional, clamped, position.side === 'long' ? 'long' : 'short');
@@ -1068,8 +1108,10 @@ export function triggerConditionalOrders(): {
       const market = loadMarket(order.symbol);
       const rates = futuresRates(order.user_id);
       const feeBps = rates.taker > 0 ? rates.taker * 10000 : Number(market.taker_fee_bps);
-      const notional = mark * quantity * (Number(market.contract_size) || 1);
-      const fee = (notional * feeBps) / 10000;
+      const contractSize = Number(market.contract_size) || 1;
+      const inverse = isInverseContract(market.contract_type);
+      const feeNotional = positionValue(quantity, mark, contractSize, inverse);
+      const fee = (feeNotional * feeBps) / 10000;
 
       const run = db.transaction(() => {
         reducePosition(db, market, position, quantity, mark, fee, mark);

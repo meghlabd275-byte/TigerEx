@@ -16,6 +16,10 @@ export interface PositionRiskInput {
   /** Margin held for the position, in the settlement asset. */
   margin: number;
   maintenanceMarginRate: number;
+  /** Contract multiplier; defaults to 1 when omitted. */
+  contractSize?: number;
+  /** Inverse (`COIN_M`) contracts settle in coin and use different formulas. */
+  inverse?: boolean;
 }
 
 export interface PositionRisk {
@@ -30,6 +34,12 @@ export interface PositionRisk {
   liquidationPrice: number;
 }
 
+import {
+  notionalUsd,
+  unrealizedPnl as unrealizedPnlOf,
+  liquidationPrice as liquidationPriceOf,
+} from '@/lib/trading/contract-math';
+
 function positive(value: unknown): number | null {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -38,10 +48,11 @@ function positive(value: unknown): number | null {
 /**
  * Compute the risk metrics for a single derivative position.
  *
- * Unrealized P&L is (mark - entry) * quantity for a long and the negative for a
- * short. The liquidation price is the mark at which equity equals maintenance
- * margin, solved for price; it is reported as an absolute distance from entry
- * so it is meaningful for both sides.
+ * A linear contract's unrealized P&L is (mark - entry) * quantity * size for a
+ * long and the negative for a short; an inverse (`COIN_M`) contract's is
+ * direction * quantity * size * (1/entry - 1/mark), in coin. The liquidation
+ * price is the mark at which equity equals maintenance margin, solved for the
+ * contract's own pricing (see `contract-math.ts`).
  */
 export function positionRisk(input: PositionRiskInput): PositionRisk | { error: string } {
   const quantity = positive(input.quantity);
@@ -60,22 +71,32 @@ export function positionRisk(input: PositionRiskInput): PositionRisk | { error: 
     return { error: 'maintenanceMarginRate must be a fraction in (0, 1)' };
   }
 
-  const direction = input.side === 'long' ? 1 : -1;
-  const notional = markPrice * quantity;
-  const unrealizedPnl = (markPrice - entryPrice) * quantity * direction;
+  const contractSize = Number.isFinite(Number(input.contractSize)) && Number(input.contractSize) > 0
+    ? Number(input.contractSize)
+    : 1;
+  const inverse = input.inverse === true;
+
+  // Notional is quoted in USD: linear is price * quantity * size, inverse is
+  // quantity * size (its size is already USD). Unrealized P&L and the
+  // maintenance margin are denominated in the settlement asset, so an inverse
+  // contract's figures are divided by price to reach coin.
+  const notional = notionalUsd(quantity, markPrice, contractSize, inverse);
+  const unrealizedPnl = unrealizedPnlOf({ inverse, side: input.side, quantity, entryPrice, markPrice, contractSize });
   const equity = margin + unrealizedPnl;
-  const maintenanceMargin = notional * mmr;
+  const maintenanceMargin = inverse
+    ? (notional * mmr) / markPrice
+    : notional * mmr;
   const marginRatio = maintenanceMargin === 0 ? Infinity : equity / maintenanceMargin;
 
-  // Equity at liquidation = maintenanceMargin, i.e.
-  // margin + (P - entry) * q * dir = P * q * mmr
-  // Solve for P: P = (margin - entry * q * dir) / (q * (mmr - dir)).
-  // The sign of the denominator is `mmr - dir`, not `dir - mmr`; the latter
-  // negates the result, so every price clamped to zero and a trader saw a
-  // liquidation price of 0.
-  const denominator = quantity * (mmr - direction);
-  const liquidationPrice =
-    denominator === 0 ? 0 : Math.max(0, (margin - entryPrice * quantity * direction) / denominator);
+  const liquidationPrice = liquidationPriceOf({
+    inverse,
+    side: input.side,
+    quantity,
+    entryPrice,
+    contractSize,
+    margin,
+    maintenanceMarginRate: mmr,
+  });
 
   return {
     notional,

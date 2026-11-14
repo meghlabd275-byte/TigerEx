@@ -841,10 +841,35 @@ bodies past the depth/array/key/string/node bounds, control characters in
 strings (tab/newline allowed), and non-finite numbers. Fails closed. Tests:
 `scripts/test/input-guard.test.cjs`.
 
+## Linear vs inverse derivatives (`src/lib/trading/contract-math.ts`)
+
+The venue lists both linear (`USDT_M`, `USDC_M`, `RUSD_M`, `RYUSD_M`, `TGR_M`)
+and inverse (`COIN_M`) contracts. They are priced differently and every money
+path must branch on the contract type; running an inverse contract through the
+linear formulas credited a winning short an astronomically wrong amount of
+coin.
+
+- Linear: notional is `price * quantity * size`; P&L is
+  `(mark - entry) * quantity * size * direction`; margin and fees are that
+  notional over leverage / times the bps.
+- Inverse: the contract's size is already USD, so the USD notional is
+  `quantity * size` (price-independent); the settlement-asset (coin) value is
+  `quantity * size / price`; P&L is
+  `direction * quantity * size * (1/entry - 1/mark)`; margin and fees are the
+  coin value, so a `notionalUsd` figure is divided by price first.
+
+`contract-math.ts` is the single source for `isInverseContract`, `notionalUsd`,
+`positionValue`, `unrealizedPnl`, `requiredMargin` and `liquidationPrice`.
+`positionRisk` (`src/lib/risk/engine.ts`) takes `contractSize` and `inverse`;
+`futures-engine.ts`, `risk-supervisor.ts` (liquidation) and `adl.ts` all pass
+them through, so the open, close, funding, conditional-trigger, liquidation and
+ADL paths agree. Tests: `scripts/test/contract-math.test.cjs` (pure formulas)
+and `scripts/test/futures-inverse.test.cjs` (real balances through the engine).
+
 ## Verified toolchain matrix (this environment)
 
 Every layer builds and its tests pass: TypeScript (`npx tsc --noEmit`,
-`npm run test:logic` 1105, `npm run build`), Go 1.23 (`go build ./...`,
+`npm run test:logic` 1115, `npm run build`), Go 1.23 (`go build ./...`,
 `go test ./...`), C++ (`cmake --build`, `ctest` 2 suites), Rust
 (`cargo test --lib` in `backend/rust/matching-engine`, 13), Python
 (`python -m pytest` in `backend/python`). No layer is a placeholder.

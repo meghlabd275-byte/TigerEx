@@ -19,6 +19,7 @@ import { consumeLocked, creditAvailable, recordTransaction, LedgerError } from '
 import { recordAdl } from '@/lib/db/accounting';
 import { adlQueue, insuranceFundStatus, type AdlPosition } from '@/lib/risk/engine';
 import { markPriceFor } from '@/lib/trading/futures-engine';
+import { isInverseContract, notionalUsd, unrealizedPnl } from '@/lib/trading/contract-math';
 
 export class AdlError extends Error {
   constructor(
@@ -101,11 +102,12 @@ export function runAdl(contract: string): AdlResult {
   if (mark === null) throw new AdlError('NO_PRICE', `No mark price for ${contract}`, 409);
 
   const market = db
-    .prepare('SELECT settlement_asset, contract_size FROM futures_markets WHERE symbol = ?')
-    .get(contract) as { settlement_asset: string; contract_size: number } | undefined;
+    .prepare('SELECT settlement_asset, contract_type, contract_size FROM futures_markets WHERE symbol = ?')
+    .get(contract) as { settlement_asset: string; contract_type: string; contract_size: number } | undefined;
   if (!market) throw new AdlError('UNKNOWN_MARKET', `No market for ${contract}`, 404);
   const settlement = market.settlement_asset;
   const contractSize = Number(market.contract_size) || 1;
+  const inverse = isInverseContract(market.contract_type);
 
   const rows = db
     .prepare(
@@ -119,8 +121,14 @@ export function runAdl(contract: string): AdlResult {
   // that to its margin is the ADL priority the pure engine sorts on.
   const withProfit = rows
     .map((row) => {
-      const direction = row.side === 'long' ? 1 : -1;
-      const profit = (mark - Number(row.entry_price)) * Number(row.quantity) * direction * contractSize;
+      const profit = unrealizedPnl({
+        inverse,
+        side: row.side === 'long' ? 'long' : 'short',
+        quantity: Number(row.quantity),
+        entryPrice: Number(row.entry_price),
+        markPrice: mark,
+        contractSize,
+      });
       const margin = Number(row.margin);
       return { row, profit, pnlRatio: margin > 0 ? profit / margin : 0 };
     })
@@ -134,7 +142,7 @@ export function runAdl(contract: string): AdlResult {
     withProfit.map((entry) => ({
       userId: entry.row.user_id,
       side: entry.row.side === 'short' ? ('short' as const) : ('long' as const),
-      notional: Number(entry.row.quantity) * mark * contractSize,
+      notional: notionalUsd(Number(entry.row.quantity), mark, contractSize, inverse),
       leverage: Number(entry.row.leverage),
       pnlRatio: entry.pnlRatio,
       row: entry.row,

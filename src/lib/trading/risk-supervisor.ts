@@ -22,6 +22,7 @@ import { consumeLocked, recordTransaction, LedgerError } from '@/lib/db/ledger';
 import { recordFuturesLiquidation } from '@/lib/db/accounting';
 import { positionRisk } from '@/lib/risk/engine';
 import { riskTiers, markPriceFor, FuturesError } from '@/lib/trading/futures-engine';
+import { isInverseContract, notionalUsd, unrealizedPnl } from '@/lib/trading/contract-math';
 
 export interface PositionRow {
   position_id: string;
@@ -41,6 +42,7 @@ export interface PositionRow {
 interface MarketRow {
   symbol: string;
   settlement_asset: string;
+  contract_type: string;
   contract_size: number;
   maintenance_margin_rate: number;
 }
@@ -69,7 +71,7 @@ export function scanPositions(): ScanResult {
   const db = getDb();
   const markets = new Map<string, MarketRow>();
   for (const row of db
-    .prepare('SELECT symbol, settlement_asset, contract_size, maintenance_margin_rate FROM futures_markets')
+    .prepare('SELECT symbol, settlement_asset, contract_type, contract_size, maintenance_margin_rate FROM futures_markets')
     .all() as MarketRow[]) {
     markets.set(row.symbol, row);
   }
@@ -94,7 +96,8 @@ export function scanPositions(): ScanResult {
     }
 
     const contractSize = Number(market.contract_size) || 1;
-    const notional = mark * Number(position.quantity) * contractSize;
+    const inverse = isInverseContract(market.contract_type);
+    const notional = notionalUsd(Number(position.quantity), mark, contractSize, inverse);
     const risk = positionRisk({
       side: position.side === 'short' ? 'short' : 'long',
       quantity: Number(position.quantity),
@@ -103,6 +106,8 @@ export function scanPositions(): ScanResult {
       leverage: Number(position.leverage),
       margin: Number(position.margin),
       maintenanceMarginRate: maintenanceRate(market, notional),
+      contractSize,
+      inverse,
     });
 
     if ('error' in risk) {
@@ -190,7 +195,7 @@ export function processQueue(limit = 50): ProcessResult {
     }
 
     const market = db
-      .prepare('SELECT symbol, settlement_asset, contract_size, maintenance_margin_rate FROM futures_markets WHERE symbol = ?')
+      .prepare('SELECT symbol, settlement_asset, contract_type, contract_size, maintenance_margin_rate FROM futures_markets WHERE symbol = ?')
       .get(entry.symbol) as MarketRow | undefined;
     if (!market) {
       result.skipped.push(entry.entry_id);
@@ -205,9 +210,16 @@ export function processQueue(limit = 50): ProcessResult {
 
     const settlement = market.settlement_asset;
     const contractSize = Number(market.contract_size) || 1;
-    const direction = position.side === 'long' ? 1 : -1;
+    const inverse = isInverseContract(market.contract_type);
     const quantity = Number(position.quantity);
-    const grossPnl = (mark - Number(position.entry_price)) * quantity * direction * contractSize;
+    const grossPnl = unrealizedPnl({
+      inverse,
+      side: position.side === 'long' ? 'long' : 'short',
+      quantity,
+      entryPrice: Number(position.entry_price),
+      markPrice: mark,
+      contractSize,
+    });
     const margin = Number(position.margin);
 
     // The margin is consumed to cover the loss; whatever the loss exceeds is a

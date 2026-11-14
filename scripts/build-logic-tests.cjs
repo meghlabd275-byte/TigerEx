@@ -40,6 +40,7 @@ const MODULES = [
   'src/lib/trading/margin-engine.ts',
   'src/lib/trading/futures-engine.ts',
   'src/lib/trading/mark-price.ts',
+  'src/lib/trading/contract-math.ts',
   'src/lib/trading/risk-supervisor.ts',
   'src/lib/trading/adl.ts',
   'src/lib/risk/engine.ts',
