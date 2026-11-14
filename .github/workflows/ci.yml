@@ -203,6 +203,11 @@ jobs:
       - name: Test Rust exchange engine crate
         run: cargo test --manifest-path TigerEx/core_exchange_engine/Cargo.toml
 
+      - name: Test Rust settlement matching engine
+        run: |
+          cargo test --manifest-path backend/rust/matching-engine/Cargo.toml
+          cargo build --release --manifest-path backend/rust/matching-engine/Cargo.toml
+
       - name: Test Rust custody crates fail closed
         run: |
           rustc --edition 2021 --crate-type lib --test TigerEx/mpc_wallet/src/lib.rs -o /tmp/mpc_wallet_tests && /tmp/mpc_wallet_tests
