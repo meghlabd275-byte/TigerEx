@@ -16,24 +16,26 @@ audit, liquidity, insurance, banking, support).
 
 | Layer | Evidence | Count |
 | --- | --- | --- |
-| Frontend API route handlers | `src/app/api/**/route.ts` | 472 |
-| — DB-backed handlers (`src/lib/db`) | no external backend needed | 260 |
-| — Proxies to `TIGEREX_BACKEND_URL` (fail-closed 503) | `src/lib/backend-url.ts` | 133 |
+| Frontend API route handlers | `src/app/api/**/route.ts` | 475 |
+| — admin handlers | `src/app/api/admin/**/route.ts` | 80 |
+| — DB-backed handlers (`src/lib/db`) | no external backend needed | ~260 |
+| — Proxies to `TIGEREX_BACKEND_URL` (fail-closed 503) | `src/lib/backend-url.ts` | ~133 |
 | Frontend pages | `src/app/**/page.tsx` | 138 |
-| Frontend components | `src/components/**/*.tsx` | 42 |
-| Frontend logic modules | `src/lib/**/*.ts` | 165 |
-| Logic tests | `scripts/test/*.test.cjs` (75 files) | 1078 pass |
-| Go tests | `backend/go` `func Test*` | 305 |
-| Secondary module dirs | `TigerEx/*` | 173 (many overlapping) |
+| Frontend logic modules | `src/lib/**/*.ts` | 169 |
+| TypeScript LOC (frontend + lib) | `src/**/*.ts(x)` | ~111,000 |
+| Logic tests | `scripts/test/*.test.cjs` (80 files) | 1116 pass |
+| Go LOC / tests | `backend/go` + `integrations` | ~74,700 / 305 `func Test*` |
+| Rust LOC | `backend/rust` | ~69,000 |
+| C++ LOC | `backend/cpp` | ~12,400 |
 | Environment variables | `.env.example` | 94 |
 
-Verified toolchains in this environment: Node 24, npm 12. Go, Rust and CMake are
-**not installed here**, so `go build/test`, `cargo test` and `ctest` were not run
-in this session; their status below is taken from CI configuration and prior
-sessions, not re-measured now.
+Verified toolchains in this environment: Node 24, npm 12, g++ 14, Python 3.13.
+Go, Rust and CMake are **not installed here**, so `go build/test`, `cargo test`
+and `ctest` were not run in this session; their status below is taken from CI
+configuration and prior sessions, not re-measured now.
 
 Build/test results re-measured today: `npx tsc --noEmit` clean;
-`npm run test:logic` = 1078 pass / 0 fail.
+`npm run test:logic` = 1116 pass / 0 fail; `npm run build` green.
 
 ---
 
@@ -68,9 +70,17 @@ Build/test results re-measured today: `npx tsc --noEmit` clean;
 - **Spot** (`spot-engine.ts`, 1132 lines + pure `orderbook.ts`): limit, market,
   stop-limit, stop-market, iceberg; price-time priority; maker/taker fees; funds
   reserved before matching; a fill settles real balances and journals.
-- **Futures/perp** (`futures-engine.ts`): linear contracts, leverage, one-way /
-  hedge modes, funding, mark price, insurance fund, ADL, conditional orders
-  (stop-loss, take-profit, trailing stop), reduce-only, liquidation.
+- **Futures/perp** (`futures-engine.ts`): linear **and inverse** contracts,
+  leverage, one-way / hedge modes, funding, mark price, insurance fund, ADL,
+  conditional orders (stop-loss, take-profit, trailing stop), reduce-only,
+  liquidation. Inverse (`COIN_M`) pricing was fixed this session: the engine
+  now branches on the contract type through `contract-math.ts`
+  (`notionalUsd`, `positionValue`, `unrealizedPnl`, `requiredMargin`,
+  `liquidationPrice`) in the open, close, setLeverage, funding, conditional-
+  trigger, liquidation and ADL paths. Before the fix an inverse position was
+  priced with the linear formulas, which credited a winning short coin it never
+  earned and mis-charged fees. Tests: `scripts/test/contract-math.test.cjs`
+  (formulas) and `scripts/test/futures-inverse.test.cjs` (real BTC balances).
 - **Margin** (`margin-engine.ts`): cross/isolated mode, collateral LTV,
   borrow/repay, liquidation, interest curve.
 - **Options** (`options-engine.ts`) and **leveraged tokens / ETF**
@@ -207,8 +217,10 @@ real dependency is wired:
 - **Unified Trading Account (UTA)** across spot/futures/margin/options with
   portfolio margin and multi-asset collateral/haircuts.
 - **Portfolio margin** (only cross/isolated exist).
-- **Deliverable/quarterly futures**, inverse COIN-M at product level, and
-  TradFi-linked instruments (only an admin `tradfi/markets` route exists).
+- **Deliverable/quarterly futures** (dated contracts are listable and settle at
+  expiry) and TradFi-linked instruments (only an admin `tradfi/markets` route
+  exists). Inverse COIN-M is now priced correctly end-to-end (see A.2); what
+  remains is listing the actual inverse markets and their liquidity.
 - **Sub-accounts at scale** (300/master) with per-sub-account API keys and
   isolated balances — `account/subaccounts.ts` exists but is not a full product.
 - **Copy trading for CEX** is partial; DEX copy is more complete than CEX copy.

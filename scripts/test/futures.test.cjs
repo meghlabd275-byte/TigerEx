@@ -47,6 +47,12 @@ test('USDC-margined and inverse contracts are accepted', () => {
   assert.ok('market' in validateFuturesMarket({ ...validFutures, settlementAsset: 'BTC', contractType: 'COIN_M' }));
 });
 
+test('an inverse contract settled in a stablecoin is rejected', () => {
+  // The engine prices COIN_M in the base coin, so a stablecoin settlement
+  // would compute coin amounts but credit a stablecoin.
+  assert.ok('error' in validateFuturesMarket({ ...validFutures, settlementAsset: 'USDT', contractType: 'COIN_M' }));
+});
+
 test('an unknown settlement asset is rejected', () => {
   assert.ok('error' in validateFuturesMarket({ ...validFutures, settlementAsset: 'DOGE' }));
 });

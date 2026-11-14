@@ -10,6 +10,8 @@
 export const SYMBOL_RE = /^[A-Z0-9]{1,20}\/[A-Z0-9]{1,20}$/;
 
 const SETTLEMENT_ASSETS = ['USDT', 'USDC', 'RUSD', 'RYUSD', 'BTC', 'ETH', 'TGR'];
+/** Settlement assets that are stablecoins (linear contracts settle in these). */
+const STABLE_SETTLEMENT_ASSETS = ['USDT', 'USDC', 'RUSD', 'RYUSD'];
 const CONTRACT_TYPES = ['USDT_M', 'USDC_M', 'RUSD_M', 'RYUSD_M', 'COIN_M', 'TGR_M'];
 const LISTING_TYPES = ['perpetual', 'quarterly', 'bi_quarterly', 'delivery'];
 const MARGIN_MODES = ['cross', 'isolated'];
@@ -116,6 +118,12 @@ export function validateFuturesMarket(body: Record<string, unknown>): FuturesVal
   const contractType = String(body.contractType ?? 'USDT_M').trim().toUpperCase();
   if (!CONTRACT_TYPES.includes(contractType)) {
     return { error: `contractType must be one of ${CONTRACT_TYPES.join(', ')}` };
+  }
+  // An inverse contract is margined and settled in the base coin, so its
+  // settlement asset must be a coin. A COIN_M settled in a stablecoin would be
+  // priced with the inverse (coin) formulas but credit a stablecoin.
+  if (contractType === 'COIN_M' && STABLE_SETTLEMENT_ASSETS.includes(settlementAsset)) {
+    return { error: 'an inverse (COIN_M) contract must settle in a coin, not a stablecoin' };
   }
 
   const listingType = String(body.listingType ?? 'perpetual').trim().toLowerCase();

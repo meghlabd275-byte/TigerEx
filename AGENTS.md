@@ -869,7 +869,7 @@ and `scripts/test/futures-inverse.test.cjs` (real balances through the engine).
 ## Verified toolchain matrix (this environment)
 
 Every layer builds and its tests pass: TypeScript (`npx tsc --noEmit`,
-`npm run test:logic` 1115, `npm run build`), Go 1.23 (`go build ./...`,
+`npm run test:logic` 1116, `npm run build`), Go 1.23 (`go build ./...`,
 `go test ./...`), C++ (`cmake --build`, `ctest` 2 suites), Rust
 (`cargo test --lib` in `backend/rust/matching-engine`, 13), Python
 (`python -m pytest` in `backend/python`). No layer is a placeholder.
