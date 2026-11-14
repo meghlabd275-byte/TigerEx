@@ -1,59 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { listFiatOrders } from '@/lib/fiat/ramp';
+import { NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
 
-// Get fiat payments
+/**
+ * The authenticated user's full fiat payment history (buys and sells), newest
+ * first, read from this venue's own `fiat_orders` table.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const { searchParams } = new URL(request.url);
-    const orderId = searchParams.get('orderId');
-    const startTime = searchParams.get('startTime');
-    const endTime = searchParams.get('endTime');
-    const limit = searchParams.get('limit') || '100';
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const { searchParams } = request.nextUrl;
+  const limit = Math.min(Math.max(Number(searchParams.get('limit')) || 20, 1), 100);
+  const offset = Math.max(Number(searchParams.get('offset')) || 0, 0);
 
-    let url = `${API_BASE_URL}/fiat/payments?limit=${limit}`;
-    if (orderId) url += `&orderId=${orderId}`;
-    if (startTime) url += `&startTime=${startTime}`;
-    if (endTime) url += `&endTime=${endTime}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch fiat payments' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Fiat payments API error:', error);
-    return NextResponse.json(
-      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
-      { status: 500 }
-    );
-  }
+  const orders = listFiatOrders(auth.user.userId, limit, offset);
+  return NextResponse.json({ success: true, data: orders }, { headers: NO_STORE });
 }

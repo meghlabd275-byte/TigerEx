@@ -20,6 +20,8 @@ const MODULES = [
   'src/lib/db/index.ts',
   'src/lib/db/portfolio.ts',
   'src/lib/db/convert.ts',
+  'src/lib/fiat/ramp.ts',
+  'src/lib/fiat/provider.ts',
   'src/lib/markets/listing.ts',
   'src/lib/markets/futures.ts',
   'src/lib/markets/instruments.ts',

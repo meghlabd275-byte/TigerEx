@@ -1,107 +1,87 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { requireSession } from '@/lib/db/session';
+import { placeFiatOrder, listFiatOrders, FiatError } from '@/lib/fiat/ramp';
+import { getFiatProvider } from '@/lib/fiat/provider';
+import { enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
 
-// Create fiat deposit
+/**
+ * Start a fiat deposit (a fiat `buy`): pay fiat, receive crypto.
+ *
+ * The order is priced and recorded here, then handed to the provider. When no
+ * provider is configured the order is refused — a deposit is never reported as
+ * started when nothing could settle it. The crypto is credited only after the
+ * provider's signed callback confirms the fiat was taken.
+ */
 export async function POST(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
+  const guard = enforceRequestGuards(request, 'fiat.deposit.post');
+  if (guard) return guard;
+
+  const provider = getFiatProvider();
+  if (!provider) {
     return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
+      { success: false, error: { code: 'FIAT_UNAVAILABLE', message: 'No fiat provider is configured on this deployment' } },
+      { status: 503, headers: NO_STORE },
     );
   }
+
+  let body: Record<string, unknown>;
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    const body = await request.json();
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ success: false, error: { code: 'INVALID_BODY', message: 'Invalid JSON body' } }, { status: 400 });
+  }
 
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authorization required' },
-        { status: 401 }
-      );
-    }
+  const fiatCurrency = String(body.fiatCurrency ?? body.currency ?? '').toUpperCase();
+  const cryptoCurrency = String(body.cryptoCurrency ?? body.asset ?? '').toUpperCase();
+  const fiatAmount = Number(body.fiatAmount ?? body.amount);
+  const providerId = body.providerId ? String(body.providerId) : null;
 
-    const { amount, currency, paymentMethod } = body;
-
-    if (!amount || !currency || !paymentMethod) {
-      return NextResponse.json(
-        { success: false, error: 'Missing required parameters: amount, currency, paymentMethod' },
-        { status: 400 }
-      );
-    }
-
-    const response = await fetch(`${API_BASE_URL}/fiat/deposit`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        amount,
-        currency,
-        paymentMethod,
-      }),
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to create fiat deposit' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Fiat deposit API error:', error);
+  if (!fiatCurrency || !cryptoCurrency || !Number.isFinite(fiatAmount)) {
     return NextResponse.json(
-      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
-      { status: 500 }
+      { success: false, error: { code: 'INVALID_PARAMS', message: 'fiatCurrency, cryptoCurrency and fiatAmount are required' } },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const order = placeFiatOrder(auth.user.userId, 'buy', fiatCurrency, cryptoCurrency, fiatAmount, providerId);
+    await provider.submit({
+      orderId: order.orderId,
+      userId: auth.user.userId,
+      direction: order.direction,
+      fiatCurrency: order.fiatCurrency,
+      cryptoCurrency: order.cryptoCurrency,
+      fiatAmount: order.fiatAmount,
+      cryptoAmount: order.cryptoAmount,
+      rate: order.rate,
+      fee: order.fee,
+    });
+    return NextResponse.json({ success: true, data: order }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof FiatError) {
+      return NextResponse.json({ success: false, error: { code: error.code, message: error.message } }, { status: error.status });
+    }
+    console.error('Fiat deposit error:', error);
+    return NextResponse.json(
+      { success: false, error: { code: 'PROVIDER_ERROR', message: 'The fiat provider could not accept the order' } },
+      { status: 502 },
     );
   }
 }
 
-// Get fiat deposit methods
+/** The authenticated user's fiat deposit (buy) history. */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
-    return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
-    );
-  }
-  try {
-    const { searchParams } = new URL(request.url);
-    const currency = searchParams.get('currency');
+  const auth = await requireSession(request);
+  if ('error' in auth) return auth.error;
 
-    const url = currency 
-      ? `${API_BASE_URL}/fiat/deposit?currency=${currency}`
-      : `${API_BASE_URL}/fiat/deposit`;
+  const { searchParams } = request.nextUrl;
+  const limit = Math.min(Math.max(Number(searchParams.get('limit')) || 20, 1), 100);
+  const offset = Math.max(Number(searchParams.get('offset')) || 0, 0);
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch deposit methods' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Fiat deposit API error:', error);
-    return NextResponse.json(
-      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
-      { status: 500 }
-    );
-  }
+  const orders = listFiatOrders(auth.user.userId, limit, offset).filter((o) => o.direction === 'buy');
+  return NextResponse.json({ success: true, data: orders }, { headers: NO_STORE });
 }

@@ -1,42 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { backendBaseUrl } from '@/lib/backend-url';
+import { conversionRate } from '@/lib/db/convert';
+import { NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
 
-// Get fiat exchange rates
+/**
+ * The live crypto/fiat rate for a pair, read from this venue's own market data.
+ *
+ * There is no external FX feed and no fallback: when no rate exists the route
+ * reports it as unavailable rather than returning a fabricated number.
+ */
 export async function GET(request: NextRequest) {
-  const API_BASE_URL = backendBaseUrl();
-  if (!API_BASE_URL) {
+  const { searchParams } = request.nextUrl;
+  const fiat = (searchParams.get('currency') ?? 'USD').toUpperCase();
+  const crypto = (searchParams.get('asset') ?? searchParams.get('cryptoCurrency') ?? '').toUpperCase();
+
+  if (!crypto) {
     return NextResponse.json(
-      { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'The trading backend is not configured.' } },
-      { status: 503 },
+      { success: false, error: { code: 'INVALID_PARAMS', message: 'asset (the crypto currency) is required' } },
+      { status: 400 },
     );
   }
-  try {
-    const { searchParams } = new URL(request.url);
-    const currency = searchParams.get('currency') || 'USD';
 
-    const response = await fetch(`${API_BASE_URL}/fiat/rate?currency=${currency}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
+  const rate = conversionRate(crypto, fiat);
+  if (rate === null || !Number.isFinite(rate) || rate <= 0) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: { code: 'RATE_UNAVAILABLE', message: `No live ${crypto}/${fiat} rate is available` },
       },
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      return NextResponse.json(
-        { success: false, error: data.error || 'Failed to fetch fiat rates' },
-        { status: response.status }
-      );
-    }
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error('Fiat rate API error:', error);
-    return NextResponse.json(
-      { success: false, error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
-      { status: 500 }
+      { status: 409, headers: NO_STORE },
     );
   }
+
+  return NextResponse.json(
+    { success: true, data: { asset: crypto, currency: fiat, rate } },
+    { headers: NO_STORE },
+  );
 }
