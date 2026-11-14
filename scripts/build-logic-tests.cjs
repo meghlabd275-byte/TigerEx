@@ -142,6 +142,7 @@ const MODULES = [
   'src/lib/compliance/surveillance.ts',
   'src/lib/compliance/travel-rule.ts',
   'src/lib/compliance/address-risk.ts',
+  'src/lib/wallet/approvals.ts',
   'src/lib/db/journal.ts',
   'src/lib/db/accounting.ts',
   'src/lib/kyc/mrz.ts',

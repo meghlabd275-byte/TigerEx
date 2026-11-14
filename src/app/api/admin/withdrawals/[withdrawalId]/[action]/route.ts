@@ -3,6 +3,7 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 import { settleWithdrawal, WithdrawalError } from '@/lib/wallet/withdrawals';
 import { broadcastWithdrawal, PayoutError } from '@/lib/wallet/payout';
+import { recordWithdrawalApproval, withdrawalApprovalState } from '@/lib/wallet/approvals';
 
 /**
  * Approve, reject or broadcast a pending withdrawal.
@@ -43,7 +44,40 @@ export async function POST(
   const reason = body && typeof body.reason === 'string' ? body.reason.trim() : '';
 
   try {
+    // Maker-checker. An approval is a real operator action, so it is recorded
+    // first; settlement only proceeds once the withdrawal's value tier is
+    // satisfied by that many distinct operators. A rejection is immediate
+    // because it moves no funds out.
+    if (action === 'approve') {
+      const state = recordWithdrawalApproval(withdrawalId, auth.admin.email);
+      if (!state.satisfied) {
+        recordAdminAction(request, auth.admin, 'withdrawal.approve.pending', {
+          type: 'withdrawal',
+          id: withdrawalId,
+          detail: { received: state.received, required: state.required },
+        });
+        return NextResponse.json(
+          {
+            success: true,
+            withdrawalId,
+            status: 'pending',
+            approvals: { received: state.received, required: state.required },
+            message: `This withdrawal needs ${state.required} distinct approvals before it can settle`,
+          },
+          { headers: NO_STORE },
+        );
+      }
+    }
+
     if (action === 'broadcast') {
+      const state = withdrawalApprovalState(withdrawalId);
+      if (!state.satisfied) {
+        return fail(
+          'APPROVALS_REQUIRED',
+          `This withdrawal needs ${state.required} distinct approvals before it can be broadcast (has ${state.received})`,
+          403,
+        );
+      }
       const result = await broadcastWithdrawal(withdrawalId);
       recordAdminAction(request, auth.admin, 'withdrawal.broadcast', {
         type: 'withdrawal',

@@ -542,8 +542,8 @@ export function createWithdrawal(input: CreateWithdrawalInput): CreateWithdrawal
     lockAvailable(input.userId, asset, total);
     db.prepare(
       `INSERT INTO withdrawals
-         (withdrawal_id, user_id, wallet_id, currency, network, amount, fee, address, memo, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+         (withdrawal_id, user_id, wallet_id, currency, network, amount, fee, address, memo, status, amount_usd, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
     ).run(
       withdrawalId,
       input.userId,
@@ -554,6 +554,7 @@ export function createWithdrawal(input: CreateWithdrawalInput): CreateWithdrawal
       fee,
       checked.normalized,
       input.memo ? String(input.memo).slice(0, 128) : null,
+      requestedUsd,
       now,
     );
     recordTransaction(input.userId, 'withdrawal', asset, total, 0, 'pending', `Withdrawal ${withdrawalId}`);

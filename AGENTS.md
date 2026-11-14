@@ -754,10 +754,23 @@ tables and all unit tested (`scripts/test/compliance-surveillance.test.cjs`):
 No third-party risk API is consulted; every signal is derived from a table the
 venue owns.
 
+## Withdrawal maker-checker (`src/lib/wallet/approvals.ts`)
+
+A withdrawal's USD value (`withdrawals.amount_usd`, written at creation) maps to
+the number of *distinct* admin approvals it needs before it can settle. Tiers
+live in `withdrawal_approval_tiers` (`min_usd`, `required_approvals`); an empty
+table is the default single approval. `setWithdrawalApprovalTiers` is
+fail-closed: positive values, integer counts of at least 1, distinct thresholds,
+and a count that never decreases as the value rises. Approvals are one row per
+`(withdrawal, approver)` in `withdrawal_approvals`, so one operator cannot
+satisfy a 2-of-N by approving twice. The admin withdrawal route records the
+approval before settling and refuses `broadcast` with `APPROVALS_REQUIRED` until
+the tier is met. Admin: `GET/PUT /api/admin/withdrawal-tiers`.
+
 ## Verified toolchain matrix (this environment)
 
 Every layer builds and its tests pass: TypeScript (`npx tsc --noEmit`,
-`npm run test:logic` 1040, `npm run build`), Go 1.23 (`go build ./...`,
+`npm run test:logic` 1045, `npm run build`), Go 1.23 (`go build ./...`,
 `go test ./...`), C++ (`cmake --build`, `ctest` 2 suites), Rust
 (`cargo test --lib` in `backend/rust/matching-engine`, 13), Python
 (`python -m pytest` in `backend/python`). No layer is a placeholder.

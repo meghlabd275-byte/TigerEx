@@ -26,6 +26,7 @@ const addressRisk = require('../../.test-build/address-risk.js');
 const { addSanctionsEntry } = require('../../.test-build/sanctions.js');
 const { createWithdrawal, WithdrawalError } = require('../../.test-build/withdrawals.js');
 const { availableBalance, lockedBalance } = require('../../.test-build/ledger.js');
+const approvals = require('../../.test-build/approvals.js');
 
 const db = getDb();
 const EVM_ADDRESS = '0x9858EfFD232B4033E47d90003D41EC34EcaEda94';
@@ -303,4 +304,75 @@ test('createWithdrawal: a high-value withdrawal with party data is accepted and 
   assert.equal(lockedBalance(user, 'RUSD'), 5000);
   const messages = travelRule.listTravelRuleMessages({ referenceId: result.withdrawalId });
   assert.equal(messages.length, 1, 'an in-scope withdrawal records a travel-rule message');
+});
+
+// --- Maker-checker approval tiers -----------------------------------------
+
+test('approvals: with no tiers configured a withdrawal needs one approval', () => {
+  assert.equal(approvals.approvalsRequiredFor(1000000), 1);
+});
+
+test('approvals: a tier raises the requirement at and above its value', () => {
+  approvals.setWithdrawalApprovalTiers([
+    { minUsd: 10000, requiredApprovals: 2 },
+    { minUsd: 100000, requiredApprovals: 3 },
+  ]);
+  assert.equal(approvals.approvalsRequiredFor(5000), 1);
+  assert.equal(approvals.approvalsRequiredFor(10000), 2);
+  assert.equal(approvals.approvalsRequiredFor(50000), 2);
+  assert.equal(approvals.approvalsRequiredFor(100000), 3);
+  // An unpriced value takes the strictest requirement.
+  assert.equal(approvals.approvalsRequiredFor(null), 3);
+});
+
+test('approvals: required counts must not decrease as the value rises', () => {
+  assert.throws(
+    () =>
+      approvals.setWithdrawalApprovalTiers([
+        { minUsd: 10000, requiredApprovals: 3 },
+        { minUsd: 100000, requiredApprovals: 2 },
+      ]),
+    /must not decrease/,
+  );
+});
+
+test('approvals: the same operator approving twice does not satisfy a 2-of-N', () => {
+  approvals.setWithdrawalApprovalTiers([{ minUsd: 1, requiredApprovals: 2 }]);
+  const owner = seedUser();
+  const withdrawalId = 'w-2ofn';
+  db.prepare(
+    `INSERT INTO withdrawals (withdrawal_id, user_id, currency, network, amount, fee, address, status, amount_usd)
+     VALUES (?, ?, 'RUSD', 'ERC20', 100, 0, ?, 'pending', 100)`,
+  ).run(withdrawalId, owner, EVM_ADDRESS);
+
+  const first = approvals.recordWithdrawalApproval(withdrawalId, 'ops@example.com');
+  assert.equal(first.received, 1);
+  assert.equal(first.satisfied, false);
+  const second = approvals.recordWithdrawalApproval(withdrawalId, 'ops@example.com');
+  assert.equal(second.received, 1, 'a repeated approval from the same operator must not advance');
+  assert.equal(second.satisfied, false);
+
+  const other = approvals.recordWithdrawalApproval(withdrawalId, 'compliance@example.com');
+  assert.equal(other.received, 2);
+  assert.equal(other.satisfied, true);
+});
+
+test('createWithdrawal: a stored amount_usd drives the approval requirement', () => {
+  approvals.setWithdrawalApprovalTiers([{ minUsd: 5000, requiredApprovals: 2 }]);
+  setFees({ 'RUSD:ERC20': { fee: 0, minAmount: 1, enabled: true } });
+  const user = seedUser({ display_name: 'Alice Trader', country_code: 'GB' });
+  fund(user, 'RUSD', 100000);
+  const result = createWithdrawal({
+    userId: user,
+    kycLevel: '3',
+    asset: 'RUSD',
+    network: 'ERC20',
+    amount: 6000,
+    fee: 0,
+    address: EVM_ADDRESS,
+    usdPrice: () => 1,
+  });
+  const state = approvals.withdrawalApprovalState(result.withdrawalId);
+  assert.equal(state.required, 2);
+  assert.equal(state.satisfied, false);
 });

@@ -320,10 +320,26 @@ function initializeSchema() {
       memo TEXT,
       tx_hash TEXT,
       status TEXT DEFAULT 'pending',
+      amount_usd REAL,
       created_at TEXT DEFAULT (datetime('now')),
       processed_at TEXT,
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
       FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE SET NULL
+    );
+
+    -- Maker-checker approvals. One row per (withdrawal, admin) so a single
+    -- operator cannot satisfy a multi-approval tier by approving twice.
+    CREATE TABLE IF NOT EXISTS withdrawal_approvals (
+      withdrawal_id TEXT NOT NULL,
+      approver TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (withdrawal_id, approver)
+    );
+
+    -- Operator policy: how many distinct approvals a withdrawal needs by value.
+    CREATE TABLE IF NOT EXISTS withdrawal_approval_tiers (
+      min_usd REAL PRIMARY KEY,
+      required_approvals INTEGER NOT NULL
     );
 
     -- API keys
@@ -2342,6 +2358,9 @@ function applyColumnMigrations(database: Database.Database) {
     { table: 'trading_bots', column: 'last_run_ns', definition: 'INTEGER' },
     { table: 'wallets', column: 'memo', definition: 'TEXT' },
     { table: 'wallets', column: 'address_index', definition: 'TEXT' },
+    // A withdrawal records its USD value so the approval-tier and travel-rule
+    // policy can be evaluated from the stored row.
+    { table: 'withdrawals', column: 'amount_usd', definition: 'REAL' },
     // Security toggles are dedicated columns so a query that needs one does not
     // parse a blob, and so a flag can be indexed or constrained later.
     { table: 'users', column: 'anti_phishing_enabled', definition: 'INTEGER DEFAULT 0' },
