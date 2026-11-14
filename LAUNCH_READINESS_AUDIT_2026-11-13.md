@@ -112,6 +112,19 @@ Build/test results re-measured today: `npx tsc --noEmit` clean;
 - **KYC** is in-house (`src/lib/kyc/image.ts`, `mrz.ts`, `submission.ts`), with
   an admin review queue; **sanctions** (`compliance/sanctions.ts`) and
   **proof-of-reserves** reconciliation (`compliance/reserves.ts`) exist.
+- **In-house identity checks** (`src/lib/kyc/`): a dependency-free image
+  decoder (`png.ts` RGB/RGBA/gray/palette/interlaced, `jpeg.ts` baseline and
+  progressive, `decode.ts` dispatch), face detection
+  (`face.ts` — YCbCr skin mask, morphological open, connected components,
+  size/aspect/fill gate), a liveness assessment (`liveness.ts` — face framing,
+  in-frame, Laplacian sharpness, inter-frame motion) and document-to-selfie
+  comparison (`match.ts`). `identity-checks.ts` runs them over the applicant's
+  own images; `submitApplication` records the result encrypted on the document
+  row and surfaces it to the reviewer via `/api/admin/kyc`. A deployment may
+  refuse a submission that fails liveness with
+  `TIGEREX_KYC_REQUIRE_LIVENESS=1`. No external KYC/face provider is consulted.
+  Tests: `scripts/test/kyc-image-decode.test.cjs`,
+  `kyc-identity-checks.test.cjs`, `kyc-submission-identity.test.cjs`.
 - **Market-integrity surveillance** (`compliance/surveillance.ts`): detects
   self-matching, wash trading, layering and spoofing over a rolling
   `spot_trades`/`orders` window; alerts persist idempotently and are read from

@@ -15,6 +15,7 @@ import { getDb, generateId, encrypt } from '@/lib/db';
 import { isOtpVerified } from '@/lib/security/otp';
 import { parseMrz, isExpired, MrzError, type MrzFields } from '@/lib/kyc/mrz';
 import { decodeBase64, contentMatchesType } from '@/lib/kyc/image';
+import { runIdentityChecks, type IdentityCheckResult } from '@/lib/kyc/identity-checks';
 
 export class KycError extends Error {
   constructor(
@@ -211,7 +212,10 @@ function parseDocuments(raw: unknown, documentType: DocumentType): SubmittedDocu
  * and within limits. A resubmission supersedes the earlier attempt rather than
  * stacking rows.
  */
-export function submitApplication(userId: string, input: SubmitInput): { status: string; documents: number } {
+export function submitApplication(
+  userId: string,
+  input: SubmitInput,
+): { status: string; documents: number; identity: IdentityCheckResult | null } {
   const db = getDb();
   const user = db.prepare('SELECT user_id, email, phone, kyc_status FROM users WHERE user_id = ?').get(userId) as
     | { user_id: string; email: string | null; phone: string | null; kyc_status: string }
@@ -253,6 +257,24 @@ export function submitApplication(userId: string, input: SubmitInput): { status:
     }
   }
 
+  // Run the in-house face/liveness checks over the applicant's own images. A
+  // result is recorded either way; a deployment may opt into refusing a
+  // submission that fails liveness via TIGEREX_KYC_REQUIRE_LIVENESS.
+  const frontDoc = documents.find((doc) => doc.kind === 'front');
+  const selfieDoc = documents.find((doc) => doc.kind === 'selfie');
+  let identity: IdentityCheckResult | null = null;
+  if (frontDoc && selfieDoc) {
+    identity = runIdentityChecks({ documentFront: frontDoc.data, selfie: selfieDoc.data });
+  }
+  if (identity && process.env.TIGEREX_KYC_REQUIRE_LIVENESS === '1') {
+    if (!identity.analysed || !identity.liveness?.live) {
+      throw new KycError(
+        'LIVENESS_CHECK_FAILED',
+        'The selfie did not pass the liveness check; please retake it in good lighting, holding the document',
+      );
+    }
+  }
+
   const now = new Date().toISOString();
   db.transaction(() => {
     db.prepare("DELETE FROM kyc_documents WHERE user_id = ? AND status IN ('pending', 'rejected')").run(userId);
@@ -263,8 +285,8 @@ export function submitApplication(userId: string, input: SubmitInput): { status:
     db.prepare(
       `INSERT INTO kyc_documents
          (document_id, user_id, document_type, document_number, front_image, back_image, selfie_image,
-          mrz_verified, mrz_data, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`,
+          mrz_verified, mrz_data, identity_checks, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`,
     ).run(
       generateId(),
       userId,
@@ -275,6 +297,7 @@ export function submitApplication(userId: string, input: SubmitInput): { status:
       selfie ? encrypt(selfie.data) : null,
       mrz ? 1 : 0,
       mrz ? encrypt(JSON.stringify(mrz)) : null,
+      identity ? encrypt(JSON.stringify(identity)) : null,
     );
 
     db.prepare(
@@ -285,7 +308,7 @@ export function submitApplication(userId: string, input: SubmitInput): { status:
     ).run(now, encrypt(JSON.stringify(personal)), userId);
   })();
 
-  return { status: 'pending', documents: documents.length };
+  return { status: 'pending', documents: documents.length, identity };
 }
 
 /** The applicant's own KYC state, without any document contents. */

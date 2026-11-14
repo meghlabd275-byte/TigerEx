@@ -1,7 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { getDb, decrypt } from '@/lib/db';
 import { requireAdmin } from '@/lib/auth/admin';
 import { NO_STORE } from '@/lib/api/route-guards';
+
+/**
+ * Summarise a stored identity-check result for the reviewer.
+ *
+ * The blob is encrypted at rest; it is decrypted only here, for an authenticated
+ * admin, and reduced to the fields the reviewer reads. A missing or unreadable
+ * blob yields null rather than a fabricated verdict.
+ */
+function identitySummary(encrypted: unknown): Record<string, unknown> | null {
+  if (typeof encrypted !== 'string' || encrypted.length === 0) return null;
+  try {
+    const parsed = JSON.parse(decrypt(encrypted)) as {
+      analysed?: boolean;
+      documentFaceFound?: boolean;
+      selfieFaceFound?: boolean;
+      faceSimilarity?: number | null;
+      faceMatched?: boolean;
+      liveness?: { live?: boolean; score?: number; signals?: Array<{ name: string; passed: boolean; value: number; threshold: number }> } | null;
+      notes?: string[];
+    };
+    return {
+      analysed: parsed.analysed === true,
+      documentFaceFound: parsed.documentFaceFound === true,
+      selfieFaceFound: parsed.selfieFaceFound === true,
+      faceSimilarity: typeof parsed.faceSimilarity === 'number' ? parsed.faceSimilarity : null,
+      faceMatched: parsed.faceMatched === true,
+      liveness: parsed.liveness
+        ? { live: parsed.liveness.live === true, score: parsed.liveness.score ?? 0, signals: parsed.liveness.signals ?? [] }
+        : null,
+      notes: parsed.notes ?? [],
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The KYC review queue.
@@ -29,7 +64,8 @@ export async function GET(request: NextRequest) {
     .prepare(
       `SELECT u.user_id, u.email, u.kyc_level, u.kyc_status, u.country_code,
               d.document_type, d.document_number, d.status AS document_status,
-              d.created_at AS submitted_at, d.reviewed_at, d.rejection_reason
+              d.created_at AS submitted_at, d.reviewed_at, d.rejection_reason,
+              d.identity_checks
          FROM users u
          LEFT JOIN kyc_documents d ON d.user_id = u.user_id
         WHERE u.kyc_status = ?
@@ -53,6 +89,7 @@ export async function GET(request: NextRequest) {
         submittedAt: toUnixSeconds(row.submitted_at),
         reviewedAt: toUnixSeconds(row.reviewed_at),
         rejectReason: row.rejection_reason ?? null,
+        identityChecks: identitySummary(row.identity_checks),
       })),
     },
     { headers: NO_STORE },

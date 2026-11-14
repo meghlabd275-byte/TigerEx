@@ -767,10 +767,43 @@ satisfy a 2-of-N by approving twice. The admin withdrawal route records the
 approval before settling and refuses `broadcast` with `APPROVALS_REQUIRED` until
 the tier is met. Admin: `GET/PUT /api/admin/withdrawal-tiers`.
 
+## In-house KYC identity checks (`src/lib/kyc/`)
+
+The KYC stack is entirely self-built — no Sumsub/Onfido/AWS Rekognition or other
+face/KYC provider is consulted.
+
+- `png.ts` / `jpeg.ts` / `decode.ts` — a dependency-free image decoder.
+  `decodeImage()` dispatches on magic bytes; `png.ts` handles RGB/RGBA/gray/
+  palette and Adam7 interlacing, `jpeg.ts` handles baseline and progressive
+  (successive-approximation) scans. Two invariants in `jpeg.ts` are load-bearing:
+  the canonical Huffman table's BITS field is 16 bytes, so the count for a code
+  of length `n` is `codeLengths[n - 1]` (reading `codeLengths[n]` shifted every
+  code and made the DC/AC selector collide); and DCT coefficients are held
+  **unquantised** in the coefficient buffer, with the quantisation step applied
+  once in `assembleFrame` — a progressive refinement scan adds the low bits to
+  the coefficient magnitude, which is only correct on the unquantised value.
+  Progressive first scans store `value << successiveLow`.
+- `face.ts` — face detection: a YCbCr+RGB skin mask, a morphological open to
+  drop speckle, 4-connected components, and a size/aspect/fill gate. The
+  descriptor is a normalised low-frequency luminance grid compared by cosine
+  similarity.
+- `liveness.ts` — presentation-attack signals: face framing, in-frame, Laplacian
+  sharpness (a printed/re-photographed image is blurry) and inter-frame motion
+  (a static photo re-submitted twice shows none). Fails closed with no face.
+- `match.ts` — document portrait vs selfie, threshold `FACE_MATCH_THRESHOLD`.
+- `identity-checks.ts` — runs the above over the applicant's own images.
+  `submitApplication` records the result encrypted (`kyc_documents.identity_checks`)
+  and `/api/admin/kyc` decrypts it for the reviewer. `TIGEREX_KYC_REQUIRE_LIVENESS=1`
+  makes a failed liveness check refuse the submission (`LIVENESS_CHECK_FAILED`).
+
+The decoder is a signal for a human reviewer, never an automated approval. Tests:
+`scripts/test/kyc-image-decode.test.cjs`, `kyc-identity-checks.test.cjs`,
+`kyc-submission-identity.test.cjs`; fixtures under `scripts/test/fixtures/kyc/`.
+
 ## Verified toolchain matrix (this environment)
 
 Every layer builds and its tests pass: TypeScript (`npx tsc --noEmit`,
-`npm run test:logic` 1045, `npm run build`), Go 1.23 (`go build ./...`,
+`npm run test:logic` 1078, `npm run build`), Go 1.23 (`go build ./...`,
 `go test ./...`), C++ (`cmake --build`, `ctest` 2 suites), Rust
 (`cargo test --lib` in `backend/rust/matching-engine`, 13), Python
 (`python -m pytest` in `backend/python`). No layer is a placeholder.

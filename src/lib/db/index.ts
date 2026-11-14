@@ -436,6 +436,9 @@ function initializeSchema() {
       selfie_image TEXT,
       mrz_verified INTEGER NOT NULL DEFAULT 0,
       mrz_data TEXT,
+      -- The automated identity-check result: face detection, face match and
+      -- liveness signals, as JSON. A reviewer reads it; nothing here decides.
+      identity_checks TEXT,
       status TEXT DEFAULT 'pending',
       reviewed_at TEXT,
       reviewer_id TEXT,
@@ -2425,6 +2428,9 @@ function applyColumnMigrations(database: Database.Database) {
     // document's own check digits were checked rather than assuming they were.
     { table: 'kyc_documents', column: 'mrz_verified', definition: 'INTEGER NOT NULL DEFAULT 0' },
     { table: 'kyc_documents', column: 'mrz_data', definition: 'TEXT' },
+    // The automated face/liveness check result for an application, as JSON, so
+    // a reviewer on a database created before the check existed still sees it.
+    { table: 'kyc_documents', column: 'identity_checks', definition: 'TEXT' },
   ];
 
   for (const { table, column, definition } of migrations) {
