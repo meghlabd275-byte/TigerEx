@@ -3,6 +3,8 @@ import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, finite, positive, upper, NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Treasury accounts and movements.
  *

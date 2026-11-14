@@ -2221,6 +2221,57 @@ function initializeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_travel_rule_reference ON travel_rule_messages(reference_id, created_at DESC);
 
+    -- AML/CFT cases. A case is opened from one or more venue signals (a
+    -- surveillance alert, a destination-risk refusal, a sanctions hit, a
+    -- structuring pattern) and moves through an explicit lifecycle. It is the
+    -- unit an analyst investigates and the unit a regulatory report is filed
+    -- against, so the trail from signal to filed report is unbroken.
+    CREATE TABLE IF NOT EXISTS aml_cases (
+      case_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      priority TEXT NOT NULL DEFAULT 'normal',
+      source TEXT NOT NULL,
+      score REAL NOT NULL DEFAULT 0,
+      summary TEXT NOT NULL,
+      signals TEXT NOT NULL DEFAULT '[]',
+      assigned_to TEXT,
+      opened_by TEXT,
+      opened_at TEXT DEFAULT (datetime('now')),
+      closed_at TEXT,
+      closed_by TEXT,
+      resolution TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_aml_cases_user ON aml_cases(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_aml_cases_status ON aml_cases(status, created_at DESC);
+    -- One open case per (user, source, bucket) so a re-scan does not stack
+    -- duplicate cases for the same signal window.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_aml_cases_dedup ON aml_cases(user_id, source, summary);
+
+    -- Regulatory report filings (SAR/STR/CTR and equivalents). Append-only:
+    -- a filed report is a record of what was sent, so nothing updates or
+    -- deletes a row once its status is filed.
+    CREATE TABLE IF NOT EXISTS regulatory_reports (
+      report_id TEXT PRIMARY KEY,
+      case_id TEXT,
+      user_id TEXT NOT NULL,
+      report_type TEXT NOT NULL,
+      jurisdiction TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      reference TEXT,
+      amount_usd REAL,
+      payload TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      filed_by TEXT,
+      filed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (case_id) REFERENCES aml_cases(case_id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_regulatory_reports_status ON regulatory_reports(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_regulatory_reports_user ON regulatory_reports(user_id, created_at DESC);
+
     -- Operator-managed destination risk list. A 'blocked' entry refuses a
     -- withdrawal; medium/high entries raise the score so the transfer is held.
     CREATE TABLE IF NOT EXISTS address_risk_entries (

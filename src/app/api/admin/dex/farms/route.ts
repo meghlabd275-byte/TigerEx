@@ -5,6 +5,8 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { validateFarmInput } from '@/lib/dex/validation';
 import { recomputeGaugeWeights, fundFarmRewards, rewardFundBalance } from '@/lib/dex/farm-service';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * TigerSwap farm, gauge and emission administration.
  *

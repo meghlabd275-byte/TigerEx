@@ -4,6 +4,8 @@ import { getDb } from '@/lib/db';
 import { portfolioSummary } from '@/lib/db/portfolio';
 import { NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * The caller's portfolio performance.
  *

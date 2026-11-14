@@ -3,6 +3,8 @@ import { getDb } from '@/lib/db';
 import { requireAdmin } from '@/lib/auth/admin';
 import { parseJsonColumn, NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Roles and administrators for the permissions console.
  *

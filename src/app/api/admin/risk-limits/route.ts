@@ -4,6 +4,8 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 import { validateRiskLimit } from '@/lib/markets/instruments';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Per-market leverage brackets.
  *

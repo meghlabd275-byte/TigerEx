@@ -5,6 +5,8 @@ import { dexFailure } from '@/lib/dex/route-helpers';
 import { NO_STORE } from '@/lib/api/route-guards';
 import { priceInQuote } from '@/lib/trading/valuation';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * The caller's TigerSwap portfolio.
  *

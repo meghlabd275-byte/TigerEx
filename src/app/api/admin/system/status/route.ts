@@ -4,6 +4,8 @@ import { getDb } from '@/lib/db';
 import { exchangeStats } from '@/lib/db/analytics';
 import { NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Runtime system status for the console.
  *

@@ -6,6 +6,8 @@ import { validatePoolInput, validatePoolUpdate } from '@/lib/dex/validation';
 import { refreshPoolStats } from '@/lib/dex/pool-service';
 import { v3LiquidityForAmounts } from '@/lib/dex/amm';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * TigerSwap pool administration.
  *

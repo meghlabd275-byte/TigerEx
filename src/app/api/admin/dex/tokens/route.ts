@@ -4,6 +4,8 @@ import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { validateDexTokenInput } from '@/lib/dex/validation';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * TigerSwap token listing administration.
  *

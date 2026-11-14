@@ -6,6 +6,8 @@ import { dexFailure } from '@/lib/dex/route-helpers';
 import { loadPool } from '@/lib/dex/pool-service';
 import { frequencyMs, type DcaFrequency } from '@/lib/dex/orders';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Dollar-cost-averaging plans.
  *

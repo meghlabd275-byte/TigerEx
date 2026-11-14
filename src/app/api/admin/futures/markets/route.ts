@@ -4,6 +4,8 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 import { validateFuturesMarket } from '@/lib/markets/futures';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Futures and perpetual contract listing administration.
  *

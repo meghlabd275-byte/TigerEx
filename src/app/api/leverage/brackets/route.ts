@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { fail, symbolParam, NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Leverage brackets for a market.
  *

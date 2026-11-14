@@ -5,6 +5,8 @@ import { fail, readJson, NO_STORE, enforceRequestGuards } from '@/lib/api/route-
 import { validateSchedule } from '@/lib/dex/fee-engine';
 import { distributeVetgrFees } from '@/lib/dex/farm-service';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * DEX fee and revenue-split administration.
  *

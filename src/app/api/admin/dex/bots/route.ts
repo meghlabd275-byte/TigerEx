@@ -5,6 +5,8 @@ import { fail, readJson, NO_STORE } from '@/lib/api/route-guards';
 import { DexError } from '@/lib/dex/pool-service';
 import { evaluateBotInstance } from '@/lib/dex/bot-service';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * DEX bot administration.
  *

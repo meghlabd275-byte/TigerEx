@@ -4,6 +4,8 @@ import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { SYMBOL_RE, validatePairInput } from '@/lib/markets/listing';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Spot market listing administration.
  *

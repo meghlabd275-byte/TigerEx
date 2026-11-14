@@ -3,6 +3,8 @@ import { getDb } from '@/lib/db';
 import { requireAdmin } from '@/lib/auth/admin';
 import { fail, NO_STORE, symbolParam } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Detailed view of one market across every venue.
  *

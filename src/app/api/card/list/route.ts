@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireSession } from '@/lib/db/session';
 import { getDb } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
+
 /** Cards issued to the authenticated user, with month-to-date spend and cashback. */
 export async function GET(request: NextRequest) {
   const auth = await requireSession(request);

@@ -5,6 +5,8 @@ import { fail, readJson, enforceRequestGuards, finite, positive, NO_STORE } from
 import { fundEarnRewards, earnRewardFundBalance } from '@/lib/earn/subscriptions';
 import { validateDualTerms, validateSharkTerms } from '@/lib/earn/products';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Earn product administration.
  *

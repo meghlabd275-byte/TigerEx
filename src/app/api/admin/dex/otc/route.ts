@@ -4,6 +4,8 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { enforceRequestGuards, readJson, fail, NO_STORE, upper } from '@/lib/api/route-guards';
 import { fundOtcDesk, otcDeskBalance } from '@/lib/otc/quote';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * OTC desk administration.
  *

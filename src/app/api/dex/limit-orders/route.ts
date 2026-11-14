@@ -6,6 +6,8 @@ import { validateLimitOrder } from '@/lib/dex/orders';
 import { dexFailure } from '@/lib/dex/route-helpers';
 import { loadPool } from '@/lib/dex/pool-service';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * On-chain limit orders.
  *

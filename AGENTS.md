@@ -800,10 +800,51 @@ The decoder is a signal for a human reviewer, never an automated approval. Tests
 `scripts/test/kyc-image-decode.test.cjs`, `kyc-identity-checks.test.cjs`,
 `kyc-submission-identity.test.cjs`; fixtures under `scripts/test/fixtures/kyc/`.
 
+## AML/CFT cases and regulatory reporting (`src/lib/compliance/aml.ts`)
+
+Signals → case → filed report, over the venue's own data; no external provider.
+
+- Signals come from recorded rows only: open `surveillance_alerts`, a large
+  withdrawal at or above `CTR_THRESHOLD_USD` (10k), and a structuring pattern
+  (`structuringSignal`: at least `STRUCTURING_MIN_COUNT` withdrawals in
+  `STRUCTURING_WINDOW_HOURS` whose USD value sits in the just-under band).
+- `openCase` keys a case on `(user, source, summary)` via
+  `idx_aml_cases_dedup`, so a repeat scan touches the open case instead of
+  stacking duplicates; a closed case is never reopened — a recurrence opens a
+  new one.
+- `updateCase` refuses to close without a resolution and refuses to reopen a
+  closed case.
+- `fileReport` files once per case (a filed report is returned, not re-filed);
+  the payload is hash-committed in `regulatory_reports.payload_hash`. A case
+  scores `SAR` at `SAR_SCORE_THRESHOLD`, else `CTR` when it carries a
+  `large_transaction` signal, else no report is due.
+- Wired into the scheduler cycle (`aml.scan`) and admin at
+  `GET/POST/PUT /api/admin/aml` (requireAdmin + `recordAdminAction`).
+- Tests: `scripts/test/aml.test.cjs`.
+
+## Account statements and tax reports (`src/lib/account/statements.ts`)
+
+Per-user period exports, built from `transactions` (statement) and
+`spot_trades` (tax). `parsePeriod` refuses an inverted range and defaults to 30
+days. Realised P&L is average-cost per pair (fed fee-free fills, since
+`realizedPnl` nets fees into its total; fees are a separate column). CSV writers
+are pure so the bytes are tested. User routes: `GET /api/account/statement` and
+`/api/account/tax-report` (`?format=csv`). Tests:
+`scripts/test/statements.test.cjs`.
+
+## Structural input validation (`src/lib/security/input-guard.ts`)
+
+`readJson` (in `route-guards.ts`) now runs `validateJsonInput` on every parsed
+body, so a route that checks `if (!body)` refuses a hostile one without doing
+anything per-route. It rejects `__proto__`/`constructor`/`prototype` keys,
+bodies past the depth/array/key/string/node bounds, control characters in
+strings (tab/newline allowed), and non-finite numbers. Fails closed. Tests:
+`scripts/test/input-guard.test.cjs`.
+
 ## Verified toolchain matrix (this environment)
 
 Every layer builds and its tests pass: TypeScript (`npx tsc --noEmit`,
-`npm run test:logic` 1078, `npm run build`), Go 1.23 (`go build ./...`,
+`npm run test:logic` 1105, `npm run build`), Go 1.23 (`go build ./...`,
 `go test ./...`), C++ (`cmake --build`, `ctest` 2 suites), Rust
 (`cargo test --lib` in `backend/rust/matching-engine`, 13), Python
 (`python -m pytest` in `backend/python`). No layer is a placeholder.

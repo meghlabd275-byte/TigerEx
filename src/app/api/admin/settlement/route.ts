@@ -4,6 +4,8 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 import { runSettlementCycle } from '@/lib/trading/settlement';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Run one settlement cycle from the admin console.
  *

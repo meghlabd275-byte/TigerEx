@@ -5,6 +5,8 @@ import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-
 import { subscribe, SubscriptionError } from '@/lib/earn/subscriptions';
 import { LedgerError } from '@/lib/db/ledger';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Earn products and subscriptions.
  *

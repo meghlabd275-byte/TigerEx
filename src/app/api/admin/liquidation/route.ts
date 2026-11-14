@@ -6,6 +6,8 @@ import { scanPositions, processQueue } from '@/lib/trading/risk-supervisor';
 import { runAdl, runArmedAdl, AdlError } from '@/lib/trading/adl';
 import { liquidatableLoans, runMarginLiquidationKeeper } from '@/lib/trading/margin-engine';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * The liquidation work queue.
  *

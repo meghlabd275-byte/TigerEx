@@ -3,6 +3,8 @@ import { getDb } from '@/lib/db';
 import { referralLeaderboard, referralStats } from '@/lib/db/referral';
 import { requireSession } from '@/lib/db/session';
 
+export const dynamic = 'force-dynamic';
+
 /** Referrer leaderboard plus the authenticated user's own position. */
 export async function GET(request: NextRequest) {
   const auth = await requireSession(request);

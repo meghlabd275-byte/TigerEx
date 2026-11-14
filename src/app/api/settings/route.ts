@@ -4,6 +4,8 @@ import { requireSession } from '@/lib/db/session';
 import { securitySettings } from '@/lib/security/account';
 import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * The caller's account settings.
  *

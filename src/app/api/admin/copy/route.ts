@@ -3,6 +3,8 @@ import { getDb } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, finite, positive, parseJsonColumn, NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Copy-trading administration.
  *

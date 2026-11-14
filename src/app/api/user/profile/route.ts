@@ -3,6 +3,8 @@ import { getDb } from '@/lib/db';
 import { requireSession } from '@/lib/db/session';
 import { enforceRequestGuards } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /** Profile for the authenticated user. */
 export async function GET(request: NextRequest) {
   const auth = await requireSession(request);

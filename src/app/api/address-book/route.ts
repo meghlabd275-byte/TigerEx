@@ -5,6 +5,8 @@ import { addressBook } from '@/lib/wallet/withdrawals';
 import { validateAddress } from '@/lib/wallet/address';
 import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * The account's saved withdrawal addresses.
  *

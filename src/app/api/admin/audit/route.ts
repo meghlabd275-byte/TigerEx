@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { requireAdmin } from '@/lib/auth/admin';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * The immutable admin audit trail.
  *

@@ -4,6 +4,8 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, NO_STORE, enforceRequestGuards } from '@/lib/api/route-guards';
 import { applyFunding, liquidatePosition, markPrice, perpPositions, fundPerpPool, perpPoolBalance } from '@/lib/dex/perps-service';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Perpetual risk administration for TigerSwap.
  *

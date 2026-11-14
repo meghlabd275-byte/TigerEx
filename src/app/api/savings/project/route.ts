@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { NO_STORE, fail } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /** One savings product, including its real total subscribed. */
 export async function GET(request: NextRequest) {
   const productId = (request.nextUrl.searchParams.get('productId') ?? request.nextUrl.searchParams.get('id') ?? '').trim();

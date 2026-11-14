@@ -5,6 +5,8 @@ import { runBotTick, type BotRow } from '@/lib/bots/runner';
 import { getDb } from '@/lib/db';
 import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * The caller's trading bots.
  *

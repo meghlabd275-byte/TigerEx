@@ -5,6 +5,8 @@ import { getDb, generateId } from '@/lib/db';
 import { dexFailure } from '@/lib/dex/route-helpers';
 import { loadPool } from '@/lib/dex/pool-service';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Time-weighted average price plans.
  *

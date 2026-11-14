@@ -3,6 +3,8 @@ import { getDb } from '@/lib/db';
 import { requireSession } from '@/lib/db/session';
 import { enforceRequestGuards } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 function parseJson(value: unknown): Record<string, unknown> {
   if (typeof value !== 'string' || !value) return {};
   try {

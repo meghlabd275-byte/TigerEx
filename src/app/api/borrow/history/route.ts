@@ -3,6 +3,8 @@ import { getDb } from '@/lib/db';
 import { requireSession } from '@/lib/db/session';
 import { NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * The caller's borrow and repay history.
  *

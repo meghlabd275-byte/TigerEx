@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { requireSession } from '@/lib/db/session';
 
+export const dynamic = 'force-dynamic';
+
 /** Fiat buy/sell orders for the authenticated user, newest first. */
 export async function GET(request: NextRequest) {
   const auth = await requireSession(request);

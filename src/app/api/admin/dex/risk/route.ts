@@ -3,6 +3,8 @@ import { getDb, generateId } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, NO_STORE, enforceRequestGuards } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * DEX emergency controls: pausing the venue or a scope, and the blacklist.
  *

@@ -4,6 +4,8 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, finite, positive, NO_STORE } from '@/lib/api/route-guards';
 import { insuranceFundStatus } from '@/lib/risk/engine';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Insurance funds, one per contract.
  *

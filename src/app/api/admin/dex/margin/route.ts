@@ -5,6 +5,8 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { validateLendingMarketInput, lendingMarketRowToInput } from '@/lib/dex/validation';
 import { listLendingMarkets, accrueInterest } from '@/lib/dex/margin-service';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * TigerSwap lending and isolated-pool administration.
  *

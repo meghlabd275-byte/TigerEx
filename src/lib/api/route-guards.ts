@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { isAllowedOrigin, checkRateLimit, rateLimitKey } from '@/lib/security/guards';
+import { validateJsonInput, InputValidationError } from '@/lib/security/input-guard';
 
 /** Standard error envelope used by every native route. */
 export function fail(code: string, message: string, status = 400): NextResponse {
@@ -18,15 +19,29 @@ export function fail(code: string, message: string, status = 400): NextResponse 
 /** Responses that carry account or market state must never be cached. */
 export const NO_STORE = { 'Cache-Control': 'no-store' } as const;
 
-/** Read a JSON object body, or null when the body is missing or malformed. */
+/**
+ * Read and structurally validate a JSON object body.
+ *
+ * Returns null when the body is missing, malformed, not an object, or fails the
+ * structural guard (poisoned keys, unbounded depth/size, control characters), so
+ * a route that checks `if (!body) return fail(...)` refuses it. The validation
+ * is applied here rather than per route so a new route cannot forget it.
+ */
 export async function readJson(request: NextRequest): Promise<Record<string, unknown> | null> {
+  let body: unknown;
   try {
-    const body = await request.json();
-    if (body === null || typeof body !== 'object' || Array.isArray(body)) return null;
-    return body as Record<string, unknown>;
+    body = await request.json();
   } catch {
     return null;
   }
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return null;
+  try {
+    validateJsonInput(body);
+  } catch (error) {
+    if (error instanceof InputValidationError) return null;
+    throw error;
+  }
+  return body as Record<string, unknown>;
 }
 
 /**

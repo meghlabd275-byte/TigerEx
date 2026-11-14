@@ -23,6 +23,7 @@ import { scanPositions, processQueue } from '@/lib/trading/risk-supervisor';
 import { runKeeperCycle } from '@/lib/dex/keeper';
 import { runReconciliation } from '@/lib/compliance/reserves';
 import { runSurveillanceCycle } from '@/lib/compliance/surveillance';
+import { scanForAmlCases } from '@/lib/compliance/aml';
 
 export interface JobResult {
   job: string;
@@ -120,6 +121,16 @@ export async function runScheduledCycle(): Promise<CycleReport> {
       await runJob('surveillance.scan', () => {
         const result = runSurveillanceCycle();
         return { scanned: result.scanned, raised: result.alerts.length };
+      }),
+    );
+
+    // Turn recorded signals (surveillance alerts, large or structured
+    // withdrawals) into AML cases. Idempotent per (user, source, summary), so a
+    // redundant cycle touches the same open case rather than stacking new ones.
+    jobs.push(
+      await runJob('aml.scan', () => {
+        const cases = scanForAmlCases();
+        return { touched: cases.length };
       }),
     );
 

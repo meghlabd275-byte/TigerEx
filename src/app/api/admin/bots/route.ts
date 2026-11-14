@@ -4,6 +4,8 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, parseJsonColumn, NO_STORE } from '@/lib/api/route-guards';
 import { gridLevels, twapSlices, type GridConfig, type TwapConfig } from '@/lib/bots/strategies';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Bot administration.
  *

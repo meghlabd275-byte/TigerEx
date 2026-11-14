@@ -3,6 +3,8 @@ import { getDb } from '@/lib/db';
 import { lastTradePrice } from '@/lib/trading/market-view';
 import { NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Listed TradFi instruments.
  *

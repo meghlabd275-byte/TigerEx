@@ -4,6 +4,8 @@ import { fail, symbolParam, NO_STORE } from '@/lib/api/route-guards';
 import { markPriceForContract } from '@/lib/trading/mark-price';
 import { fundingRate as premiumRate } from '@/lib/oracle/aggregator';
 
+export const dynamic = 'force-dynamic';
+
 const HOUR_NS = 60 * 60 * 1e9;
 
 /**

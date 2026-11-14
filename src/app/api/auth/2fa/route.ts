@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { requireSession } from '@/lib/db/session';
 
+export const dynamic = 'force-dynamic';
+
 /** Report the authenticated user's current 2FA state. */
 export async function GET(request: NextRequest) {
   const auth = await requireSession(request);

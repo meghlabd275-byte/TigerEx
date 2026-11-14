@@ -3,6 +3,8 @@ import { requireSession } from '@/lib/db/session';
 import { getDb } from '@/lib/db';
 import { NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * The caller's own liquidation history.
  *

@@ -4,6 +4,8 @@ import { requireSession } from '@/lib/db/session';
 import { usdPrice } from '@/lib/db/portfolio';
 import { NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * The caller's balances per wallet.
  *

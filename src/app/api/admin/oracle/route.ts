@@ -4,6 +4,8 @@ import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, finite, positive, upper, NO_STORE } from '@/lib/api/route-guards';
 import { indexPrice, type OracleObservation } from '@/lib/oracle/aggregator';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Oracle source administration.
  *

@@ -5,6 +5,8 @@ import { voteGauge, submitBribe, claimBribe, currentEpoch } from '@/lib/dex/farm
 import { dexFailure } from '@/lib/dex/route-helpers';
 import { getDb } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
+
 /** List gauges with their weights, emission share and the epoch's bribes. */
 export async function GET(_request: NextRequest) {
   try {

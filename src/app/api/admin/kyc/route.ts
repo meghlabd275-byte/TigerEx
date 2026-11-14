@@ -3,6 +3,8 @@ import { getDb, decrypt } from '@/lib/db';
 import { requireAdmin } from '@/lib/auth/admin';
 import { NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Summarise a stored identity-check result for the reviewer.
  *

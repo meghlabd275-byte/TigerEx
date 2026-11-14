@@ -5,6 +5,8 @@ import { NO_STORE } from '@/lib/api/route-guards';
 import { insuranceFundStatus, positionRisk } from '@/lib/risk/engine';
 import { allMarginLoanHealth, liquidatableLoans } from '@/lib/trading/margin-engine';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Risk dashboard.
  *

@@ -4,6 +4,8 @@ import { requireSession } from '@/lib/db/session';
 import { borrow, MarginError } from '@/lib/trading/margin-engine';
 import { fail, readJson, enforceRequestGuards, NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Borrow against collateral.
  *

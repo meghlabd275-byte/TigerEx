@@ -5,6 +5,8 @@ import { stakeFarm, unstakeFarm, claimFarm, farmPositions } from '@/lib/dex/farm
 import { dexFailure } from '@/lib/dex/route-helpers';
 import { getDb } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * TigerSwap farms.
  *

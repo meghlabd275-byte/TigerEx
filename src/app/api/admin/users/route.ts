@@ -3,6 +3,8 @@ import { getDb } from '@/lib/db';
 import { requireAdmin } from '@/lib/auth/admin';
 import { NO_STORE } from '@/lib/api/route-guards';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * List exchange users with their verification level and account state.
  *
