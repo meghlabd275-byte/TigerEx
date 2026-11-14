@@ -21,8 +21,8 @@ audit, liquidity, insurance, banking, support).
 | — Proxies to `TIGEREX_BACKEND_URL` (fail-closed 503) | `src/lib/backend-url.ts` | 133 |
 | Frontend pages | `src/app/**/page.tsx` | 138 |
 | Frontend components | `src/components/**/*.tsx` | 42 |
-| Frontend logic modules | `src/lib/**/*.ts` | 158 |
-| Logic tests | `scripts/test/*.test.cjs` (73 files) | 1045 pass |
+| Frontend logic modules | `src/lib/**/*.ts` | 165 |
+| Logic tests | `scripts/test/*.test.cjs` (75 files) | 1078 pass |
 | Go tests | `backend/go` `func Test*` | 305 |
 | Secondary module dirs | `TigerEx/*` | 173 (many overlapping) |
 | Environment variables | `.env.example` | 94 |
@@ -33,7 +33,7 @@ in this session; their status below is taken from CI configuration and prior
 sessions, not re-measured now.
 
 Build/test results re-measured today: `npx tsc --noEmit` clean;
-`npm run test:logic` = 1045 pass / 0 fail.
+`npm run test:logic` = 1078 pass / 0 fail.
 
 ---
 
