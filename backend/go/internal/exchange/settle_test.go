@@ -316,3 +316,66 @@ func TestPartiallyFilledOrderCancelReleasesOnlyRemainder(t *testing.T) {
 	approx(t, "seller ADA available after cancel", bal.Available, 9)
 	approx(t, "seller ADA locked after cancel", bal.Locked, 0)
 }
+
+// TestSweepSettlesEveryMaker proves a single taker order that consumes two
+// resting orders settles against both of them. The engine must report one fill
+// per maker; if it aggregated them and named only the first maker, the second
+// maker's base would never leave its reservation and it would be credited no
+// proceeds — value created from nothing on one side and stranded on the other.
+func TestSweepSettlesEveryMaker(t *testing.T) {
+	s := engineStore(t)
+	ctx := context.Background()
+
+	symbol := uniqueSymbol(t)
+	seedMarket(t, s, symbol, "SOL", "RUSD")
+	if err := s.LoadMarketsIntoEngine(ctx); err != nil {
+		t.Fatalf("register market: %v", err)
+	}
+
+	makerA := freshUser(t, s)
+	makerB := freshUser(t, s)
+	taker := freshUser(t, s)
+	for _, m := range []string{makerA, makerB} {
+		if err := s.Credit(ctx, m, "SOL", "main", 10, "seed"); err != nil {
+			t.Fatalf("credit maker SOL: %v", err)
+		}
+	}
+	if err := s.Credit(ctx, taker, "RUSD", "main", 100000, "seed"); err != nil {
+		t.Fatalf("credit taker RUSD: %v", err)
+	}
+
+	// Two asks rest at the same price.
+	for _, m := range []string{makerA, makerB} {
+		if _, err := s.PlaceOrderAndMatch(ctx, &OrderRequest{
+			UserID: m, Symbol: symbol, Side: "sell", Type: "limit", Quantity: 1, Price: 100,
+		}); err != nil {
+			t.Fatalf("rest ask: %v", err)
+		}
+	}
+
+	// One buy sweeps both.
+	buy, err := s.PlaceOrderAndMatch(ctx, &OrderRequest{
+		UserID: taker, Symbol: symbol, Side: "buy", Type: "limit", Quantity: 2, Price: 100,
+	})
+	if err != nil {
+		t.Fatalf("sweep buy: %v", err)
+	}
+	if buy.Status != "filled" {
+		t.Fatalf("sweep buy should be filled, got %s", buy.Status)
+	}
+
+	// Taker paid 200 RUSD and received 2 SOL less its taker fee.
+	rusd, _ := s.GetBalance(ctx, taker, "RUSD")
+	approx(t, "taker RUSD", rusd.Available, 100000-200)
+	sol, _ := s.GetBalance(ctx, taker, "SOL")
+	approx(t, "taker SOL", sol.Available, 2-0.002)
+
+	// Both makers delivered 1 SOL and were credited 100 RUSD less the maker fee.
+	for _, m := range []string{makerA, makerB} {
+		b, _ := s.GetBalance(ctx, m, "SOL")
+		approx(t, "maker SOL available", b.Available, 9)
+		approx(t, "maker SOL locked", b.Locked, 0)
+		r, _ := s.GetBalance(ctx, m, "RUSD")
+		approx(t, "maker RUSD", r.Available, 99.9)
+	}
+}

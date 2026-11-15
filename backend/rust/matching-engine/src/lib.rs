@@ -985,28 +985,35 @@ impl MatchingEngine {
             };
             let mut level_remaining = remaining;
             let fills = drain_level(level, &mut level_remaining);
-            let taken = remaining - level_remaining;
             remaining = level_remaining;
-            let (maker_user, maker_order_id) = fills
-                .first()
-                .map(|f| (f.1.clone(), f.0.clone()))
-                .unwrap_or_default();
-            if taken > 0.0 {
+            // One trade per maker fill. A single sweep can consume several
+            // resting orders at the same price; emitting one aggregated trade
+            // and attributing it to the first maker would mis-pay every other
+            // maker (and mis-book the buyer/seller legs), so each fill is its
+            // own execution against its own resting order.
+            for (maker_order_id, maker_user, filled) in fills {
+                if filled <= 0.0 {
+                    continue;
+                }
                 let (bid_user, ask_user) = if order.is_buy() {
                     (order.user_id.clone(), maker_user)
                 } else {
                     (maker_user, order.user_id.clone())
                 };
-                trades.push(Trade::new(
+                let mut trade = Trade::new(
                     format!("trade_{}", generate_id()),
                     maker_order_id,
                     order.market.clone(),
                     order.side,
                     maker_price,
-                    taken,
+                    filled,
                     bid_user,
                     ask_user,
-                ));
+                );
+                // The incoming order took liquidity, so it is the taker and the
+                // resting order it hit is the maker.
+                trade.maker = false;
+                trades.push(trade);
             }
             let empty = if opposite_is_bids {
                 book.bids.get(&key).map(|l| l.orders.is_empty()).unwrap_or(true)
@@ -1095,28 +1102,30 @@ impl MatchingEngine {
             };
             let mut level_remaining = remaining;
             let fills = drain_level(level, &mut level_remaining);
-            let taken = remaining - level_remaining;
             remaining = level_remaining;
-            let (maker_user, maker_order_id) = fills
-                .first()
-                .map(|f| (f.1.clone(), f.0.clone()))
-                .unwrap_or_default();
-            if taken > 0.0 {
+            // One trade per maker fill, for the same reason as submit_limit:
+            // a sweep across several resting orders must pay each maker.
+            for (maker_order_id, maker_user, filled) in fills {
+                if filled <= 0.0 {
+                    continue;
+                }
                 let (bid_user, ask_user) = if order.is_buy() {
                     (order.user_id.clone(), maker_user)
                 } else {
                     (maker_user, order.user_id.clone())
                 };
-                trades.push(Trade::new(
+                let mut trade = Trade::new(
                     format!("trade_{}", generate_id()),
                     maker_order_id,
                     order.market.clone(),
                     order.side,
                     maker_price,
-                    taken,
+                    filled,
                     bid_user,
                     ask_user,
-                ));
+                );
+                trade.maker = false;
+                trades.push(trade);
             }
             let empty = if opposite_is_bids {
                 book.bids.get(&key).map(|l| l.orders.is_empty()).unwrap_or(true)
@@ -1460,6 +1469,42 @@ mod tests {
 
         let trades = engine.place_order(limit_order("taker2", "u3", Side::Buy, 100.0, 1.0)).unwrap();
         assert_eq!(trades[0].seller_user_id, "u2");
+    }
+
+    #[test]
+    fn a_sweep_pays_every_maker_it_consumes() {
+        // Two makers rest at the same price. A single taker order that consumes
+        // both must produce one trade per maker: an aggregated trade attributed
+        // to the first maker would leave the second maker unpaid.
+        let engine = engine_with_market();
+        engine.place_order(limit_order("m1", "maker_a", Side::Sell, 100.0, 1.0)).unwrap();
+        engine.place_order(limit_order("m2", "maker_b", Side::Sell, 100.0, 1.0)).unwrap();
+
+        let trades = engine.place_order(limit_order("sweep", "taker", Side::Buy, 100.0, 2.0)).unwrap();
+        assert_eq!(trades.len(), 2, "each maker fill is its own trade");
+        assert!((trades[0].quantity + trades[1].quantity - 2.0).abs() < 1e-9);
+
+        let mut sellers: Vec<&str> = trades.iter().map(|t| t.seller_user_id.as_str()).collect();
+        sellers.sort();
+        assert_eq!(sellers, vec!["maker_a", "maker_b"], "both makers must be credited");
+        assert!(trades.iter().all(|t| t.buyer_user_id == "taker"));
+        // The incoming order is the taker on every fill it generates.
+        assert!(trades.iter().all(|t| !t.maker));
+    }
+
+    #[test]
+    fn market_sweep_pays_every_maker_it_consumes() {
+        let engine = engine_with_market();
+        engine.place_order(limit_order("m1", "maker_a", Side::Sell, 100.0, 1.0)).unwrap();
+        engine.place_order(limit_order("m2", "maker_b", Side::Sell, 101.0, 1.0)).unwrap();
+
+        let mut market = limit_order("mb", "taker", Side::Buy, 0.0, 2.0);
+        market.order_type = OrderType::Market;
+        let trades = engine.place_order(market).unwrap();
+        assert_eq!(trades.len(), 2);
+        let mut sellers: Vec<&str> = trades.iter().map(|t| t.seller_user_id.as_str()).collect();
+        sellers.sort();
+        assert_eq!(sellers, vec!["maker_a", "maker_b"]);
     }
 
     #[test]
