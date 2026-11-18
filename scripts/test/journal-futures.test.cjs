@@ -21,7 +21,7 @@ const { getDb, generateId, hashPassword } = require('../../.test-build/index.js'
 const { availableBalance, lockedBalance } = require('../../.test-build/ledger.js');
 const { recordDeposit, reconcileJournal } = require('../../.test-build/accounting.js');
 const { accountBalance, userAccount } = require('../../.test-build/journal.js');
-const { placeFuturesOrder, closePosition, applyFunding, listPositions, fundFuturesPool } = require('../../.test-build/futures-engine.js');
+const { placeFuturesOrder, closePosition, applyFunding, listPositions, fundFuturesPool, futuresPoolBalance } = require('../../.test-build/futures-engine.js');
 const { scanPositions, processQueue } = require('../../.test-build/risk-supervisor.js');
 const { runAdl } = require('../../.test-build/adl.js');
 
@@ -202,6 +202,12 @@ test('a liquidation reconciles and books the seized margin', () => {
   // The margin is gone from the user's locked balance and the journal agrees.
   assert.equal(lockedBalance(user, 'RUSD'), 0);
   assert.ok(accountBalance(`insurance:${symbol}`) !== 0 || accountBalance(`futures_pool:${symbol}`) !== 0);
+  // The tracked pool balance must equal the journal's pool account exactly; a
+  // liquidation that banked the margin while journaling the loss would drift.
+  assert.ok(
+    Math.abs(futuresPoolBalance(symbol) - accountBalance(`futures_pool:${symbol}`)) < 1e-6,
+    `pool drift: tracked ${futuresPoolBalance(symbol)} vs journal ${accountBalance(`futures_pool:${symbol}`)}`,
+  );
 });
 
 test('an auto-deleverage reconciles', () => {

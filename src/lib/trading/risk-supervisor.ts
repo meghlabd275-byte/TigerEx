@@ -257,10 +257,10 @@ export function processQueue(limit = 50): ProcessResult {
             "UPDATE insurance_funds SET balance = balance + ?, updated_at = datetime('now') WHERE contract = ?",
           ).run(insuranceCredit, entry.symbol);
         }
-        // The seized margin is banked into the contract's counterparty pool, the
-        // other side of the liquidated trader's loss, so the pool tracks the
-        // journal's `futures_pool` account exactly.
-        applyFuturesPoolDelta(entry.symbol, margin);
+        // The pool is the other side of the liquidated trader's loss, so its
+        // tracked balance moves by exactly the journal's pool leg (-grossPnl):
+        // a loss is banked into it, a bankruptcy surplus is paid out of it.
+        applyFuturesPoolDelta(entry.symbol, -grossPnl);
 
         db.prepare(
           `UPDATE futures_positions
