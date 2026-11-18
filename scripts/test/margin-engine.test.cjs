@@ -85,6 +85,7 @@ test('a loan within its LTV credits the borrow and locks the collateral', () => 
   credit(user, 'BTC', 1);
 
   // 0.5 BTC at 50,000 is 25,000 of collateral; 70% LTV allows 17,500.
+  const poolBefore = lendingPoolFundBalance('RUSD');
   const loan = borrow(user, {
     symbol: 'BTC/RUSD',
     asset: 'RUSD',
@@ -102,6 +103,30 @@ test('a loan within its LTV credits the borrow and locks the collateral', () => 
   assert.equal(availableBalance(user, 'RUSD'), 17000);
   assert.equal(availableBalance(user, 'BTC'), 0.5);
   assert.equal(lockedBalance(user, 'BTC'), 0.5);
+  // The draw leaves the lending pool; it is not minted.
+  assert.ok(Math.abs(lendingPoolFundBalance('RUSD') - (poolBefore - 17000)) < 1e-6);
+});
+
+test('the lending pool cannot be drawn beyond what it holds', () => {
+  const user = seedUser();
+  credit(user, 'BTC', 100);
+
+  const pool = lendingPoolFundBalance('RUSD');
+  // A borrow within LTV but larger than the whole pool must be refused: the
+  // pool tracks what it lent, so it is not a bottomless source.
+  assert.throws(
+    () =>
+      borrow(user, {
+        symbol: 'BTC/RUSD',
+        asset: 'RUSD',
+        amount: pool + 1000,
+        collateralAsset: 'BTC',
+        collateralAmount: 100,
+      }),
+    (error) => error instanceof MarginError && error.code === 'LENDING_POOL_EMPTY',
+  );
+  assert.equal(lendingPoolFundBalance('RUSD'), pool);
+  assert.equal(availableBalance(user, 'RUSD'), 0);
 });
 
 test('a loan above its LTV is refused and locks nothing', () => {

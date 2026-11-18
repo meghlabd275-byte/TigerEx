@@ -14,7 +14,7 @@ import { getDb, generateId } from '@/lib/db';
 import { randomInt } from 'crypto';
 import { lockAvailable, unlockAvailable, creditAvailable, consumeLocked, recordTransaction } from '@/lib/db/ledger';
 import { recordPoolMove, recordBalanced } from '@/lib/db/accounting';
-import { userAccount } from '@/lib/db/journal';
+import { userAccount, EXTERNAL_ACCOUNT } from '@/lib/db/journal';
 
 export class RewardsError extends Error {
   constructor(
@@ -74,6 +74,54 @@ export function stakingPools(): StakingPool[] {
 // ---------------------------------------------------------------------------
 // Coupons
 // ---------------------------------------------------------------------------
+
+/**
+ * The venue account that funds coupons and promotions.
+ *
+ * A coupon credits a user from this account, so it is a real, funded pool rather
+ * than an unbounded one: a redemption the pool cannot cover fails closed instead
+ * of minting the currency. `fundPromotions` supplies it from venue capital.
+ */
+const PROMOTIONS_ACCOUNT = 'promo';
+
+/** The venue's promotions pool balance for an asset. */
+export function promotionsBalance(asset: string): number {
+  const row = getDb()
+    .prepare("SELECT balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
+    .get(asset.toUpperCase(), PROMOTIONS_ACCOUNT) as { balance: number } | undefined;
+  return Number(row?.balance) || 0;
+}
+
+/** Move a delta (positive = into the pool, negative = out) on the promotions pool. */
+function applyPromotionsDelta(asset: string, delta: number): void {
+  if (!Number.isFinite(delta) || delta === 0) return;
+  getDb()
+    .prepare(
+      `INSERT INTO treasury_accounts (account_id, asset, network, account_type, balance)
+       VALUES (?, ?, 'TIGEREX', ?, ?)
+       ON CONFLICT(asset, network, account_type) DO UPDATE SET balance = balance + ?, updated_at = datetime('now')`,
+    )
+    .run(generateId(), asset.toUpperCase(), PROMOTIONS_ACCOUNT, delta, delta);
+}
+
+/** Supply the venue's promotions pool so coupons can be redeemed. */
+export function fundPromotions(asset: string, amount: number): number {
+  const value = Number(amount);
+  const normalized = asset.trim().toUpperCase();
+  if (!normalized) throw new RewardsError('VALIDATION_FAILED', 'asset is required');
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new RewardsError('VALIDATION_FAILED', 'the funding must be a positive number');
+  }
+  const db = getDb();
+  db.transaction(() => {
+    applyPromotionsDelta(normalized, value);
+    recordBalanced(normalized, [
+      { account: EXTERNAL_ACCOUNT, amount: -value },
+      { account: `pool:${PROMOTIONS_ACCOUNT}`, amount: value },
+    ], `Fund promotions ${normalized}`);
+  })();
+  return promotionsBalance(normalized);
+}
 
 export interface Coupon {
   id: string;
@@ -138,7 +186,18 @@ export function redeemCoupon(userId: string, code: string): Coupon {
   }
 
   db.transaction(() => {
+    // A coupon is paid from the venue's funded promotions account; it may only
+    // pay what it holds, so a coupon the account cannot cover is refused rather
+    // than minting the currency.
+    if (promotionsBalance(coupon.currency) + 1e-9 < coupon.amount) {
+      throw new RewardsError(
+        'PROMOTIONS_UNFUNDED',
+        `the ${coupon.currency} promotions account cannot cover this coupon; fund it first`,
+        409,
+      );
+    }
     creditAvailable(userId, coupon.currency, coupon.amount);
+    applyPromotionsDelta(coupon.currency, -coupon.amount);
     // A coupon is funded by the venue's promotions account, not minted.
     recordPoolMove(userId, coupon.currency, coupon.amount, 'promo', `Coupon ${coupon.code}`);
     recordTransaction(userId, 'coupon', coupon.currency, coupon.amount, 0, 'completed', `Coupon ${coupon.code}`);

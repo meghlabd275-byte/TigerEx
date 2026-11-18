@@ -18,7 +18,7 @@ import { getDb } from '@/lib/db';
 import { consumeLocked, creditAvailable, recordTransaction, LedgerError } from '@/lib/db/ledger';
 import { recordAdl } from '@/lib/db/accounting';
 import { adlQueue, insuranceFundStatus, type AdlPosition } from '@/lib/risk/engine';
-import { markPriceFor, applyFuturesPoolDelta } from '@/lib/trading/futures-engine';
+import { markPriceFor, applyFuturesPoolDelta, futuresPoolBalance } from '@/lib/trading/futures-engine';
 import { isInverseContract, notionalUsd, unrealizedPnl } from '@/lib/trading/contract-math';
 
 export class AdlError extends Error {
@@ -159,6 +159,18 @@ export function runAdl(contract: string): AdlResult {
     if (covered >= deficit) break;
   }
   const clawbackRate = covered > 0 ? Math.min(1, deficit / covered) : 0;
+
+  // The pool is the counterparty that pays every deleveraged position's profit;
+  // it may only pay what it holds. Without this gate the ADL relieved the pool
+  // of profit it never had, driving it negative and minting the settlement asset.
+  const totalProfit = selected.reduce((sum, entry) => sum + entry.profit, 0);
+  if (totalProfit > 0 && futuresPoolBalance(contract) + 1e-9 < totalProfit) {
+    throw new AdlError(
+      'POOL_INSUFFICIENT',
+      `the ${contract} counterparty pool cannot fund ${totalProfit}; fund it before deleveraging`,
+      409,
+    );
+  }
 
   const reductions: AdlReduction[] = [];
   let clawedBack = 0;

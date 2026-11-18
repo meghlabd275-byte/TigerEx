@@ -15,7 +15,8 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { debitAvailable, creditAvailable, recordTransaction } from '@/lib/db/ledger';
-import { recordEtfSubscribe, recordEtfRedeem } from '@/lib/db/accounting';
+import { recordEtfSubscribe, recordEtfRedeem, recordBalanced, poolAccount } from '@/lib/db/accounting';
+import { EXTERNAL_ACCOUNT } from '@/lib/db/journal';
 import { usdPrice } from '@/lib/db/portfolio';
 import {
   applyMove,
@@ -50,6 +51,63 @@ export interface EtfMarket {
   rebalanceThreshold: number;
   managementFeeApr: number;
   status: string;
+}
+
+/**
+ * The venue account that backs every leveraged-token redemption.
+ *
+ * A subscription pays its settlement asset into this pool and a redemption is
+ * paid out of it, so it is a real, funded account rather than an unbounded one.
+ * A redemption the pool cannot cover fails closed instead of minting the
+ * settlement asset, and `fundEtfPool` supplies it from venue capital. The
+ * tracked balance and the journal's `pool:etf` account move together.
+ */
+const ETF_POOL = 'etf_pool';
+
+/** The venue's leveraged-token pool balance, in its settlement asset. */
+export function etfPoolBalance(asset: string): number {
+  const row = getDb()
+    .prepare("SELECT balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
+    .get(asset.trim().toUpperCase(), ETF_POOL) as { balance: number } | undefined;
+  return Number(row?.balance) || 0;
+}
+
+/** Move a delta (positive = into the pool, negative = out) on the ETF pool. */
+function applyEtfPoolDelta(asset: string, delta: number): void {
+  if (!Number.isFinite(delta) || delta === 0) return;
+  const normalized = asset.trim().toUpperCase();
+  getDb()
+    .prepare(
+      `INSERT INTO treasury_accounts (account_id, asset, network, account_type, balance)
+       VALUES (?, ?, 'TIGEREX', ?, ?)
+       ON CONFLICT(asset, network, account_type) DO UPDATE SET balance = balance + ?, updated_at = datetime('now')`,
+    )
+    .run(generateId(), normalized, ETF_POOL, delta, delta);
+}
+
+/**
+ * Supply the venue's leveraged-token pool so a redemption can pay out.
+ *
+ * A real launch funds this from venue capital; until then it holds only what
+ * subscribers have paid in, so a redemption the pool cannot cover is refused
+ * rather than minted.
+ */
+export function fundEtfPool(asset: string, amount: number): number {
+  const value = Number(amount);
+  const normalized = asset.trim().toUpperCase();
+  if (!normalized) throw new EtfError('VALIDATION_FAILED', 'asset is required');
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new EtfError('VALIDATION_FAILED', 'the pool funding must be a positive number');
+  }
+  const db = getDb();
+  db.transaction(() => {
+    applyEtfPoolDelta(normalized, value);
+    recordBalanced(normalized, [
+      { account: EXTERNAL_ACCOUNT, amount: -value },
+      { account: poolAccount('etf'), amount: value },
+    ], `Fund ETF pool ${normalized}`);
+  })();
+  return etfPoolBalance(normalized);
 }
 
 function toMarket(row: Record<string, unknown>): EtfMarket {
@@ -235,6 +293,9 @@ export function subscribe(input: SubscribeInput): EtfPositionView {
   const db = getDb();
   db.transaction(() => {
     debitAvailable(input.userId, market.settlementAsset, amount);
+    // The subscription's settlement asset is held by the venue pool, which pays
+    // the redemption later.
+    applyEtfPoolDelta(market.settlementAsset, amount);
     recordEtfSubscribe(input.userId, market.settlementAsset, amount, `subscribe ${tokens} ${market.symbol}`);
     recordTransaction(input.userId, 'etf_subscribe', market.settlementAsset, amount, 0, 'completed', `subscribe ${tokens} ${market.symbol}`);
 
@@ -295,7 +356,17 @@ export function redeem(input: RedeemInput): { redeemed: number; proceeds: number
   const costRemoved = held > 0 ? (Number(position.cost_basis) || 0) * (tokens / held) : 0;
 
   db.transaction(() => {
+    // The pool pays the redemption; it may only pay what it holds. Without this
+    // gate a redemption credited the user an asset the venue never held.
+    if (proceeds > 0 && etfPoolBalance(market.settlementAsset) + 1e-9 < proceeds) {
+      throw new EtfError(
+        'POOL_INSUFFICIENT',
+        `the ${market.settlementAsset} pool cannot cover the redemption of ${proceeds}; fund it first`,
+        409,
+      );
+    }
     creditAvailable(input.userId, market.settlementAsset, proceeds);
+    applyEtfPoolDelta(market.settlementAsset, -proceeds);
     recordEtfRedeem(input.userId, market.settlementAsset, proceeds, fee, `redeem ${tokens} ${market.symbol}`);
     recordTransaction(input.userId, 'etf_redeem', market.settlementAsset, proceeds, fee, 'completed', `redeem ${tokens} ${market.symbol}`);
 

@@ -343,6 +343,8 @@ test('a long option debits the premium and a close realizes the difference', () 
   setPrice('BTCUSDT', 50000);
   const expiryNs = Date.now() * 1e6 + 30 * 86400e9;
   listOption('BTC-50000-C', 'BTC', 'call', 50000, expiryNs);
+  // The venue pool is the counterparty that pays a winning close.
+  optionsEngine.fundOptionsPool('RUSD', 1000000);
 
   const position = optionsEngine.openPosition({ userId: user, symbol: 'BTC-50000-C', side: 'long', quantity: 1 });
   assert.equal(position.side, 'long');

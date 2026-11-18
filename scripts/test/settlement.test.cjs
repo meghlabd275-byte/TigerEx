@@ -187,6 +187,8 @@ test('an expired in-the-money call settles and pays the holder its intrinsic', (
 
   const expiryNs = Date.now() * 1e6 + 30 * 86400e9;
   const marketId = listOption('SXBT-50000-C', 'SXBT', 'call', 50000, expiryNs);
+  // The venue pool is the counterparty that pays the holder's intrinsic.
+  optionsEngine.fundOptionsPool('RUSD', 1000000);
   optionsEngine.openPosition({ userId: user, symbol: 'SXBT-50000-C', side: 'long', quantity: 1 });
 
   // The underlying rallies, then the contract expires.

@@ -1,8 +1,46 @@
 import { getDb, generateId } from '@/lib/db';
 import { availableBalance, debitAvailable, creditAvailable } from '@/lib/db/ledger';
-import { recordConvert } from '@/lib/db/accounting';
+import { recordConvert, recordBalanced, poolAccount } from '@/lib/db/accounting';
+import { EXTERNAL_ACCOUNT } from '@/lib/db/journal';
 
 export const CONVERT_FEE_RATE = 0.001; // 0.1% conversion fee
+
+/** The venue's conversion pool balance for an asset, from the journal. */
+export function convertPoolBalance(asset: string): number {
+  const row = getDb()
+    .prepare(
+      `SELECT COALESCE(SUM(l.amount), 0) AS balance
+         FROM journal_legs l JOIN journal_entries e ON e.entry_id = l.entry_id
+        WHERE l.account = ? AND e.asset = ?`,
+    )
+    .get(poolAccount('convert'), asset.trim().toUpperCase()) as { balance: number } | undefined;
+  return Number(row?.balance) || 0;
+}
+
+/**
+ * Supply an asset to the venue's conversion pool.
+ *
+ * The pool pays the destination side of every conversion, so it must hold the
+ * asset it delivers; without funding it, a conversion would credit an asset the
+ * venue never held. The supply is journalled against the same `pool:convert`
+ * account a conversion draws from.
+ */
+export function fundConvertPool(asset: string, amount: number): number {
+  const value = Number(amount);
+  const normalized = asset.trim().toUpperCase();
+  if (!normalized) throw new ConvertError('VALIDATION_FAILED', 'asset is required');
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new ConvertError('VALIDATION_FAILED', 'the pool supply must be a positive number');
+  }
+  const db = getDb();
+  db.transaction(() => {
+    recordBalanced(normalized, [
+      { account: EXTERNAL_ACCOUNT, amount: -value },
+      { account: poolAccount('convert'), amount: value },
+    ], `Fund ${normalized} convert pool`);
+  })();
+  return convertPoolBalance(normalized);
+}
 
 /**
  * Look up the current mid price for a conversion.
@@ -105,6 +143,16 @@ export function executeConvert(userId: string, fromAsset: string, toAsset: strin
   const run = db.transaction(() => {
     if (availableBalance(userId, from) + 1e-9 < amount) {
       throw new ConvertError('INSUFFICIENT_BALANCE', `Insufficient ${from} balance`, 400);
+    }
+    // The destination leg is paid out of the venue's conversion pool, which may
+    // only deliver what it holds. Without this gate a conversion credited an
+    // asset the venue never held.
+    if (convertPoolBalance(to) + 1e-9 < quote.toAmount) {
+      throw new ConvertError(
+        'CONVERT_POOL_UNFUNDED',
+        `the ${to} conversion pool cannot cover ${quote.toAmount}; fund it first`,
+        409,
+      );
     }
     debitAvailable(userId, from, amount);
     creditAvailable(userId, to, quote.toAmount);

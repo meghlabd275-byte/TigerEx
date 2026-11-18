@@ -222,6 +222,8 @@ test('an auto-deleverage reconciles', () => {
      VALUES (?, 50, 1000, 0.1, 1, 500)
      ON CONFLICT(contract) DO UPDATE SET balance = 50, target_balance = 1000, adl_enabled = 1, adl_threshold = 500`,
   ).run(symbol);
+  // The counterparty pool must hold the profit the ADL will realise.
+  fundFuturesPool(symbol, 10000);
 
   const result = runAdl(symbol);
   assert.equal(result.ran, true);

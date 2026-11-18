@@ -13,7 +13,8 @@
 
 import { getDb, generateId } from '@/lib/db';
 import { debitAvailable, creditAvailable, recordTransaction } from '@/lib/db/ledger';
-import { recordPoolMove } from '@/lib/db/accounting';
+import { recordPoolMove, recordBalanced, poolAccount } from '@/lib/db/accounting';
+import { EXTERNAL_ACCOUNT } from '@/lib/db/journal';
 import { usdPrice } from '@/lib/db/portfolio';
 import { blackScholes, settlementValue, impliedVolatility, type OptionGreeks } from '@/lib/options/pricing';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
@@ -27,6 +28,63 @@ export class OptionsError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * The venue account that is the counterparty to every option.
+ *
+ * A premium, a close payout and an intrinsic settlement all move through this
+ * pool, so it is a real, funded account rather than an unbounded one. A payout
+ * it cannot cover fails closed instead of conjuring the settlement asset, and
+ * `fundOptionsPool` supplies it from venue capital. The tracked balance and the
+ * journal's `pool:options` account are kept in step by every movement here.
+ */
+const OPTIONS_POOL = 'options_pool';
+
+/** The venue's options counterparty pool balance, in its settlement asset. */
+export function optionsPoolBalance(asset: string): number {
+  const row = getDb()
+    .prepare("SELECT balance FROM treasury_accounts WHERE asset = ? AND network = 'TIGEREX' AND account_type = ?")
+    .get(asset.trim().toUpperCase(), OPTIONS_POOL) as { balance: number } | undefined;
+  return Number(row?.balance) || 0;
+}
+
+/** Move a delta (positive = into the pool, negative = out) on the options pool. */
+function applyOptionsPoolDelta(asset: string, delta: number): void {
+  if (!Number.isFinite(delta) || delta === 0) return;
+  const normalized = asset.trim().toUpperCase();
+  getDb()
+    .prepare(
+      `INSERT INTO treasury_accounts (account_id, asset, network, account_type, balance)
+       VALUES (?, ?, 'TIGEREX', ?, ?)
+       ON CONFLICT(asset, network, account_type) DO UPDATE SET balance = balance + ?, updated_at = datetime('now')`,
+    )
+    .run(generateId(), normalized, OPTIONS_POOL, delta, delta);
+}
+
+/**
+ * Supply the venue's options pool so a close or settlement can pay out.
+ *
+ * A real launch funds this from venue capital; until then it holds only what
+ * premiums and losing writers have paid in, so a payout the pool cannot cover is
+ * refused rather than minted.
+ */
+export function fundOptionsPool(asset: string, amount: number): number {
+  const value = Number(amount);
+  const normalized = asset.trim().toUpperCase();
+  if (!normalized) throw new OptionsError('VALIDATION_FAILED', 'asset is required');
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new OptionsError('VALIDATION_FAILED', 'the pool funding must be a positive number');
+  }
+  const db = getDb();
+  db.transaction(() => {
+    applyOptionsPoolDelta(normalized, value);
+    recordBalanced(normalized, [
+      { account: EXTERNAL_ACCOUNT, amount: -value },
+      { account: poolAccount('options'), amount: value },
+    ], `Fund options pool ${normalized}`);
+  })();
+  return optionsPoolBalance(normalized);
 }
 
 export interface OptionsMarket {
@@ -313,6 +371,9 @@ export function openPosition(input: OpenPositionInput): OptionsPositionView {
   db.transaction(() => {
     // A long buyer pays the premium; a short writer posts it as collateral.
     debitAvailable(input.userId, market.settlementAsset, totalPremium + fee);
+    // The premium (and fee) the writer or buyer posts is held by the venue pool,
+    // which is the counterparty that later pays the close or settlement.
+    applyOptionsPoolDelta(market.settlementAsset, totalPremium + fee);
     recordPoolMove(input.userId, market.settlementAsset, -(totalPremium + fee), 'options', `options open ${market.symbol}`);
     recordTransaction(
       input.userId,
@@ -415,11 +476,21 @@ export function closePosition(input: ClosePositionInput): { closed: number; real
     side === 'long' ? markPerContract * requested - fee : (entry - markPerContract) * requested - fee;
 
   db.transaction(() => {
+    // The pool is the counterparty to the close: it pays a positive payout and
+    // receives a negative one, so it may only pay what it holds.
+    if (proceeds > 0 && optionsPoolBalance(market.settlementAsset) + 1e-9 < proceeds) {
+      throw new OptionsError(
+        'POOL_INSUFFICIENT',
+        `the options pool cannot pay ${proceeds} ${market.settlementAsset}; fund it before closing`,
+        409,
+      );
+    }
     creditAvailable(input.userId, market.settlementAsset, Math.max(proceeds, 0));
     if (proceeds < 0) {
       // A short closed above its entry owes the difference.
       debitAvailable(input.userId, market.settlementAsset, -proceeds);
     }
+    applyOptionsPoolDelta(market.settlementAsset, -proceeds);
     recordPoolMove(input.userId, market.settlementAsset, proceeds, 'options', `options close ${market.symbol}`);
     recordTransaction(
       input.userId,
@@ -507,11 +578,30 @@ export function settleExpired(market: OptionsMarket, nowMs: number = Date.now())
       const returnedCollateral = side === 'short' ? Math.max(0, entry * quantity - Math.max(-value, 0)) : 0;
       if (side === 'short') {
         if (returnedCollateral > 0) {
+          // A writer's returned collateral is the remainder of the premium it
+          // posted at open, which the pool already holds; the pool pays it back.
+          if (optionsPoolBalance(market.settlementAsset) + 1e-9 < returnedCollateral) {
+            throw new OptionsError(
+              'POOL_INSUFFICIENT',
+              `the options pool cannot settle ${market.symbol}; fund it before expiry`,
+              409,
+            );
+          }
           creditAvailable(String(position.user_id), market.settlementAsset, returnedCollateral);
+          applyOptionsPoolDelta(market.settlementAsset, -returnedCollateral);
           recordPoolMove(String(position.user_id), market.settlementAsset, returnedCollateral, 'options', `options settle ${market.symbol}`);
         }
       } else if (value > 0) {
+        // A long's intrinsic is paid by the pool, which may only pay what it holds.
+        if (optionsPoolBalance(market.settlementAsset) + 1e-9 < value) {
+          throw new OptionsError(
+            'POOL_INSUFFICIENT',
+            `the options pool cannot settle ${market.symbol}; fund it before expiry`,
+            409,
+          );
+        }
         creditAvailable(String(position.user_id), market.settlementAsset, value);
+        applyOptionsPoolDelta(market.settlementAsset, -value);
         recordPoolMove(String(position.user_id), market.settlementAsset, value, 'options', `options settle ${market.symbol}`);
       }
 

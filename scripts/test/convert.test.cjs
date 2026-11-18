@@ -19,7 +19,7 @@ process.env.ENCRYPTION_KEY = 'test-encryption-key-0123456789abcdef0123456789';
 
 const { getDb, generateId, hashPassword } = require('../../.test-build/index.js');
 const { availableBalance } = require('../../.test-build/ledger.js');
-const { executeConvert, ConvertError } = require('../../.test-build/convert.js');
+const { executeConvert, ConvertError, fundConvertPool } = require('../../.test-build/convert.js');
 
 const db = getDb();
 
@@ -64,6 +64,8 @@ test('a conversion debits every row that holds the source asset, never going neg
   const user = seedUser();
   fund(user, 'TGR', 600);
   fund(user, 'TGR', 400); // a second wallet, so TGR sits in two rows
+  // The destination leg is paid from the venue's funded conversion pool.
+  fundConvertPool('USDT', 100000);
 
   executeConvert(user, 'TGR', 'USDT', 900);
 

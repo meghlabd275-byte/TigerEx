@@ -184,6 +184,25 @@ function lendingPoolBalance(asset: string): number {
 }
 
 /**
+ * Move a delta (positive = into the pool, negative = out) on the lending pool.
+ *
+ * The pool is the source of every borrow, so a draw must decrement the tracked
+ * balance exactly as its journal leg does; otherwise the pool could be lent
+ * repeatedly beyond what it holds. The row is created on first use.
+ */
+function applyLendingPoolDelta(asset: string, delta: number): void {
+  if (!Number.isFinite(delta) || delta === 0) return;
+  const normalized = asset.trim().toUpperCase();
+  getDb()
+    .prepare(
+      `INSERT INTO treasury_accounts (account_id, asset, network, account_type, balance)
+       VALUES (?, ?, 'TIGEREX', 'lending_pool', ?)
+       ON CONFLICT(asset, network, account_type) DO UPDATE SET balance = balance + ?, updated_at = datetime('now')`,
+    )
+    .run(generateId(), normalized, delta, delta);
+}
+
+/**
  * Supply an asset to the venue's lending pool so margin loans can be drawn.
  *
  * The pool is the source of every borrow: without a funded pool a borrow would
@@ -200,11 +219,7 @@ export function fundLendingPool(asset: string, amount: number): number {
   }
   const db = getDb();
   db.transaction(() => {
-    db.prepare(
-      `INSERT INTO treasury_accounts (account_id, asset, network, account_type, balance)
-       VALUES (?, ?, 'TIGEREX', 'lending_pool', ?)
-       ON CONFLICT(asset, network, account_type) DO UPDATE SET balance = balance + ?, updated_at = datetime('now')`,
-    ).run(generateId(), normalized, value, value);
+    applyLendingPoolDelta(normalized, value);
     recordBalanced(normalized, [
       { account: EXTERNAL_ACCOUNT, amount: -value },
       { account: LENDING_POOL_ACCOUNT, amount: value },
@@ -408,7 +423,9 @@ export function borrow(userId: string, input: BorrowInput): MarginLoanView {
       lockAvailable(userId, collateralAsset, collateralAmount);
       creditAvailable(userId, asset, amount);
       // The collateral lock is net-zero; the borrowed asset is drawn from the
-      // venue's lending pool, so the loan is a pool-to-user transfer.
+      // venue's lending pool, so the loan is a pool-to-user transfer and the
+      // pool's tracked balance falls by the same amount.
+      applyLendingPoolDelta(asset, -amount);
       recordMarginBorrow(userId, asset, amount, `Borrow ${amount} ${asset}`);
       db.prepare(
         `INSERT INTO margin_loans
@@ -479,8 +496,9 @@ export function repay(userId: string, loanId: string, amount: number): MarginLoa
   try {
     const run = db.transaction(() => {
       debitAvailable(userId, row.asset, applied);
-      // The borrower returns what was drawn to the pool; the collateral release
-      // is net-zero and is not journaled.
+      // The borrower returns what was drawn to the pool, so its tracked balance
+      // rises by the same amount; the collateral release is net-zero.
+      applyLendingPoolDelta(row.asset, applied);
       recordMarginRepay(userId, row.asset, applied, `Repay ${row.asset}`);
       if (releasedCollateral > 0) {
         unlockAvailable(userId, row.collateral_asset, Math.min(releasedCollateral, Number(row.collateral_amount)));

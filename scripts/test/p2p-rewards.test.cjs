@@ -39,6 +39,7 @@ const {
   claimRedPacket,
   refundRedPacket,
   sweepExpiredRedPackets,
+  fundPromotions,
   RewardsError,
 } = require('../../.test-build/rewards.js');
 const { isBlocked, updateP2pSettings } = require('../../.test-build/profile.js');
@@ -315,6 +316,8 @@ test('a coupon can only be redeemed once, by its owner', () => {
     (error) => error instanceof RewardsError && error.code === 'COUPON_NOT_YOURS',
   );
 
+  // A coupon is paid from the venue's funded promotions account.
+  fundPromotions('USDT', 500);
   const redeemed = redeemCoupon(owner, 'welcome50');
   assert.equal(redeemed.status, 'used');
   assert.equal(availableBalance(owner, 'USDT'), 50);

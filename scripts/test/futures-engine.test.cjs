@@ -638,6 +638,9 @@ function armAdl(symbol, balance, target, threshold) {
      ON CONFLICT(contract) DO UPDATE SET balance = excluded.balance, target_balance = excluded.target_balance,
        adl_enabled = 1, adl_threshold = excluded.adl_threshold`,
   ).run(symbol, balance, target, threshold);
+  // The counterparty pool must hold what the deleveraged positions would realise;
+  // a real venue funds it, so the test does too.
+  fundFuturesPool(symbol, 10000);
 }
 
 test('adl is inert while the insurance fund is above its threshold', () => {
