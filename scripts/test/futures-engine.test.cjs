@@ -179,6 +179,60 @@ test('a short and a long are tracked separately in hedge mode', () => {
   );
 });
 
+test('a hedge-mode long is closed by a reduce-only sell, not increased', () => {
+  const symbol = pricedContract('HCLOSE', 60000, { tickSize: 1, minQuantity: 0.001 });
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  setOraclePrice(symbol, 60000);
+
+  placeFuturesOrder(user, { symbol, side: 'buy', positionSide: 'long', type: 'market', quantity: 1, leverage: 10 });
+  const before = lockedBalance(user, 'RUSD');
+  assert.ok(before > 0, 'opening a hedge long locks margin');
+
+  // Move the mark so the close realises a profit, then close with the exact
+  // shape a hedge-mode client sends: a sell that names the long it reduces.
+  setOraclePrice(symbol, 66000);
+  const result = placeFuturesOrder(user, {
+    symbol,
+    side: 'sell',
+    positionSide: 'long',
+    type: 'market',
+    quantity: 1,
+    leverage: 10,
+    reduceOnly: true,
+  });
+
+  assert.equal(result.action, 'closed');
+  assert.equal(result.position.quantity, 0);
+  assert.equal(result.position.status, 'closed');
+  // 1 contract at 60,000 -> 66,000 is 6,000 gross profit; the fee is charged on
+  // top and the whole margin reservation is released.
+  assert.ok(result.realizedPnl > 0, 'a winning long realises a profit');
+  assert.equal(lockedBalance(user, 'RUSD'), 0, 'the closed position holds no margin');
+  assert.equal(listPositions(user, symbol).length, 0, 'no open position remains');
+});
+
+test('a hedge-mode reduce-only sell with no long is refused', () => {
+  const symbol = pricedContract('HNOPOS', 60000, { tickSize: 1, minQuantity: 0.001 });
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+  setOraclePrice(symbol, 60000);
+
+  assert.throws(
+    () =>
+      placeFuturesOrder(user, {
+        symbol,
+        side: 'sell',
+        positionSide: 'long',
+        type: 'market',
+        quantity: 1,
+        leverage: 10,
+        reduceOnly: true,
+      }),
+    (err) => err instanceof FuturesError && err.code === 'NO_POSITION',
+  );
+});
+
 test('a second order in the same direction increases the position and averages the entry', () => {
   const symbol = pricedContract('ATGR', 10, { tickSize: 0.0001, minQuantity: 1 });
   const user = seedUser();

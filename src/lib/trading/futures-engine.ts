@@ -290,13 +290,31 @@ export function placeFuturesOrder(userId: string, input: FuturesOrderInput): Fut
           .get(userId, market.symbol) as PositionRow | undefined);
 
   const reduceOnly = input.reduceOnly === true;
-  if (reduceOnly && !existing) {
-    throw new FuturesError('NO_POSITION', 'A reduce-only order needs an open position');
+  const hedge = positionMode === 'hedge';
+
+  // Does this order act against the position it targets? A buy reduces a short
+  // and a sell reduces a long; the mirror adds to it. The position's side is
+  // what decides, not the order side the caller named: in hedge mode a caller
+  // closing a long sends `side: 'sell'` with `positionSide: 'long'`, and the
+  // old test (`existing.side !== orderSide`) read that as an *increase* because
+  // `orderSide` was itself the position side, so a hedge-mode position could
+  // never be reduced or closed.
+  const reducing = Boolean(existing) && (existing!.side === 'long') === (input.side === 'sell');
+
+  // In hedge mode a `side` that points against a position which does not exist
+  // has nothing to reduce; it is not a request to open the opposite book.
+  if (hedge && !existing) {
+    const adds =
+      (input.positionSide === 'long' && input.side === 'buy') ||
+      (input.positionSide === 'short' && input.side === 'sell');
+    if (!adds) {
+      throw new FuturesError('NO_POSITION', 'A reduce order needs an open position');
+    }
   }
 
-  // An order that opposes the open position reduces it; one that matches it
-  // increases it.
-  const reducing = Boolean(existing) && existing!.side !== orderSide;
+  if (reduceOnly && !reducing) {
+    throw new FuturesError('NO_POSITION', 'A reduce-only order must reduce an open position');
+  }
 
   // The fill is charged the account's own tier rate; the market's configured
   // bps are the fallback when no fee schedule is installed.
