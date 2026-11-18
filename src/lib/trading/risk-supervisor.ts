@@ -21,7 +21,7 @@ import { getDb, generateId } from '@/lib/db';
 import { consumeLocked, recordTransaction, LedgerError } from '@/lib/db/ledger';
 import { recordFuturesLiquidation } from '@/lib/db/accounting';
 import { positionRisk } from '@/lib/risk/engine';
-import { riskTiers, markPriceFor, FuturesError } from '@/lib/trading/futures-engine';
+import { riskTiers, markPriceFor, FuturesError, applyFuturesPoolDelta } from '@/lib/trading/futures-engine';
 import { isInverseContract, notionalUsd, unrealizedPnl } from '@/lib/trading/contract-math';
 
 export interface PositionRow {
@@ -257,6 +257,10 @@ export function processQueue(limit = 50): ProcessResult {
             "UPDATE insurance_funds SET balance = balance + ?, updated_at = datetime('now') WHERE contract = ?",
           ).run(insuranceCredit, entry.symbol);
         }
+        // The seized margin is banked into the contract's counterparty pool, the
+        // other side of the liquidated trader's loss, so the pool tracks the
+        // journal's `futures_pool` account exactly.
+        applyFuturesPoolDelta(entry.symbol, margin);
 
         db.prepare(
           `UPDATE futures_positions

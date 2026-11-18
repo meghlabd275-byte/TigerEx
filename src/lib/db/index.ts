@@ -902,9 +902,14 @@ function initializeSchema() {
     CREATE INDEX IF NOT EXISTS idx_tradfi_markets_type ON tradfi_markets(instrument_type);
 
     -- Per-contract insurance fund, refilled from a share of trading fees.
+    -- pool_balance is the venue's counterparty pool for the contract: a
+    -- trader's realised profit is paid out of it and a trader's realised loss
+    -- (or a liquidation's seized margin) is banked into it, so a winning close
+    -- can only be paid from value the venue actually holds.
     CREATE TABLE IF NOT EXISTS insurance_funds (
       contract TEXT PRIMARY KEY,
       balance REAL NOT NULL DEFAULT 0,
+      pool_balance REAL NOT NULL DEFAULT 0,
       target_balance REAL NOT NULL DEFAULT 0,
       fee_share REAL NOT NULL DEFAULT 0.1,
       adl_enabled INTEGER NOT NULL DEFAULT 0,
@@ -2537,6 +2542,9 @@ function applyColumnMigrations(database: Database.Database) {
     // The automated face/liveness check result for an application, as JSON, so
     // a reviewer on a database created before the check existed still sees it.
     { table: 'kyc_documents', column: 'identity_checks', definition: 'TEXT' },
+    // The venue's counterparty pool for a contract, so a database created
+    // before the pool existed also tracks it.
+    { table: 'insurance_funds', column: 'pool_balance', definition: 'REAL NOT NULL DEFAULT 0' },
   ];
 
   for (const { table, column, definition } of migrations) {

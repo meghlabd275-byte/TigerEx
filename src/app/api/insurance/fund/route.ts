@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
   const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
 
   const rows = getDb()
-    .prepare(`SELECT contract, balance, target_balance, fee_share, adl_enabled, adl_threshold, updated_at FROM insurance_funds${where} ORDER BY contract`)
+    .prepare(`SELECT contract, balance, pool_balance, target_balance, fee_share, adl_enabled, adl_threshold, updated_at FROM insurance_funds${where} ORDER BY contract`)
     .all(...params) as Array<Record<string, unknown>>;
 
   const total = rows.reduce((sum, row) => sum + (Number(row.balance) || 0), 0);
@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
       funds: rows.map((row) => ({
         contract: row.contract,
         balance: Number(row.balance) || 0,
+        poolBalance: Number(row.pool_balance) || 0,
         targetBalance: Number(row.target_balance) || 0,
         feeShare: Number(row.fee_share) || 0,
         adlEnabled: row.adl_enabled === 1,

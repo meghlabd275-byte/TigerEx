@@ -18,7 +18,7 @@ import { getDb } from '@/lib/db';
 import { consumeLocked, creditAvailable, recordTransaction, LedgerError } from '@/lib/db/ledger';
 import { recordAdl } from '@/lib/db/accounting';
 import { adlQueue, insuranceFundStatus, type AdlPosition } from '@/lib/risk/engine';
-import { markPriceFor } from '@/lib/trading/futures-engine';
+import { markPriceFor, applyFuturesPoolDelta } from '@/lib/trading/futures-engine';
 import { isInverseContract, notionalUsd, unrealizedPnl } from '@/lib/trading/contract-math';
 
 export class AdlError extends Error {
@@ -187,6 +187,10 @@ export function runAdl(contract: string): AdlResult {
         db.prepare(
           "UPDATE insurance_funds SET balance = balance + ?, updated_at = datetime('now') WHERE contract = ?",
         ).run(clawback, contract);
+
+        // The pool is relieved of the whole profit the deleveraged position would
+        // have realised, so its tracked balance matches the journal's pool leg.
+        applyFuturesPoolDelta(contract, -entry.profit);
 
         recordTransaction(
           entry.row.user_id,

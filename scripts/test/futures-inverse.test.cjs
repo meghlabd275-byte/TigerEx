@@ -22,6 +22,7 @@ const {
   placeFuturesOrder,
   closePosition,
   markPriceFor,
+  fundFuturesPool,
 } = require('../../.test-build/futures-engine.js');
 
 const db = getDb();
@@ -110,6 +111,7 @@ test('an inverse short gains coin as the price falls, and closing moves real bal
   const symbol = inverseContract(50000);
   const user = seedUser();
   credit(user, 'BTC', 10);
+  fundFuturesPool(symbol, 1); // the venue must hold the coin that pays the short
 
   const opened = placeFuturesOrder(user, {
     symbol,

@@ -29,6 +29,8 @@ const {
   listConditionalOrders,
   cancelConditionalOrder,
   triggerConditionalOrders,
+  fundFuturesPool,
+  futuresPoolBalance,
   FuturesError,
 } = require('../../.test-build/futures-engine.js');
 const { scanPositions, processQueue } = require('../../.test-build/risk-supervisor.js');
@@ -183,6 +185,7 @@ test('a hedge-mode long is closed by a reduce-only sell, not increased', () => {
   const symbol = pricedContract('HCLOSE', 60000, { tickSize: 1, minQuantity: 0.001 });
   const user = seedUser();
   credit(user, 'RUSD', 100000);
+  fundFuturesPool(symbol, 10000);
   setOraclePrice(symbol, 60000);
 
   placeFuturesOrder(user, { symbol, side: 'buy', positionSide: 'long', type: 'market', quantity: 1, leverage: 10 });
@@ -271,6 +274,9 @@ test('closing a profitable long returns margin plus profit', () => {
   const symbol = pricedContract('PSOL', 100);
   const user = seedUser();
   credit(user, 'RUSD', 100000);
+  // The venue is the other side of the trade: it must hold the pool that pays a
+  // winning close. A real launch funds this from venue capital.
+  fundFuturesPool(symbol, 1000);
 
   placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 10, leverage: 10 });
   // 10 SOL at 100 is 1,000 notional; 10x locks 100.
@@ -294,6 +300,53 @@ test('closing a profitable long returns margin plus profit', () => {
   assert.equal(lockedBalance(user, 'RUSD'), 0);
   // Margin came back plus the profit, less the taker fee.
   assert.ok(availableBalance(user, 'RUSD') > afterOpen + 100 + 190);
+  // The profit came out of the pool, so the pool shrank by the gross P&L.
+  assert.ok(Math.abs(futuresPoolBalance(symbol) - (1000 - (closed.realizedPnl + closed.fee))) < 1e-6);
+});
+
+test('a lone winner cannot be paid from an unfunded counterparty pool', () => {
+  const symbol = pricedContract('LONE', 100);
+  const user = seedUser();
+  credit(user, 'RUSD', 100000);
+
+  placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 10, leverage: 10 });
+  const before = availableBalance(user, 'RUSD');
+  setOraclePrice(symbol, 200); // the lone long is +1,000 with no counterparty
+
+  assert.throws(
+    () => placeFuturesOrder(user, { symbol, side: 'sell', type: 'market', quantity: 10, reduceOnly: true }),
+    (error) => error instanceof FuturesError && error.code === 'POOL_INSUFFICIENT',
+  );
+  // The close was refused, so no value was conjured and the position stands.
+  assert.equal(availableBalance(user, 'RUSD'), before);
+  assert.equal(futuresPoolBalance(symbol), 0);
+  assert.equal(listPositions(user, symbol)[0].quantity, 10);
+});
+
+test('a losing close banks the loss into the pool and a later winner is paid from it', () => {
+  const symbol = pricedContract('WINPAY', 100);
+  const loser = seedUser();
+  const winner = seedUser();
+  credit(loser, 'RUSD', 100000);
+  credit(winner, 'RUSD', 100000);
+
+  // The loser goes long and the price falls to 90, realising a 100 loss that is
+  // banked into the pool.
+  placeFuturesOrder(loser, { symbol, side: 'buy', type: 'market', quantity: 10, leverage: 10 });
+  setOraclePrice(symbol, 90);
+  const closedLoss = placeFuturesOrder(loser, { symbol, side: 'sell', type: 'market', quantity: 10, reduceOnly: true });
+  assert.ok(closedLoss.realizedPnl < 0, 'the loser realises a loss');
+  const funded = futuresPoolBalance(symbol);
+  assert.ok(funded > 0, 'the loss is banked into the pool');
+
+  // A winner goes long from 90 and takes a profit smaller than the pool, so the
+  // pool can pay it in full.
+  placeFuturesOrder(winner, { symbol, side: 'buy', type: 'market', quantity: 5, leverage: 10 });
+  setOraclePrice(symbol, 96); // 5 contracts, 90 -> 96 = +30, well under the pool
+  const closedWin = placeFuturesOrder(winner, { symbol, side: 'sell', type: 'market', quantity: 5, reduceOnly: true });
+  assert.ok(closedWin.realizedPnl > 0, 'the winner realises a profit');
+  assert.ok(futuresPoolBalance(symbol) >= 0, 'the pool never goes negative');
+  assert.ok(futuresPoolBalance(symbol) < funded, 'the pool paid the profit out');
 });
 
 test('a partially reduced position keeps the rest open', () => {
@@ -709,6 +762,7 @@ test('a take-profit fires in the position favour, not against it', () => {
   const symbol = pricedContract('TPBTC', 50000);
   const user = seedUser();
   credit(user, 'RUSD', 100000);
+  fundFuturesPool(symbol, 10000);
 
   placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 0.1, leverage: 10 });
   placeConditionalOrder(user, {
@@ -732,6 +786,7 @@ test('a trailing stop follows the peak and fires on the retrace', () => {
   const symbol = pricedContract('TRBTC', 50000);
   const user = seedUser();
   credit(user, 'RUSD', 100000);
+  fundFuturesPool(symbol, 10000);
 
   placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 0.1, leverage: 10 });
   const order = placeConditionalOrder(user, {

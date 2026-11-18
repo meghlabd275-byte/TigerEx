@@ -35,6 +35,7 @@ import {
   futuresPoolAccount,
   insuranceAccount,
 } from '@/lib/db/accounting';
+import { EXTERNAL_ACCOUNT } from '@/lib/db/journal';
 import { positionRisk, selectRiskTier, type RiskTier } from '@/lib/risk/engine';
 import { futuresRates } from '@/lib/trading/spot-engine';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
@@ -493,6 +494,17 @@ function reducePosition(
 
   try {
     const run = db.transaction(() => {
+      // A realised profit is paid by the venue's counterparty pool, which may
+      // only pay what it actually holds. Without this gate a lone winner closing
+      // was credited value nobody had posted, driving the pool negative and
+      // minting the settlement asset. A loss is banked into the same pool.
+      if (grossPnl > 0 && poolBalanceOf(db, market.symbol) + 1e-9 < grossPnl) {
+        throw new FuturesError(
+          'POOL_INSUFFICIENT',
+          `the ${market.symbol} counterparty pool cannot pay ${grossPnl}; fund it before realising profit`,
+          409,
+        );
+      }
       // The margin that backed the closed quantity returns to available; the
       // P&L is then added or subtracted and the fee is charged on top. A zero
       // P&L or fee is a no-op rather than a zero-amount ledger movement.
@@ -505,6 +517,9 @@ function reducePosition(
       } else if (grossPnl < 0) {
         debitAvailable(userId, settlement, -grossPnl);
       }
+      // The pool is the other side of the trader's P&L: it pays a profit and
+      // banks a loss, so its tracked balance always equals its journal balance.
+      applyPoolDelta(db, market.symbol, -grossPnl);
       if (fee > 0) debitAvailable(userId, settlement, fee);
       // The margin release above is net-zero (locked -> available). The realised
       // PnL is settled against the venue's counterparty pool and the fee accrues
@@ -826,6 +841,77 @@ function addToInsuranceFund(symbol: string, amount: number): void {
     amount,
     symbol,
   );
+}
+
+/**
+ * The venue's counterparty pool for a contract.
+ *
+ * The venue is the other side of every perpetual: a trader's realised profit is
+ * paid out of this pool and a trader's realised loss (or a liquidation's seized
+ * margin) is banked into it. The pool is a real, tracked balance — a payout that
+ * the pool cannot cover fails closed instead of conjuring the settlement asset,
+ * exactly as the DEX perpetual pool does. It is funded by the operator (a
+ * treasury transfer) and grown by every trader loss.
+ */
+function poolBalanceOf(db: ReturnType<typeof getDb>, symbol: string): number {
+  const row = db.prepare('SELECT pool_balance FROM insurance_funds WHERE contract = ?').get(symbol) as
+    | { pool_balance: number }
+    | undefined;
+  return Number(row?.pool_balance) || 0;
+}
+
+/** Move `delta` (positive = into the pool, negative = out) on the contract pool. */
+function applyPoolDelta(db: ReturnType<typeof getDb>, symbol: string, delta: number): void {
+  if (!Number.isFinite(delta) || delta === 0) return;
+  const existing = db.prepare('SELECT 1 FROM insurance_funds WHERE contract = ?').get(symbol);
+  if (!existing) {
+    db.prepare('INSERT INTO insurance_funds (contract, balance) VALUES (?, 0)').run(symbol);
+  }
+  db.prepare(
+    "UPDATE insurance_funds SET pool_balance = pool_balance + ?, updated_at = datetime('now') WHERE contract = ?",
+  ).run(delta, symbol);
+}
+
+/**
+ * Seed a contract's counterparty pool so it can pay traders' profits.
+ *
+ * A real launch funds this from venue capital; until then it holds only what
+ * traders have lost, so a winning close that the pool cannot cover is refused
+ * rather than minted.
+ */
+export function fundFuturesPool(symbol: string, amount: number): number {
+  const value = Number(amount);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new FuturesError('VALIDATION_FAILED', 'the pool funding must be a positive number');
+  }
+  const market = loadMarket(symbol);
+  const db = getDb();
+  db.transaction(() => {
+    applyPoolDelta(db, market.symbol, value);
+    recordBalanced(
+      market.settlement_asset,
+      [
+        { account: EXTERNAL_ACCOUNT, amount: -value },
+        { account: futuresPoolAccount(market.symbol), amount: value },
+      ],
+      `Fund futures pool ${market.symbol}`,
+    );
+  })();
+  return poolBalanceOf(db, market.symbol);
+}
+
+/** The counterparty pool balance for a contract, in its settlement asset. */
+export function futuresPoolBalance(symbol: string): number {
+  return poolBalanceOf(getDb(), loadMarket(symbol).symbol);
+}
+
+/**
+ * Apply a counterparty-pool delta for a contract from a settlement path outside
+ * this module (liquidation, auto-deleveraging), so the tracked pool balance
+ * always mirrors its journal balance. Callers run inside their own transaction.
+ */
+export function applyFuturesPoolDelta(symbol: string, delta: number): void {
+  applyPoolDelta(getDb(), symbol, delta);
 }
 
 /**

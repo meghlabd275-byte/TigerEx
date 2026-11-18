@@ -3,6 +3,7 @@ import { getDb } from '@/lib/db';
 import { requireAdmin, recordAdminAction } from '@/lib/auth/admin';
 import { fail, readJson, enforceRequestGuards, finite, positive, NO_STORE } from '@/lib/api/route-guards';
 import { insuranceFundStatus } from '@/lib/risk/engine';
+import { fundFuturesPool, FuturesError } from '@/lib/trading/futures-engine';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +35,7 @@ export async function GET(request: NextRequest) {
         return {
           contract: row.contract,
           balance: row.balance,
+          poolBalance: row.pool_balance,
           targetBalance: row.target_balance,
           feeShare: row.fee_share,
           adlEnabled: row.adl_enabled === 1,
@@ -104,6 +106,14 @@ export async function PUT(request: NextRequest) {
 
   const adlEnabled = body.adlEnabled === undefined ? null : body.adlEnabled === true;
 
+  // A contribution to the contract's counterparty pool, which pays traders'
+  // realised profits. Kept distinct from the insurance `contribution`.
+  let poolContribution: number | null = null;
+  if (body.poolContribution !== undefined) {
+    poolContribution = positive(body.poolContribution);
+    if (poolContribution === null) return fail('VALIDATION_FAILED', 'poolContribution must be a positive number');
+  }
+
   const db = getDb();
   const existing = db.prepare('SELECT * FROM insurance_funds WHERE contract = ?').get(contract) as
     | Record<string, unknown>
@@ -111,8 +121,8 @@ export async function PUT(request: NextRequest) {
 
   if (!existing) {
     db.prepare(
-      `INSERT INTO insurance_funds (contract, balance, target_balance, fee_share, adl_enabled, adl_threshold)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO insurance_funds (contract, balance, pool_balance, target_balance, fee_share, adl_enabled, adl_threshold)
+       VALUES (?, ?, 0, ?, ?, ?, ?)`,
     ).run(
       contract,
       balance ?? contribution ?? 0,
@@ -144,10 +154,17 @@ export async function PUT(request: NextRequest) {
     );
   }
 
+  // A pool contribution moves real venue capital into the contract's
+  // counterparty pool through the journal, so the pool balance and its journal
+  // account stay in step. It is a separate concern from the insurance balance.
+  if (poolContribution !== null) {
+    fundFuturesPool(contract, poolContribution);
+  }
+
   recordAdminAction(request, auth.admin, 'insurance.update', {
     type: 'insurance_fund',
     id: contract,
-    detail: { balance, contribution, targetBalance, feeShare, adlThreshold, adlEnabled },
+    detail: { balance, contribution, poolContribution, targetBalance, feeShare, adlThreshold, adlEnabled },
   });
 
   const row = db.prepare('SELECT * FROM insurance_funds WHERE contract = ?').get(contract) as Record<string, unknown>;
@@ -157,6 +174,7 @@ export async function PUT(request: NextRequest) {
       fund: {
         contract: row.contract,
         balance: row.balance,
+        poolBalance: row.pool_balance,
         targetBalance: row.target_balance,
         feeShare: row.fee_share,
         adlEnabled: row.adl_enabled === 1,

@@ -21,7 +21,7 @@ const { getDb, generateId, hashPassword } = require('../../.test-build/index.js'
 const { availableBalance, lockedBalance } = require('../../.test-build/ledger.js');
 const { recordDeposit, reconcileJournal } = require('../../.test-build/accounting.js');
 const { accountBalance, userAccount } = require('../../.test-build/journal.js');
-const { placeFuturesOrder, closePosition, applyFunding, listPositions } = require('../../.test-build/futures-engine.js');
+const { placeFuturesOrder, closePosition, applyFunding, listPositions, fundFuturesPool } = require('../../.test-build/futures-engine.js');
 const { scanPositions, processQueue } = require('../../.test-build/risk-supervisor.js');
 const { runAdl } = require('../../.test-build/adl.js');
 
@@ -125,6 +125,8 @@ test('an open fee and a profitable close reconcile', () => {
   const symbol = pricedContract('JBTC', 50000);
   const user = seedUser();
   fund(user, 'RUSD', 100000);
+  // The venue must hold the counterparty pool that pays a winning close.
+  fundFuturesPool(symbol, 10000);
 
   placeFuturesOrder(user, { symbol, side: 'buy', type: 'market', quantity: 0.1, leverage: 10 });
   assertReconciles('after open');
@@ -135,8 +137,10 @@ test('an open fee and a profitable close reconcile', () => {
   closePosition(user, position.position_id);
   assertReconciles('after close');
 
-  // A winning long is paid from the venue pool, so the pool is net short.
-  assert.ok(accountBalance(`futures_pool:${symbol}`) < 0);
+  // A winning long is paid out of the funded venue pool, so the pool's journal
+  // balance falls by the gross P&L but is never driven negative.
+  assert.ok(accountBalance(`futures_pool:${symbol}`) < 10000);
+  assert.ok(accountBalance(`futures_pool:${symbol}`) > 0);
 });
 
 test('a losing close is banked into the venue pool', () => {
