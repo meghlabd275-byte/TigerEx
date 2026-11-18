@@ -18,7 +18,7 @@ process.env.ENCRYPTION_KEY = 'test-encryption-key-0123456789abcdef0123456789';
 
 const { getDb, generateId, hashPassword } = require('../../.test-build/index.js');
 const { availableBalance, lockedBalance } = require('../../.test-build/ledger.js');
-const { borrow, repay, liquidate, marginAccount, liquidatableLoans, runMarginLiquidationKeeper, MARGIN_LIQUIDATION_ACCOUNT, MarginError } = require('../../.test-build/margin-engine.js');
+const { borrow, repay, liquidate, marginAccount, liquidatableLoans, runMarginLiquidationKeeper, MARGIN_LIQUIDATION_ACCOUNT, fundLendingPool, lendingPoolFundBalance, MarginError } = require('../../.test-build/margin-engine.js');
 
 const db = getDb();
 
@@ -74,6 +74,11 @@ setPrice('BTC/RUSD', 50000);
 setPrice('TGR/RUSD', 10);
 listMarginMarket('BTC/RUSD');
 listMarginMarket('TGR/RUSD', 'isolated');
+
+// A borrow is drawn from the venue's lending pool, so it must be supplied
+// first — a real launch funds it from venue capital.
+fundLendingPool('RUSD', 1000000);
+fundLendingPool('BTC', 100);
 
 test('a loan within its LTV credits the borrow and locks the collateral', () => {
   const user = seedUser();
@@ -327,6 +332,44 @@ test('an account with no loans reports zeros, not a fabricated balance', () => {
   assert.equal(account.totalCollateralValue, 0);
   assert.equal(account.totalDebt, 0);
   assert.equal(account.liquidatable, false);
+});
+
+test('an unfunded lending pool refuses the borrow instead of minting the asset', () => {
+  const user = seedUser();
+  credit(user, 'BTC', 1);
+
+  // A market that lists USDT as borrowable, but no USDT was ever supplied to
+  // the pool.
+  setPrice('ETH/RUSD', 3000);
+  db.prepare(
+    `INSERT INTO margin_markets
+       (market_id, symbol, base_asset, quote_asset, mode, max_leverage, collateral_ltv,
+        borrowable_assets, interest_base_apr, interest_kink_utilization, interest_kink_apr,
+        interest_max_apr, liquidation_thresholds, liquidation_bonus, risk_tier, status)
+     VALUES (?, 'ETH/RUSD', 'ETH', 'RUSD', 'isolated', 10, ?, ?, 0.05, 0.8, 0.5, 1.0, ?, 0.05, 'medium', 'active')`,
+  ).run(
+    generateId(),
+    JSON.stringify({ BTC: 0.7 }),
+    JSON.stringify(['USDT']),
+    JSON.stringify({ BTC: 0.75 }),
+  );
+
+  assert.throws(
+    () =>
+      borrow(user, {
+        symbol: 'ETH/RUSD',
+        asset: 'USDT',
+        amount: 1000,
+        collateralAsset: 'BTC',
+        collateralAmount: 0.5,
+        mode: 'isolated',
+      }),
+    (error) => error instanceof MarginError && error.code === 'LENDING_POOL_EMPTY',
+  );
+  // Nothing was credited and no collateral was locked.
+  assert.equal(availableBalance(user, 'USDT'), 0);
+  assert.equal(lockedBalance(user, 'BTC'), 0);
+  assert.equal(lendingPoolFundBalance('USDT'), 0);
 });
 
 test('an unpriced collateral asset blocks the borrow rather than guessing', () => {

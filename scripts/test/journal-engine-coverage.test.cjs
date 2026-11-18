@@ -86,6 +86,9 @@ db.prepare(
   JSON.stringify({ BTC: 0.75, RUSD: 0.95 }),
 );
 
+// A borrow is drawn from the venue's lending pool, so it must be supplied.
+marginEngine.fundLendingPool('RUSD', 1000000);
+
 test('a margin borrow and repay reconcile', () => {
   const user = seedUser();
   fund(user, 'BTC', 1);

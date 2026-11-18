@@ -29,7 +29,10 @@ import {
   recordMarginBorrow,
   recordMarginRepay,
   recordMarginLiquidation,
+  recordBalanced,
+  poolAccount,
 } from '@/lib/db/accounting';
+import { EXTERNAL_ACCOUNT } from '@/lib/db/journal';
 import { priceInQuote, valueInQuote } from '@/lib/trading/valuation';
 import { borrowInterest } from '@/lib/trading/fees';
 import { pausedScope, pauseMessage } from '@/lib/trading/controls';
@@ -167,6 +170,52 @@ export function marketUtilization(symbol: string): number {
   if (!Number.isFinite(capacity) || capacity <= 0) return 0;
 
   return Math.min(Math.max(borrowed / capacity, 0), 1);
+}
+
+/** The venue account a borrowed asset is drawn from and repaid into. */
+export const LENDING_POOL_ACCOUNT = poolAccount('lending');
+
+/** The balance of the venue's lending pool for an asset. */
+function lendingPoolBalance(asset: string): number {
+  const row = getDb()
+    .prepare('SELECT balance FROM treasury_accounts WHERE asset = ? AND network = ? AND account_type = ?')
+    .get(asset.trim().toUpperCase(), 'TIGEREX', 'lending_pool') as { balance: number } | undefined;
+  return Number(row?.balance) || 0;
+}
+
+/**
+ * Supply an asset to the venue's lending pool so margin loans can be drawn.
+ *
+ * The pool is the source of every borrow: without a funded pool a borrow would
+ * credit the borrower an asset the venue never held. A supply moves real venue
+ * capital in, journalled against the same `pool:lending` account a borrow draws
+ * from, so the pool's tracked balance always equals its journal balance.
+ */
+export function fundLendingPool(asset: string, amount: number): number {
+  const value = Number(amount);
+  const normalized = asset.trim().toUpperCase();
+  if (!normalized) throw new MarginError('VALIDATION_FAILED', 'asset is required');
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new MarginError('VALIDATION_FAILED', 'the pool supply must be a positive number');
+  }
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO treasury_accounts (account_id, asset, network, account_type, balance)
+       VALUES (?, ?, 'TIGEREX', 'lending_pool', ?)
+       ON CONFLICT(asset, network, account_type) DO UPDATE SET balance = balance + ?, updated_at = datetime('now')`,
+    ).run(generateId(), normalized, value, value);
+    recordBalanced(normalized, [
+      { account: EXTERNAL_ACCOUNT, amount: -value },
+      { account: LENDING_POOL_ACCOUNT, amount: value },
+    ], `Fund ${normalized} lending pool`);
+  })();
+  return lendingPoolBalance(normalized);
+}
+
+/** The counterparty-free lending pool balance for an asset, in that asset. */
+export function lendingPoolFundBalance(asset: string): number {
+  return lendingPoolBalance(asset);
 }
 
 export interface MarginLoanView {
@@ -338,6 +387,17 @@ export function borrow(userId: string, input: BorrowInput): MarginLoanView {
 
   if (!covers(availableBalance(userId, collateralAsset), collateralAmount)) {
     throw new MarginError('INSUFFICIENT_BALANCE', `Insufficient ${collateralAsset} balance`);
+  }
+
+  // A borrow is drawn from the venue's lending pool, which may only lend what it
+  // actually holds. Without this gate the borrower was credited an asset the
+  // venue never supplied, minting it. Fund the pool first (fundLendingPool).
+  if (lendingPoolBalance(asset) + 1e-9 < amount) {
+    throw new MarginError(
+      'LENDING_POOL_EMPTY',
+      `the ${asset} lending pool cannot fund ${amount}; supply it before borrowing`,
+      409,
+    );
   }
 
   const db = getDb();
