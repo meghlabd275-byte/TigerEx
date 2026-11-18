@@ -24,6 +24,7 @@ process.env.TIGEREX_OPTIONS_DEFAULT_VOLATILITY = '0.8';
 
 const { getDb, generateId, hashPassword } = require('../../.test-build/index.js');
 const { creditAvailable, availableBalance } = require('../../.test-build/ledger.js');
+const { accountBalance } = require('../../.test-build/journal.js');
 const { placeSpotOrder } = require('../../.test-build/spot-engine.js');
 const copyEngine = require('../../.test-build/copy-engine.js');
 const optionsEngine = require('../../.test-build/options-engine.js');
@@ -356,6 +357,12 @@ test('a long option debits the premium and a close realizes the difference', () 
   const closed = optionsEngine.closePosition({ userId: user, symbol: 'BTC-50000-C', side: 'long' });
   assert.equal(closed.closed, 1);
   assert.ok(closed.realizedPnl > 0, `expected a profit, got ${closed.realizedPnl}`);
+  // The tracked pool balance mirrors its journal account exactly, so the pool
+  // can never pay out more than the venue's books say it holds.
+  assert.ok(
+    Math.abs(optionsEngine.optionsPoolBalance('RUSD') - accountBalance('pool:options')) < 1e-6,
+    `options pool drift: tracked ${optionsEngine.optionsPoolBalance('RUSD')} vs journal ${accountBalance('pool:options')}`,
+  );
 });
 
 test('an option position cannot be opened without the funds for its premium', () => {
@@ -426,6 +433,12 @@ test('a subscription mints tokens at the live NAV and a redemption burns them', 
 
   const result = etfEngine.redeem({ userId: user, symbol: 'BTC3L', tokens: position.tokens });
   assert.ok(result.proceeds > 0);
+  // The tracked ETF pool mirrors its journal account exactly after a
+  // subscription and redemption.
+  assert.ok(
+    Math.abs(etfEngine.etfPoolBalance('RUSD') - accountBalance('pool:etf')) < 1e-6,
+    `etf pool drift: tracked ${etfEngine.etfPoolBalance('RUSD')} vs journal ${accountBalance('pool:etf')}`,
+  );
 });
 
 test('a leveraged token cannot be redeemed beyond what is held', () => {
