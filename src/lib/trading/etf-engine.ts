@@ -356,17 +356,20 @@ export function redeem(input: RedeemInput): { redeemed: number; proceeds: number
   const costRemoved = held > 0 ? (Number(position.cost_basis) || 0) * (tokens / held) : 0;
 
   db.transaction(() => {
-    // The pool pays the redemption; it may only pay what it holds. Without this
-    // gate a redemption credited the user an asset the venue never held.
-    if (proceeds > 0 && etfPoolBalance(market.settlementAsset) + 1e-9 < proceeds) {
+    // The pool pays the redemption and the exit fee, so it may only pay what it
+    // holds; without this gate a redemption credited the user an asset the venue
+    // never held.
+    if (proceeds + fee > 0 && etfPoolBalance(market.settlementAsset) + 1e-9 < proceeds + fee) {
       throw new EtfError(
         'POOL_INSUFFICIENT',
-        `the ${market.settlementAsset} pool cannot cover the redemption of ${proceeds}; fund it first`,
+        `the ${market.settlementAsset} pool cannot cover the redemption of ${proceeds + fee}; fund it first`,
         409,
       );
     }
     creditAvailable(input.userId, market.settlementAsset, proceeds);
-    applyEtfPoolDelta(market.settlementAsset, -proceeds);
+    // The pool pays both the proceeds and the exit fee (which accrues to the
+    // venue), so its tracked delta equals the journal's pool leg exactly.
+    applyEtfPoolDelta(market.settlementAsset, -(proceeds + fee));
     recordEtfRedeem(input.userId, market.settlementAsset, proceeds, fee, `redeem ${tokens} ${market.symbol}`);
     recordTransaction(input.userId, 'etf_redeem', market.settlementAsset, proceeds, fee, 'completed', `redeem ${tokens} ${market.symbol}`);
 

@@ -431,10 +431,11 @@ test('a subscription mints tokens at the live NAV and a redemption burns them', 
   assert.ok(position.tokens > 0);
   assert.ok(availableBalance(user, 'RUSD') < 10000);
 
-  const result = etfEngine.redeem({ userId: user, symbol: 'BTC3L', tokens: position.tokens });
+  const result = etfEngine.redeem({ userId: user, symbol: 'BTC3L', tokens: position.tokens, exitFeeRate: 0.01 });
   assert.ok(result.proceeds > 0);
   // The tracked ETF pool mirrors its journal account exactly after a
-  // subscription and redemption.
+  // subscription and a redemption that charges an exit fee (the fee is a pool
+  // leg, so it must be in the tracked delta too).
   assert.ok(
     Math.abs(etfEngine.etfPoolBalance('RUSD') - accountBalance('pool:etf')) < 1e-6,
     `etf pool drift: tracked ${etfEngine.etfPoolBalance('RUSD')} vs journal ${accountBalance('pool:etf')}`,
